@@ -11,6 +11,7 @@ from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane
 
+from tongs.errors import AuthError, NetworkError
 from tongs.forges.models import CIStatus, MRSummary
 
 
@@ -91,7 +92,7 @@ class MRTable(DataTable):
             return None
         try:
             row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
-            return self._mr_data.get(str(row_key))
+            return self._mr_data.get(row_key.value)
         except Exception:
             return None
 
@@ -179,9 +180,14 @@ class InboxScreen(Screen):
                         table.add_mr_row(mr, self.app.config.ascii_mode)
                 except NotImplementedError:
                     pass
+                except (NetworkError, AuthError) as exc:
+                    self.notify(
+                        f"[dim]{hostname}: {exc}[/]",
+                        severity="warning",
+                    )
                 except Exception as exc:
                     self.notify(
-                        f"[red]Failed to load reviews from {hostname}:[/] {exc}",
+                        f"[red]{hostname}:[/] {exc}",
                         severity="error",
                     )
         finally:

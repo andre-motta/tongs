@@ -1,0 +1,53 @@
+name: Good First Issue
+description: Template for maintainers to create beginner-friendly issues
+labels: ["good first issue"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to create well-scoped issues for new contributors. See [CONTRIBUTING.md](https://github.com/andre-motta/tongs/blob/main/CONTRIBUTING.md) for project structure and development setup.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs to be done, written for someone unfamiliar with the codebase.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the codebase does this touch?
+      options:
+        - scanner
+        - forges
+        - tui
+        - diff
+        - plugins
+    validations:
+      required: true
+
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: Difficulty estimate
+      options:
+        - "Easy: small, self-contained change"
+        - "Medium: requires understanding one subsystem"
+        - "Moderate: touches multiple files or subsystems"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Helpful context
+      description: Pointers to relevant files, functions, tests, or design decisions that will help a newcomer get started.
+      placeholder: |
+        - Start with `src/tongs/forges/base.py` to understand the interface
+        - Tests go in `tests/test_forges/`
+        - See `tests/test_forges/test_gitlab.py` for the mocking pattern
+    validations:
+      required: true

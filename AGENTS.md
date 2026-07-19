@@ -49,11 +49,12 @@ src/tongs/
     discovery.py       # Filesystem walk, git remote reading, primary remote selection
 
   forges/              # Forge abstraction layer
-    base.py            # ForgeClient ABC (MR, comment, review, pipeline ops)
-    models.py          # Shared dataclasses (MRSummary, MRDetail, Pipeline, etc.)
+    base.py            # ForgeClient ABC (MR, comment, review, pipeline, commit ops)
+    models.py          # Shared dataclasses (MRSummary, MRDetail, Pipeline, Commit, etc.)
     auth.py            # Token resolution cascade: CLI -> .netrc -> error
     http.py            # httpx transport: create_client, request, paginate, error mapping
     gitlab.py          # GitLabClient implementation (API v4)
+    github.py          # GitHubClient implementation (REST API)
     registry.py        # ForgeRegistry: hostname -> authenticated ForgeClient
 
   diff/                # Diff parsing engine (Phase 2)
@@ -87,7 +88,7 @@ src/tongs/
 
 ## Development Status
 
-Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). GitHub client planned for Phase 3.
+Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). Phase 3 complete (GitHub REST API client, Commit model, commits tab in MR detail, scrollable overview with Markdown description, SSRF prevention, cross-fork safety).
 
 ## Gate Process
 

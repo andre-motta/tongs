@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [
-    { name = "Andre Motta", email = "andre@motta.dev" },
+    { name = "Andre Motta" },
 ]
 keywords = ["tui", "git", "gitlab", "github", "merge-request", "pull-request", "code-review"]
 classifiers = [

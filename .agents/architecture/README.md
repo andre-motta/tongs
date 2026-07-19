@@ -22,10 +22,10 @@ The TUI layer never imports a concrete forge client. Everything goes through `Fo
 2. `TongsApp._discover_repos()` runs discovery in a background thread (`@work(thread=True)`) to avoid blocking the UI.
 3. `TongsApp.get_repo_hostnames()` extracts unique hostnames from discovered repos (not hardcoded).
 4. `InboxScreen.load_reviews()` iterates hostnames, calls `ForgeRegistry.get_client(hostname)` which lazily creates an authenticated `ForgeClient`.
-5. `ForgeRegistry.get_client()` resolves auth via `auth.py:resolve_token()`, creates an `httpx.AsyncClient` via `http.py:create_client()`, wraps it in a forge-specific client (e.g., `GitLabClient`).
+5. `ForgeRegistry.get_client()` resolves auth via `auth.py:resolve_token()`, creates an `httpx.AsyncClient` via `http.py:create_client()`, wraps it in a forge-specific client (`GitLabClient` or `GitHubClient`, selected by `ForgeType`).
 6. The forge client makes API calls using `http.py:request()`, which maps HTTP errors to `ForgeError` subclasses.
-7. Forge client methods return shared dataclasses (`MRSummary`, `MRDetail`, etc.) to the view layer.
-8. Views populate Textual widgets (DataTable, Tree) with the returned data.
+7. Forge client methods return shared dataclasses (`MRSummary`, `MRDetail`, `Commit`, etc.) to the view layer.
+8. Views populate Textual widgets (DataTable, Tree, Static) with the returned data.
 
 ## Data Flow: MR Detail and Diff Rendering
 
@@ -39,6 +39,19 @@ The TUI layer never imports a concrete forge client. Everything goes through `Fo
 8. For inline commenting (planned), `diff/position.py:position_from_diff_line()` creates a `DiffPosition`, then `to_forge_position()` converts it to the forge-specific API format.
 
 This path keeps the view layer working against shared models (`DiffFile`, `DiffPosition`) without knowing which forge produced the data.
+
+## Data Flow: Commit Listing (Phase 3)
+
+1. When the user switches to the Commits tab in `MRDetailScreen`, `_on_tab_switch("commits")` triggers `_load_commits()` (lazy, same pattern as diff loading).
+2. `_load_commits()` calls `client.list_mr_commits(repo_path, number)` on the forge client.
+3. Both `GitLabClient` and `GitHubClient` return `list[Commit]` using the shared `Commit` dataclass (forge-agnostic).
+4. The view renders each commit as a Rich-formatted line in a `Static` widget (sha, title, author, optional body).
+
+The `Commit` model is intentionally minimal (sha, short_sha, title, message, author, created_at, web_url) and lives in `forges/models.py` alongside the other shared models.
+
+## Registry: GitHub Wiring (Phase 3)
+
+`ForgeRegistry.get_client()` now instantiates `GitHubClient` for `ForgeType.GITHUB` hosts (previously raised `NotImplementedError`). The `InboxScreen` worker pattern that caught `NotImplementedError` for unimplemented forges is no longer needed for GitHub, though the catch remains as a safety net for any future forge backends.
 
 ## HTTP-First Architecture
 

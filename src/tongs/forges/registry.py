@@ -78,7 +78,9 @@ class ForgeRegistry:
 
             client = GitLabClient(host, http_client)
         else:
-            raise NotImplementedError("GitHub client not yet implemented")
+            from tongs.forges.github import GitHubClient
+
+            client = GitHubClient(host, http_client)
 
         self._clients[hostname] = client
         return client

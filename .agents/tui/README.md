@@ -88,7 +88,7 @@ async def load_reviews(self) -> None:
         table.loading = False
 ```
 
-Key patterns: `exclusive=True` cancels previous loads; `NotImplementedError` is caught and silently skipped (for unimplemented forges like GitHub); other exceptions surface as dim warnings; `table.loading` shows Textual's built-in loading indicator.
+Key patterns: `exclusive=True` cancels previous loads; `NotImplementedError` is caught and silently skipped (safety net for any future forge backends not yet implemented); other exceptions surface as dim warnings; `table.loading` shows Textual's built-in loading indicator.
 
 **"All Open" tab** uses `asyncio.Semaphore(max_parallel)` and `asyncio.gather()` to fetch MRs for all discovered repos concurrently, with per-host failure tracking.
 
@@ -129,26 +129,31 @@ Structure:
 ```
 Header (sub_title = "!{number} {title}")
 TabbedContent (initial="overview")
-  TabPane "Overview"   -> MROverview (metadata + description)
+  TabPane "Overview"   -> VerticalScroll > MROverview (metadata) + Markdown (description)
   TabPane "Diff"       -> DiffPanel (split-pane diff viewer)
+  TabPane "Commits"    -> VerticalScroll > Static (commit list)
   TabPane "Discussion" -> placeholder (Phase 4)
   TabPane "Pipeline"   -> placeholder (Phase 5)
 Footer
 ```
 
-**Constructor** takes an `MRSummary`. Stores `mr_detail: MRDetail | None` (populated after API call) and `_diff_loaded: bool` flag.
+**Constructor** takes an `MRSummary`. Stores `mr_detail: MRDetail | None` (populated after API call), `_diff_loaded: bool`, and `_commits_loaded: bool` flags.
 
-**Lazy diff loading:** the Diff tab does not fetch data until first activated. `_on_tab_switch()` checks `_diff_loaded` flag; on first switch to "diff", sets the flag and calls `_load_diff()`. This avoids fetching potentially large diffs that the user may never view.
+**Scrollable overview (Phase 3):** The Overview tab wraps `MROverview` and a `Markdown` widget inside a `VerticalScroll` container. `MROverview` renders metadata (title, author, branches, CI, etc.) as Rich markup. The MR description is rendered via the Textual `Markdown` widget (supports headings, links, code blocks, etc.) rather than plain text. `TongsApp` CSS sets `VerticalScroll { height: 1fr; }` to allow scrolling long descriptions.
 
-**Overview loading:** `_load_detail()` worker runs on mount, fetches `MRDetail` from the forge API, and populates `MROverview` with metadata (title, author, branches, CI status, approvals, reviewers, assignees, labels, additions/deletions, description).
+**Lazy loading pattern:** Both the Diff and Commits tabs use the same lazy-load approach. `_on_tab_switch()` checks per-tab boolean flags (`_diff_loaded`, `_commits_loaded`); on first switch, sets the flag and calls the corresponding worker method. This avoids unnecessary API calls for tabs the user may never view.
+
+**Commits tab (Phase 3):** `_load_commits()` worker calls `client.list_mr_commits()` and renders each commit as a Rich-formatted line in a `Static` widget: yellow short SHA, title, dimmed author. Multi-line commit messages are shown indented beneath the title line. The tab is wrapped in a `VerticalScroll` for long commit histories.
+
+**Overview loading:** `_load_detail()` worker runs on mount, fetches `MRDetail` from the forge API, populates `MROverview` with metadata, and updates the `Markdown` widget with the MR description.
 
 **Diff loading:** `_load_diff()` worker fetches changes via `client.get_mr_diff()`, converts the changes list to unified diff text via `_changes_to_diff_text()`, parses with `parse_diff()`, and passes files to `DiffPanel.set_files()`.
 
-**Tab switching:** both number keys (1-4) and clicking tabs work. `action_focus_tab()` sets `TabbedContent.active` and calls `_on_tab_switch()`. `on_tabbed_content_tab_activated()` handles click-based tab switches.
+**Tab switching:** both number keys (1-5) and clicking tabs work. `action_focus_tab()` sets `TabbedContent.active` and calls `_on_tab_switch()`. `on_tabbed_content_tab_activated()` handles click-based tab switches.
 
-**Refresh:** `action_refresh()` resets `_diff_loaded = False` and re-runs `_load_detail()`, so re-entering the Diff tab triggers a fresh fetch.
+**Refresh:** `action_refresh()` resets both `_diff_loaded = False` and `_commits_loaded = False`, then re-runs `_load_detail()`. Re-entering the Diff or Commits tab triggers a fresh fetch.
 
-Bindings: Esc/q = back, 1-4 = focus tab, o = open in browser, y = copy URL to clipboard, Ctrl+R = refresh.
+Bindings: Esc/q = back, 1-5 = focus tab, o = open in browser, y = copy URL to clipboard, Ctrl+R = refresh.
 
 ## DiffPanel Widget
 
@@ -218,7 +223,7 @@ InboxScreen (default)
 
 All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_screen()` (Esc/q). State is passed via constructor arguments (MRSummary, Repo), not reactive app-level attributes.
 
-## Planned Views (Phase 3+)
+## Planned Views (Phase 4+)
 
 - `CommentEditor` -- inline TextArea + optional external editor
 - `PipelineListScreen` / `PipelineDetailScreen` / `JobLogScreen`

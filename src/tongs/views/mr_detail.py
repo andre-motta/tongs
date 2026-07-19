@@ -8,6 +8,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
+from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
 from tongs.forges.models import CIStatus, MRDetail, MRSummary
@@ -62,8 +63,9 @@ class MRDetailScreen(Screen):
         Binding("q", "go_back", "Back", show=False),
         Binding("1", "focus_tab('overview')", "Overview", show=True),
         Binding("2", "focus_tab('diff')", "Diff", show=True),
-        Binding("3", "focus_tab('discussion')", "Discussion", show=True),
-        Binding("4", "focus_tab('pipeline')", "Pipeline", show=True),
+        Binding("3", "focus_tab('commits')", "Commits", show=True),
+        Binding("4", "focus_tab('discussion')", "Discussion", show=True),
+        Binding("5", "focus_tab('pipeline')", "Pipeline", show=True),
         Binding("o", "open_in_browser", "Open", show=True),
         Binding("y", "yank_url", "Copy URL", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
@@ -79,10 +81,14 @@ class MRDetailScreen(Screen):
         yield Header()
         with TabbedContent(initial="overview"):
             with TabPane("Overview", id="overview"):
-                yield MROverview(id="mr-overview")
-                yield Markdown(id="mr-description")
+                with VerticalScroll():
+                    yield MROverview(id="mr-overview")
+                    yield Markdown(id="mr-description")
             with TabPane("Diff", id="diff"):
                 yield DiffPanel(id="diff-panel")
+            with TabPane("Commits", id="commits"):
+                with VerticalScroll(id="commits-scroll"):
+                    yield Static("[dim]Loading commits...[/]", id="commits-content")
             with TabPane("Discussion", id="discussion"):
                 yield Static("[dim]Discussion view planned for Phase 4[/]")
             with TabPane("Pipeline", id="pipeline"):
@@ -127,10 +133,15 @@ class MRDetailScreen(Screen):
         if tab_id:
             self._on_tab_switch(tab_id)
 
+    _commits_loaded: bool = False
+
     def _on_tab_switch(self, tab_id: str) -> None:
         if tab_id == "diff" and not self._diff_loaded:
             self._diff_loaded = True
             self._load_diff()
+        elif tab_id == "commits" and not self._commits_loaded:
+            self._commits_loaded = True
+            self._load_commits()
 
     @work(exclusive=True, group="mr-diff")
     async def _load_diff(self) -> None:
@@ -157,18 +168,57 @@ class MRDetailScreen(Screen):
             content.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
 
     def _changes_to_diff_text(self, changes: list[dict]) -> str:
-        """Convert GitLab changes API response to unified diff text."""
+        """Convert forge API response to unified diff text.
+
+        Handles both GitLab (old_path/new_path/diff) and GitHub (filename/patch).
+        """
         parts = []
         for change in changes:
-            old_path = change.get("old_path", "")
-            new_path = change.get("new_path", "")
-            diff = change.get("diff", "").rstrip("\n")
+            old_path = (
+                change.get("old_path")
+                or change.get("previous_filename")
+                or change.get("filename", "")
+            )
+            new_path = change.get("new_path") or change.get("filename", "")
+            diff = (change.get("diff") or change.get("patch") or "").rstrip("\n")
             if diff:
                 if not diff.lstrip().startswith("--- "):
                     parts.append(f"--- a/{old_path}")
                     parts.append(f"+++ b/{new_path}")
                 parts.append(diff)
         return "\n".join(parts)
+
+    @work(exclusive=True, group="mr-commits")
+    async def _load_commits(self) -> None:
+        content = self.query_one("#commits-content", Static)
+        content.update("[dim]Loading commits...[/]")
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            commits = await client.list_mr_commits(
+                self.mr_summary.repo_path, self.mr_summary.number
+            )
+            if not commits:
+                content.update("[dim]No commits[/]")
+                return
+
+            lines = []
+            for c in commits:
+                sha = f"[yellow]{c.short_sha}[/]"
+                author = f"[dim]@{c.author.username}[/]"
+                title = escape(c.title)
+                lines.append(f"{sha} {title}  {author}")
+                if c.message and c.message != c.title:
+                    body = c.message[len(c.title) :].strip()
+                    if body:
+                        for body_line in body.split("\n"):
+                            lines.append(f"        [dim]{escape(body_line)}[/]")
+                lines.append("")
+
+            content.update("\n".join(lines) if lines else "[dim]No commits[/]")
+        except Exception as exc:
+            content.update(f"Could not load commits. ({exc})")
 
     def action_open_in_browser(self) -> None:
         self.app.open_url(self.mr_summary.web_url)
@@ -184,4 +234,5 @@ class MRDetailScreen(Screen):
 
     def action_refresh(self) -> None:
         self._diff_loaded = False
+        self._commits_loaded = False
         self._load_detail()

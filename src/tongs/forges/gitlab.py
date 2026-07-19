@@ -13,6 +13,7 @@ from tongs.forges.base import ForgeClient
 from tongs.forges.http import map_http_error, paginate, request
 from tongs.forges.models import (
     CIStatus,
+    Commit,
     Discussion,
     ForgeHost,
     InlineComment,
@@ -98,11 +99,13 @@ class GitLabClient(ForgeClient):
         return [self._parse_mr_summary(mr, repo_path) for mr in data]
 
     async def list_my_reviews(self) -> list[MRSummary]:
+        user_data = await request(self._http, "GET", "/user")
+        username = user_data.get("username", "")
         data = await request(
             self._http,
             "GET",
             "/merge_requests",
-            params={"scope": "all", "reviewer_username": "self", "state": "opened"},
+            params={"scope": "all", "reviewer_username": username, "state": "opened"},
         )
         return [self._parse_mr_summary(mr, self._extract_repo_path(mr)) for mr in data]
 
@@ -132,6 +135,28 @@ class GitLabClient(ForgeClient):
             f"/projects/{project}/merge_requests/{number}/changes",
         )
         return data.get("changes", [])
+
+    async def list_mr_commits(self, repo_path: str, number: int) -> list[Commit]:
+        project = _encode_project(repo_path)
+        data = await paginate(
+            self._http,
+            f"/projects/{project}/merge_requests/{number}/commits",
+        )
+        return [
+            Commit(
+                sha=c.get("id", ""),
+                short_sha=c.get("short_id", c.get("id", "")[:8]),
+                title=c.get("title", ""),
+                message=c.get("message", ""),
+                author=User(
+                    username=c.get("author_name", "unknown"),
+                    display_name=c.get("author_name", ""),
+                ),
+                created_at=_parse_datetime(c.get("created_at")),
+                web_url=c.get("web_url", ""),
+            )
+            for c in data
+        ]
 
     async def get_mr_discussions(self, repo_path: str, number: int) -> list[Discussion]:
         project = _encode_project(repo_path)

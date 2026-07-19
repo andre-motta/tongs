@@ -1,0 +1,101 @@
+name: Bug Report
+description: Report a bug in tongs
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill out the fields below so we can reproduce and fix it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear summary of the bug.
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. Run `tongs --scan-root ~/projects`
+        2. Press `Enter` on an MR
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened. Include error messages or tracebacks if applicable.
+    validations:
+      required: true
+
+  - type: input
+    id: tongs-version
+    attributes:
+      label: tongs version
+      description: Output of `tongs --version` or `pip show tongs`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: Output of `python --version`.
+      placeholder: "3.12.4"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Fedora 44 / macOS 15.1 / Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal emulator
+      description: The terminal you were using when the bug occurred.
+      placeholder: "kitty / Alacritty / GNOME Terminal / Windows Terminal"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: forge-type
+    attributes:
+      label: Forge type
+      description: Which forge(s) were involved? Bugs may be forge-specific.
+      options:
+        - GitHub
+        - GitLab
+        - Both
+        - Not forge-related
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Anything else that might help (screenshots, config snippets, ASCII mode on/off).
+    validations:
+      required: false

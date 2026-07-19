@@ -419,8 +419,10 @@ class TestGitLabClientAsync:
         mr_data = _mr_api_json()
 
         def handler(req: httpx.Request) -> httpx.Response:
+            if req.url.path.endswith("/user"):
+                return httpx.Response(200, json={"username": "testuser"})
             assert req.url.params["scope"] == "all"
-            assert req.url.params["reviewer_username"] == "self"
+            assert req.url.params["reviewer_username"] == "testuser"
             assert req.url.params["state"] == "opened"
             return httpx.Response(200, json=[mr_data])
 

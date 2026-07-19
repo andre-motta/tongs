@@ -69,6 +69,28 @@ Redaction is applied in:
 - Both catch `FileNotFoundError` (command not found) and `TimeoutExpired`
 - Environment is not modified; subprocess inherits the standard environment
 
+## SSRF Prevention (Phase 3)
+
+`GitHubClient._repo_path_from_api_url(api_url)` validates that API URLs from search results are scoped to the client's own `base_url` before constructing follow-up requests. The method checks that `api_url` starts with `self._http.base_url + "/repos/"` and returns an empty string (skipping the result) if it does not match. This prevents a crafted search response from redirecting the client to an arbitrary host.
+
+This is particularly important for the `_search_prs()` method, which processes `repository_url` values from GitHub's `/search/issues` endpoint. Without validation, a malicious or manipulated response could cause the client to send authenticated requests (with the user's Bearer token) to an attacker-controlled URL.
+
+**Rule:** Any method that constructs API URLs from data returned by a previous API call must validate the URL against the client's known `base_url` before making the request.
+
+## Cross-Fork Branch Deletion Safety (Phase 3)
+
+`GitHubClient.merge_mr()` includes a safety check before deleting the head branch after merge. It verifies that `head.repo.full_name` matches the target `repo_path`. This prevents accidental branch deletion on fork repositories when merging cross-fork PRs, where the head branch belongs to a different user's fork.
+
+```python
+# Only delete the branch if it belongs to the target repo, not a fork
+if branch and head_repo == repo_path:
+    await request(self._http, "DELETE", f"/repos/{owner}/{repo}/git/refs/heads/{branch}")
+```
+
+## resolve_discussion Documentation Requirement (Phase 3)
+
+`GitHubClient.resolve_discussion()` is a documented no-op because the GitHub REST API does not support per-thread resolution (this would require GraphQL). The `supports_thread_resolution` property returns `False` (the default). Callers must check this property before calling `resolve_discussion()`, and the UI must not show resolution controls for GitHub PRs. The method has an explicit docstring explaining the limitation rather than silently doing nothing.
+
 ## Hostname Allowlist
 
 Only make API calls to hostnames that are either:

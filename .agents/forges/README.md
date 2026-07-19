@@ -10,6 +10,7 @@ Defined in `src/tongs/forges/base.py`. All forge backends implement this interfa
 - `list_my_mrs()` -- MRs authored by current user (host-scoped)
 - `get_mr(repo_path, number)` -- full MR detail
 - `get_mr_diff(repo_path, number)` -- raw diff data
+- `list_mr_commits(repo_path, number)` -- commits in an MR/PR (returns `list[Commit]`)
 
 **Comment operations:**
 - `get_mr_discussions(repo_path, number)` -- threaded discussions
@@ -42,6 +43,7 @@ Defined in `src/tongs/forges/models.py`. Union approach with Optional forge-spec
 - `User(username, display_name)`
 - `MRSummary` -- lightweight, for list views (no diff/comment data)
 - `MRDetail(MRSummary)` -- full MR with description, approvals, reviewers
+- `Commit` -- forge-agnostic commit (sha, short_sha, title, message, author, created_at, web_url)
 - `InlineComment` -- anchored to diff position, has `replies` tuple
 - `Discussion` -- comment thread, may or may not be inline
 - `Pipeline` / `PipelineJob` -- CI data
@@ -101,9 +103,32 @@ Key details:
 - **approved_by unwrapping:** GitLab wraps approved users as `{"user": {...}}`. `_parse_mr_detail()` calls `a.get("user", a)` to unwrap.
 - **Repo path extraction:** `_extract_repo_path()` gets repo path from MR data returned by global endpoints (used by `list_my_reviews`/`list_my_mrs`). Tries `references.full` first, falls back to parsing `web_url`.
 
+**list_my_reviews fix (Phase 3):** Previously used `reviewer_id=self` which relied on GitLab interpreting "self". Now fetches the actual username via `GET /user` and passes `reviewer_username={username}` with `scope=all`. This is more reliable across GitLab versions.
+
 **submit_review implementation:** GitLab has no batched review concept. `submit_review()` posts each inline comment individually via `create_inline_comment()`, then calls `approve_mr()` if verdict is APPROVED, then posts body as a general comment. This means redundant API calls (known deferred optimization).
 
 **Thread resolution:** `supports_thread_resolution` returns `True`. The `resolve_discussion()` method PUTs `{"resolved": true/false}` to the discussion endpoint.
+
+## GitHub Client
+
+`src/tongs/forges/github.py:GitHubClient(ForgeClient)` implements all ABC methods for the GitHub REST API.
+
+**GitHub-specific patterns:**
+
+- **Repo path splitting:** `_split_repo_path(repo_path)` splits `"owner/repo"` into a tuple. Called on every API method to construct `/repos/{owner}/{repo}/...` paths.
+- **Search API for inbox:** `list_my_reviews()` and `list_my_mrs()` use `_search_prs()`, which queries `/search/issues` with `review-requested:@me` or `author:@me`. Search results are issue-shaped (missing PR fields like `mergeable_state`), so each result is re-fetched via `/repos/{owner}/{repo}/pulls/{number}` to get full PR data.
+- **SSRF prevention:** `_repo_path_from_api_url(repo_url)` validates that the `repository_url` from search results starts with the client's `base_url + "/repos/"` before extracting the repo path. Results that do not match are silently skipped, preventing crafted API responses from redirecting requests to arbitrary hosts.
+- **CI status:** `ci_status` is always `CIStatus.UNKNOWN` in PR list/detail responses. GitHub does not include check-run status in the PR payload; it requires a separate `GET /repos/{owner}/{repo}/commits/{ref}/check-runs` call which is not implemented yet.
+- **State mapping:** GitHub uses `"open"/"closed"`, plus the `merged` flag on the PR object for merged state. `_parse_mr_state()` handles the translation.
+- **CI status mapping:** `_parse_ci_status(status, conclusion)` maps GitHub Actions two-field status (status + conclusion) to `CIStatus`. Example: `status="completed"` + `conclusion="success"` becomes `CIStatus.SUCCESS`.
+
+**submit_review implementation:** GitHub natively supports batched reviews. `submit_review()` posts to `/repos/{owner}/{repo}/pulls/{number}/reviews` with event (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`), body, and optional inline comments in a single API call. `supports_batched_review` returns `True`.
+
+**Thread resolution:** `resolve_discussion()` is a documented no-op. GitHub REST API does not support per-thread resolution (it requires GraphQL). `supports_thread_resolution` is not overridden (defaults to `False`). Callers should check this property before attempting resolution.
+
+**Branch deletion safety:** `merge_mr()` with `delete_branch=True` verifies that `head.repo.full_name` matches the target `repo_path` before deleting the branch. This prevents accidental deletion of branches on fork repositories in cross-fork PRs.
+
+**Commit listing:** `list_mr_commits()` paginates `/repos/{owner}/{repo}/pulls/{number}/commits` and returns `list[Commit]`. Author is parsed from the top-level `author` (GitHub user), not `commit.author` (git author name).
 
 ## Adding a New Forge Backend
 
@@ -135,12 +160,13 @@ Key details:
 
 | Component | Status |
 |---|---|
-| ForgeClient ABC | Complete |
-| Shared data models | Complete |
+| ForgeClient ABC | Complete (includes list_mr_commits) |
+| Shared data models | Complete (includes Commit) |
 | Auth cascade (CLI + .netrc) | Complete |
 | HTTP transport + error mapping | Complete |
-| ForgeRegistry | Complete |
+| ForgeRegistry | Complete (GitHub + GitLab wired) |
 | GitLabClient | Complete (all ABC methods) |
-| GitHubClient | Planned (Phase 3) |
+| GitHubClient | Complete (all ABC methods; CI status from PR list is UNKNOWN) |
+| GitHub CI check-runs | Not implemented (requires separate API call per PR) |
 | Keyring auth | Planned (future) |
 | Rate limit auto-retry | Error raised, UI retry planned |

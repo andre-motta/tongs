@@ -146,3 +146,16 @@ class PipelineJob:
     finished_at: datetime | None = None
     duration_seconds: int | None = None
     allow_failure: bool = False
+
+
+@dataclass(frozen=True)
+class Commit:
+    """A commit in an MR/PR."""
+
+    sha: str
+    short_sha: str
+    title: str
+    message: str
+    author: User
+    created_at: datetime | None = None
+    web_url: str = ""

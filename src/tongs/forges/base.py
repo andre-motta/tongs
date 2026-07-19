@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import AsyncIterator
 
 from tongs.forges.models import (
+    Commit,
     Discussion,
     InlineComment,
     MRDetail,
@@ -43,6 +44,9 @@ class ForgeClient(ABC):
 
     @abstractmethod
     async def get_mr_diff(self, repo_path: str, number: int) -> list[dict]: ...
+
+    @abstractmethod
+    async def list_mr_commits(self, repo_path: str, number: int) -> list[Commit]: ...
 
     @abstractmethod
     async def get_mr_discussions(

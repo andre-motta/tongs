@@ -40,6 +40,10 @@ class TongsApp(App):
         height: 1fr;
         padding: 0 1;
     }
+
+    VerticalScroll {
+        height: 1fr;
+    }
     """
 
     BINDINGS = [

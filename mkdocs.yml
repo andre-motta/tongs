@@ -6,6 +6,8 @@ repo_name: andre-motta/tongs
 
 theme:
   name: material
+  favicon: assets/icon.png
+  logo: assets/icon.png
   palette:
     - scheme: slate
       primary: deep purple

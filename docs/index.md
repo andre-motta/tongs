@@ -6,14 +6,7 @@ hide:
 
 <div class="hero" markdown>
 
-```
- _
-| |_ ___  _ __   __ _ ___
-| __/ _ \| '_ \ / _` / __|
-| || (_) | | | | (_| \__ \
- \__\___/|_| |_|\__, |___/
-                |___/
-```
+![tongs](assets/hero-banner.png){ width="600" }
 
 # One TUI. Every forge. Full review.
 

@@ -11,7 +11,7 @@ from textual.screen import Screen
 from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
-from tongs.forges.models import CIStatus, MRDetail, MRSummary
+from tongs.forges.models import CIStatus, MRDetail, MRState, MRSummary
 from tongs.widgets.diff_panel import DiffPanel
 
 
@@ -26,6 +26,32 @@ def _ci_label(status: CIStatus) -> str:
         CIStatus.UNKNOWN: "[dim]unknown[/]",
     }
     return labels.get(status, "[dim]unknown[/]")
+
+
+def _merge_readiness(mr: MRDetail) -> str:
+    if mr.state == MRState.MERGED:
+        return "[green bold]MERGED[/]"
+    if mr.state == MRState.CLOSED:
+        return "[red]CLOSED[/]"
+    blockers = []
+    if mr.is_draft:
+        blockers.append("draft")
+    if mr.has_conflicts:
+        blockers.append("has conflicts")
+    if mr.ci_status == CIStatus.FAILED:
+        blockers.append("CI failing")
+    elif mr.ci_status == CIStatus.RUNNING:
+        blockers.append("CI running")
+    if mr.detailed_merge_status and mr.detailed_merge_status not in (
+        "mergeable",
+        "can_be_merged",
+    ):
+        status = mr.detailed_merge_status.replace("_", " ")
+        if status not in " ".join(blockers):
+            blockers.append(status)
+    if not blockers:
+        return "[green]ready[/]"
+    return "[yellow]blocked[/] -- " + ", ".join(blockers)
 
 
 class MROverview(Static):
@@ -46,6 +72,7 @@ class MROverview(Static):
             f"by @{mr.author.username}\n\n"
             f"CI: {_ci_label(mr.ci_status)}  "
             f"Approvals: {approvals}\n"
+            f"Merge: {_merge_readiness(mr)}\n"
             f"Reviewers: {reviewers}  "
             f"Assignees: {assignees}\n"
             f"Labels: {labels}  "
@@ -66,8 +93,12 @@ class MRDetailScreen(Screen):
         Binding("3", "focus_tab('commits')", "Commits", show=True),
         Binding("4", "focus_tab('discussion')", "Discussion", show=True),
         Binding("5", "focus_tab('pipeline')", "Pipeline", show=True),
+        Binding("A", "approve", "Approve", show=True, key_display="A"),
+        Binding("U", "unapprove", "Unapprove", show=True, key_display="U"),
+        Binding("M", "merge", "Merge", show=True, key_display="M"),
+        Binding("X", "close_mr", "Close", show=True, key_display="X"),
         Binding("o", "open_in_browser", "Open", show=True),
-        Binding("y", "yank_url", "Copy URL", show=True),
+        Binding("ctrl+y", "yank_url", "Copy URL", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
     ]
 
@@ -119,6 +150,11 @@ class MRDetailScreen(Screen):
             )
 
     def action_go_back(self) -> None:
+        screen_stack = self.app.screen_stack
+        if len(screen_stack) >= 2:
+            parent = screen_stack[-2]
+            if hasattr(parent, "_loaded_tabs"):
+                parent._loaded_tabs.clear()
         self.app.pop_screen()
 
     def action_focus_tab(self, tab_id: str) -> None:
@@ -231,6 +267,135 @@ class MRDetailScreen(Screen):
             self.notify("URL copied to clipboard")
         except Exception:
             self.notify(f"URL: {self.mr_summary.web_url}")
+
+    _pending_action: str = ""
+    _action_taken: bool = False
+
+    def _check_open(self) -> bool:
+        if self.mr_detail and self.mr_detail.state != MRState.OPEN:
+            self.notify("MR is no longer open", severity="warning")
+            return False
+        return True
+
+    def action_approve(self) -> None:
+        if not self._check_open():
+            return
+        if self._pending_action == "approve":
+            self._pending_action = ""
+            self._do_approve()
+        else:
+            self._pending_action = "approve"
+            self.notify(
+                f"Approve !{self.mr_summary.number}? Press A again to confirm.",
+                severity="warning",
+            )
+
+    def action_unapprove(self) -> None:
+        if not self._check_open():
+            return
+        if self._pending_action == "unapprove":
+            self._pending_action = ""
+            self._do_unapprove()
+        else:
+            self._pending_action = "unapprove"
+            self.notify(
+                f"Revoke approval on !{self.mr_summary.number}? Press U again.",
+                severity="warning",
+            )
+
+    def action_merge(self) -> None:
+        if not self._check_open():
+            return
+        if self._pending_action == "merge":
+            self._pending_action = ""
+            self._do_merge()
+        else:
+            self._pending_action = "merge"
+            self.notify(
+                f"Merge !{self.mr_summary.number} into {self.mr_summary.target_branch}? "
+                "Press M again to confirm.",
+                severity="warning",
+            )
+
+    def action_close_mr(self) -> None:
+        if not self._check_open():
+            return
+        if self._pending_action == "close":
+            self._pending_action = ""
+            self._do_close()
+        else:
+            self._pending_action = "close"
+            self.notify(
+                f"Close !{self.mr_summary.number}? Press X again to confirm.",
+                severity="warning",
+            )
+
+    @work(exclusive=True, group="mr-action")
+    async def _do_approve(self) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.approve_mr(self.mr_summary.repo_path, self.mr_summary.number)
+            self.notify(
+                f"[green]Approved !{self.mr_summary.number}[/]",
+                severity="information",
+            )
+            self._action_taken = True
+            self._load_detail()
+        except Exception as exc:
+            self.notify(f"Approve failed: {exc}", severity="error")
+
+    @work(exclusive=True, group="mr-action")
+    async def _do_unapprove(self) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            if not client.supports_unapprove:
+                self.notify("Unapprove not supported on this forge", severity="warning")
+                return
+            await client.unapprove_mr(self.mr_summary.repo_path, self.mr_summary.number)
+            self.notify(
+                f"[yellow]Approval revoked on !{self.mr_summary.number}[/]",
+                severity="information",
+            )
+            self._action_taken = True
+            self._load_detail()
+        except Exception as exc:
+            self.notify(f"Unapprove failed: {exc}", severity="error")
+
+    @work(exclusive=True, group="mr-action")
+    async def _do_merge(self) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.merge_mr(self.mr_summary.repo_path, self.mr_summary.number)
+            self.notify(
+                f"[green]Merged !{self.mr_summary.number}[/]",
+                severity="information",
+            )
+            self._action_taken = True
+            self._load_detail()
+        except Exception as exc:
+            self.notify(f"Merge failed: {exc}", severity="error")
+
+    @work(exclusive=True, group="mr-action")
+    async def _do_close(self) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.close_mr(self.mr_summary.repo_path, self.mr_summary.number)
+            self.notify(
+                f"[yellow]Closed !{self.mr_summary.number}[/]",
+                severity="information",
+            )
+            self._action_taken = True
+            self._load_detail()
+        except Exception as exc:
+            self.notify(f"Close failed: {exc}", severity="error")
 
     def action_refresh(self) -> None:
         self._diff_loaded = False

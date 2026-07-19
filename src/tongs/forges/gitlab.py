@@ -289,12 +289,34 @@ class GitLabClient(ForgeClient):
             await self.add_comment(repo_path, number, body)
 
     async def approve_mr(self, repo_path: str, number: int) -> None:
+        from tongs.errors import AuthError, ForgeError
+
+        project = _encode_project(repo_path)
+        try:
+            await request(
+                self._http,
+                "POST",
+                f"/projects/{project}/merge_requests/{number}/approve",
+            )
+        except AuthError:
+            raise ForgeError(
+                "Cannot approve: you may not have permission or this project "
+                "does not allow self-approval"
+            )
+        except ForgeError:
+            raise
+
+    async def unapprove_mr(self, repo_path: str, number: int) -> None:
         project = _encode_project(repo_path)
         await request(
             self._http,
             "POST",
-            f"/projects/{project}/merge_requests/{number}/approve",
+            f"/projects/{project}/merge_requests/{number}/unapprove",
         )
+
+    @property
+    def supports_unapprove(self) -> bool:
+        return True
 
     async def merge_mr(
         self,

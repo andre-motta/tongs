@@ -293,7 +293,14 @@ class GitHubClient(ForgeClient):
         )
 
     async def approve_mr(self, repo_path: str, number: int) -> None:
-        await self.submit_review(repo_path, number, ReviewDecision.APPROVED, "")
+        from tongs.errors import ForgeError
+
+        try:
+            await self.submit_review(repo_path, number, ReviewDecision.APPROVED, "")
+        except ForgeError as exc:
+            if "422" in str(exc):
+                raise ForgeError("GitHub does not allow self-approving PRs") from exc
+            raise
 
     async def merge_mr(
         self,

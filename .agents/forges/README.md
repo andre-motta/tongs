@@ -21,6 +21,7 @@ Defined in `src/tongs/forges/base.py`. All forge backends implement this interfa
 **Review operations:**
 - `submit_review(repo_path, number, verdict, body, inline_comments)` -- abstract on both forges
 - `approve_mr(repo_path, number)`
+- `unapprove_mr(repo_path, number)` -- non-abstract, default raises `NotImplementedError`; GitLab overrides with `/unapprove` endpoint, GitHub does not implement
 - `merge_mr(repo_path, number, squash, delete_branch)`
 - `close_mr(repo_path, number)` / `reopen_mr(repo_path, number)`
 
@@ -34,6 +35,7 @@ Defined in `src/tongs/forges/base.py`. All forge backends implement this interfa
 - `supports_batched_review` -- GitHub batches comments into a review; GitLab does not
 - `supports_thread_resolution` -- GitLab has first-class resolution; GitHub uses GraphQL
 - `supports_draft_notes` -- GitLab-only feature
+- `supports_unapprove` -- GitLab returns `True` (uses `/unapprove` endpoint); GitHub returns `False` (default). TUI checks this before calling `unapprove_mr()`
 
 ## Data Models
 
@@ -104,6 +106,8 @@ Key details:
 - **Repo path extraction:** `_extract_repo_path()` gets repo path from MR data returned by global endpoints (used by `list_my_reviews`/`list_my_mrs`). Tries `references.full` first, falls back to parsing `web_url`.
 
 **list_my_reviews fix (Phase 3):** Previously used `reviewer_id=self` which relied on GitLab interpreting "self". Now fetches the actual username via `GET /user` and passes `reviewer_username={username}` with `scope=all`. This is more reliable across GitLab versions.
+
+**Unapprove:** `unapprove_mr()` POSTs to `/projects/{project}/merge_requests/{number}/unapprove`. `supports_unapprove` returns `True`. This is a GitLab-only feature; the ABC default raises `NotImplementedError`.
 
 **submit_review implementation:** GitLab has no batched review concept. `submit_review()` posts each inline comment individually via `create_inline_comment()`, then calls `approve_mr()` if verdict is APPROVED, then posts body as a general comment. This means redundant API calls (known deferred optimization).
 

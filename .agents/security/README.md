@@ -91,6 +91,15 @@ if branch and head_repo == repo_path:
 
 `GitHubClient.resolve_discussion()` is a documented no-op because the GitHub REST API does not support per-thread resolution (this would require GraphQL). The `supports_thread_resolution` property returns `False` (the default). Callers must check this property before calling `resolve_discussion()`, and the UI must not show resolution controls for GitHub PRs. The method has an explicit docstring explaining the limitation rather than silently doing nothing.
 
+## Self-Approval Error Handling
+
+Both forge clients catch self-approval errors from the API and re-raise them with clear, user-facing messages:
+
+- **GitLab:** `approve_mr()` catches `AuthError` (HTTP 401/403) and raises `ForgeError("Cannot approve: you may not have permission or this project does not allow self-approval")`. GitLab returns a permission error when the project has "Prevent MR approval by author" enabled, or when the user lacks approval rights.
+- **GitHub:** `approve_mr()` catches `ForgeError` where the message contains `"422"` (GitHub returns 422 Unprocessable Entity for self-reviews) and raises `ForgeError("GitHub does not allow self-approving PRs")`. All other errors are re-raised as-is.
+
+These clear messages surface in the TUI via the MRDetailScreen action error notifications (e.g., "Approve failed: GitHub does not allow self-approving PRs"). Without this handling, users would see raw API error payloads.
+
 ## Hostname Allowlist
 
 Only make API calls to hostnames that are either:

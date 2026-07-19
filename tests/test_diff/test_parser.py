@@ -749,3 +749,66 @@ class TestEdgeCases:
         assert lines[0].content == "context_line"
         assert lines[1].content == "deleted_line"
         assert lines[2].content == "added_line"
+
+    def test_empty_context_line_preserves_line_numbers(self) -> None:
+        """An empty context line (blank source line) must not cause line-number drift."""
+        diff = (
+            "--- a/f.py\n"
+            "+++ b/f.py\n"
+            "@@ -1,5 +1,6 @@\n"
+            " line1\n"
+            " \n"
+            " line3\n"
+            "+added\n"
+            " line4\n"
+            " line5\n"
+        )
+        files = parse_diff(diff)
+        lines = files[0].hunks[0].lines
+
+        # line1
+        assert lines[0].old_lineno == 1
+        assert lines[0].new_lineno == 1
+
+        # empty context line
+        assert lines[1].line_type == LineType.CONTEXT
+        assert lines[1].old_lineno == 2
+        assert lines[1].new_lineno == 2
+
+        # line3
+        assert lines[2].old_lineno == 3
+        assert lines[2].new_lineno == 3
+
+        # added
+        assert lines[3].line_type == LineType.ADDITION
+        assert lines[3].old_lineno is None
+        assert lines[3].new_lineno == 4
+
+        # line4 -- shifted by the addition
+        assert lines[4].old_lineno == 4
+        assert lines[4].new_lineno == 5
+
+        # line5
+        assert lines[5].old_lineno == 5
+        assert lines[5].new_lineno == 6
+
+    def test_deletion_of_sql_comment_not_truncated(self) -> None:
+        """Deleting a line starting with '-- ' must parse as a deletion, not a hunk break."""
+        diff = (
+            "--- a/schema.sql\n"
+            "+++ b/schema.sql\n"
+            "@@ -1,4 +1,3 @@\n"
+            " SELECT 1;\n"
+            "--- This is a SQL comment\n"
+            " SELECT 2;\n"
+            " SELECT 3;\n"
+        )
+        files = parse_diff(diff)
+        assert len(files) == 1
+        assert files[0].deletions == 1
+        assert files[0].additions == 0
+
+        lines = files[0].hunks[0].lines
+        del_lines = [ln for ln in lines if ln.line_type == LineType.DELETION]
+        assert len(del_lines) == 1
+        assert del_lines[0].content == "-- This is a SQL comment"

@@ -153,7 +153,23 @@ Footer
 
 **Refresh:** `action_refresh()` resets both `_diff_loaded = False` and `_commits_loaded = False`, then re-runs `_load_detail()`. Re-entering the Diff or Commits tab triggers a fresh fetch.
 
-Bindings: Esc/q = back, 1-5 = focus tab, o = open in browser, y = copy URL to clipboard, Ctrl+R = refresh.
+Bindings: Esc/q = back, 1-5 = focus tab, A = approve, U = unapprove, M = merge, X = close, o = open in browser, Ctrl+Y = copy URL to clipboard, Ctrl+R = refresh.
+
+## MR Actions (MRDetailScreen)
+
+`MRDetailScreen` supports four MR mutation actions: Approve (A), Unapprove (U), Merge (M), and Close (X). All use uppercase bindings, following the convention that uppercase keys indicate mutating operations.
+
+**Double-press confirmation pattern:** Every action requires pressing the key twice. The first press sets `_pending_action` to the action name and shows a warning notification (e.g., "Approve !42? Press A again to confirm."). The second press checks that `_pending_action` matches, clears it, and executes the action via a `@work(exclusive=True, group="mr-action")` async method. This prevents accidental mutations without a modal dialog.
+
+**State guards:** All four actions call `_check_open()` before proceeding. If the MR state is not `MRState.OPEN` (i.e., already merged or closed), the action is blocked with a "MR is no longer open" warning notification. This prevents impossible operations like merging an already-merged MR.
+
+**Unapprove capability check:** `_do_unapprove()` checks `client.supports_unapprove` before calling the API. If the forge does not support it (GitHub), a "not supported on this forge" warning is shown and the operation is skipped.
+
+**Auto-refresh after actions:** On success, each `_do_*()` method sets `_action_taken = True` and calls `_load_detail()` to re-fetch the MR from the API. This updates the overview metadata (approvals list, merge readiness, state) immediately after the action completes.
+
+**Parent screen cache invalidation:** `action_go_back()` checks whether the parent screen (one level up in `app.screen_stack`) has a `_loaded_tabs` attribute. If so, it calls `_loaded_tabs.clear()` before popping. This forces the parent screen (InboxScreen or MRListScreen) to re-fetch tab data on return, ensuring the MR list reflects any state changes made in the detail view.
+
+**Merge readiness indicator:** `_merge_readiness(mr)` in the overview computes a readiness status from MR metadata. It returns `[green]ready[/]` when no blockers exist, or `[yellow]blocked[/]` with a comma-separated list of reasons. Blockers checked: `is_draft`, `has_conflicts`, CI status (`FAILED` or `RUNNING`), and GitLab's `detailed_merge_status` (when not `"mergeable"` or `"can_be_merged"`).
 
 ## DiffPanel Widget
 
@@ -180,11 +196,13 @@ Bindings: n = next file, Shift+N = previous file (wraps around).
 
 - Lowercase = view/navigate. Uppercase = mutate (with confirmation)
 - `Ctrl+R` = refresh everywhere
+- `Ctrl+Y` = copy URL to clipboard (MRDetailScreen)
 - `Ctrl+P` = command palette (planned)
 - `?` = contextual help
 - `j/k` = navigate in lists/trees
 - `q` / `Esc` = back/quit
 - `o` = open in browser
+- `A/U/M/X` = approve/unapprove/merge/close (MRDetailScreen, double-press to confirm)
 - `/` = search (planned)
 
 Current bindings are defined as `BINDINGS` lists on each Screen class. Format: `Binding(key, action_name, description, show=True/False)`.

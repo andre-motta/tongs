@@ -120,6 +120,28 @@ class TestRepoProperties:
         assert repo.namespace == ""
         assert repo.forge_type is None
 
+    def test_namespace_single_segment(self):
+        remote = Remote(
+            name="origin",
+            url="https://github.com/repo.git",
+            hostname="github.com",
+            repo_path="repo",
+            forge_type=ForgeType.GITHUB,
+        )
+        repo = Repo(path=Path("/tmp/repo"), remotes=(remote,), primary_remote=remote)
+        assert repo.namespace == ""
+
+    def test_namespace_two_segments(self):
+        remote = Remote(
+            name="origin",
+            url="https://github.com/org/repo.git",
+            hostname="github.com",
+            repo_path="org/repo",
+            forge_type=ForgeType.GITHUB,
+        )
+        repo = Repo(path=Path("/tmp/repo"), remotes=(remote,), primary_remote=remote)
+        assert repo.namespace == "org"
+
 
 class TestDiscoverReposEdgeCases:
     def test_repo_with_only_local_remote_excluded(self, tmp_path):
@@ -182,3 +204,20 @@ class TestDiscoverReposEdgeCases:
         (tmp_path / "broken-link").symlink_to(tmp_path / "nonexistent")
         repos = discover_repos(tmp_path)
         assert len(repos) == 1
+
+    def test_repo_at_exact_max_depth_found(self, tmp_path):
+        _init_repo(
+            tmp_path / "a" / "b" / "deep-repo",
+            {"origin": "https://github.com/org/deep-repo.git"},
+        )
+        repos = discover_repos(tmp_path, max_depth=3)
+        assert len(repos) == 1
+        assert repos[0].path.name == "deep-repo"
+
+    def test_repo_beyond_max_depth_missed(self, tmp_path):
+        _init_repo(
+            tmp_path / "a" / "b" / "c" / "too-deep",
+            {"origin": "https://github.com/org/too-deep.git"},
+        )
+        repos = discover_repos(tmp_path, max_depth=3)
+        assert len(repos) == 0

@@ -95,6 +95,9 @@ class ForgeClient(ABC):
     @abstractmethod
     async def approve_mr(self, repo_path: str, number: int) -> None: ...
 
+    async def unapprove_mr(self, repo_path: str, number: int) -> None:
+        raise NotImplementedError("This forge does not support unapprove")
+
     @abstractmethod
     async def merge_mr(
         self,
@@ -148,6 +151,10 @@ class ForgeClient(ABC):
 
     @property
     def supports_draft_notes(self) -> bool:
+        return False
+
+    @property
+    def supports_unapprove(self) -> bool:
         return False
 
     @abstractmethod

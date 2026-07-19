@@ -14,7 +14,7 @@ Defined in `src/tongs/forges/base.py`. All forge backends implement this interfa
 
 **Comment operations:**
 - `get_mr_discussions(repo_path, number)` -- threaded discussions
-- `create_inline_comment(repo_path, number, file_path, line, side, body)` -- new inline comment
+- `create_inline_comment(repo_path, number, file_path, line, side, body, start_line=None, start_side=None)` -- new inline comment; `start_line`/`start_side` enable multi-line ranges (GitHub uses REST payload params, GitLab encodes range in suggestion fence syntax)
 - `reply_to_discussion(repo_path, number, discussion_id, body)` -- reply to thread
 - `resolve_discussion(repo_path, number, discussion_id, resolved)` -- resolve/unresolve
 
@@ -129,6 +129,8 @@ Key details:
 **submit_review implementation:** GitHub natively supports batched reviews. `submit_review()` posts to `/repos/{owner}/{repo}/pulls/{number}/reviews` with event (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`), body, and optional inline comments in a single API call. `supports_batched_review` returns `True`.
 
 **Thread resolution:** `resolve_discussion()` is a documented no-op. GitHub REST API does not support per-thread resolution (it requires GraphQL). `supports_thread_resolution` is not overridden (defaults to `False`). Callers should check this property before attempting resolution.
+
+**Multi-line comment support:** `create_inline_comment()` accepts optional `start_line` and `start_side` parameters. When provided, these are included in the REST payload to create multi-line review comments. GitLab does not use these parameters; its multi-line range is encoded in the suggestion fence syntax instead.
 
 **Branch deletion safety:** `merge_mr()` with `delete_branch=True` verifies that `head.repo.full_name` matches the target `repo_path` before deleting the branch. This prevents accidental deletion of branches on fork repositories in cross-fork PRs.
 

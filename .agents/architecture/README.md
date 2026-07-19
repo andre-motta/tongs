@@ -36,9 +36,24 @@ The TUI layer never imports a concrete forge client. Everything goes through `Fo
 5. `_changes_to_diff_text()` converts the changes list to unified diff text (prepends `---`/`+++` headers when missing).
 6. `diff/parser.py:parse_diff()` parses the text into `list[DiffFile]` (shared model layer).
 7. `DiffPanel.set_files()` populates `DiffFileTree` and renders the first file in `DiffContent`.
-8. For inline commenting (planned), `diff/position.py:position_from_diff_line()` creates a `DiffPosition`, then `to_forge_position()` converts it to the forge-specific API format.
+8. For inline commenting, `diff/position.py:position_from_diff_line()` creates a `DiffPosition`, then `to_forge_position()` converts it to the forge-specific API format.
 
 This path keeps the view layer working against shared models (`DiffFile`, `DiffPosition`) without knowing which forge produced the data.
+
+## Data Flow: Inline Suggestions (Phase 4)
+
+1. User selects one or more lines in `DiffOptionList` (Shift+J/K or Ctrl+Click) and presses F3.
+2. `DiffOptionList.action_suggest()` posts `CommentRequested` with `CommentMode.SUGGEST` and `context_lines` from the selection.
+3. `MRDetailScreen.on_comment_requested()` receives the message and invokes the suggestion flow using pure helpers from `views/suggestion.py`.
+4. `extract_new_side_lines()` filters out deletion lines from the selection.
+5. `build_suggestion_template()` creates the editor template with original code below a separator.
+6. The user edits the code in the CommentEditor (or external editor via F2).
+7. `parse_suggestion_template()` splits the edited text into comment and suggested code.
+8. `format_suggestion_block()` wraps the code in a forge-specific suggestion fence (GitLab: `suggestion:-0+N`, GitHub: `suggestion`).
+9. `resolve_suggestion_position()` determines the anchor line and optional `start_line`/`start_side` for multi-line ranges.
+10. `client.create_inline_comment()` posts the comment with the suggestion block.
+
+The suggestion helpers are pure functions in `views/suggestion.py` with no I/O or Textual dependencies. Forge-specific differences are handled by `forge_type` parameters, not by conditional logic in the TUI layer.
 
 ## Data Flow: Commit Listing (Phase 3)
 

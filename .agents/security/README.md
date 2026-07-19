@@ -131,9 +131,9 @@ Only make API calls to hostnames that are either:
 
 This runs on every parsed remote URL before storing it in the `Remote` dataclass. The URL stored in `Remote.url` is always credential-free.
 
-## Temp File Security (Planned)
+## Temp File Security
 
-For external editor integration (Phase 4):
+For external editor integration (CommentEditor F2 binding):
 - `tempfile.mkstemp(mode=0o600)` for comment editing temp files
 - Cleanup in `finally` block
 - Pass `--cmd "set noswapfile noundofile nobackup"` to neovim to prevent swap/undo file creation

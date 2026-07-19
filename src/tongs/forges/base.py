@@ -62,6 +62,8 @@ class ForgeClient(ABC):
         line: int,
         side: str,
         body: str,
+        start_line: int | None = None,
+        start_side: str | None = None,
     ) -> InlineComment: ...
 
     @abstractmethod

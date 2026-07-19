@@ -19,7 +19,7 @@ pytest tests/test_forges/test_gitlab.py
 pytest tests/test_forges/test_gitlab.py::TestGitLabClientAsync
 ```
 
-Tests run without network access. All forge interactions are mocked. The full suite (217 tests) runs in under 0.5 seconds.
+Tests run without network access. All forge interactions are mocked. The full suite (406 tests) runs in under 0.5 seconds.
 
 ## Directory Layout
 
@@ -37,11 +37,16 @@ tests/
     test_auth.py             # Token resolution cascade
     test_http.py             # HTTP transport, error mapping
     test_gitlab.py           # GitLab client parsing and async methods
+    test_github.py           # GitHub client: inline comment, multi-line params (3 tests)
     test_registry.py         # ForgeRegistry hostname mapping
   test_diff/
     test_parser.py           # Diff parser with inline strings + fixture files
+    test_position.py         # DiffPosition creation and forge converters
   test_views/
     test_helpers.py          # View helper functions (CI icons, relative time)
+    test_suggestion.py       # Suggestion helpers: template, fence, format, position (25 tests)
+  test_widgets/
+    test_diff_panel.py       # DiffOptionList, DiffContent, DiffRenderer, selection, comments (49 tests)
   fixtures/
     builder_mr_3113.diff     # Real MR diff from builder project
     fromager_pr_1258.diff    # Real PR diff from fromager project
@@ -139,6 +144,38 @@ def test_reads_valid_netrc(self, tmp_path):
 ```
 
 POSIX permission tests use `@pytest.mark.skipif(sys.platform == "win32", ...)`.
+
+## Widget Tests (DiffPanel)
+
+`tests/test_widgets/test_diff_panel.py` tests the DiffOptionList, DiffContent, DiffRenderer, and related classes directly without running the Textual app. The tests construct model objects (DiffFile, DiffHunk, DiffLine) and call methods on the widgets.
+
+Key patterns:
+
+**Direct model construction for test data:**
+
+```python
+def _make_line(lt: LineType, content: str = "x", old: int | None = 1, new: int | None = 1) -> DiffLine:
+    return DiffLine(old_lineno=old, new_lineno=new, content=content, line_type=lt)
+```
+
+**Testing render_line() behavior:**
+Tests verify that `DiffOptionList.render_line()` injects the correct VisualStyle (addition/deletion/selection backgrounds) by checking the style applied before `_get_option_render()`.
+
+**Selection range testing:**
+Tests verify `_in_selection_range()` and `_get_selection_lines()` by setting `_selection_anchor` and `highlighted` directly, then asserting the expected lines are included.
+
+**CommentRequested message assertions:**
+Tests verify that `action_comment()` and `action_suggest()` post `CommentRequested` with the correct `CommentMode`, `context_lines`, and blocking behavior (e.g., suggest on deletion lines is blocked).
+
+## Suggestion Helper Tests
+
+`tests/test_views/test_suggestion.py` tests pure functions from `src/tongs/views/suggestion.py`. No Textual dependencies, no mocking required.
+
+Covers: template building/parsing, backtick fence computation (including edge cases with inner triple-backtick code blocks), forge-specific suggestion block formatting (GitLab fence syntax vs GitHub plain fence), new-side line extraction, and position resolution for single-line and multi-line suggestions on both forges.
+
+## GitHub Client Tests
+
+`tests/test_forges/test_github.py` tests `GitHubClient.create_inline_comment()` via `httpx.MockTransport`. Covers single-line comments (no `start_line`/`start_side` in payload) and multi-line comments (`start_line`/`start_side` included in REST payload).
 
 ## Diff Parser Tests
 

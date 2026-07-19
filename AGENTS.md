@@ -67,13 +67,14 @@ src/tongs/
 
   widgets/             # Reusable Textual widgets
     comment_editor.py  # CommentEditor (bottom-docked, general + inline modes)
-    diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent)
+    diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent(DiffOptionList + Markdown))
     mr_table.py        # MRTable (DataTable subclass, setup_columns(show_repo) toggle)
 
   views/               # Textual Screens
     inbox.py           # InboxScreen: MR inbox with tabs (My Reviews/My MRs/All Open), supports scoped mode
     repo_list.py       # RepoListScreen: searchable DataTable with live filter and forge cycling
     mr_detail.py       # MRDetailScreen: tabbed MR detail (Overview/Diff/Discussion/Pipeline)
+    suggestion.py      # Pure helpers for suggestion comments (template, fence, forge-specific blocks)
 ```
 
 ## Subsystem Guides
@@ -89,7 +90,7 @@ src/tongs/
 
 ## Development Status
 
-Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). Phase 3 complete (GitHub REST API client, Commit model, commits tab in MR detail, scrollable overview with Markdown description, SSRF prevention, cross-fork safety).
+Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). Phase 3 complete (GitHub REST API client, Commit model, commits tab in MR detail, scrollable overview with Markdown description, SSRF prevention, cross-fork safety). Phase 4 in progress: DiffPanel refactored to OptionList-based per-line interaction, multi-line selection, inline suggestions with forge-specific formatting, multi-line comment API support.
 
 ## Gate Process
 

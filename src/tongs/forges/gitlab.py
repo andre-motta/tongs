@@ -203,6 +203,8 @@ class GitLabClient(ForgeClient):
         line: int,
         side: str,
         body: str,
+        start_line: int | None = None,
+        start_side: str | None = None,
     ) -> InlineComment:
         project = _encode_project(repo_path)
         mr_data = await request(

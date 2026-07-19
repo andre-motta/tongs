@@ -190,18 +190,55 @@ Layout:
 
 ```
 Horizontal
-  DiffFileTree (width: 35, border-right)  |  DiffContent (width: 1fr)
+  DiffFileTree (width: 35, border-right)  |  Vertical (#diff-right-pane)
+                                               Static (#diff-file-header)
+                                               DiffContent
+                                                 DiffOptionList (#diff-option-list)
+                                                 Markdown (#diff-markdown-preview, hidden)
 ```
 
 **DiffFileTree** extends `Tree`. `set_files()` populates the tree with file entries showing status icon (M/A/D/R color-coded), path, and +/- stats. File index stored as `data` on leaf nodes.
 
-**DiffContent** extends `VerticalScroll`. `show_file()` renders a single file's diff: file header with stats, then hunk headers and diff lines. `show_placeholder()` for loading/empty states.
+**DiffOptionList** extends `OptionList`. Provides per-line cursor navigation and multi-line selection for diff content.
+
+Internal state:
+- `_line_map: dict[int, DiffLine]` -- maps option index to DiffLine (only selectable lines)
+- `_line_types: dict[int, LineType]` -- maps option index to LineType (for background coloring)
+- `_current_file: DiffFile | None` -- currently displayed file
+- `_selection_anchor: int | None` -- starting option index of a visual selection (None when no selection)
+
+Line-level background coloring via `render_line()` override:
+- Injects bgcolor into Textual `VisualStyle` BEFORE calling `_get_option_render()`. This is critical because `Strip.apply_style()` does not work here due to style priority rules; the VisualStyle must be set before the render call.
+- Class-level VisualStyle constants: `_ADDITION_BG` (dark green), `_DELETION_BG` (dark red), `_SELECTION_BG` (blue).
+- Selection range overrides addition/deletion colors. Highlighted line is not recolored (uses default highlight style).
+
+Multi-line selection:
+- Shift+J (`action_extend_down`) / Shift+K (`action_extend_up`): extends selection from `_selection_anchor`
+- Regular j/k movement clears the selection anchor
+- Ctrl+Click (`_on_click` override): extends selection to clicked line
+- Escape clears selection via `action_clear_selection`, guarded by `check_action()` which returns False when no selection is active, allowing screen-level Escape to pass through
+
+Comment/suggest actions:
+- `c` (`action_comment`): posts `CommentRequested` with `CommentMode.COMMENT`, includes `context_lines` from selection if active
+- `F3` (`action_suggest`): posts `CommentRequested` with `CommentMode.SUGGEST`, blocks on deletion lines with notification
+- Both clear the selection anchor after posting
+
+**DiffContent** extends `Widget` (not VerticalScroll). Composes `DiffOptionList` + `Markdown` preview widget. `show_file()` populates the option list; `show_placeholder()` for loading/empty states; `toggle_markdown_preview()` switches between diff and rendered markdown for `.md` files.
+
+**DiffRenderer** handles syntax highlighting and word-level diffs:
+- `render_lines(hunk)` returns `list[tuple[DiffLine | None, Text]]` where `None` indicates a fold marker (non-selectable)
+- Context folding: runs of context lines longer than `CONTEXT_LINES * 2` (default 3) are collapsed to top-N, fold marker, bottom-N
+- Word-level diffs: consecutive deletion+addition blocks are paired; `difflib.SequenceMatcher` highlights changed words with bold+underline
+- Foreground-only styling in render methods; backgrounds come from `DiffOptionList.render_line()`
 
 **DiffPanel** extends `Widget`. Composes `DiffFileTree` + `DiffContent` in a `Horizontal` container. `set_files()` populates the tree and auto-selects the first file. `on_tree_node_selected()` switches the content pane when a file is clicked.
 
-**Diff line rendering** (`_render_diff_line`): additions get green-on-dark-green, deletions get red-on-dark-red, context lines are plain, no-newline markers are dimmed. Gutter shows old and new line numbers (4-char wide each).
+Bindings: n = next file, Shift+N = previous file (wraps around), m = toggle markdown preview.
 
-Bindings: n = next file, Shift+N = previous file (wraps around).
+**CommentMode enum and CommentRequested message:**
+- `CommentMode` enum: `COMMENT` (default), `SUGGEST` (suggestion mode)
+- `CommentRequested` message fields: `file: DiffFile | None`, `line: DiffLine | None`, `mode: CommentMode`, `context_lines: list[DiffLine] | None`
+- `context_lines` carries the multi-line selection for both comments and suggestions
 
 ## CommentEditor Widget
 
@@ -216,12 +253,13 @@ Bindings: n = next file, Shift+N = previous file (wraps around).
 **Message flow (decoupled communication):**
 
 ```
-DiffPanel                CommentEditor            MRDetailScreen
+DiffOptionList           CommentEditor            MRDetailScreen
   |                           |                        |
   |-- CommentRequested ------>|                        |
-  |                           |-- (bubbles up) ------->|
-  |                           |                        |-- on_comment_requested()
+  |   (file, line, mode,      |-- (bubbles up) ------->|
+  |    context_lines)         |                        |-- on_comment_requested()
   |                           |                        |     opens editor (inline or general)
+  |                           |                        |     if SUGGEST mode: opens suggestion flow
   |                           |                        |
   |                    (user types, submits)            |
   |                           |                        |
@@ -232,9 +270,9 @@ DiffPanel                CommentEditor            MRDetailScreen
   |                           |   Submitted            |     client.add_comment()
 ```
 
-`DiffPanel` posts `CommentRequested` (with optional `file`/`line`). `MRDetailScreen.on_comment_requested()` receives it and opens the editor in the appropriate mode. The editor posts `CommentSubmitted` (with `body` + `DiffPosition`) or `GeneralCommentSubmitted` (with `body`). `MRDetailScreen` handles both and posts via the forge client in a `@work(exclusive=True, group="mr-comment")` method.
+`DiffOptionList` posts `CommentRequested` (with `file`, `line`, `mode`, and optional `context_lines` from multi-line selection). `MRDetailScreen.on_comment_requested()` receives it and opens the editor in the appropriate mode. For `CommentMode.SUGGEST`, the suggestion flow uses helpers from `views/suggestion.py` to build the template and format the forge-specific suggestion block. The editor posts `CommentSubmitted` (with `body` + `DiffPosition`) or `GeneralCommentSubmitted` (with `body`). `MRDetailScreen` handles both and posts via the forge client in a `@work(exclusive=True, group="mr-comment")` method.
 
-The `c` key on `MRDetailScreen` opens the editor in general mode directly. The `c` key on `DiffPanel` posts `CommentRequested` which bubbles up to the screen.
+The `c` key on `MRDetailScreen` opens the editor in general mode directly. The `c` key on `DiffOptionList` posts `CommentRequested` which bubbles up to the screen. The `F3` key on `DiffOptionList` posts `CommentRequested` with `CommentMode.SUGGEST`.
 
 **External editor (F2):** Creates a temp file (`.md` suffix, `0o600` perms), writes current TextArea content, launches `$VISUAL` / `$EDITOR` / nvim / vim / vi / nano via `subprocess.run()` inside `app.suspend()`, then reads back the result. Temp file is cleaned up in a `finally` block. Not supported on Windows.
 
@@ -252,9 +290,13 @@ Bindings: Ctrl+S / Ctrl+J = submit (priority bindings), Esc = cancel (with guard
 - `j/k` = navigate in lists/trees
 - `q` / `Esc` = back/quit
 - `o` = open in browser
-- `c` = add comment (MRDetailScreen: general, DiffPanel: via CommentRequested)
+- `c` = add comment (MRDetailScreen: general, DiffOptionList: inline via CommentRequested)
+- `F3` = suggest edit (DiffOptionList: suggestion via CommentRequested with SUGGEST mode)
+- `Shift+J/K` = extend multi-line selection (DiffOptionList)
+- `Ctrl+Click` = extend selection to clicked line (DiffOptionList)
 - `Ctrl+S` / `Ctrl+J` = submit comment (CommentEditor, priority bindings)
 - `F2` = open external editor (CommentEditor)
+- `m` = toggle markdown preview (DiffPanel, for .md files)
 - `A/U/M/X` = approve/unapprove/merge/close (MRDetailScreen, double-press to confirm)
 - `/` = search (RepoListScreen: live filter)
 - `f` = cycle forge filter (RepoListScreen: None -> GH -> GL -> None)
@@ -296,8 +338,25 @@ InboxScreen (global, default)
 
 All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_screen()` (Esc/q). State is passed via constructor arguments (MRSummary, Repo), not reactive app-level attributes. The scoped InboxScreen reuses the same class as the global one, differentiated by the `repo` constructor parameter.
 
-## Planned Views (Phase 4+)
+## Suggestion Flow
+
+`src/tongs/views/suggestion.py` contains pure helper functions for building and parsing suggestion comments. All functions are forge-agnostic or accept `forge_type` as a parameter, contain no I/O or Textual dependencies, and are trivially testable.
+
+**Functions:**
+- `build_suggestion_template(original_code)` -- builds editor template with comment area above a separator (`SUGGESTION_SEPARATOR`) and original code below
+- `parse_suggestion_template(edited)` -- splits editor output into `(comment_text, suggested_code)` at the separator; strips instruction lines
+- `compute_backtick_fence(code)` -- returns the minimum backtick fence (at least 3) that avoids conflicts with backtick runs in the code
+- `format_suggestion_block(suggested_code, n_original, forge_type, comment_text)` -- formats the full comment body with the fence block:
+  - GitLab: `` ```suggestion:-0+N `` (range encoded in fence syntax)
+  - GitHub: `` ```suggestion `` (range via API params `start_line`/`start_side`)
+- `extract_new_side_lines(lines)` -- filters to context + addition lines (no deletions)
+- `resolve_suggestion_position(new_side_lines, forge_type)` -- returns `(anchor_line, start_line, start_side)`:
+  - GitLab: anchor is always the first line; start_line/start_side are None (range in fence)
+  - GitHub single-line: anchor is the first line; start_line/start_side are None
+  - GitHub multi-line: anchor is the LAST line (GitHub's `line` param); start_line is the first line's `new_lineno`; start_side is `"RIGHT"`
+
+## Planned Views (Phase 5+)
 
 - `PipelineListScreen` / `PipelineDetailScreen` / `JobLogScreen`
-- Discussion tab content for MRDetailScreen (Phase 4)
-- Pipeline tab content for MRDetailScreen (Phase 5)
+- Discussion tab content for MRDetailScreen
+- Pipeline tab content for MRDetailScreen

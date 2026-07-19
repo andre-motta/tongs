@@ -3,62 +3,27 @@
 </p>
 
 <p align="center">
-  <strong>Code review without leaving the terminal.</strong><br>
-  A terminal-native TUI for merge request review and CI/CD management across GitHub and GitLab.
+  <strong>One TUI. Every forge. Full review.</strong><br>
+  A terminal-native code review inbox for developers who work across GitHub and GitLab.
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/tongs/"><img src="https://img.shields.io/pypi/v/tongs" alt="PyPI"></a>
+  <a href="https://pypi.org/project/tongs/"><img src="https://img.shields.io/pypi/pyversions/tongs" alt="Python"></a>
   <a href="https://github.com/andre-motta/tongs/blob/main/LICENSE"><img src="https://img.shields.io/github/license/andre-motta/tongs" alt="License"></a>
   <a href="https://github.com/andre-motta/tongs"><img src="https://img.shields.io/github/stars/andre-motta/tongs" alt="Stars"></a>
 </p>
 
-Point it at any directory, and tongs discovers your repos, detects their forges, and gives you a unified inbox for everything that needs your attention.
+<!-- TODO: Replace with a 30-second GIF/recording showing: inbox -> diff -> comment -> approve -->
 
-No browser tabs. No context switching. Just your terminal.
+Your team uses GitHub. Another uses GitLab. You live in the terminal. tongs gives you a single review inbox across forges, with syntax-highlighted diffs and inline comments, right where you already work.
 
-> Think of it as [lazygit](https://github.com/jesseduffield/lazygit) for code review, or [gh-dash](https://github.com/dlvhdr/gh-dash) that also speaks GitLab.
-
-## Why?
-
-Every code review starts the same way: you leave your editor, open a browser, navigate to the MR, lose your terminal context, and then try to remember what you were doing when you get back. Multiply that by a dozen repos across GitHub and GitLab and it adds up fast.
-
-tongs keeps you in the terminal. It scans your local repos, figures out which forges they live on, and pulls your review queue into a single dashboard. Diffs render with syntax highlighting. Comments happen inline. Pipelines show their status right next to the MR. You approve, merge, or comment without ever opening a browser.
-
-## Status
-
-**Early stage, actively developed.** Phase 1 is complete: repo scanner, forge abstraction (GitLab client), and the TUI shell with inbox and repo list. 200+ tests. Published on [PyPI](https://pypi.org/project/tongs/). The core plumbing works and the roadmap is clear.
-
-This is a good time to get involved if you want to shape the direction.
-
-## Features
-
-### Built (Phase 1)
-
-- **Repo scanner** -- walks any directory, finds git repos, auto-detects GitHub vs GitLab from remotes
-- **Unified inbox** -- "My Reviews" and "My MRs" tabs across all discovered repos and forges
-- **Repo list** -- tree view grouped by namespace/org with forge indicators
-- **Forge abstraction** -- clean `ForgeClient` interface with GitLab implementation
-- **Smart auth** -- delegates to `gh`/`glab` CLI credential stores with `.netrc` fallback (tongs never stores your tokens)
-- **TOML config** -- `~/.config/tongs/config.toml` with sane defaults for everything
-- **Cross-platform** -- Linux, macOS, Windows via platformdirs
-- **ASCII mode** -- works on any terminal, Nerd Fonts are optional polish
-
-### Planned
-
-- Full diff viewer with syntax highlighting, word-level diff, context folding
-- Inline comments on diff lines, thread replies, resolve/unresolve discussions
-- Approve, merge, close, reopen with confirmation dialogs
-- Pipeline/CI management: job logs, retry, cancel, trigger
-- GitHub client (forge abstraction is ready, implementation is next)
-- Plugin system (fleet monitor is the first plugin, more planned)
-- MCP server for AI tool integration
-- Neovim integration (optional, never required)
+> lazygit is great for git operations. tongs picks up where it stops, at code review.
 
 ## Install
 
 ```bash
-# Recommended: isolated install with pipx or uvx
+# Recommended: install with pipx or uvx for isolation
 pipx install tongs
 # or
 uvx install tongs
@@ -67,16 +32,15 @@ uvx install tongs
 pip install tongs
 ```
 
-Requires **Python 3.12+**. No other system dependencies are required.
+Requires **Python 3.12+**. No other system dependencies.
 
-### Optional extras
+### From source
 
 ```bash
-# MCP server support (for AI tool integration)
-pipx install 'tongs[mcp]'
-
-# Fleet monitor plugin
-pipx install 'tongs[fleet]'
+git clone https://github.com/andre-motta/tongs.git
+cd tongs
+uv venv && source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
 ## Quick start
@@ -85,15 +49,14 @@ pipx install 'tongs[fleet]'
 # Run tongs -- it scans ~/git by default
 tongs
 
-# Point at a different directory
-tongs --scan-root ~/projects
+# Configure a different scan root in ~/.config/tongs/config.toml:
+#   [general]
+#   scan_root = "~/projects"
 ```
 
 tongs discovers repos under your scan root, reads their git remotes, and populates the inbox. Auth tokens come from your existing `gh` and `glab` CLI logins automatically.
 
-### First-time setup
-
-If you haven't logged in to your forges yet:
+### First-time auth setup
 
 ```bash
 # GitHub
@@ -106,9 +69,115 @@ glab auth login
 glab auth login --hostname gitlab.example.com
 ```
 
-### Configuration
+tongs never stores your tokens. It delegates to `gh auth token` / `glab auth token` at runtime, falling back to `~/.netrc`.
 
-tongs uses `~/.config/tongs/config.toml` (or the platform-appropriate config directory). All settings have sensible defaults. Example:
+## Features
+
+### Inbox
+
+- **Multi-forge inbox** -- GitHub PRs and GitLab MRs in one view, auto-detected from your git remotes
+- **Three tabs** -- My Reviews, My MRs, All Open with lazy loading and parallel fetching
+- **Per-repo scope** -- click any repo in the repo list to filter the inbox to just that project
+- **Repo list** -- searchable, filterable by forge type (GH/GL/All), grouped by namespace
+
+### Diff review
+
+- **Split-pane viewer** -- file tree on the left, diff content on the right
+- **Syntax highlighting** -- 500+ languages via Pygments, applied per-line inside the diff
+- **Word-level diffs** -- changed words highlighted bold+underline within modified lines
+- **Context folding** -- long unchanged sections collapse to "... N unchanged lines ..." markers
+- **Markdown preview** -- toggle rendered preview for `.md` files with `m`
+- **File navigation** -- jump between files with `n` / `Shift+N`
+
+### Commenting
+
+- **Inline comments** -- press `c` on any diff line to open the bottom-docked comment editor
+- **Visual line selection** -- select multiple lines with `Shift+J` / `Shift+K` or `Ctrl+Click` for multi-line comments
+- **Suggested changes** -- press `F3` to open your `$EDITOR` with the selected code; edit it, and tongs posts a suggestion block (GitHub `suggestion` / GitLab `suggestion:-0+N` syntax)
+- **External editor** -- press `F2` inside the comment editor to switch to your preferred editor
+- **General comments** -- press `c` from the overview tab to post a top-level MR comment
+
+### Actions
+
+- **Approve** (`A`) -- approve the MR/PR with double-press confirmation
+- **Unapprove** (`U`) -- revoke your approval (GitLab)
+- **Merge** (`M`) -- merge with double-press confirmation
+- **Close** (`X`) -- close with double-press confirmation
+- **Merge readiness** -- visual indicator showing blockers (draft, conflicts, CI failing, merge status)
+
+### Navigation
+
+- **Commits tab** -- browse the full commit history for any MR/PR
+- **Open in browser** (`o`) -- jump to the MR/PR in your default browser
+- **Copy URL** (`Ctrl+Y`) -- yank the MR URL to clipboard
+- **Refresh** (`Ctrl+R`) -- reload the current view
+
+## Keybindings
+
+### Global
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+P` | Command palette |
+| `?` | Help |
+| `q` | Quit / Back |
+| `Ctrl+R` | Refresh current view |
+| `o` | Open in browser |
+
+### Inbox
+
+| Key | Action |
+|-----|--------|
+| `1` | My Reviews tab |
+| `2` | My MRs tab |
+| `3` | All Open tab |
+| `r` | Repo list / Back |
+| `Enter` | Open MR detail |
+
+### Repo list
+
+| Key | Action |
+|-----|--------|
+| `/` | Filter repos |
+| `f` | Cycle forge filter (All/GH/GL) |
+| `Enter` | Open scoped inbox for repo |
+
+### MR detail
+
+| Key | Action |
+|-----|--------|
+| `1`-`5` | Switch tabs (Overview/Diff/Commits/Discussion/Pipeline) |
+| `c` | Add comment |
+| `A` | Approve (press twice) |
+| `U` | Unapprove (press twice) |
+| `M` | Merge (press twice) |
+| `X` | Close (press twice) |
+| `Ctrl+Y` | Copy MR URL |
+
+### Diff viewer
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Move cursor down / up |
+| `J` / `K` | Extend selection down / up |
+| `Ctrl+Click` | Extend selection to clicked line |
+| `c` | Comment on current line or selection |
+| `F3` | Suggest changes (opens `$EDITOR`) |
+| `n` / `Shift+N` | Next / previous file |
+| `m` | Toggle Markdown preview |
+| `Escape` | Clear selection |
+
+### Comment editor
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+S` | Submit comment |
+| `Escape` | Cancel (press twice if text entered) |
+| `F2` | Open in external editor |
+
+## Configuration
+
+tongs uses `~/.config/tongs/config.toml` (or the platform-appropriate config directory). All settings have sensible defaults.
 
 ```toml
 [general]
@@ -118,76 +187,60 @@ scan_depth = 5
 [ui]
 theme = "monokai"
 diff_style = "unified"
-ascii_mode = false
+ascii_mode = false          # Set true for minimal terminals
 
 [cache]
 mr_list_ttl = 60
 diff_ttl = 300
 
+[concurrency]
+max_parallel = 8
+request_timeout = 30
+
+# Self-hosted forges
 [hosts.my-gitlab]
 hostname = "gitlab.example.com"
 forge_type = "gitlab"
+
+[hosts.my-ghes]
+hostname = "github.corp.com"
+forge_type = "github"
 ```
 
-## Keybindings
+## tongs is for you if
 
-| Key | Action |
-|-----|--------|
-| `1` | My Reviews tab |
-| `2` | My MRs tab |
-| `r` | Switch to repo list |
-| `o` | Open MR in browser |
-| `Enter` | Open MR detail |
-| `Ctrl+R` | Refresh |
-| `Ctrl+P` | Command palette |
-| `?` | Help |
-| `q` | Quit / Back |
+- You review code across both GitHub and GitLab
+- You want diffs, inline comments, and approvals in your terminal
+- You manage many repos and want a single inbox
+- You prefer keyboard-driven workflows over browser tabs
 
-## Architecture
-
-```
-tongs/
-  scanner/        # Walks filesystem, discovers repos, parses remotes
-  forges/         # Abstract ForgeClient + concrete implementations (GitLab, GitHub)
-    auth.py       # Token resolution: CLI cred stores -> .netrc -> helpful error
-    base.py       # ABC defining the forge interface
-    gitlab.py     # GitLab API v4 client
-    models.py     # Shared data models (MRSummary, MRDetail, Pipeline, etc.)
-    registry.py   # Maps hostnames to authenticated client instances
-  views/          # Textual screens (inbox, repo list, and future diff/detail views)
-  widgets/        # Reusable TUI components
-  plugins/        # Plugin system (extensible)
-  mcp/            # MCP server for AI tool integration
-  cache/          # SQLite-backed response cache
-  state/          # Application state management
-  config.py       # TOML config loader with platformdirs
-  app.py          # Main Textual application
-```
-
-Key design decisions:
-
-- **Forge abstraction** -- `ForgeClient` is an ABC. Adding a new forge means implementing the interface; the TUI never knows which forge it's talking to.
-- **Auth delegation** -- tongs never stores tokens. It reads from `gh auth token` / `glab auth token` at runtime, falling back to `.netrc`.
-- **Scanner, not config** -- you don't list repos in a config file. tongs walks your filesystem and discovers them, just like your shell does.
-- **Lazy client creation** -- `ForgeRegistry` creates and caches API clients on first access. No network calls until something actually needs data.
+| | tongs | gh-dash | GitHub/GitLab web |
+|---|---|---|---|
+| GitHub + GitLab | Yes | GitHub only | One at a time |
+| Terminal-native diffs | Yes | No | No |
+| Inline comments | Yes | No | Yes |
+| Suggested changes | Yes | No | Yes |
+| Approve / Merge | Yes | No | Yes |
+| Zero config auth | Yes | Yes | N/A |
+| Self-hosted forges | Yes | Yes | N/A |
 
 ## Roadmap
 
 | Phase | What | Status |
 |-------|------|--------|
 | 1 | Scanner, forge abstraction, GitLab client, TUI shell, inbox, repo list | Done |
-| 2 | MR detail view, diff viewer with syntax highlighting, inline comments | Next |
-| 3 | MR actions (approve, merge, close, reopen), confirmation dialogs | Planned |
-| 4 | Pipeline/CI management (job logs, retry, cancel) | Planned |
-| 5 | GitHub client implementation | Planned |
-| 6 | Plugin system, fleet monitor plugin, MCP server | Planned |
-| 7 | Neovim integration, advanced search, cross-forge workflows | Planned |
+| 2 | MR detail view, diff viewer, syntax highlighting, GitHub client, commits tab | Done |
+| 3 | MR actions (approve, merge, close), inline comments, suggested changes | Done |
+| 4 | Discussion tab (existing comments inline in diff), repo list search/filter | In progress |
+| 5 | Pipeline/CI management (job logs, retry, cancel, trigger) | Planned |
+| 6 | Plugin system, fleet monitor plugin | Planned |
+| 7 | SQLite caching, MCP server, distribution (Homebrew, Fedora COPR) | Planned |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends. 370+ tests and growing.
 
-tongs is early enough that contributions shape the architecture. The plugin system, GitHub client, and diff viewer are all open for contributors. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
+tongs is early enough that contributions shape the architecture. The Discussion view, Pipeline/CI views, and plugin system are all open for contributors. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 
 ## Why "tongs"?
 

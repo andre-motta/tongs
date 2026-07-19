@@ -220,6 +220,8 @@ class GitHubClient(ForgeClient):
         line: int,
         side: str,
         body: str,
+        start_line: int | None = None,
+        start_side: str | None = None,
     ) -> InlineComment:
         owner, repo = _split_repo_path(repo_path)
         pr_data = await request(
@@ -235,6 +237,9 @@ class GitHubClient(ForgeClient):
             "line": line,
             "side": side,
         }
+        if start_line is not None:
+            payload["start_line"] = start_line
+            payload["start_side"] = start_side or side
         data = await request(
             self._http,
             "POST",

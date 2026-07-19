@@ -141,10 +141,29 @@ Frozen dataclass capturing enough information for any forge:
 
 **`to_forge_position(pos, forge_type, ...)`** dispatches to the correct converter based on `ForgeType` enum. Accepts all keyword arguments for both forges; each converter uses only what it needs.
 
+## Rendering Pipeline
+
+Diff lines flow through this pipeline from parser to screen:
+
+1. `parse_diff()` produces `list[DiffFile]` with `DiffHunk` and `DiffLine` objects
+2. `DiffContent.show_file()` passes the file to `DiffRenderer.render_lines()`
+3. `DiffRenderer` handles syntax highlighting (`rich.syntax.Syntax`), word-level diffs (`difflib.SequenceMatcher`), and context folding. Returns `list[tuple[DiffLine | None, Text]]` with foreground-only styling
+4. Each `(DiffLine, Text)` pair becomes an `Option` in `DiffOptionList`
+5. `DiffOptionList.render_line()` injects background colors (addition/deletion/selection) via `VisualStyle` BEFORE calling `_get_option_render()`. This is the only place backgrounds are set
+
+The foreground/background split is intentional: `Strip.apply_style()` cannot reliably override backgrounds due to Textual style priority, so backgrounds must be set in the VisualStyle before rendering.
+
+## Suggestion Position Mapping
+
+`src/tongs/views/suggestion.py:resolve_suggestion_position()` extends the position system for multi-line suggestions:
+
+- **GitLab:** Range is encoded in the suggestion fence syntax (`suggestion:-0+N`). The anchor line is always the first new-side line. No `start_line`/`start_side` API params needed.
+- **GitHub single-line:** Anchor is the first line. No extra params.
+- **GitHub multi-line:** Anchor is the LAST new-side line (GitHub's `line` parameter). `start_line` is the first line's `new_lineno`, `start_side` is `"RIGHT"`.
+
+The `create_inline_comment` ABC accepts optional `start_line`/`start_side` to support this.
+
 ## Planned Features
 
-- **Viewport-scoped highlighting:** only highlight visible lines + 100-line buffer via `rich.syntax.Syntax`
-- **Word-level diff highlighting:** within changed lines, highlight specific tokens that changed
-- **Context folding:** collapse unchanged sections to 3 context lines with expandable separators
 - **Virtual scrolling:** only materialize visible lines as Rich Text objects
 - **Comment anchors in gutter:** markers for existing comments, drafts, resolved threads

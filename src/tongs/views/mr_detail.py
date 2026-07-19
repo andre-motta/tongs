@@ -12,12 +12,19 @@ from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
 from tongs.forges.models import CIStatus, MRDetail, MRState, MRSummary
+from tongs.views.suggestion import (
+    build_suggestion_template,
+    extract_new_side_lines,
+    format_suggestion_block,
+    parse_suggestion_template,
+    resolve_suggestion_position,
+)
 from tongs.widgets.comment_editor import (
     CommentEditor,
     CommentSubmitted,
     GeneralCommentSubmitted,
 )
-from tongs.widgets.diff_panel import CommentRequested, DiffPanel
+from tongs.widgets.diff_panel import CommentMode, CommentRequested, DiffPanel
 
 
 def _ci_label(status: CIStatus) -> str:
@@ -410,11 +417,91 @@ class MRDetailScreen(Screen):
 
     def on_comment_requested(self, event: CommentRequested) -> None:
         """Handle comment request from DiffPanel."""
+        if event.mode == CommentMode.SUGGEST and event.file and event.line:
+            self._open_suggestion(event)
+            return
         editor = self.query_one("#comment-editor", CommentEditor)
         if event.file and event.line:
             editor.open_inline(event.file, event.line)
         else:
             editor.open_general()
+
+    def _open_suggestion(self, event: CommentRequested) -> None:
+        """Open external editor for suggesting changes."""
+        import os
+        import shlex
+        import shutil
+        import subprocess
+        import tempfile
+
+        editor_cmd = None
+        for var in ("VISUAL", "EDITOR"):
+            v = os.environ.get(var)
+            if v:
+                editor_cmd = v
+                break
+        if not editor_cmd:
+            for cmd in ("nvim", "vim", "vi", "nano"):
+                if shutil.which(cmd):
+                    editor_cmd = cmd
+                    break
+        if not editor_cmd:
+            self.notify("No external editor found. Set $EDITOR.")
+            return
+
+        lines = event.context_lines or ([event.line] if event.line else [])
+        new_side_lines = extract_new_side_lines(lines)
+        if not new_side_lines:
+            self.notify("Cannot suggest: no new-side lines in selection")
+            return
+        original_code = "\n".join(dl.content for dl in new_side_lines)
+        file_path = event.file.new_path if event.file else "unknown"
+
+        template = build_suggestion_template(original_code)
+        n_original = len(new_side_lines)
+
+        ext = os.path.splitext(file_path)[1] or ".txt"
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(suffix=ext, prefix="tongs-suggest-")
+            os.chmod(tmp_path, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(template)
+
+            with self.app.suspend():
+                subprocess.run([*shlex.split(editor_cmd), tmp_path], check=False)
+
+            with open(tmp_path) as f:
+                edited = f.read()
+
+            comment_text, suggested_code = parse_suggestion_template(edited)
+
+            if not suggested_code or suggested_code == original_code.strip():
+                self.notify("No changes made, suggestion cancelled.")
+                return
+
+            forge_type = self.mr_summary.forge_host.forge_type
+            body = format_suggestion_block(
+                suggested_code, n_original, forge_type, comment_text
+            )
+
+            from tongs.diff.position import position_from_diff_line
+
+            pos_line, start_line, start_side = resolve_suggestion_position(
+                new_side_lines, forge_type
+            )
+            position = position_from_diff_line(event.file, pos_line)
+            self._post_inline_comment(
+                body, position, start_line=start_line, start_side=start_side
+            )
+        except Exception as exc:
+            self.notify(f"Suggestion failed: {exc}", severity="error")
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
 
     def on_comment_submitted(self, event: CommentSubmitted) -> None:
         """Handle inline comment submission from CommentEditor."""
@@ -438,7 +525,13 @@ class MRDetailScreen(Screen):
             self.notify(f"Failed to post comment: {exc}", severity="error")
 
     @work(exclusive=True, group="mr-comment")
-    async def _post_inline_comment(self, body: str, position) -> None:
+    async def _post_inline_comment(
+        self,
+        body: str,
+        position,
+        start_line: int | None = None,
+        start_side: str | None = None,
+    ) -> None:
         try:
             client = await self.app.forge_registry.get_client(
                 self.mr_summary.forge_host.hostname
@@ -454,6 +547,8 @@ class MRDetailScreen(Screen):
                 else position.old_line,
                 side=position.side,
                 body=body,
+                start_line=start_line,
+                start_side=start_side,
             )
             self.notify("[green]Comment posted[/]", severity="information")
         except Exception as exc:

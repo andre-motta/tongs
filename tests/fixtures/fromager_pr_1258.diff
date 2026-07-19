@@ -1,0 +1,98 @@
+diff --git a/src/fromager/bootstrapper/_bootstrapper.py b/src/fromager/bootstrapper/_bootstrapper.py
+index 21891c4f..f5773e53 100644
+--- a/src/fromager/bootstrapper/_bootstrapper.py
++++ b/src/fromager/bootstrapper/_bootstrapper.py
+@@ -935,11 +935,12 @@ def add_to_build_order(
+         prebuilt: bool = False,
+         constraint: Requirement | None = None,
+     ) -> None:
+-        """Append a package to the build-order output file if not already present.
++        """Append a package to the build-order list if not already present.
+ 
+         Deduplicates by ``(canonicalized_name, version)`` so the same package
+-        is never written twice, regardless of extras. On each new entry, the
+-        full build-order list is written to ``self._build_order_filename``.
++        is never written twice, regardless of extras. Data is buffered in
++        memory and written to ``self._build_order_filename`` once during
++        ``finalize()``.
+ 
+         Args:
+             req: The requirement being added to the build order.
+@@ -985,7 +986,12 @@ def _schedule_write(self, path: pathlib.Path, content: str) -> None:
+             fut.add_done_callback(self._check_write_error)
+ 
+     def _write_graph_async(self) -> None:
+-        """Serialize the dependency graph on the main thread, write it in background."""
++        """Serialize the dependency graph on the main thread, write it in background.
++
++        Must only be called from the main thread. Serialization happens
++        synchronously here so the snapshot is consistent with the caller's
++        view of the graph; only the file I/O is offloaded to the write pool.
++        """
+         buf = io.StringIO()
+         self.ctx.dependency_graph.serialize(buf)
+         self._schedule_write(self.ctx.graph_file, buf.getvalue())
+@@ -1269,6 +1275,10 @@ def finalize(self) -> int:
+         Reports failed versions in multiple versions mode.
+         In test mode, writes failure report and returns non-zero if there were failures.
+ 
++        Note: I/O errors from background graph writes are logged at ERROR level
++        but are not raised. Check the log for ``"background file write failed"``
++        if the on-disk graph file is suspected to be stale.
++
+         Returns:
+             0 if all packages built successfully (or not in test/multiple versions mode)
+             1 if any packages failed in test mode
+@@ -1334,5 +1344,8 @@ def __exit__(
+             self._bg_pool.shutdown(wait=False, cancel_futures=True)
+             self._bg_pool = None
+         if self._write_pool is not None:
++            # Intentionally abandon any pending graph writes on error exit.
++            # A crashed or aborted run produces inconsistent state regardless;
++            # waiting for writes would only delay propagation of the exception.
+             self._write_pool.shutdown(wait=False, cancel_futures=True)
+             self._write_pool = None
+diff --git a/tests/test_bootstrapper.py b/tests/test_bootstrapper.py
+index 27897d45..6c662f0d 100644
+--- a/tests/test_bootstrapper.py
++++ b/tests/test_bootstrapper.py
+@@ -799,6 +799,12 @@ def test_record_stack_state_throttled_when_called_rapidly(
+     bt._record_stack_state([_make_resolve_item("pkgc")])
+     second_mtime = bt._stack_filename.stat().st_mtime
+ 
++    # NOTE: This assertion compares st_mtime values for equality. On filesystems
++    # with coarse mtime resolution (e.g. 1-second), two calls that span a
++    # resolution boundary could produce equal mtimes even when the file was
++    # rewritten, or unequal mtimes when it was not. APFS (nanosecond resolution)
++    # makes this reliable in practice, but the test is inherently filesystem-
++    # dependent.
+     assert first_mtime == second_mtime
+ 
+ 
+@@ -825,6 +831,26 @@ def test_finalize_writes_build_order_and_graph(tmp_context: WorkContext) -> None
+     assert contents[0]["dist"] == "mypkg"
+ 
+ 
++def test_check_write_error_logs_on_failure(
++    tmp_context: WorkContext, caplog: pytest.LogCaptureFixture
++) -> None:
++    """_check_write_error() logs an error when the background write future raises."""
++    bt = bootstrapper.Bootstrapper(tmp_context)
++
++    # Arrange: create a future that has already failed with an OSError
++    import concurrent.futures
++
++    fut: concurrent.futures.Future[int] = concurrent.futures.Future()
++    fut.set_exception(OSError("disk full"))
++
++    # Act
++    with caplog.at_level(logging.ERROR):
++        bt._check_write_error(fut)
++
++    # Assert: error is logged, not raised
++    assert any("disk full" in r.message for r in caplog.records)
++
++
+ def test_bootstrap_calls_record_stack_state(tmp_context: WorkContext) -> None:
+     """`_record_stack_state` is called at least once during `bootstrap()`."""
+     bt = bootstrapper.Bootstrapper(tmp_context)

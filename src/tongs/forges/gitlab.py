@@ -83,16 +83,17 @@ class GitLabClient(ForgeClient):
     async def list_mrs(
         self,
         repo_path: str,
-        state: str = "open",
+        state: str = "opened",
         per_page: int = 20,
         page: int = 1,
     ) -> list[MRSummary]:
         project = _encode_project(repo_path)
+        gitlab_state = "opened" if state == "open" else state
         data = await request(
             self._http,
             "GET",
             f"/projects/{project}/merge_requests",
-            params={"state": state, "per_page": per_page, "page": page},
+            params={"state": gitlab_state, "per_page": per_page, "page": page},
         )
         return [self._parse_mr_summary(mr, repo_path) for mr in data]
 

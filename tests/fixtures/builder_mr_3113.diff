@@ -1,0 +1,152 @@
+--- package_plugins/hooks/upload_after_build_wheel.py
++++ package_plugins/hooks/upload_after_build_wheel.py
+@@ -3,6 +3,7 @@ import hashlib
+ import logging
+ import os
+ import pathlib
++import time
+ import typing
+ 
+ import gitlab.v4.objects.projects
+@@ -311,25 +312,41 @@ def upload_python_package_to_gitlab(
+     with open(filename, "rb") as f:
+         sha256_digest = hashlib.file_digest(f, "sha256").hexdigest()
+ 
+-    with open(filename, "rb") as f:
+-        response = session.post(
+-            url,
+-            files={"content": (filename.name, f, "application/octet-stream")},
+-            data={
+-                "sha256_digest": sha256_digest,
+-                "name": dist_name,
+-                "version": dist_version,
+-            },
+-            timeout=60,
+-        )
+-    if (
+-        skip_existing
+-        and response.status_code == 400
+-        and "File name has already been taken" in response.text
+-    ):
+-        logger.info("%s: %s already exists, skipping", dist_name, filename.name)
+-        return
+-    response.raise_for_status()
++    max_retries = 3
++    base_delay = 5.0
++    for attempt in range(max_retries + 1):
++        with open(filename, "rb") as f:
++            response = session.post(
++                url,
++                files={"content": (filename.name, f, "application/octet-stream")},
++                data={
++                    "sha256_digest": sha256_digest,
++                    "name": dist_name,
++                    "version": dist_version,
++                },
++                timeout=60,
++            )
++        if (
++            skip_existing
++            and response.status_code == 400
++            and "File name has already been taken" in response.text
++        ):
++            logger.info("%s: %s already exists, skipping", dist_name, filename.name)
++            return
++        if response.status_code >= 500 and attempt < max_retries:
++            delay = base_delay * (2**attempt)
++            logger.warning(
++                "%s: upload attempt %d/%d failed with HTTP %d, retrying in %.0fs",
++                dist_name,
++                attempt + 1,
++                max_retries + 1,
++                response.status_code,
++                delay,
++            )
++            time.sleep(delay)
++            continue
++        response.raise_for_status()
++        break
+     logger.info(
+         "%s: successfully uploaded %s %s==%s (%s)",
+         dist_name,
+--- test/test_upload_after_build_wheel.py
++++ test/test_upload_after_build_wheel.py
+@@ -198,6 +198,78 @@ def test_upload_package_skip_existing(
+         assert expected_log in caplog.text
+ 
+ 
++@patch("package_plugins.hooks.upload_after_build_wheel.time")
++@patch("package_plugins.hooks.upload_after_build_wheel.pkginfo")
++@patch("package_plugins.hooks.upload_after_build_wheel.session")
++def test_upload_retries_on_transient_5xx(
++    mock_session, mock_pkginfo, mock_time, tmp_path, caplog
++):
++    """Test that transient 5xx errors are retried with exponential backoff."""
++    mock_pkginfo.Wheel.return_value.name = "test-package"
++    mock_pkginfo.Wheel.return_value.version = "1.2.3"
++
++    error_response = Mock(status_code=502, text="Bad Gateway")
++    success_response = Mock(status_code=200)
++    success_response.raise_for_status = Mock()
++    mock_session.post.side_effect = [error_response, error_response, success_response]
++
++    wheel = tmp_path / "test_package-1.2.3-py3-none-any.whl"
++    wheel.write_bytes(b"fake wheel content")
++
++    with caplog.at_level(logging.WARNING):
++        upload_python_package_to_gitlab("test-package", "1.2.3", wheel)
++
++    assert mock_session.post.call_count == 3
++    assert mock_time.sleep.call_count == 2
++    mock_time.sleep.assert_any_call(5.0)
++    mock_time.sleep.assert_any_call(10.0)
++    assert "retrying" in caplog.text.lower()
++
++
++@patch("package_plugins.hooks.upload_after_build_wheel.time")
++@patch("package_plugins.hooks.upload_after_build_wheel.pkginfo")
++@patch("package_plugins.hooks.upload_after_build_wheel.session")
++def test_upload_raises_after_max_retries(
++    mock_session, mock_pkginfo, mock_time, tmp_path
++):
++    """Test that after exhausting retries, the 5xx error is raised."""
++    mock_pkginfo.Wheel.return_value.name = "test-package"
++    mock_pkginfo.Wheel.return_value.version = "1.2.3"
++
++    error_response = Mock(status_code=502, text="Bad Gateway")
++    error_response.raise_for_status.side_effect = req_lib.HTTPError("502 Bad Gateway")
++    mock_session.post.return_value = error_response
++
++    wheel = tmp_path / "test_package-1.2.3-py3-none-any.whl"
++    wheel.write_bytes(b"fake wheel content")
++
++    with pytest.raises(req_lib.HTTPError, match="502"):
++        upload_python_package_to_gitlab("test-package", "1.2.3", wheel)
++
++    assert mock_session.post.call_count == 4
++    assert mock_time.sleep.call_count == 3
++
++
++@patch("package_plugins.hooks.upload_after_build_wheel.pkginfo")
++@patch("package_plugins.hooks.upload_after_build_wheel.session")
++def test_upload_no_retry_on_4xx(mock_session, mock_pkginfo, tmp_path):
++    """Test that 4xx errors are not retried."""
++    mock_pkginfo.Wheel.return_value.name = "test-package"
++    mock_pkginfo.Wheel.return_value.version = "1.2.3"
++
++    error_response = Mock(status_code=403, text="Forbidden")
++    error_response.raise_for_status.side_effect = req_lib.HTTPError("403 Forbidden")
++    mock_session.post.return_value = error_response
++
++    wheel = tmp_path / "test_package-1.2.3-py3-none-any.whl"
++    wheel.write_bytes(b"fake wheel content")
++
++    with pytest.raises(req_lib.HTTPError, match="403"):
++        upload_python_package_to_gitlab("test-package", "1.2.3", wheel)
++
++    mock_session.post.assert_called_once()
++
++
+ @patch("package_plugins.hooks.upload_after_build_wheel.pkginfo")
+ def test_upload_package_rejects_mismatched_name(mock_pkginfo, tmp_path):
+     """Test that metadata name mismatch raises ValueError before uploading."""

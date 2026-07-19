@@ -79,6 +79,19 @@ The discussion data flows through the same shared models (`Discussion`, `InlineC
 7. `_render_thread(disc)` renders each comment body as Rich Markdown with author and timestamp.
 8. Cross-tab navigation: pressing Enter on an inline `DiscussionCard` posts `JumpToDiffDiscussion`. `MRDetailScreen` handles it by switching to the Diff tab and calling `DiffPanel.jump_to_discussion()`, which selects the file, expands the thread, and scrolls to the target line.
 
+## Data Flow: Pipeline/CI Management (Phase 5)
+
+1. When the user switches to the Pipeline tab in `MRDetailScreen`, `_on_tab_switch("pipeline")` triggers `_load_pipelines()` (lazy, same pattern as diff/commits/discussions).
+2. `_load_pipelines()` calls `client.list_mr_pipelines(repo_path, number)` to get MR-scoped pipelines.
+3. `PipelinePanel.set_pipelines(pipelines)` renders `PipelineCard` widgets in a `VerticalScroll`.
+4. User drills in (Enter or click): posts `LoadJobsRequested`. `MRDetailScreen._load_pipeline_jobs()` fetches `client.get_pipeline_jobs()` and calls `panel.set_jobs(jobs, pipeline)`.
+5. `set_jobs()` groups jobs by `stage` and renders `JobCard` widgets.
+6. User drills into a job (Enter or click): posts `LoadJobLogRequested`. `MRDetailScreen._load_job_log()` fetches `client.get_job_log()` and calls `panel.set_job_log()`.
+7. `set_job_log()` renders the log in a `RichLog` widget. Each line uses `Text.from_ansi()` to parse ANSI escape codes (CI color output), prepended with a dim line number.
+8. Cancel/Retry: `PipelinePanel` posts `CancelPipelineRequested`, `RetryPipelineRequested`, `CancelJobRequested`, or `RetryJobRequested`. `MRDetailScreen` handles each with a `@work` method that calls the appropriate forge client method, then reloads the pipeline tab.
+
+The pipeline data flows through shared models (`Pipeline`, `PipelineJob`) from `forges/models.py`. The drill-down state (`_view_level`, `_saved_pipeline_idx`, `_saved_job_idx`) is local to `PipelinePanel`.
+
 ## Diff Caching Between Tabs
 
 `_cached_diff_files` on `MRDetailScreen` provides a shared cache for the parsed `list[DiffFile]` between the Diff and Discussion tabs. Whichever tab loads first populates it; the other reuses it. `action_refresh()` clears the cache. This avoids redundant diff API calls when reviewing discussions and also enables `render_diff_snippet()` to show code context in discussion cards.

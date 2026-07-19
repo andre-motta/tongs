@@ -133,11 +133,12 @@ This runs on every parsed remote URL before storing it in the `Remote` dataclass
 
 ## Temp File Security
 
-For external editor integration (CommentEditor F2 binding):
-- `tempfile.mkstemp(mode=0o600)` for comment editing temp files
+For external editor integration (CommentEditor F2 binding and PipelinePanel F2 job log viewer):
+- `tempfile.mkstemp(mode=0o600)` for comment editing and job log temp files
 - Cleanup in `finally` block
 - Pass `--cmd "set noswapfile noundofile nobackup"` to neovim to prevent swap/undo file creation
 - Platform gate: `app.suspend()` not available on Windows
+- Job log temp files use `.log` suffix with `tongs-{job_name}-` prefix
 
 ## MCP Server Security (Planned)
 

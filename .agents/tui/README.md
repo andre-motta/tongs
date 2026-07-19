@@ -161,16 +161,16 @@ TabbedContent (initial="overview")
   TabPane "Diff"       -> DiffPanel (split-pane diff viewer with inline discussions)
   TabPane "Commits"    -> VerticalScroll > Static (commit list)
   TabPane "Discussion" -> Static (status bar) + DiscussionPanel (card-based discussion view)
-  TabPane "Pipeline"   -> placeholder (Phase 5)
+  TabPane "Pipeline"   -> Static (status bar) + PipelinePanel (three-level drill-down)
 CommentEditor (bottom-docked, hidden by default)
 Footer
 ```
 
-**Constructor** takes an `MRSummary`. Stores `mr_detail: MRDetail | None` (populated after API call), `_diff_loaded: bool`, `_commits_loaded: bool`, `_discussions_loaded: bool` flags, and `_cached_diff_files: list | None` for sharing parsed diff files between the Diff and Discussion tabs.
+**Constructor** takes an `MRSummary`. Stores `mr_detail: MRDetail | None` (populated after API call), `_diff_loaded: bool`, `_commits_loaded: bool`, `_discussions_loaded: bool`, `_pipeline_loaded: bool` flags, and `_cached_diff_files: list | None` for sharing parsed diff files between the Diff and Discussion tabs.
 
 **Scrollable overview (Phase 3):** The Overview tab wraps `MROverview` and a `Markdown` widget inside a `VerticalScroll` container. `MROverview` renders metadata (title, author, branches, CI, etc.) as Rich markup. The MR description is rendered via the Textual `Markdown` widget (supports headings, links, code blocks, etc.) rather than plain text. `TongsApp` CSS sets `VerticalScroll { height: 1fr; }` to allow scrolling long descriptions.
 
-**Lazy loading pattern:** The Diff, Commits, and Discussion tabs all use the same lazy-load approach. `_on_tab_switch()` checks per-tab boolean flags (`_diff_loaded`, `_commits_loaded`, `_discussions_loaded`); on first switch, sets the flag and calls the corresponding worker method. This avoids unnecessary API calls for tabs the user may never view.
+**Lazy loading pattern:** The Diff, Commits, Discussion, and Pipeline tabs all use the same lazy-load approach. `_on_tab_switch()` checks per-tab boolean flags (`_diff_loaded`, `_commits_loaded`, `_discussions_loaded`, `_pipeline_loaded`); on first switch, sets the flag and calls the corresponding worker method. This avoids unnecessary API calls for tabs the user may never view.
 
 **Commits tab (Phase 3):** `_load_commits()` worker calls `client.list_mr_commits()` and renders each commit as a Rich-formatted line in a `Static` widget: yellow short SHA, title, dimmed author. Multi-line commit messages are shown indented beneath the title line. The tab is wrapped in a `VerticalScroll` for long commit histories.
 
@@ -180,7 +180,7 @@ Footer
 
 **Tab switching:** both number keys (1-5) and clicking tabs work. `action_focus_tab()` sets `TabbedContent.active` and calls `_on_tab_switch()`. `on_tabbed_content_tab_activated()` handles click-based tab switches.
 
-**Refresh:** `action_refresh()` resets `_diff_loaded = False`, `_commits_loaded = False`, `_discussions_loaded = False`, and `_cached_diff_files = None`, then re-runs `_load_detail()`. Re-entering the Diff, Commits, or Discussion tab triggers a fresh fetch.
+**Refresh:** `action_refresh()` resets `_diff_loaded = False`, `_commits_loaded = False`, `_discussions_loaded = False`, `_pipeline_loaded = False`, and `_cached_diff_files = None`, then re-runs `_load_detail()`. Re-entering the Diff, Commits, Discussion, or Pipeline tab triggers a fresh fetch.
 
 **Discussion handling (Phase 4):** `MRDetailScreen` handles messages from both `DiffPanel` and `DiscussionPanel`:
 
@@ -194,6 +194,20 @@ From `DiscussionPanel`:
 - `on_discussion_reply_requested(DiscussionReplyRequested)`: opens `CommentEditor.open_reply()` for inline discussions (using dummy DiffFile/DiffLine objects) or `CommentEditor.open_reply_general()` for general discussions
 
 Both `_post_reply()` and `_resolve_thread()` reset both `_diff_loaded = False` and `_discussions_loaded = False` to refresh both tabs after mutation.
+
+**Pipeline handling (Phase 5):** `MRDetailScreen` handles messages from `PipelinePanel`:
+- `on_load_jobs_requested(LoadJobsRequested)`: calls `_load_pipeline_jobs(pipeline)` worker which fetches jobs via `client.get_pipeline_jobs()` and calls `panel.set_jobs()`
+- `on_load_job_log_requested(LoadJobLogRequested)`: calls `_load_job_log(job, pipeline)` worker which fetches log via `client.get_job_log()` and calls `panel.set_job_log()`
+- `on_cancel_pipeline_requested(CancelPipelineRequested)`: calls `_do_cancel_pipeline()` then reloads the pipeline tab
+- `on_retry_pipeline_requested(RetryPipelineRequested)`: calls `_do_retry_pipeline()` then reloads the pipeline tab
+- `on_cancel_job_requested(CancelJobRequested)`: calls `_do_cancel_job()` via `client.cancel_job()`
+- `on_retry_job_requested(RetryJobRequested)`: calls `_do_retry_job()` via `client.retry_job()`
+
+All pipeline workers use `group="mr-pipelines"` with `exclusive=True`.
+
+**Pipeline drill-in binding suppression:** `check_action()` returns `False` for MR-level actions (`add_comment`, `approve`, `unapprove`, `merge`, `close_mr`, `yank_url`) when `PipelinePanel._view_level > 0`, preventing accidental mutations while browsing jobs or logs.
+
+**Pipeline Escape delegation:** `action_go_back()` checks if PipelinePanel is drilled in (`_view_level > 0`) and delegates to `panel.action_drill_out()` instead of popping the screen. This allows Escape to navigate back through pipeline levels before exiting the MR detail view.
 
 **Diff caching:** `_cached_diff_files` on `MRDetailScreen` stores the parsed `list[DiffFile]` from the Diff tab loading. When the Discussion tab loads, it reuses this cache to build diff snippets on `DiscussionCard`s without re-fetching. If the Discussion tab is visited before the Diff tab, it fetches and parses the diff itself, populating the cache for later. `action_refresh()` clears the cache (`_cached_diff_files = None`).
 
@@ -402,6 +416,57 @@ Sorting: `_sort_discussions()` orders by (1) unresolved first, (2) file path, (3
 
 **Bindings:** j/k = move cursor, Enter = jump to diff, r = reply, R = resolve (double-press), f = cycle filter (all/unresolved/resolved), `]`/`[` = next/prev unresolved (wraps around).
 
+## PipelinePanel Widget
+
+`src/tongs/widgets/pipeline_panel.py` is a three-level drill-down pipeline viewer used inside `MRDetailScreen`.
+
+Layout:
+
+```
+PipelinePanel (Widget, can_focus=True, height: 1fr)
+  VerticalScroll (#pipeline-list-scroll)    -- level 0: pipeline cards
+  VerticalScroll (#job-list-scroll)         -- level 1: job cards grouped by stage
+  Vertical (#job-log-container)             -- level 2: log viewer
+    Static (#job-log-header)
+    RichLog (#job-log-content, max_lines: 50000, wrap: False)
+    Input (#log-search-input, dock: bottom, hidden by default)
+```
+
+Only one of the three containers is visible at a time, controlled by `_view_level` (0, 1, or 2).
+
+**PipelineCard** extends `Static`. Renders pipeline ID, CI status icon (color-coded), relative timestamp, SHA, ref, source, and duration. CSS classes `.failed` (red border) and `.running` (yellow border) for visual distinction. Click posts `LoadJobsRequested`.
+
+**JobCard** extends `Static`. Renders job name (bold if failed), CI status icon, duration, FAILED label, allow_failure flag. Click posts `LoadJobLogRequested`.
+
+**Three-level drill-down:**
+- Level 0 (pipelines): `set_pipelines()` renders `PipelineCard`s in `#pipeline-list-scroll`. Enter drills into jobs.
+- Level 1 (jobs): `set_jobs()` renders `JobCard`s grouped by `stage` in `#job-list-scroll`. Enter drills into log.
+- Level 2 (log): `set_job_log()` renders job log in a `RichLog` widget with line numbers and `Text.from_ansi()` for ANSI color parsing. Supports F2 editor and / search.
+
+**Navigation state:** `_saved_pipeline_idx` and `_saved_job_idx` preserve cursor position when drilling out, so the user returns to the same pipeline/job they drilled into.
+
+**Card focus management:** `_focused_index` reactive triggers `watch__focused_index()` which toggles the `.focused` CSS class on the old and new cards. `_render_gen` counter prevents stale ID collisions across re-renders.
+
+**Cancel/Retry (double-press):** Same pattern as MR actions. `_pending_cancel`/`_pending_retry` track the pending item ID. First press shows confirmation notification, second press posts the message. State guards prevent canceling non-running or retrying non-failed items.
+
+**Log search (/ key):** Shows the `#log-search-input` at the bottom. On submit, `_do_search()` strips ANSI from each line via `Text.from_ansi().plain` and finds case-insensitive matches. Scrolls `RichLog` to the first match and shows "Match 1/N: line M".
+
+**Open in editor (F2):** Same pattern as CommentEditor F2. Creates a temp `.log` file, writes the raw log text, launches `$VISUAL`/`$EDITOR`/nvim/vim/vi/nano/less via `app.suspend()`, cleans up in `finally`.
+
+**Open in browser (o):** Opens the focused pipeline or job `web_url` via `app.open_url()`.
+
+**check_action guard:** `drill_out` action returns `False` when `_view_level == 0` (nothing to drill out of), allowing screen-level Escape to handle back navigation.
+
+**Messages:**
+- `CancelPipelineRequested(pipeline_id)` -- posted on C key at level 0 (double-press). Handled by `MRDetailScreen._do_cancel_pipeline()`.
+- `RetryPipelineRequested(pipeline_id)` -- posted on R key at level 0 (double-press). Handled by `MRDetailScreen._do_retry_pipeline()`.
+- `CancelJobRequested(job_id)` -- posted on C key at level 1 (double-press). Handled by `MRDetailScreen._do_cancel_job()`.
+- `RetryJobRequested(job_id)` -- posted on R key at level 1 (double-press). Handled by `MRDetailScreen._do_retry_job()`.
+- `LoadJobsRequested(pipeline)` -- posted on Enter at level 0 or PipelineCard click. Handled by `MRDetailScreen._load_pipeline_jobs()`.
+- `LoadJobLogRequested(job, pipeline)` -- posted on Enter at level 1 or JobCard click. Handled by `MRDetailScreen._load_job_log()`.
+
+Bindings: j/k = navigate cards, Enter = drill in, Escape = drill out, C = cancel (double-press), R = retry (double-press), o = open in browser, F2 = open log in editor (level 2 only), / = search log (level 2 only).
+
 ## Keybinding Conventions
 
 - Lowercase = view/navigate. Uppercase = mutate (with confirmation)
@@ -431,6 +496,15 @@ Sorting: `_sort_discussions()` orders by (1) unresolved first, (2) file path, (3
 - `j/k` = navigate cards (DiscussionPanel)
 - `Enter` = jump to diff from discussion card (DiscussionPanel, inline discussions only)
 - `f` = cycle filter: all / unresolved / resolved (DiscussionPanel)
+
+- `j/k` = navigate pipeline/job cards (PipelinePanel)
+- `Enter` = drill into jobs (level 0) or log (level 1) (PipelinePanel)
+- `Escape` = drill out one level (PipelinePanel, blocked at level 0)
+- `C` = cancel pipeline (level 0) or job (level 1) (PipelinePanel, double-press)
+- `R` = retry pipeline (level 0) or job (level 1) (PipelinePanel, double-press)
+- `o` = open pipeline or job in browser (PipelinePanel)
+- `F2` = open job log in external editor (PipelinePanel, level 2 only)
+- `/` = search job log (PipelinePanel, level 2 only)
 
 Current bindings are defined as `BINDINGS` lists on each Screen class. Format: `Binding(key, action_name, description, show=True/False)`.
 
@@ -488,7 +562,8 @@ All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_s
   - GitHub single-line: anchor is the first line; start_line/start_side are None
   - GitHub multi-line: anchor is the LAST line (GitHub's `line` param); start_line is the first line's `new_lineno`; start_side is `"RIGHT"`
 
-## Planned Views (Phase 5+)
+## Planned Views (Phase 6+)
 
-- `PipelineListScreen` / `PipelineDetailScreen` / `JobLogScreen`
-- Pipeline tab content for MRDetailScreen
+- Plugin system with fleet monitor plugin
+- SQLite caching layer
+- MCP server

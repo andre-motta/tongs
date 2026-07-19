@@ -423,6 +423,38 @@ class GitLabClient(ForgeClient):
             f"/projects/{project}/pipelines/{pipeline_id}/cancel",
         )
 
+    async def list_mr_pipelines(
+        self, repo_path: str, number: int, per_page: int = 20
+    ) -> list[Pipeline]:
+        project = _encode_project(repo_path)
+        data = await request(
+            self._http,
+            "GET",
+            f"/projects/{project}/merge_requests/{number}/pipelines",
+            params={"per_page": per_page},
+        )
+        return [self._parse_pipeline(p) for p in data]
+
+    async def retry_pipeline(self, repo_path: str, pipeline_id: int) -> None:
+        project = _encode_project(repo_path)
+        await request(
+            self._http,
+            "POST",
+            f"/projects/{project}/pipelines/{pipeline_id}/retry",
+        )
+
+    async def cancel_job(self, repo_path: str, job_id: int) -> None:
+        project = _encode_project(repo_path)
+        await request(
+            self._http,
+            "POST",
+            f"/projects/{project}/jobs/{job_id}/cancel",
+        )
+
+    @property
+    def supports_job_cancel(self) -> bool:
+        return True
+
     @property
     def supports_thread_resolution(self) -> bool:
         return True

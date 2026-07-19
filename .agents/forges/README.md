@@ -27,15 +27,19 @@ Defined in `src/tongs/forges/base.py`. All forge backends implement this interfa
 
 **Pipeline operations:**
 - `list_pipelines(repo_path, per_page)`
+- `list_mr_pipelines(repo_path, number, per_page)` -- list pipelines for a specific MR/PR. Default implementation falls back to `list_pipelines()`. GitLab overrides with `/merge_requests/{number}/pipelines`. GitHub overrides to fetch the PR's head branch then query `/actions/runs?branch={branch}`.
 - `get_pipeline_jobs(repo_path, pipeline_id)`
 - `get_job_log(repo_path, job_id)` / `stream_job_log(repo_path, job_id)`
 - `retry_job(repo_path, job_id)` / `cancel_pipeline(repo_path, pipeline_id)`
+- `retry_pipeline(repo_path, pipeline_id)` -- retry all failed jobs in a pipeline. Default raises `NotImplementedError`. GitLab overrides with `/pipelines/{id}/retry`. GitHub overrides with `/actions/runs/{id}/rerun-failed-jobs`.
+- `cancel_job(repo_path, job_id)` -- cancel a single job. Default raises `NotImplementedError`. GitLab overrides with `/jobs/{id}/cancel`.
 
 **Capability queries** (properties, override in subclasses):
 - `supports_batched_review` -- GitHub batches comments into a review; GitLab does not
 - `supports_thread_resolution` -- GitLab has first-class resolution; GitHub uses GraphQL
 - `supports_draft_notes` -- GitLab-only feature
 - `supports_unapprove` -- GitLab returns `True` (uses `/unapprove` endpoint); GitHub returns `False` (default). TUI checks this before calling `unapprove_mr()`
+- `supports_job_cancel` -- GitLab returns `True`; base returns `False` (default). TUI checks this before showing job cancel actions.
 
 ## Data Models
 
@@ -113,6 +117,8 @@ Key details:
 
 **Thread resolution:** `supports_thread_resolution` returns `True`. The `resolve_discussion()` method PUTs `{"resolved": true/false}` to the discussion endpoint.
 
+**MR-scoped pipelines (Phase 5):** `list_mr_pipelines()` GETs `/projects/{project}/merge_requests/{number}/pipelines` to return only pipelines associated with the specific MR. `retry_pipeline()` POSTs to `/pipelines/{id}/retry`. `cancel_job()` POSTs to `/jobs/{id}/cancel`. `supports_job_cancel` returns `True`.
+
 ## GitHub Client
 
 `src/tongs/forges/github.py:GitHubClient(ForgeClient)` implements all ABC methods for the GitHub REST API.
@@ -135,6 +141,8 @@ Key details:
 **Branch deletion safety:** `merge_mr()` with `delete_branch=True` verifies that `head.repo.full_name` matches the target `repo_path` before deleting the branch. This prevents accidental deletion of branches on fork repositories in cross-fork PRs.
 
 **Commit listing:** `list_mr_commits()` paginates `/repos/{owner}/{repo}/pulls/{number}/commits` and returns `list[Commit]`. Author is parsed from the top-level `author` (GitHub user), not `commit.author` (git author name).
+
+**PR-scoped workflow runs (Phase 5):** `list_mr_pipelines()` first fetches the PR to get the head branch ref, then GETs `/repos/{owner}/{repo}/actions/runs?branch={branch}`. `retry_pipeline()` POSTs to `/actions/runs/{id}/rerun-failed-jobs`. `cancel_job` and `supports_job_cancel` are not overridden (GitHub Actions jobs are canceled at the run level via `cancel_pipeline`).
 
 ## Adding a New Forge Backend
 
@@ -166,8 +174,8 @@ Key details:
 
 | Component | Status |
 |---|---|
-| ForgeClient ABC | Complete (includes list_mr_commits) |
-| Shared data models | Complete (includes Commit) |
+| ForgeClient ABC | Complete (includes list_mr_commits, list_mr_pipelines, retry_pipeline, cancel_job) |
+| Shared data models | Complete (includes Commit, Pipeline, PipelineJob) |
 | Auth cascade (CLI + .netrc) | Complete |
 | HTTP transport + error mapping | Complete |
 | ForgeRegistry | Complete (GitHub + GitLab wired) |

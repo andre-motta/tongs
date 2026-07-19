@@ -51,6 +51,12 @@ class TongsApp(App):
         background: $accent 15%;
         padding: 0 1;
     }
+
+    .pipeline-status-bar {
+        height: 1;
+        background: $accent 15%;
+        padding: 0 1;
+    }
     """
 
     COMMANDS = {TongsCommandProvider}

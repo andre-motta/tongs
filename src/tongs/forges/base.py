@@ -143,6 +143,24 @@ class ForgeClient(ABC):
     @abstractmethod
     async def cancel_pipeline(self, repo_path: str, pipeline_id: int) -> None: ...
 
+    async def list_mr_pipelines(
+        self, repo_path: str, number: int, per_page: int = 20
+    ) -> list[Pipeline]:
+        """List pipelines for a specific MR/PR. Default: falls back to list_pipelines."""
+        return await self.list_pipelines(repo_path, per_page=per_page)
+
+    async def retry_pipeline(self, repo_path: str, pipeline_id: int) -> None:
+        """Retry all failed jobs in a pipeline."""
+        raise NotImplementedError("This forge does not support retry_pipeline")
+
+    async def cancel_job(self, repo_path: str, job_id: int) -> None:
+        """Cancel a single job."""
+        raise NotImplementedError("This forge does not support cancel_job")
+
+    @property
+    def supports_job_cancel(self) -> bool:
+        return False
+
     @property
     def supports_batched_review(self) -> bool:
         return False

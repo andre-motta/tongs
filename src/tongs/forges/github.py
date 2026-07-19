@@ -425,6 +425,32 @@ class GitHubClient(ForgeClient):
             f"/repos/{owner}/{repo}/actions/runs/{pipeline_id}/cancel",
         )
 
+    async def list_mr_pipelines(
+        self, repo_path: str, number: int, per_page: int = 20
+    ) -> list[Pipeline]:
+        owner, repo = _split_repo_path(repo_path)
+        pr_data = await request(
+            self._http, "GET", f"/repos/{owner}/{repo}/pulls/{number}"
+        )
+        branch = pr_data.get("head", {}).get("ref", "")
+        if not branch:
+            return []
+        data = await request(
+            self._http,
+            "GET",
+            f"/repos/{owner}/{repo}/actions/runs",
+            params={"branch": branch, "per_page": per_page},
+        )
+        return [self._parse_workflow_run(r) for r in data.get("workflow_runs", [])]
+
+    async def retry_pipeline(self, repo_path: str, pipeline_id: int) -> None:
+        owner, repo = _split_repo_path(repo_path)
+        await request(
+            self._http,
+            "POST",
+            f"/repos/{owner}/{repo}/actions/runs/{pipeline_id}/rerun-failed-jobs",
+        )
+
     @property
     def supports_batched_review(self) -> bool:
         return True

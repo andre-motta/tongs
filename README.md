@@ -102,6 +102,17 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 - **External editor** -- press `F2` inside the comment editor to switch to your preferred editor
 - **General comments** -- press `c` from the overview tab to post a top-level MR comment
 
+### Pipeline / CI
+
+- **Three-level drill-down** -- browse pipelines, drill into jobs grouped by stage, drill into full job logs
+- **ANSI log rendering** -- CI color output rendered natively via `Text.from_ansi()` with line numbers
+- **Cancel / Retry** -- cancel running pipelines or individual jobs (`C`), retry failed pipelines or jobs (`R`), with double-press confirmation
+- **Log search** -- press `/` in the log view to search for text across the full job output
+- **Open in editor** -- press `F2` to open the job log in your `$EDITOR` for deeper analysis
+- **Open in browser** -- press `o` to jump to the pipeline or job in the web UI
+- **MR-scoped** -- Pipeline tab shows only pipelines associated with the current MR/PR
+- **Lazy loading** -- pipeline data is fetched only when the Pipeline tab is first opened
+
 ### Actions
 
 - **Approve** (`A`) -- approve the MR/PR with double-press confirmation
@@ -196,6 +207,19 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 | `f` | Cycle filter (All / Unresolved / Resolved) |
 | `]` / `[` | Jump to next / previous unresolved |
 
+### Pipeline tab
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Move between pipeline / job cards |
+| `Enter` | Drill into jobs (from pipeline) or log (from job) |
+| `Escape` | Drill out one level |
+| `C` | Cancel pipeline or job (press twice) |
+| `R` | Retry pipeline or job (press twice) |
+| `o` | Open pipeline / job in browser |
+| `F2` | Open job log in external editor |
+| `/` | Search job log text |
+
 ## Configuration
 
 tongs uses `~/.config/tongs/config.toml` (or the platform-appropriate config directory). All settings have sensible defaults.
@@ -242,6 +266,7 @@ forge_type = "github"
 | Inline comments | Yes | No | Yes |
 | Discussion threads + tab | Yes | No | Yes |
 | Suggested changes | Yes | No | Yes |
+| Pipeline / CI drill-down | Yes | No | Yes |
 | Approve / Merge | Yes | No | Yes |
 | Command palette | Yes | No | N/A |
 | Zero config auth | Yes | Yes | N/A |
@@ -255,15 +280,15 @@ forge_type = "github"
 | 2 | MR detail view, diff viewer, syntax highlighting, GitHub client, commits tab | Done |
 | 3 | MR actions (approve, merge, close), inline comments, suggested changes | Done |
 | 4 | Discussion threads (inline + card-based tab with diff snippets), command palette, comment navigation, cross-tab jump-to-diff | Done |
-| 5 | Pipeline/CI management (job logs, retry, cancel, trigger) | Planned |
+| 5 | Pipeline/CI management (three-level drill-down, job logs, retry, cancel, log search) | Done |
 | 6 | Plugin system, fleet monitor plugin | Planned |
 | 7 | SQLite caching, MCP server, distribution (Homebrew, Fedora COPR) | Planned |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends. 489 tests and growing.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends. 531 tests and growing.
 
-tongs is early enough that contributions shape the architecture. The Pipeline/CI views and plugin system are open for contributors. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
+tongs is early enough that contributions shape the architecture. The plugin system and MCP server are open for contributors. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 
 ## Why "tongs"?
 

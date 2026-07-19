@@ -11,7 +11,14 @@ from textual.screen import Screen
 from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
-from tongs.forges.models import CIStatus, MRDetail, MRState, MRSummary
+from tongs.forges.models import (
+    CIStatus,
+    MRDetail,
+    MRState,
+    MRSummary,
+    Pipeline,
+    PipelineJob,
+)
 from tongs.views.suggestion import (
     build_suggestion_template,
     extract_new_side_lines,
@@ -36,6 +43,15 @@ from tongs.widgets.discussion_list import (
     DiscussionPanel,
     DiscussionReplyRequested,
     JumpToDiffDiscussion,
+)
+from tongs.widgets.pipeline_panel import (
+    CancelJobRequested,
+    CancelPipelineRequested,
+    LoadJobLogRequested,
+    LoadJobsRequested,
+    PipelinePanel,
+    RetryJobRequested,
+    RetryPipelineRequested,
 )
 
 
@@ -133,6 +149,7 @@ class MRDetailScreen(Screen):
         self.mr_detail: MRDetail | None = None
         self._diff_loaded = False
         self._discussions_loaded = False
+        self._pipeline_loaded = False
         self._cached_diff_files: list | None = None
 
     def compose(self) -> ComposeResult:
@@ -151,7 +168,10 @@ class MRDetailScreen(Screen):
                 yield Static("", id="disc-status-bar", classes="disc-status-bar")
                 yield DiscussionPanel(id="disc-panel")
             with TabPane("Pipeline", id="pipeline"):
-                yield Static("[dim]Pipeline view planned for Phase 5[/]")
+                yield Static(
+                    "", id="pipeline-status-bar", classes="pipeline-status-bar"
+                )
+                yield PipelinePanel(id="pipeline-panel")
         yield CommentEditor(id="comment-editor")
         yield Footer()
 
@@ -178,7 +198,33 @@ class MRDetailScreen(Screen):
                 severity="warning",
             )
 
+    def _pipeline_drilled_in(self) -> bool:
+        try:
+            panel = self.query_one("#pipeline-panel", PipelinePanel)
+            return panel._view_level > 0
+        except Exception:
+            return False
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if self._pipeline_drilled_in() and action in (
+            "add_comment",
+            "approve",
+            "unapprove",
+            "merge",
+            "close_mr",
+            "yank_url",
+        ):
+            return False
+        return True
+
     def action_go_back(self) -> None:
+        try:
+            panel = self.query_one("#pipeline-panel", PipelinePanel)
+            if panel._view_level > 0:
+                panel.action_drill_out()
+                return
+        except Exception:
+            pass
         screen_stack = self.app.screen_stack
         if len(screen_stack) >= 2:
             parent = screen_stack[-2]
@@ -210,6 +256,9 @@ class MRDetailScreen(Screen):
         elif tab_id == "discussion" and not self._discussions_loaded:
             self._discussions_loaded = True
             self._load_discussions()
+        elif tab_id == "pipeline" and not self._pipeline_loaded:
+            self._pipeline_loaded = True
+            self._load_pipelines()
 
     @work(exclusive=True, group="mr-diff")
     async def _load_diff(self) -> None:
@@ -342,6 +391,123 @@ class MRDetailScreen(Screen):
         self.action_focus_tab("diff")
         panel = self.query_one("#diff-panel", DiffPanel)
         panel.jump_to_discussion(event.file_path, event.line, event.discussion_id)
+
+    @work(exclusive=True, group="mr-pipelines")
+    async def _load_pipelines(self) -> None:
+        status = self.query_one("#pipeline-status-bar", Static)
+        status.update("[dim]Loading pipelines...[/]")
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            pipelines = await client.list_mr_pipelines(
+                self.mr_summary.repo_path, self.mr_summary.number
+            )
+            panel = self.query_one("#pipeline-panel", PipelinePanel)
+            panel.set_pipelines(pipelines)
+            running = sum(1 for p in pipelines if p.status == CIStatus.RUNNING)
+            failed = sum(1 for p in pipelines if p.status == CIStatus.FAILED)
+            total = len(pipelines)
+            parts = [f"{total} pipeline{'s' if total != 1 else ''}"]
+            if running:
+                parts.append(f"[yellow]{running} running[/]")
+            if failed:
+                parts.append(f"[red]{failed} failed[/]")
+            status.update("  ".join(parts))
+        except Exception as exc:
+            status.update(f"Could not load pipelines. ({exc})")
+
+    def on_load_jobs_requested(self, event: LoadJobsRequested) -> None:
+        self._load_pipeline_jobs(event.pipeline)
+
+    @work(exclusive=True, group="mr-pipelines")
+    async def _load_pipeline_jobs(self, pipeline: Pipeline) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            jobs = await client.get_pipeline_jobs(
+                self.mr_summary.repo_path, pipeline.id
+            )
+            panel = self.query_one("#pipeline-panel", PipelinePanel)
+            panel.set_jobs(jobs, pipeline)
+        except Exception as exc:
+            self.notify(f"Could not load jobs: {exc}", severity="error")
+
+    def on_load_job_log_requested(self, event: LoadJobLogRequested) -> None:
+        self._load_job_log(event.job, event.pipeline)
+
+    @work(exclusive=True, group="mr-pipelines")
+    async def _load_job_log(self, job: PipelineJob, pipeline: Pipeline) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            log_text = await client.get_job_log(self.mr_summary.repo_path, job.id)
+            panel = self.query_one("#pipeline-panel", PipelinePanel)
+            panel.set_job_log(log_text, job, pipeline)
+        except Exception as exc:
+            self.notify(f"Could not load job log: {exc}", severity="error")
+
+    def on_cancel_pipeline_requested(self, event: CancelPipelineRequested) -> None:
+        self._do_cancel_pipeline(event.pipeline_id)
+
+    @work(exclusive=True, group="mr-pipelines")
+    async def _do_cancel_pipeline(self, pipeline_id: int) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.cancel_pipeline(self.mr_summary.repo_path, pipeline_id)
+            self.notify("[green]Pipeline cancelled[/]")
+            self._pipeline_loaded = False
+            self._on_tab_switch("pipeline")
+        except Exception as exc:
+            self.notify(f"Cancel failed: {exc}", severity="error")
+
+    def on_retry_pipeline_requested(self, event: RetryPipelineRequested) -> None:
+        self._do_retry_pipeline(event.pipeline_id)
+
+    @work(exclusive=True, group="mr-pipelines")
+    async def _do_retry_pipeline(self, pipeline_id: int) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.retry_pipeline(self.mr_summary.repo_path, pipeline_id)
+            self.notify("[green]Pipeline retried[/]")
+            self._pipeline_loaded = False
+            self._on_tab_switch("pipeline")
+        except Exception as exc:
+            self.notify(f"Retry failed: {exc}", severity="error")
+
+    def on_cancel_job_requested(self, event: CancelJobRequested) -> None:
+        self._do_cancel_job(event.job_id)
+
+    @work(exclusive=True, group="mr-pipelines")
+    async def _do_cancel_job(self, job_id: int) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.cancel_job(self.mr_summary.repo_path, job_id)
+            self.notify("[green]Job cancelled[/]")
+        except Exception as exc:
+            self.notify(f"Cancel job failed: {exc}", severity="error")
+
+    def on_retry_job_requested(self, event: RetryJobRequested) -> None:
+        self._do_retry_job(event.job_id)
+
+    @work(exclusive=True, group="mr-pipelines")
+    async def _do_retry_job(self, job_id: int) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.retry_job(self.mr_summary.repo_path, job_id)
+            self.notify("[green]Job retried[/]")
+        except Exception as exc:
+            self.notify(f"Retry job failed: {exc}", severity="error")
 
     def on_discussion_reply_requested(self, event: DiscussionReplyRequested) -> None:
         """Open reply editor from the Discussion tab."""
@@ -705,5 +871,6 @@ class MRDetailScreen(Screen):
         self._diff_loaded = False
         self._commits_loaded = False
         self._discussions_loaded = False
+        self._pipeline_loaded = False
         self._cached_diff_files = None
         self._load_detail()

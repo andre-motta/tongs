@@ -43,7 +43,9 @@ def discover_repos(
             continue
 
         primary = _pick_primary_remote(remotes)
-        repos.append(Repo(path=repo_path, remotes=tuple(remotes), primary_remote=primary))
+        repos.append(
+            Repo(path=repo_path, remotes=tuple(remotes), primary_remote=primary)
+        )
 
     repos.sort(key=lambda r: r.display_name.lower())
     return repos
@@ -130,4 +132,8 @@ def _read_remotes(
 def _pick_primary_remote(remotes: list[Remote]) -> Remote | None:
     """Pick the primary remote. Prefer 'origin', then 'upstream', then first."""
     by_name = {r.name: r for r in remotes}
-    return by_name.get("origin") or by_name.get("upstream") or (remotes[0] if remotes else None)
+    return (
+        by_name.get("origin")
+        or by_name.get("upstream")
+        or (remotes[0] if remotes else None)
+    )

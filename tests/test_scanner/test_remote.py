@@ -30,14 +30,18 @@ class TestParseRemoteUrl:
         assert remote.forge_type == ForgeType.GITHUB
 
     def test_https_gitlab(self):
-        remote = parse_remote_url("origin", "https://gitlab.com/redhat/rhel-ai/wheels/builder.git")
+        remote = parse_remote_url(
+            "origin", "https://gitlab.com/redhat/rhel-ai/wheels/builder.git"
+        )
         assert remote is not None
         assert remote.hostname == "gitlab.com"
         assert remote.repo_path == "redhat/rhel-ai/wheels/builder"
         assert remote.forge_type == ForgeType.GITLAB
 
     def test_ssh_gitlab(self):
-        remote = parse_remote_url("origin", "git@gitlab.com:redhat/rhel-ai/core/tools/alerts.git")
+        remote = parse_remote_url(
+            "origin", "git@gitlab.com:redhat/rhel-ai/core/tools/alerts.git"
+        )
         assert remote is not None
         assert remote.repo_path == "redhat/rhel-ai/core/tools/alerts"
         assert remote.forge_type == ForgeType.GITLAB
@@ -61,7 +65,9 @@ class TestParseRemoteUrl:
         assert remote.forge_type == ForgeType.GITLAB
 
     def test_altssh_gitlab_normalized(self):
-        remote = parse_remote_url("origin", "git@altssh.gitlab.com:redhat/rhel-ai/builder.git")
+        remote = parse_remote_url(
+            "origin", "git@altssh.gitlab.com:redhat/rhel-ai/builder.git"
+        )
         assert remote is not None
         assert remote.hostname == "gitlab.com"
 
@@ -78,7 +84,9 @@ class TestParseRemoteUrl:
         assert remote is None
 
     def test_ssh_protocol_url(self):
-        remote = parse_remote_url("origin", "ssh://git@github.com/andre-motta/tongs.git")
+        remote = parse_remote_url(
+            "origin", "ssh://git@github.com/andre-motta/tongs.git"
+        )
         assert remote is not None
         assert remote.hostname == "github.com"
         assert remote.repo_path == "andre-motta/tongs"

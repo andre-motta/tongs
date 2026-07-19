@@ -12,18 +12,12 @@ GITHUB_HOSTS = frozenset({"github.com"})
 GITLAB_HOSTS = frozenset({"gitlab.com"})
 
 # ssh://user@host:port/path or ssh://user@host/path
-SSH_PROTOCOL_RE = re.compile(
-    r"^ssh://(?:[^@]+@)?([^:/]+)(?::\d+)?/(.+?)(?:\.git)?$"
-)
+SSH_PROTOCOL_RE = re.compile(r"^ssh://(?:[^@]+@)?([^:/]+)(?::\d+)?/(.+?)(?:\.git)?$")
 
 # git@host:path (SCP-style, no port support)
-SCP_RE = re.compile(
-    r"^(?:[^@]+@)?([^:/]+):(.+?)(?:\.git)?$"
-)
+SCP_RE = re.compile(r"^(?:[^@]+@)?([^:/]+):(.+?)(?:\.git)?$")
 
-HTTPS_URL_RE = re.compile(
-    r"^https?://([^/]+)/(.+?)(?:\.git)?$"
-)
+HTTPS_URL_RE = re.compile(r"^https?://([^/]+)/(.+?)(?:\.git)?$")
 
 
 def parse_remote_url(

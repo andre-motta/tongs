@@ -15,7 +15,10 @@ from tongs.errors import (
 
 class TestRedactCredentials:
     def test_gitlab_pat(self):
-        assert redact_credentials("token: glpat-abc123DEF_xyz") == "token: glpat-[REDACTED]"
+        assert (
+            redact_credentials("token: glpat-abc123DEF_xyz")
+            == "token: glpat-[REDACTED]"
+        )
 
     def test_gitlab_deploy_token(self):
         assert redact_credentials("gldt-abc123") == "gldt-[REDACTED]"
@@ -59,10 +62,16 @@ class TestRedactCredentials:
         )
 
     def test_private_token_header(self):
-        assert redact_credentials("PRIVATE-TOKEN: glpat-abc123") == "PRIVATE-TOKEN: [REDACTED]"
+        assert (
+            redact_credentials("PRIVATE-TOKEN: glpat-abc123")
+            == "PRIVATE-TOKEN: [REDACTED]"
+        )
 
     def test_no_token_unchanged(self):
-        assert redact_credentials("normal text with no secrets") == "normal text with no secrets"
+        assert (
+            redact_credentials("normal text with no secrets")
+            == "normal text with no secrets"
+        )
 
     def test_empty_string(self):
         assert redact_credentials("") == ""
@@ -85,8 +94,15 @@ class TestRedactCredentials:
 
 class TestErrorHierarchy:
     def test_all_errors_inherit_from_forge_error(self):
-        for cls in [AuthError, RateLimitError, NetworkError, NotFoundError,
-                    ConflictError, ForgePermissionError, ConfigError]:
+        for cls in [
+            AuthError,
+            RateLimitError,
+            NetworkError,
+            NotFoundError,
+            ConflictError,
+            ForgePermissionError,
+            ConfigError,
+        ]:
             assert issubclass(cls, ForgeError)
 
     def test_rate_limit_error_has_retry_after(self):

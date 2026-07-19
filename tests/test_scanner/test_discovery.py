@@ -80,7 +80,11 @@ class TestPickPrimaryRemote:
         )
 
     def test_prefers_origin(self):
-        remotes = [self._remote("upstream"), self._remote("origin"), self._remote("fork")]
+        remotes = [
+            self._remote("upstream"),
+            self._remote("origin"),
+            self._remote("fork"),
+        ]
         assert _pick_primary_remote(remotes).name == "origin"
 
     def test_falls_back_to_upstream(self):
@@ -125,28 +129,36 @@ class TestDiscoverReposEdgeCases:
 
     def test_repo_with_mixed_remotes(self, tmp_path):
         repo_dir = tmp_path / "mixed"
-        _init_repo(repo_dir, {
-            "local": "/home/user/local",
-            "origin": "https://github.com/org/mixed.git",
-        })
+        _init_repo(
+            repo_dir,
+            {
+                "local": "/home/user/local",
+                "origin": "https://github.com/org/mixed.git",
+            },
+        )
         repos = discover_repos(tmp_path)
         assert len(repos) == 1
         assert repos[0].primary_remote.name == "origin"
         assert len(repos[0].remotes) == 1
 
     def test_multi_remote_picks_origin(self, tmp_path):
-        _init_repo(tmp_path / "multi", {
-            "upstream": "https://github.com/upstream/repo.git",
-            "origin": "https://github.com/user/repo.git",
-            "fork": "https://github.com/fork/repo.git",
-        })
+        _init_repo(
+            tmp_path / "multi",
+            {
+                "upstream": "https://github.com/upstream/repo.git",
+                "origin": "https://github.com/user/repo.git",
+                "fork": "https://github.com/fork/repo.git",
+            },
+        )
         repos = discover_repos(tmp_path)
         assert len(repos) == 1
         assert repos[0].primary_remote.name == "origin"
         assert len(repos[0].remotes) == 3
 
     def test_permission_denied_dir_skipped(self, tmp_path):
-        _init_repo(tmp_path / "good-repo", {"origin": "https://github.com/org/good.git"})
+        _init_repo(
+            tmp_path / "good-repo", {"origin": "https://github.com/org/good.git"}
+        )
         blocked = tmp_path / "blocked"
         blocked.mkdir()
         os.chmod(blocked, 0o000)

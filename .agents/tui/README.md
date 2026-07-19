@@ -7,8 +7,8 @@ tongs uses Textual 1.0+ with these patterns:
 - **Screens** for distinct views (inbox, repo list, MR detail). Pushed/popped via `app.push_screen()`/`app.pop_screen()`.
 - **Workers** (`@work` decorator) for async operations. Each data-loading method gets its own named worker group with `exclusive=True` to cancel previous loads on refresh.
 - **Reactive attributes** on `TongsApp` for shared state that persists across screen push/pop.
-- **DataTable** for list views with row cursor, zebra stripes.
-- **Tree** widget for hierarchical views (repo list grouped by namespace).
+- **DataTable** for list views with row cursor, zebra stripes (inbox, repo list).
+- **Tree** widget for hierarchical views (diff file tree).
 - **TabbedContent** for multi-tab views (inbox tabs: My Reviews, My MRs, All Open).
 - **ComposeResult** for declarative widget layout via `compose()`.
 
@@ -42,7 +42,18 @@ These are regular (mutable) dataclasses because they represent in-progress state
 
 ## InboxScreen
 
-`src/tongs/views/inbox.py` is the default screen. Structure:
+`src/tongs/views/inbox.py` is the default screen. Supports two modes: global (no repo) and scoped (single repo).
+
+**Scoped mode:** Constructor accepts `repo: Repo | None`. When a repo is provided:
+- `sub_title` is set to the repo's display name
+- `show_repo=False` is passed to `MRTable.setup_columns()`, hiding the Repo column
+- `_get_hostnames()` returns only the scoped repo's hostname
+- `_filter_by_repo(mrs)` filters API results to match only the scoped repo's `repo_path`
+- `load_all_open()` fetches MRs only for the scoped repo, not all discovered repos
+- R key pops back to RepoListScreen instead of pushing it
+- q pops back instead of exiting the app; Esc also pops back
+
+Structure:
 
 ```
 Header
@@ -54,8 +65,8 @@ Footer
 ```
 
 **MRTable** extends `DataTable`:
-- `setup_columns()` adds CI, #, Title, Author, Repo, Updated columns
-- `add_mr_row(mr, ascii_mode)` adds a row from `MRSummary`, stores the MR data keyed by `"{hostname}:{repo_path}:{number}"`
+- `setup_columns(show_repo=True)` adds CI, #, Title, Author, Updated columns. When `show_repo=True` (default), also adds a Repo column. Scoped inbox passes `show_repo=False` to hide the redundant repo column.
+- `add_mr_row(mr, ascii_mode)` adds a row from `MRSummary`, stores the MR data keyed by `"{hostname}:{repo_path}:{number}"`. Conditionally includes repo_path based on `_show_repo`.
 - `get_selected_mr()` returns the `MRSummary` for the cursor row using `coordinate_to_cell_key()` and `RowKey.value`
 
 **Lazy loading:** tabs are loaded on first focus, not on mount. `_loaded_tabs` set tracks which tabs have been loaded. `on_tabbed_content_tab_activated()` checks the set before loading. `action_refresh()` discards the current tab from the set and reloads.
@@ -90,35 +101,34 @@ async def load_reviews(self) -> None:
 
 Key patterns: `exclusive=True` cancels previous loads; `NotImplementedError` is caught and silently skipped (safety net for any future forge backends not yet implemented); other exceptions surface as dim warnings; `table.loading` shows Textual's built-in loading indicator.
 
-**"All Open" tab** uses `asyncio.Semaphore(max_parallel)` and `asyncio.gather()` to fetch MRs for all discovered repos concurrently, with per-host failure tracking.
+**"All Open" tab** uses `asyncio.Semaphore(max_parallel)` and `asyncio.gather()` to fetch MRs concurrently, with per-host failure tracking. In global mode, fetches from all discovered repos. In scoped mode, fetches only for the single scoped repo.
 
 ## RepoListScreen
 
-`src/tongs/views/repo_list.py` shows repos grouped by namespace in a `Tree` widget.
+`src/tongs/views/repo_list.py` shows discovered repos in a searchable, filterable `DataTable`.
 
-- Groups repos by `repo.namespace` (from primary remote's repo_path)
-- Shows forge icons: `[blue]GL[/]` for GitLab, `[white]GH[/]` for GitHub
-- Adds hostname suffix for non-default hosts when multiple instances exist
-- `repo` object stored as `data` on tree leaf nodes
-- Selecting a repo (Enter / `on_tree_node_selected`) pushes `MRListScreen(repo)`
-
-## MRListScreen
-
-`src/tongs/views/mr_list.py` shows open MRs for a single repository. Reuses `MRTable` from `inbox.py`.
-
-Structure:
-
+**Layout:**
 ```
 Header
-MRTable#repo-mr-table
+Input#repo-search (placeholder: "type to filter...")
+Static#repo-status (count + active forge filter)
+DataTable#repo-table (columns: F, Repository, [Host])
 Footer
 ```
 
-- Constructor takes a `Repo` object; `sub_title` set to `repo.display_name`
-- `_load_mrs()` worker fetches MRs via `client.list_mrs(repo_path)`, populates the shared `MRTable`
-- Selecting a row pushes `MRDetailScreen(mr)` via `on_data_table_row_selected`
-- Handles repos without forge remotes (notifies, does not crash)
-- Bindings: Esc/q = back, o = open in browser, Ctrl+R = refresh
+**Columns:** Forge type label (F), Repository display name, and an optional Host column shown only when more than two distinct hostnames exist among discovered repos.
+
+**Live search (`/`):** Focuses the `Input` widget. Text changes update the `search_text` reactive, which triggers `_apply_filters()`. Pressing Enter returns focus to the table. Matching is case-insensitive substring on `repo.display_name`.
+
+**Forge filter (`f`):** Cycles `forge_filter` reactive through `None` (all) -> `GitHub` -> `GitLab` -> `None`. Current filter shown in the status bar.
+
+**Compound row keys:** Each row is keyed by `"{hostname}:{display_name}"`, stored in `_repo_data` dict mapping keys to `Repo` objects.
+
+**Forge icons:** `[blue]GL[/]` for GitLab, `[white]GH[/]` for GitHub, `[dim]--[/]` for unknown.
+
+**Navigation:** Selecting a repo (`on_data_table_row_selected`) pushes `InboxScreen(repo=repo)` -- the scoped inbox for that repository.
+
+Bindings: Esc/q = back, `/` = search, f = cycle forge filter, Ctrl+R = refresh.
 
 ## MRDetailScreen
 
@@ -168,7 +178,7 @@ Bindings: Esc/q = back, 1-5 = focus tab, c = general comment, A = approve, U = u
 
 **Auto-refresh after actions:** On success, each `_do_*()` method sets `_action_taken = True` and calls `_load_detail()` to re-fetch the MR from the API. This updates the overview metadata (approvals list, merge readiness, state) immediately after the action completes.
 
-**Parent screen cache invalidation:** `action_go_back()` checks whether the parent screen (one level up in `app.screen_stack`) has a `_loaded_tabs` attribute. If so, it calls `_loaded_tabs.clear()` before popping. This forces the parent screen (InboxScreen or MRListScreen) to re-fetch tab data on return, ensuring the MR list reflects any state changes made in the detail view.
+**Parent screen cache invalidation:** `action_go_back()` checks whether the parent screen (one level up in `app.screen_stack`) has a `_loaded_tabs` attribute. If so, it calls `_loaded_tabs.clear()` before popping. This forces the parent InboxScreen (global or scoped) to re-fetch tab data on return, ensuring the MR list reflects any state changes made in the detail view.
 
 **Merge readiness indicator:** `_merge_readiness(mr)` in the overview computes a readiness status from MR metadata. It returns `[green]ready[/]` when no blockers exist, or `[yellow]blocked[/]` with a comma-separated list of reasons. Blockers checked: `is_draft`, `has_conflicts`, CI status (`FAILED` or `RUNNING`), and GitLab's `detailed_merge_status` (when not `"mergeable"` or `"can_be_merged"`).
 
@@ -246,7 +256,8 @@ Bindings: Ctrl+S / Ctrl+J = submit (priority bindings), Esc = cancel (with guard
 - `Ctrl+S` / `Ctrl+J` = submit comment (CommentEditor, priority bindings)
 - `F2` = open external editor (CommentEditor)
 - `A/U/M/X` = approve/unapprove/merge/close (MRDetailScreen, double-press to confirm)
-- `/` = search (planned)
+- `/` = search (RepoListScreen: live filter)
+- `f` = cycle forge filter (RepoListScreen: None -> GH -> GL -> None)
 
 Current bindings are defined as `BINDINGS` lists on each Screen class. Format: `Binding(key, action_name, description, show=True/False)`.
 
@@ -275,14 +286,15 @@ All visual elements have ASCII fallbacks:
 ## Navigation Flow
 
 ```
-InboxScreen (default)
+InboxScreen (global, default)
   |-- select MR row --> MRDetailScreen(mr_summary)
   |-- R key ----------> RepoListScreen
-                           |-- select repo --> MRListScreen(repo)
+                           |-- select repo --> InboxScreen(repo=repo)  [scoped]
                                                  |-- select MR row --> MRDetailScreen(mr_summary)
+                                                 |-- R key ----------> pop back to RepoListScreen
 ```
 
-All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_screen()` (Esc/q). State is passed via constructor arguments (MRSummary, Repo), not reactive app-level attributes.
+All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_screen()` (Esc/q). State is passed via constructor arguments (MRSummary, Repo), not reactive app-level attributes. The scoped InboxScreen reuses the same class as the global one, differentiated by the `repo` constructor parameter.
 
 ## Planned Views (Phase 4+)
 

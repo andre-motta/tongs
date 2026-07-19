@@ -29,7 +29,7 @@ The TUI layer never imports a concrete forge client. Everything goes through `Fo
 
 ## Data Flow: MR Detail and Diff Rendering
 
-1. User selects an MR row in `InboxScreen` or `MRListScreen`. The `MRSummary` is passed to `MRDetailScreen(mr_summary)` via `push_screen()`.
+1. User selects an MR row in `InboxScreen` (global or scoped). The `MRSummary` is passed to `MRDetailScreen(mr_summary)` via `push_screen()`.
 2. On mount, `_load_detail()` worker fetches `MRDetail` from the forge API via `ForgeRegistry.get_client()` and `client.get_mr()`.
 3. `MROverview` renders metadata (title, author, branches, CI, approvals, reviewers, labels, description).
 4. When the user switches to the Diff tab (lazy, not on mount), `_load_diff()` calls `client.get_mr_diff()` which returns the forge's changes list.

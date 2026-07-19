@@ -11,25 +11,34 @@ from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane
 
+from tongs.scanner.repo import Repo
 from tongs.widgets.mr_table import MRTable
 
 
 class InboxScreen(Screen):
-    """MR inbox dashboard with tabs for My Reviews / My MRs / All Open."""
+    """MR inbox dashboard with tabs for My Reviews / My MRs / All Open.
+
+    When `repo` is provided, the inbox is scoped to that single repo.
+    """
 
     BINDINGS = [
-        Binding("r", "switch_tab('repos')", "Repos", show=True, key_display="R"),
+        Binding("r", "repos_or_back", "Repos", show=True, key_display="R"),
         Binding("1", "focus_tab('reviews')", "Reviews", show=True),
         Binding("2", "focus_tab('my-mrs')", "My MRs", show=True),
         Binding("3", "focus_tab('all-open')", "All Open", show=True),
         Binding("o", "open_in_browser", "Open", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
-        Binding("q", "quit", "Quit", show=True),
+        Binding("escape", "go_back", "Back", show=False),
+        Binding("q", "quit_or_back", "Quit/Back", show=True),
     ]
 
     loading_reviews: reactive[bool] = reactive(False)
     loading_my_mrs: reactive[bool] = reactive(False)
     loading_all_open: reactive[bool] = reactive(False)
+
+    def __init__(self, repo: Repo | None = None):
+        super().__init__()
+        self.scoped_repo = repo
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -44,18 +53,33 @@ class InboxScreen(Screen):
 
     def on_mount(self) -> None:
         self._loaded_tabs: set[str] = set()
+        show_repo = self.scoped_repo is None
         for table in self.query(MRTable):
-            table.setup_columns()
+            table.setup_columns(show_repo=show_repo)
             table.cursor_type = "row"
             table.zebra_stripes = True
+        if self.scoped_repo:
+            self.sub_title = self.scoped_repo.display_name
 
     def action_refresh(self) -> None:
         tabbed = self.query_one(TabbedContent)
         self._loaded_tabs.discard(tabbed.active)
         self.action_focus_tab(tabbed.active)
 
-    def action_switch_tab(self, tab: str) -> None:
-        if tab == "repos":
+    def action_go_back(self) -> None:
+        if self.scoped_repo:
+            self.app.pop_screen()
+
+    def action_quit_or_back(self) -> None:
+        if self.scoped_repo:
+            self.app.pop_screen()
+        else:
+            self.app.exit()
+
+    def action_repos_or_back(self) -> None:
+        if self.scoped_repo:
+            self.app.pop_screen()
+        else:
             self.app.push_screen("repo_list")
 
     def on_tabbed_content_tab_activated(
@@ -116,13 +140,24 @@ class InboxScreen(Screen):
 
                 self.app.push_screen(MRDetailScreen(mr))
 
+    def _get_hostnames(self) -> list[str]:
+        if self.scoped_repo and self.scoped_repo.hostname:
+            return [self.scoped_repo.hostname]
+        return self.app.get_repo_hostnames()
+
+    def _filter_by_repo(self, mrs: list) -> list:
+        if not self.scoped_repo or not self.scoped_repo.primary_remote:
+            return mrs
+        target = self.scoped_repo.primary_remote.repo_path
+        return [mr for mr in mrs if mr.repo_path == target]
+
     @work(exclusive=True, group="reviews")
     async def load_reviews(self) -> None:
         self.loading_reviews = True
         table = self.query_one("#reviews-table", MRTable)
         table.loading = True
         try:
-            hostnames = self.app.get_repo_hostnames()
+            hostnames = self._get_hostnames()
             if not hostnames:
                 self.notify("[dim]No forges discovered yet[/]")
                 return
@@ -130,7 +165,7 @@ class InboxScreen(Screen):
             for hostname in hostnames:
                 try:
                     client = await registry.get_client(hostname)
-                    mrs = await client.list_my_reviews()
+                    mrs = self._filter_by_repo(await client.list_my_reviews())
                     for mr in mrs:
                         table.add_mr_row(mr, self.app.config.ascii_mode)
                 except NotImplementedError:
@@ -150,14 +185,14 @@ class InboxScreen(Screen):
         table = self.query_one("#my-mrs-table", MRTable)
         table.loading = True
         try:
-            hostnames = self.app.get_repo_hostnames()
+            hostnames = self._get_hostnames()
             if not hostnames:
                 return
             registry = self.app.forge_registry
             for hostname in hostnames:
                 try:
                     client = await registry.get_client(hostname)
-                    mrs = await client.list_my_mrs()
+                    mrs = self._filter_by_repo(await client.list_my_mrs())
                     for mr in mrs:
                         table.add_mr_row(mr, self.app.config.ascii_mode)
                 except NotImplementedError:
@@ -177,7 +212,10 @@ class InboxScreen(Screen):
         table = self.query_one("#all-open-table", MRTable)
         table.loading = True
         try:
-            repos = self.app.repos
+            if self.scoped_repo:
+                repos = [self.scoped_repo]
+            else:
+                repos = self.app.repos
             if not repos:
                 return
             registry = self.app.forge_registry

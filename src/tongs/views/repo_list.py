@@ -1,88 +1,141 @@
-"""Repository list screen grouped by namespace."""
+"""Repository list screen with search and forge filtering."""
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Tree
+from textual.widgets import DataTable, Footer, Header, Input, Static
 
 from tongs.scanner.repo import ForgeType, Repo
 
 
-def _forge_icon(repo: Repo) -> str:
-    if repo.forge_type == ForgeType.GITLAB:
+def _forge_label(forge_type: ForgeType | None) -> str:
+    if forge_type == ForgeType.GITLAB:
         return "[blue]GL[/]"
-    if repo.forge_type == ForgeType.GITHUB:
+    if forge_type == ForgeType.GITHUB:
         return "[white]GH[/]"
     return "[dim]--[/]"
 
 
-def _host_suffix(repo: Repo, has_multiple_instances: bool) -> str:
-    if not has_multiple_instances or not repo.hostname:
-        return ""
-    if repo.hostname in ("github.com", "gitlab.com"):
-        return ""
-    return f" [dim]({repo.hostname})[/]"
-
-
 class RepoListScreen(Screen):
-    """Tree view of discovered repos grouped by namespace/org."""
+    """Searchable, filterable repo list with DataTable."""
 
     BINDINGS = [
         Binding("escape", "go_back", "Back", show=True),
         Binding("q", "go_back", "Back", show=False),
+        Binding("slash", "start_search", "Filter", show=True, key_display="/"),
+        Binding("f", "cycle_forge", "Forge", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
     ]
 
+    forge_filter: reactive[ForgeType | None] = reactive(None)
+    search_text: reactive[str] = reactive("")
+
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Tree("Repositories", id="repo-tree")
+        yield Input(
+            placeholder="type to filter...",
+            id="repo-search",
+        )
+        yield Static("", id="repo-status")
+        yield DataTable(id="repo-table")
         yield Footer()
 
     def on_mount(self) -> None:
-        tree = self.query_one("#repo-tree", Tree)
-        tree.root.expand()
-        self.load_repos()
-
-    def load_repos(self) -> None:
-        tree = self.query_one("#repo-tree", Tree)
-        tree.root.remove_children()
-
-        repos: list[Repo] = getattr(self.app, "repos", [])
-        if not repos:
-            tree.root.add_leaf("[dim]No repositories found[/]")
-            tree.root.set_label("Repositories (0)")
-            return
-
-        tree.root.set_label(f"Repositories ({len(repos)})")
-
-        hostnames = {r.hostname for r in repos if r.hostname}
-        has_multiple_instances = len(hostnames) > 1
-
-        namespaces: dict[str, list[Repo]] = {}
-        for repo in repos:
-            ns = repo.namespace or "(ungrouped)"
-            namespaces.setdefault(ns, []).append(repo)
-
-        for ns in sorted(namespaces.keys()):
-            ns_repos = namespaces[ns]
-            branch = tree.root.add(f"[bold]{ns}[/] ({len(ns_repos)})")
-            for repo in ns_repos:
-                name = repo.path.name
-                icon = _forge_icon(repo)
-                suffix = _host_suffix(repo, has_multiple_instances)
-                branch.add_leaf(f"{icon} {name}{suffix}", data=repo)
-            branch.expand()
+        table = self.query_one("#repo-table", DataTable)
+        table.add_column("F", key="forge", width=4)
+        table.add_column("Repository", key="repo")
+        hostnames = {r.hostname for r in self.app.repos if r.hostname}
+        self._show_host = len(hostnames) > 2
+        if self._show_host:
+            table.add_column("Host", key="host", width=20)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        self._repo_data: dict[str, Repo] = {}
+        self._apply_filters()
 
     def action_go_back(self) -> None:
         self.app.pop_screen()
 
+    def action_start_search(self) -> None:
+        search = self.query_one("#repo-search", Input)
+        search.focus()
+
+    def action_cycle_forge(self) -> None:
+        if self.forge_filter is None:
+            self.forge_filter = ForgeType.GITHUB
+        elif self.forge_filter == ForgeType.GITHUB:
+            self.forge_filter = ForgeType.GITLAB
+        else:
+            self.forge_filter = None
+
+    def watch_forge_filter(self) -> None:
+        self._apply_filters()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "repo-search":
+            self.search_text = event.value
+
+    def watch_search_text(self) -> None:
+        self._apply_filters()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        table = self.query_one("#repo-table", DataTable)
+        table.focus()
+
+    def _apply_filters(self) -> None:
+        repos: list[Repo] = getattr(self.app, "repos", [])
+        filtered = repos
+
+        if self.forge_filter is not None:
+            filtered = [r for r in filtered if r.forge_type == self.forge_filter]
+
+        search = self.search_text.strip().lower()
+        if search:
+            filtered = [r for r in filtered if search in r.display_name.lower()]
+
+        table = self.query_one("#repo-table", DataTable)
+        table.clear()
+        self._repo_data.clear()
+
+        show_host = getattr(self, "_show_host", False)
+
+        for repo in filtered:
+            key = f"{repo.hostname or ''}:{repo.display_name}"
+            self._repo_data[key] = repo
+            row = [
+                _forge_label(repo.forge_type),
+                repo.display_name,
+            ]
+            if show_host:
+                row.append(repo.hostname or "")
+            table.add_row(*row, key=key)
+
+        forge_label = {
+            None: "All",
+            ForgeType.GITHUB: "GH",
+            ForgeType.GITLAB: "GL",
+        }.get(self.forge_filter, "All")
+
+        status = self.query_one("#repo-status", Static)
+        total = len(repos)
+        shown = len(filtered)
+        if shown == total:
+            status.update(f"[dim]{total} repositories[/]  [bold][{forge_label}][/]")
+        else:
+            status.update(
+                f"[dim]{shown} of {total} repositories[/]  [bold][{forge_label}][/]"
+            )
+
     def action_refresh(self) -> None:
-        self.load_repos()
+        self._apply_filters()
 
-    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        if event.node.data and isinstance(event.node.data, Repo):
-            from tongs.views.mr_list import MRListScreen
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        key = str(event.row_key.value)
+        repo = self._repo_data.get(key)
+        if repo:
+            from tongs.views.inbox import InboxScreen
 
-            self.app.push_screen(MRListScreen(event.node.data))
+            self.app.push_screen(InboxScreen(repo=repo))

@@ -68,11 +68,11 @@ src/tongs/
   widgets/             # Reusable Textual widgets
     comment_editor.py  # CommentEditor (bottom-docked, general + inline modes)
     diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent)
+    mr_table.py        # MRTable (DataTable subclass, setup_columns(show_repo) toggle)
 
   views/               # Textual Screens
-    inbox.py           # InboxScreen: MR inbox with tabs (My Reviews/My MRs/All Open)
-    repo_list.py       # RepoListScreen: tree grouped by namespace
-    mr_list.py         # MRListScreen: repo-scoped MR list
+    inbox.py           # InboxScreen: MR inbox with tabs (My Reviews/My MRs/All Open), supports scoped mode
+    repo_list.py       # RepoListScreen: searchable DataTable with live filter and forge cycling
     mr_detail.py       # MRDetailScreen: tabbed MR detail (Overview/Diff/Discussion/Pipeline)
 ```
 

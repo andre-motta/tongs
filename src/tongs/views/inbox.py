@@ -207,10 +207,10 @@ class InboxScreen(Screen):
                         table.add_mr_row(mr, self.app.config.ascii_mode)
                 except NotImplementedError:
                     pass
-                except Exception as exc:
+                except (ForgeError, Exception) as exc:
                     self.notify(
-                        f"[red]Failed to load MRs from {hostname}:[/] {exc}",
-                        severity="error",
+                        f"[dim]{hostname}:[/] {exc}",
+                        severity="warning",
                     )
         finally:
             self.loading_my_mrs = False

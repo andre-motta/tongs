@@ -88,10 +88,12 @@ class TongsApp(App):
         self.call_from_thread(self._on_discovery_complete)
 
     def _on_discovery_complete(self) -> None:
-        """Trigger inbox refresh after repo discovery finishes."""
+        """Trigger inbox load after repo discovery finishes."""
         screen = self.screen
-        if hasattr(screen, "action_refresh"):
-            screen.action_refresh()
+        if hasattr(screen, "_loaded_tabs"):
+            screen._loaded_tabs.clear()
+        if hasattr(screen, "action_focus_tab"):
+            screen.action_focus_tab("reviews")
 
     def get_repo_hostnames(self) -> list[str]:
         """Return unique hostnames from discovered repos (not hardcoded)."""

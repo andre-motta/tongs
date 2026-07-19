@@ -27,6 +27,19 @@ The TUI layer never imports a concrete forge client. Everything goes through `Fo
 7. Forge client methods return shared dataclasses (`MRSummary`, `MRDetail`, etc.) to the view layer.
 8. Views populate Textual widgets (DataTable, Tree) with the returned data.
 
+## Data Flow: MR Detail and Diff Rendering
+
+1. User selects an MR row in `InboxScreen` or `MRListScreen`. The `MRSummary` is passed to `MRDetailScreen(mr_summary)` via `push_screen()`.
+2. On mount, `_load_detail()` worker fetches `MRDetail` from the forge API via `ForgeRegistry.get_client()` and `client.get_mr()`.
+3. `MROverview` renders metadata (title, author, branches, CI, approvals, reviewers, labels, description).
+4. When the user switches to the Diff tab (lazy, not on mount), `_load_diff()` calls `client.get_mr_diff()` which returns the forge's changes list.
+5. `_changes_to_diff_text()` converts the changes list to unified diff text (prepends `---`/`+++` headers when missing).
+6. `diff/parser.py:parse_diff()` parses the text into `list[DiffFile]` (shared model layer).
+7. `DiffPanel.set_files()` populates `DiffFileTree` and renders the first file in `DiffContent`.
+8. For inline commenting (planned), `diff/position.py:position_from_diff_line()` creates a `DiffPosition`, then `to_forge_position()` converts it to the forge-specific API format.
+
+This path keeps the view layer working against shared models (`DiffFile`, `DiffPosition`) without knowing which forge produced the data.
+
 ## HTTP-First Architecture
 
 All forge operations use `httpx.AsyncClient`, not subprocess calls to `glab`/`gh` per operation. Auth tokens are extracted from CLI credential stores once at startup via subprocess, then all subsequent operations use HTTP with Bearer auth.

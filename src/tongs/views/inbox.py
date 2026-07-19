@@ -110,7 +110,6 @@ class InboxScreen(Screen):
         Binding("2", "focus_tab('my-mrs')", "My MRs", show=True),
         Binding("3", "focus_tab('all-open')", "All Open", show=True),
         Binding("o", "open_in_browser", "Open", show=True),
-        Binding("enter", "select_mr", "Open MR", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -146,6 +145,26 @@ class InboxScreen(Screen):
         if tab == "repos":
             self.app.push_screen("repo_list")
 
+    def on_tabbed_content_tab_activated(
+        self, event: TabbedContent.TabActivated
+    ) -> None:
+        tab_id = event.pane.id
+        if tab_id and tab_id not in self._loaded_tabs:
+            self._loaded_tabs.add(tab_id)
+            table_id = {
+                "reviews": "#reviews-table",
+                "my-mrs": "#my-mrs-table",
+                "all-open": "#all-open-table",
+            }.get(tab_id)
+            if table_id:
+                self.query_one(table_id, MRTable).clear()
+            if tab_id == "reviews":
+                self.load_reviews()
+            elif tab_id == "my-mrs":
+                self.load_my_mrs()
+            elif tab_id == "all-open":
+                self.load_all_open()
+
     def action_focus_tab(self, tab_id: str) -> None:
         tabbed = self.query_one(TabbedContent)
         tabbed.active = tab_id
@@ -177,8 +196,12 @@ class InboxScreen(Screen):
 
     def action_select_mr(self) -> None:
         table = self._active_table()
-        if table and table.cursor_row is not None:
-            self.notify("MR detail view coming in Phase 2")
+        if table:
+            mr = table.get_selected_mr()
+            if mr:
+                from tongs.views.mr_detail import MRDetailScreen
+
+                self.app.push_screen(MRDetailScreen(mr))
 
     @work(exclusive=True, group="reviews")
     async def load_reviews(self) -> None:
@@ -276,7 +299,7 @@ class InboxScreen(Screen):
             table.loading = False
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        self.notify("MR detail view coming in Phase 2")
+        self.action_select_mr()
 
     def _active_table(self) -> MRTable | None:
         tabbed = self.query_one(TabbedContent)

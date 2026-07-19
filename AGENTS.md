@@ -59,13 +59,19 @@ src/tongs/
   diff/                # Diff parsing engine (Phase 2)
     models.py          # DiffFile, DiffHunk, DiffLine, LineType, FileStatus
     parser.py          # Unified diff parser (plain + git format)
+    position.py        # DiffPosition, forge-specific position converters
 
   state/               # App state management
     app_state.py       # MRFilter, ReviewDraft dataclasses
 
+  widgets/             # Reusable Textual widgets
+    diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent)
+
   views/               # Textual Screens
     inbox.py           # InboxScreen: MR inbox with tabs (My Reviews/My MRs/All Open)
     repo_list.py       # RepoListScreen: tree grouped by namespace
+    mr_list.py         # MRListScreen: repo-scoped MR list
+    mr_detail.py       # MRDetailScreen: tabbed MR detail (Overview/Diff/Discussion/Pipeline)
 ```
 
 ## Subsystem Guides
@@ -81,7 +87,7 @@ src/tongs/
 
 ## Development Status
 
-Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 in progress (diff parser done, diff views next). GitHub client planned for Phase 3.
+Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). GitHub client planned for Phase 3.
 
 ## Gate Process
 

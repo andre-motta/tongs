@@ -111,16 +111,37 @@ Real diff files for testing are in `tests/fixtures/`:
 
 Tests in `tests/test_diff/test_parser.py` cover both inline diff strings and fixture file parsing.
 
-## Position Mapping (Planned)
+## Position Mapping
 
-`diff/position.py` (not yet implemented) will translate between line numbers and forge-specific position formats for inline commenting:
+`src/tongs/diff/position.py` translates diff line positions to forge-specific API formats for inline commenting. It is forge-agnostic at the core, with per-forge converters.
 
-- **GitLab:** position object with `base_sha`, `start_sha`, `head_sha`, `old_line`/`new_line`, `new_path`/`old_path`
-- **GitHub:** `path`, `line`, `side` (LEFT/RIGHT)
+### DiffPosition
 
-The current `GitLabClient.create_inline_comment()` fetches `diff_refs` from the MR and builds the position object inline. This will be refactored to use the position module once it exists.
+Frozen dataclass capturing enough information for any forge:
 
-## Planned Features (Phase 2)
+- `file: DiffFile` -- the file this position belongs to
+- `line: DiffLine` -- the specific diff line
+- `old_path`, `new_path` -- file paths
+- `old_line: int | None`, `new_line: int | None` -- line numbers in old/new file
+- `side: str` -- `"LEFT"` (old file / deletions) or `"RIGHT"` (new file / additions and context)
+
+### Factory
+
+`position_from_diff_line(file, line)` creates a `DiffPosition` from a `DiffFile` and `DiffLine`. Side is determined by `LineType`: ADDITION -> RIGHT, DELETION -> LEFT, everything else -> RIGHT.
+
+### Forge Converters
+
+**`to_gitlab_position(pos, base_sha, start_sha, head_sha)`** returns a dict matching GitLab's discussions API `position` object:
+- Always includes `position_type`, `base_sha`, `start_sha`, `head_sha`, `old_path`, `new_path`
+- Sets `old_line` for LEFT-side positions, `new_line` for RIGHT-side
+
+**`to_github_position(pos, commit_id)`** returns a dict matching GitHub's pull request review comments API:
+- `path` is `old_path` for LEFT, `new_path` for RIGHT
+- Includes `side`, `commit_id`, and the appropriate `line` number
+
+**`to_forge_position(pos, forge_type, ...)`** dispatches to the correct converter based on `ForgeType` enum. Accepts all keyword arguments for both forges; each converter uses only what it needs.
+
+## Planned Features
 
 - **Viewport-scoped highlighting:** only highlight visible lines + 100-line buffer via `rich.syntax.Syntax`
 - **Word-level diff highlighting:** within changed lines, highlight specific tokens that changed

@@ -58,7 +58,9 @@ Footer
 - `add_mr_row(mr, ascii_mode)` adds a row from `MRSummary`, stores the MR data keyed by `"{hostname}:{repo_path}:{number}"`
 - `get_selected_mr()` returns the `MRSummary` for the cursor row using `coordinate_to_cell_key()` and `RowKey.value`
 
-**Lazy loading:** tabs are loaded on first focus, not on mount. `_loaded_tabs` set tracks which tabs have been loaded. `action_refresh()` discards the current tab from the set and reloads.
+**Lazy loading:** tabs are loaded on first focus, not on mount. `_loaded_tabs` set tracks which tabs have been loaded. `on_tabbed_content_tab_activated()` checks the set before loading. `action_refresh()` discards the current tab from the set and reloads.
+
+**Discovery race fix:** `TongsApp._on_discovery_complete()` clears `_loaded_tabs` on the current screen so tab data reloads with the discovered repos. Without this, tabs loaded before discovery finishes would show stale (empty) results.
 
 **Worker pattern for data loading:**
 
@@ -98,6 +100,76 @@ Key patterns: `exclusive=True` cancels previous loads; `NotImplementedError` is 
 - Shows forge icons: `[blue]GL[/]` for GitLab, `[white]GH[/]` for GitHub
 - Adds hostname suffix for non-default hosts when multiple instances exist
 - `repo` object stored as `data` on tree leaf nodes
+- Selecting a repo (Enter / `on_tree_node_selected`) pushes `MRListScreen(repo)`
+
+## MRListScreen
+
+`src/tongs/views/mr_list.py` shows open MRs for a single repository. Reuses `MRTable` from `inbox.py`.
+
+Structure:
+
+```
+Header
+MRTable#repo-mr-table
+Footer
+```
+
+- Constructor takes a `Repo` object; `sub_title` set to `repo.display_name`
+- `_load_mrs()` worker fetches MRs via `client.list_mrs(repo_path)`, populates the shared `MRTable`
+- Selecting a row pushes `MRDetailScreen(mr)` via `on_data_table_row_selected`
+- Handles repos without forge remotes (notifies, does not crash)
+- Bindings: Esc/q = back, o = open in browser, Ctrl+R = refresh
+
+## MRDetailScreen
+
+`src/tongs/views/mr_detail.py` is the detail view for a single MR with tabbed interface.
+
+Structure:
+
+```
+Header (sub_title = "!{number} {title}")
+TabbedContent (initial="overview")
+  TabPane "Overview"   -> MROverview (metadata + description)
+  TabPane "Diff"       -> DiffPanel (split-pane diff viewer)
+  TabPane "Discussion" -> placeholder (Phase 4)
+  TabPane "Pipeline"   -> placeholder (Phase 5)
+Footer
+```
+
+**Constructor** takes an `MRSummary`. Stores `mr_detail: MRDetail | None` (populated after API call) and `_diff_loaded: bool` flag.
+
+**Lazy diff loading:** the Diff tab does not fetch data until first activated. `_on_tab_switch()` checks `_diff_loaded` flag; on first switch to "diff", sets the flag and calls `_load_diff()`. This avoids fetching potentially large diffs that the user may never view.
+
+**Overview loading:** `_load_detail()` worker runs on mount, fetches `MRDetail` from the forge API, and populates `MROverview` with metadata (title, author, branches, CI status, approvals, reviewers, assignees, labels, additions/deletions, description).
+
+**Diff loading:** `_load_diff()` worker fetches changes via `client.get_mr_diff()`, converts the changes list to unified diff text via `_changes_to_diff_text()`, parses with `parse_diff()`, and passes files to `DiffPanel.set_files()`.
+
+**Tab switching:** both number keys (1-4) and clicking tabs work. `action_focus_tab()` sets `TabbedContent.active` and calls `_on_tab_switch()`. `on_tabbed_content_tab_activated()` handles click-based tab switches.
+
+**Refresh:** `action_refresh()` resets `_diff_loaded = False` and re-runs `_load_detail()`, so re-entering the Diff tab triggers a fresh fetch.
+
+Bindings: Esc/q = back, 1-4 = focus tab, o = open in browser, y = copy URL to clipboard, Ctrl+R = refresh.
+
+## DiffPanel Widget
+
+`src/tongs/widgets/diff_panel.py` is a split-pane diff viewer widget used inside `MRDetailScreen`.
+
+Layout:
+
+```
+Horizontal
+  DiffFileTree (width: 35, border-right)  |  DiffContent (width: 1fr)
+```
+
+**DiffFileTree** extends `Tree`. `set_files()` populates the tree with file entries showing status icon (M/A/D/R color-coded), path, and +/- stats. File index stored as `data` on leaf nodes.
+
+**DiffContent** extends `VerticalScroll`. `show_file()` renders a single file's diff: file header with stats, then hunk headers and diff lines. `show_placeholder()` for loading/empty states.
+
+**DiffPanel** extends `Widget`. Composes `DiffFileTree` + `DiffContent` in a `Horizontal` container. `set_files()` populates the tree and auto-selects the first file. `on_tree_node_selected()` switches the content pane when a file is clicked.
+
+**Diff line rendering** (`_render_diff_line`): additions get green-on-dark-green, deletions get red-on-dark-red, context lines are plain, no-newline markers are dimmed. Gutter shows old and new line numbers (4-char wide each).
+
+Bindings: n = next file, Shift+N = previous file (wraps around).
 
 ## Keybinding Conventions
 
@@ -134,9 +206,21 @@ All visual elements have ASCII fallbacks:
 - Controlled by `self.app.config.ascii_mode`
 - Checked at render time, not in data models
 
-## Planned Views (Phase 2+)
+## Navigation Flow
 
-- `MRDetailScreen` -- tabbed: Overview, Diff, Discussion, Pipeline
-- `DiffView` -- file tree + diff content split pane
+```
+InboxScreen (default)
+  |-- select MR row --> MRDetailScreen(mr_summary)
+  |-- R key ----------> RepoListScreen
+                           |-- select repo --> MRListScreen(repo)
+                                                 |-- select MR row --> MRDetailScreen(mr_summary)
+```
+
+All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_screen()` (Esc/q). State is passed via constructor arguments (MRSummary, Repo), not reactive app-level attributes.
+
+## Planned Views (Phase 3+)
+
 - `CommentEditor` -- inline TextArea + optional external editor
 - `PipelineListScreen` / `PipelineDetailScreen` / `JobLogScreen`
+- Discussion tab content for MRDetailScreen (Phase 4)
+- Pipeline tab content for MRDetailScreen (Phase 5)

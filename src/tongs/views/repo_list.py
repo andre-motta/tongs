@@ -58,7 +58,7 @@ class RepoListScreen(Screen):
         tree.root.set_label(f"Repositories ({len(repos)})")
 
         hostnames = {r.hostname for r in repos if r.hostname}
-        has_multiple_instances = len(hostnames) > 2
+        has_multiple_instances = len(hostnames) > 1
 
         namespaces: dict[str, list[Repo]] = {}
         for repo in repos:
@@ -83,4 +83,6 @@ class RepoListScreen(Screen):
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         if event.node.data and isinstance(event.node.data, Repo):
-            self.notify(f"MR list for {event.node.data.display_name} coming in Phase 2")
+            from tongs.views.mr_list import MRListScreen
+
+            self.app.push_screen(MRListScreen(event.node.data))

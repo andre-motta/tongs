@@ -30,8 +30,8 @@ class RepoListScreen(Screen):
     """Tree view of discovered repos grouped by namespace/org."""
 
     BINDINGS = [
-        Binding("escape", "pop_screen", "Back", show=True),
-        Binding("q", "pop_screen", "Back", show=False),
+        Binding("escape", "go_back", "Back", show=True),
+        Binding("q", "go_back", "Back", show=False),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
     ]
 
@@ -74,6 +74,9 @@ class RepoListScreen(Screen):
                 suffix = _host_suffix(repo, has_multiple_instances)
                 branch.add_leaf(f"{icon} {name}{suffix}", data=repo)
             branch.expand()
+
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
 
     def action_refresh(self) -> None:
         self.load_repos()

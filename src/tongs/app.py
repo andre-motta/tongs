@@ -85,6 +85,13 @@ class TongsApp(App):
             extra_gitlab_hosts=self.config.extra_gitlab_hosts,
             extra_github_hosts=self.config.extra_github_hosts,
         )
+        self.call_from_thread(self._on_discovery_complete)
+
+    def _on_discovery_complete(self) -> None:
+        """Trigger inbox refresh after repo discovery finishes."""
+        screen = self.screen
+        if hasattr(screen, "action_refresh"):
+            screen.action_refresh()
 
     def get_repo_hostnames(self) -> list[str]:
         """Return unique hostnames from discovered repos (not hardcoded)."""

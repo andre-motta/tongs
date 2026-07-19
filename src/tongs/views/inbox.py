@@ -111,8 +111,7 @@ class InboxScreen(Screen):
             table.setup_columns()
             table.cursor_type = "row"
             table.zebra_stripes = True
-        self.load_reviews()
-        self.load_my_mrs()
+            table.loading = True
 
     def action_refresh(self) -> None:
         for table in self.query(MRTable):

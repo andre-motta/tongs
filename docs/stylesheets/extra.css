@@ -1,0 +1,25 @@
+.hero {
+    text-align: center;
+    padding: 2rem 0 1rem;
+}
+
+.hero img {
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    display: inline-block;
+}
+
+.hero h1 {
+    font-size: 2.2rem;
+    margin-top: 1rem;
+}
+
+.hero p {
+    font-size: 1.15rem;
+    opacity: 0.85;
+}
+
+.hero .md-button {
+    margin: 0.3rem;
+}

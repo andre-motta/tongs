@@ -4,6 +4,9 @@ site_url: https://tongs.tools
 repo_url: https://github.com/andre-motta/tongs
 repo_name: andre-motta/tongs
 
+extra_css:
+  - stylesheets/extra.css
+
 theme:
   name: material
   favicon: assets/icon.png

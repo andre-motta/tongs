@@ -6,7 +6,7 @@ hide:
 
 <div class="hero" markdown>
 
-![tongs](assets/hero-banner.png){ width="600" }
+![tongs](assets/hero-banner.png)
 
 # One TUI. Every forge. Full review.
 

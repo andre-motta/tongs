@@ -2,7 +2,13 @@
 
 import pytest
 
-from tongs.mcp.server import _parse_host_repo
+mcp_available = True
+try:
+    from tongs.mcp.server import _parse_host_repo
+except ImportError:
+    mcp_available = False
+
+pytestmark = pytest.mark.skipif(not mcp_available, reason="mcp not installed")
 
 
 class TestParseHostRepo:

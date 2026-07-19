@@ -45,7 +45,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/andre-motta/tongs"
-Documentation = "https://andre-motta.github.io/tongs"
+Documentation = "https://tongs.tools"
 Repository = "https://github.com/andre-motta/tongs"
 Issues = "https://github.com/andre-motta/tongs/issues"
 

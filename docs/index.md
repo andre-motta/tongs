@@ -39,8 +39,8 @@ Three tabs let you triage everything you need to review.
   GL  platform/auth-service    !482  Fix OAuth token refresh     ● CI passed    3 comments
   GH  andre-motta/tongs        #127  Add pipeline retry action   ● CI passed    1 comment
   GL  platform/api-gateway     !901  Rate limiter middleware     ◌ CI running   0 comments
-  GH  infra/helm-charts        #44   Bump ingress controller    ● CI passed    5 comments
-  GL  ml/training-pipeline     !223  Fix GPU memory leak        ✗ CI failed    2 comments
+  GH  infra/helm-charts        #44   Bump ingress controller     ● CI passed    5 comments
+  GL  ml/training-pipeline     !223  Fix GPU memory leak         ✗ CI failed    2 comments
 ```
 
 Zero configuration. tongs scans `~/git`, reads your git remotes, and populates
@@ -63,8 +63,8 @@ and word-level diff highlighting that shows exactly what changed.
 ```
  Diff ──────────────────────────────────────────────────────────
   src/
-  ├─ M  auth.py          │  @@ -42,7 +42,9 @@ def validate_token(token: str):
-  ├─ M  config.py         │       if token.expired:
+  ├─ M  auth.py            │  @@ -42,7 +42,9 @@ def validate_token(token: str):
+  ├─ M  config.py          │       if token.expired:
   ├─ A  middleware.py      │  -        return None
   └─ D  legacy.py          │  +        logger.warning("Token expired for %s", token.sub)
                            │  +        raise TokenExpiredError(token.sub)

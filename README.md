@@ -20,6 +20,8 @@ Your team uses GitHub. Another uses GitLab. You live in the terminal. tongs give
 
 > lazygit is great for git operations. tongs picks up where it stops, at code review.
 
+**[Documentation](https://tongs.tools)** | **[PyPI](https://pypi.org/project/tongs/)** | **[Issues](https://github.com/andre-motta/tongs/issues)**
+
 ## Install
 
 ```bash
@@ -96,7 +98,7 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 - **Discussion tab** -- card-based view of all MR discussions with diff snippets, Rich Markdown threads, reply/resolve actions, and cross-tab jump-to-diff navigation
 - **Comment navigation** -- jump between comments with `]` / `[`, wrapping around
 - **Reply to threads** -- press `r` to reply to a discussion from the diff or discussion tab
-- **Resolve threads** -- press `R` to resolve/unresolve a discussion (GitLab; double-press to confirm)
+- **Resolve threads** -- press `R` to resolve/unresolve a discussion (GitHub and GitLab; double-press to confirm)
 - **Visual line selection** -- select multiple lines with `Shift+J` / `Shift+K` or `Ctrl+Click` for multi-line comments
 - **Suggested changes** -- press `F3` to open your `$EDITOR` with the selected code; edit it, and tongs posts a suggestion block (GitHub `suggestion` / GitLab `suggestion:-0+N` syntax)
 - **External editor** -- press `F2` inside the comment editor to switch to your preferred editor
@@ -112,6 +114,13 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 - **Open in browser** -- press `o` to jump to the pipeline or job in the web UI
 - **MR-scoped** -- Pipeline tab shows only pipelines associated with the current MR/PR
 - **Lazy loading** -- pipeline data is fetched only when the Pipeline tab is first opened
+
+### Caching
+
+- **SQLite-backed cache** -- API responses are cached locally in SQLite (via aiosqlite) for snappy navigation
+- **Per-key TTL** -- MR lists (60s) and diffs (300s) have configurable time-to-live; expired entries are pruned automatically
+- **LRU eviction** -- size-capped at 100 MB by default; recently accessed entries are protected from eviction
+- **WAL mode** -- concurrent reads never block the UI event loop
 
 ### Actions
 
@@ -237,6 +246,7 @@ ascii_mode = false          # Set true for minimal terminals
 [cache]
 mr_list_ttl = 60
 diff_ttl = 300
+max_size_mb = 100
 
 [concurrency]
 max_parallel = 8
@@ -251,6 +261,37 @@ forge_type = "gitlab"
 hostname = "github.corp.com"
 forge_type = "github"
 ```
+
+## MCP server
+
+tongs ships an optional [Model Context Protocol](https://modelcontextprotocol.io) server that lets AI assistants interact with your merge requests programmatically.
+
+### Install
+
+```bash
+pip install tongs[mcp]
+```
+
+### Start
+
+```bash
+tongs-mcp
+```
+
+The server communicates over stdio, so you can wire it into any MCP-compatible client (Claude Code, Claude Desktop, etc.). It reuses the same forge configuration and auth tokens as the TUI, so no extra setup is needed.
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_mrs` | List open/closed/merged MRs for a repository |
+| `get_mr` | Get detailed MR info (description, approvals, labels, conflicts) |
+| `get_mr_diff` | Get the unified diff for an MR |
+| `post_comment` | Post a general comment on an MR |
+| `approve_mr` | Approve an MR |
+| `list_pipelines` | List CI pipelines for an MR |
+
+All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com/acme/app`). Destructive actions (merge, close, cancel) are intentionally excluded as a security boundary.
 
 ## tongs is for you if
 
@@ -269,6 +310,8 @@ forge_type = "github"
 | Pipeline / CI drill-down | Yes | No | Yes |
 | Approve / Merge | Yes | No | Yes |
 | Command palette | Yes | No | N/A |
+| MCP server (AI integration) | Yes | No | No |
+| SQLite offline cache | Yes | No | N/A |
 | Zero config auth | Yes | Yes | N/A |
 | Self-hosted forges | Yes | Yes | N/A |
 
@@ -281,14 +324,14 @@ forge_type = "github"
 | 3 | MR actions (approve, merge, close), inline comments, suggested changes | Done |
 | 4 | Discussion threads (inline + card-based tab with diff snippets), command palette, comment navigation, cross-tab jump-to-diff | Done |
 | 5 | Pipeline/CI management (three-level drill-down, job logs, retry, cancel, log search) | Done |
-| 6 | Plugin system, fleet monitor plugin | Planned |
-| 7 | SQLite caching, MCP server, distribution (Homebrew, Fedora COPR) | Planned |
+| 6 | Plugin system | Deferred ([#2](https://github.com/andre-motta/tongs/issues/2)) |
+| 7 | SQLite caching, MCP server, GitHub thread resolution, MkDocs site | Done |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends. 531 tests and growing.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add forge backends. 551 tests and growing.
 
-tongs is early enough that contributions shape the architecture. The plugin system and MCP server are open for contributors. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
+tongs is early enough that contributions shape the architecture. The plugin system ([#2](https://github.com/andre-motta/tongs/issues/2)) is the main open design area. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 
 ## Why "tongs"?
 

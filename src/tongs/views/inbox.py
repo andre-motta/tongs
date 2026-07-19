@@ -59,6 +59,10 @@ def _relative_time(dt: datetime) -> str:
 class MRTable(DataTable):
     """MR list table with consistent columns."""
 
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._mr_data: dict[str, MRSummary] = {}
+
     def setup_columns(self) -> None:
         self.add_column("CI", key="ci", width=4)
         self.add_column("#", key="number", width=6)
@@ -70,6 +74,8 @@ class MRTable(DataTable):
     def add_mr_row(self, mr: MRSummary, ascii_mode: bool = False) -> None:
         ci = _ci_icon(mr.ci_status, ascii_mode)
         draft = "[dim]D [/]" if mr.is_draft else "  "
+        row_key = f"{mr.forge_host.hostname}:{mr.repo_path}:{mr.number}"
+        self._mr_data[row_key] = mr
         self.add_row(
             ci,
             str(mr.number),
@@ -77,8 +83,21 @@ class MRTable(DataTable):
             mr.author.username,
             mr.repo_path,
             _relative_time(mr.updated_at),
-            key=f"{mr.forge_host.hostname}:{mr.repo_path}:{mr.number}",
+            key=row_key,
         )
+
+    def get_selected_mr(self) -> MRSummary | None:
+        if self.cursor_row is None or self.row_count == 0:
+            return None
+        try:
+            row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
+            return self._mr_data.get(str(row_key))
+        except Exception:
+            return None
+
+    def clear(self, *args, **kwargs) -> None:
+        self._mr_data.clear()
+        super().clear(*args, **kwargs)
 
 
 class InboxScreen(Screen):
@@ -129,10 +148,12 @@ class InboxScreen(Screen):
 
     def action_open_in_browser(self) -> None:
         table = self._active_table()
-        if table and table.cursor_row is not None:
-            mr = self._find_mr_by_row(table)
+        if table:
+            mr = table.get_selected_mr()
             if mr:
                 self.app.open_url(mr.web_url)
+            else:
+                self.notify("No MR selected")
 
     def action_select_mr(self) -> None:
         table = self._active_table()
@@ -202,6 +223,3 @@ class InboxScreen(Screen):
         if tabbed.active == "reviews":
             return self.query_one("#reviews-table", MRTable)
         return self.query_one("#my-mrs-table", MRTable)
-
-    def _find_mr_by_row(self, table: MRTable) -> MRSummary | None:
-        return None

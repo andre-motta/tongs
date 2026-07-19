@@ -67,8 +67,9 @@ src/tongs/
     app_state.py       # MRFilter, ReviewDraft dataclasses
 
   widgets/             # Reusable Textual widgets
-    comment_editor.py  # CommentEditor (bottom-docked, general + inline + reply modes)
-    diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent(DiffOptionList + Markdown)), discussion threading
+    comment_editor.py  # CommentEditor (bottom-docked, general + inline + reply + reply_general modes, focus save/restore)
+    diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent(DiffOptionList + Markdown)), discussion threading, jump_to_discussion()
+    discussion_list.py # DiscussionPanel (card-based discussion tab), DiscussionCard, render_diff_snippet(), JumpToDiffDiscussion/DiscussionReplyRequested messages
     mr_table.py        # MRTable (DataTable subclass, setup_columns(show_repo) toggle)
 
   views/               # Textual Screens
@@ -91,7 +92,7 @@ src/tongs/
 
 ## Development Status
 
-Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). Phase 3 complete (GitHub REST API client, Commit model, commits tab in MR detail, scrollable overview with Markdown description, SSRF prevention, cross-fork safety). Phase 4 complete (inline discussion threads with expand/collapse/reply/resolve, command palette, comment navigation, parallel diff+discussions fetch, file tree with comment counts, footer cleanup with context-aware bindings).
+Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). Phase 3 complete (GitHub REST API client, Commit model, commits tab in MR detail, scrollable overview with Markdown description, SSRF prevention, cross-fork safety). Phase 4 complete (inline discussion threads with expand/collapse/reply/resolve, command palette, comment navigation, parallel diff+discussions fetch, file tree with comment counts, footer cleanup with context-aware bindings, card-based Discussion tab with diff snippets and Rich Markdown threads, cross-tab jump-to-diff navigation, diff caching between tabs, GitLab system note filtering, CommentEditor focus restoration).
 
 ## Gate Process
 

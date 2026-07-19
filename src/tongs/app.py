@@ -45,6 +45,12 @@ class TongsApp(App):
     VerticalScroll {
         height: 1fr;
     }
+
+    .disc-status-bar {
+        height: 1;
+        background: $accent 15%;
+        padding: 0 1;
+    }
     """
 
     COMMANDS = {TongsCommandProvider}

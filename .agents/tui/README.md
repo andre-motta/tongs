@@ -160,17 +160,17 @@ TabbedContent (initial="overview")
   TabPane "Overview"   -> VerticalScroll > MROverview (metadata) + Markdown (description)
   TabPane "Diff"       -> DiffPanel (split-pane diff viewer with inline discussions)
   TabPane "Commits"    -> VerticalScroll > Static (commit list)
-  TabPane "Discussion" -> placeholder (discussions are shown inline in the Diff tab)
+  TabPane "Discussion" -> Static (status bar) + DiscussionPanel (card-based discussion view)
   TabPane "Pipeline"   -> placeholder (Phase 5)
 CommentEditor (bottom-docked, hidden by default)
 Footer
 ```
 
-**Constructor** takes an `MRSummary`. Stores `mr_detail: MRDetail | None` (populated after API call), `_diff_loaded: bool`, and `_commits_loaded: bool` flags.
+**Constructor** takes an `MRSummary`. Stores `mr_detail: MRDetail | None` (populated after API call), `_diff_loaded: bool`, `_commits_loaded: bool`, `_discussions_loaded: bool` flags, and `_cached_diff_files: list | None` for sharing parsed diff files between the Diff and Discussion tabs.
 
 **Scrollable overview (Phase 3):** The Overview tab wraps `MROverview` and a `Markdown` widget inside a `VerticalScroll` container. `MROverview` renders metadata (title, author, branches, CI, etc.) as Rich markup. The MR description is rendered via the Textual `Markdown` widget (supports headings, links, code blocks, etc.) rather than plain text. `TongsApp` CSS sets `VerticalScroll { height: 1fr; }` to allow scrolling long descriptions.
 
-**Lazy loading pattern:** Both the Diff and Commits tabs use the same lazy-load approach. `_on_tab_switch()` checks per-tab boolean flags (`_diff_loaded`, `_commits_loaded`); on first switch, sets the flag and calls the corresponding worker method. This avoids unnecessary API calls for tabs the user may never view.
+**Lazy loading pattern:** The Diff, Commits, and Discussion tabs all use the same lazy-load approach. `_on_tab_switch()` checks per-tab boolean flags (`_diff_loaded`, `_commits_loaded`, `_discussions_loaded`); on first switch, sets the flag and calls the corresponding worker method. This avoids unnecessary API calls for tabs the user may never view.
 
 **Commits tab (Phase 3):** `_load_commits()` worker calls `client.list_mr_commits()` and renders each commit as a Rich-formatted line in a `Static` widget: yellow short SHA, title, dimmed author. Multi-line commit messages are shown indented beneath the title line. The tab is wrapped in a `VerticalScroll` for long commit histories.
 
@@ -180,14 +180,22 @@ Footer
 
 **Tab switching:** both number keys (1-5) and clicking tabs work. `action_focus_tab()` sets `TabbedContent.active` and calls `_on_tab_switch()`. `on_tabbed_content_tab_activated()` handles click-based tab switches.
 
-**Refresh:** `action_refresh()` resets both `_diff_loaded = False` and `_commits_loaded = False`, then re-runs `_load_detail()`. Re-entering the Diff or Commits tab triggers a fresh fetch.
+**Refresh:** `action_refresh()` resets `_diff_loaded = False`, `_commits_loaded = False`, `_discussions_loaded = False`, and `_cached_diff_files = None`, then re-runs `_load_detail()`. Re-entering the Diff, Commits, or Discussion tab triggers a fresh fetch.
 
-**Discussion handling (Phase 4):** `MRDetailScreen` handles three new messages from `DiffPanel`:
+**Discussion handling (Phase 4):** `MRDetailScreen` handles messages from both `DiffPanel` and `DiscussionPanel`:
+
+From `DiffPanel`:
 - `on_reply_requested(ReplyRequested)`: opens `CommentEditor.open_reply()` with the discussion ID, file, line, and author
-- `on_reply_submitted(ReplySubmitted)`: posts the reply via `client.reply_to_discussion()` and reloads the diff tab
-- `on_resolve_requested(ResolveRequested)`: calls `client.resolve_discussion()` with the toggled resolved state and reloads the diff tab
+- `on_reply_submitted(ReplySubmitted)`: posts the reply via `client.reply_to_discussion()` and reloads both diff and discussion tabs
+- `on_resolve_requested(ResolveRequested)`: calls `client.resolve_discussion()` with the toggled resolved state and reloads both tabs
 
-Both `_post_reply()` and `_resolve_thread()` reset `_diff_loaded = False` and call `_on_tab_switch("diff")` to refresh discussions inline after mutation.
+From `DiscussionPanel`:
+- `on_jump_to_diff_discussion(JumpToDiffDiscussion)`: switches to the Diff tab and calls `DiffPanel.jump_to_discussion()` to navigate to the file, line, and expand the thread
+- `on_discussion_reply_requested(DiscussionReplyRequested)`: opens `CommentEditor.open_reply()` for inline discussions (using dummy DiffFile/DiffLine objects) or `CommentEditor.open_reply_general()` for general discussions
+
+Both `_post_reply()` and `_resolve_thread()` reset both `_diff_loaded = False` and `_discussions_loaded = False` to refresh both tabs after mutation.
+
+**Diff caching:** `_cached_diff_files` on `MRDetailScreen` stores the parsed `list[DiffFile]` from the Diff tab loading. When the Discussion tab loads, it reuses this cache to build diff snippets on `DiscussionCard`s without re-fetching. If the Discussion tab is visited before the Diff tab, it fetches and parses the diff itself, populating the cache for later. `action_refresh()` clears the cache (`_cached_diff_files = None`).
 
 Bindings: Esc/q = back, 1-5 = focus tab, c = general comment, A = approve, U = unapprove, M = merge, X = close, o = open in browser, Ctrl+Y = copy URL to clipboard, Ctrl+R = refresh. Most bindings have `show=False` to reduce footer clutter; all are discoverable via `Ctrl+P` command palette.
 
@@ -280,6 +288,8 @@ Discussion interactions (Phase 4):
 
 **DiffPanel** extends `Widget`. Composes `DiffFileTree` + `DiffContent` in a `Horizontal` container. `set_files(files, discussions)` distributes discussions by file path into `_discussions_by_file`, populates the tree (with comment counts), and auto-selects the first file. `on_tree_node_selected()` switches the content pane when a file is clicked, passing per-file discussions to `DiffContent.show_file()`.
 
+**`jump_to_discussion(file_path, line, discussion_id)`** enables cross-tab navigation from the Discussion tab. It finds the file by matching `new_path` or `old_path`, switches to it via `_show_file()`, adds the `discussion_id` to `_expanded_threads` on the `DiffOptionList`, then re-renders the diff to show the expanded thread. It scrolls to the target line using `ol.highlighted` and `ol.scroll_to_highlight()`. Called by `MRDetailScreen.on_jump_to_diff_discussion()` after switching to the Diff tab.
+
 Bindings: n = next file, Shift+N = previous file (wraps around), m = toggle markdown preview.
 
 **CommentMode enum and CommentRequested message:**
@@ -293,10 +303,13 @@ Bindings: n = next file, Shift+N = previous file (wraps around), m = toggle mark
 
 **Bottom-dock pattern:** The widget uses `dock: bottom` CSS with `display: none` by default. Opening it sets `display = True`, which pushes content above upward while keeping it scrollable. Closing (submit or cancel) sets `display = False`. `max-height: 40%` prevents the editor from consuming the entire screen.
 
-**Three modes:**
+**Focus save/restore:** `_save_focus_and_open()` captures `self.app.focused` into `_previous_focus` before opening the editor. `_restore_focus()` refocuses the previously focused widget on close (submit or cancel). This ensures keyboard focus returns to the correct widget (DiffOptionList, DiscussionPanel, etc.) after editing.
+
+**Four modes:**
 - `open_general()` -- general MR comment. Header shows "Add comment".
 - `open_inline(file, line)` -- inline comment on a specific diff line. Header shows the file path and line number. Computes a `DiffPosition` from the diff line via `position_from_diff_line()`.
-- `open_reply(discussion_id, file, line, author)` -- reply to an existing discussion thread. Header shows "Reply to @author on file:line". Stores `_discussion_id` for routing. On submit, posts `ReplySubmitted(discussion_id, body)` instead of `CommentSubmitted`.
+- `open_reply(discussion_id, file, line, author)` -- reply to an existing inline discussion thread. Header shows "Reply to @author on file:line". Stores `_discussion_id` for routing. On submit, posts `ReplySubmitted(discussion_id, body)` instead of `CommentSubmitted`.
+- `open_reply_general(discussion_id, author)` -- reply to a general (non-inline) discussion. Header shows "Reply to @author". No file or line context. Uses the same reply submission path.
 
 **Message flow (decoupled communication):**
 
@@ -344,6 +357,51 @@ The `c` key on `MRDetailScreen` opens the editor in general mode directly. The `
 
 Bindings: Ctrl+S / Ctrl+J = submit (priority bindings), Esc = cancel (with guard), F2 = external editor.
 
+## DiscussionPanel Widget
+
+`src/tongs/widgets/discussion_list.py` is a card-based discussion panel for the Discussion tab. It replaces the earlier placeholder with a full interactive discussion view.
+
+Layout:
+
+```
+DiscussionPanel (Widget, height: 1fr)
+  VerticalScroll (#disc-scroll)
+    DiscussionCard (Static, one per discussion)
+    DiscussionCard ...
+```
+
+**DiscussionCard** extends `Static`. Each card renders a complete discussion thread as a single Rich `Text` block:
+- **Header line:** resolution status marker (yellow `*` for unresolved, dim `[resolved]` for resolved), file path and line number (for inline) or `[general]` label, reply count, relative timestamp
+- **Diff snippet:** rendered via `render_diff_snippet()` when the discussion is inline and a matching `DiffFile` is available. Shows 2 lines of context around the target line, with the target line marked with a yellow `>` prefix
+- **Thread body:** full comment thread rendered via `_render_thread()` with Rich Markdown bodies, author names, timestamps, and indented replies
+- **Action hints:** `[r] Reply`, `[R] Resolve/Unresolve`, `[enter] Jump to diff` (inline only)
+
+CSS classes: `.focused` for the currently selected card (border highlight), `.resolved` for resolved discussions (dashed border).
+
+**DiscussionPanel** extends `Widget`. Contains `VerticalScroll` with `DiscussionCard` children. Manages card focus, filtering, sorting, and keyboard navigation.
+
+State:
+- `_discussions: list[Discussion]` -- all discussions from the API
+- `_diff_files: list[DiffFile]` -- cached diff files for rendering snippets
+- `_filtered: list[Discussion]` -- discussions after applying the current filter
+- `_filter: str` -- current filter mode: `"all"`, `"unresolved"`, `"resolved"`
+- `_focused_index: reactive[int]` -- index of the currently focused card (triggers `watch__focused_index` for visual update)
+- `_pending_resolve: str | None` -- double-press confirmation state for resolve
+
+Sorting: `_sort_discussions()` orders by (1) unresolved first, (2) file path, (3) line number. General discussions sort last (file path set to `\xff`).
+
+**`set_discussions(discussions, diff_files)`** -- called by `MRDetailScreen._load_discussions()`. Stores discussions and diff files, resets focus, calls `_render_cards()`.
+
+**`render_diff_snippet(file, target_line, context=2)`** -- module-level helper that extracts diff lines around a target line number from a `DiffFile`. Uses `DiffRenderer._render_line()` for syntax-highlighted output. Returns `list[Text]` with the target line prefixed by `> ` in yellow.
+
+**`_render_thread(disc)`** -- module-level helper that renders a full discussion thread using `rich.markdown.Markdown` and `rich.console.Console.render_lines()`. Root comment is shown bold, replies are indented with dim styling.
+
+**Messages:**
+- `JumpToDiffDiscussion(discussion_id, file_path, line)` -- posted on Enter key for inline discussions. Handled by `MRDetailScreen.on_jump_to_diff_discussion()` which switches to the Diff tab and calls `DiffPanel.jump_to_discussion()`.
+- `DiscussionReplyRequested(discussion_id, file_path, line, author)` -- posted on `r` key. Handled by `MRDetailScreen.on_discussion_reply_requested()` which opens the `CommentEditor` in reply mode (inline or general).
+
+**Bindings:** j/k = move cursor, Enter = jump to diff, r = reply, R = resolve (double-press), f = cycle filter (all/unresolved/resolved), `]`/`[` = next/prev unresolved (wraps around).
+
 ## Keybinding Conventions
 
 - Lowercase = view/navigate. Uppercase = mutate (with confirmation)
@@ -370,9 +428,13 @@ Bindings: Ctrl+S / Ctrl+J = submit (priority bindings), Esc = cancel (with guard
 - `r` = reply to discussion (DiffOptionList, opens CommentEditor in reply mode)
 - `R` = resolve/unresolve discussion (DiffOptionList, double-press to confirm)
 
+- `j/k` = navigate cards (DiscussionPanel)
+- `Enter` = jump to diff from discussion card (DiscussionPanel, inline discussions only)
+- `f` = cycle filter: all / unresolved / resolved (DiscussionPanel)
+
 Current bindings are defined as `BINDINGS` lists on each Screen class. Format: `Binding(key, action_name, description, show=True/False)`.
 
-**Footer cleanup (Phase 4):** Most MRDetailScreen bindings use `show=False` to keep the footer minimal. Only essential bindings (Back, Comment, Approve, Merge, Refresh) are visible by default. All actions are discoverable via `Ctrl+P` command palette. DiffOptionList bindings for comment navigation (`]`, `[`) and thread interaction (`d`, `r`, `R`) use `show=True` with `key_display` overrides for the bracket keys.
+**Footer cleanup (Phase 4):** Most MRDetailScreen bindings use `show=False` to keep the footer minimal. Only essential bindings (Back, Comment, Approve, Merge, Refresh) are visible by default. All actions are discoverable via `Ctrl+P` command palette. DiffOptionList bindings for comment navigation (`]`, `[`) and thread interaction (`d`, `r`, `R`) use `show=True` with `key_display` overrides for the bracket keys. DiscussionPanel bindings for reply, resolve, filter, and jump-to-diff use `show=True`.
 
 ## How to Add a New Screen
 

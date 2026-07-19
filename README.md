@@ -93,8 +93,9 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 
 - **Inline comments** -- press `c` on any diff line to open the bottom-docked comment editor
 - **Discussion threads** -- existing inline comments appear as gutter markers in the diff; press `d` to expand/collapse threads with full Markdown rendering, replies, and resolution status
+- **Discussion tab** -- card-based view of all MR discussions with diff snippets, Rich Markdown threads, reply/resolve actions, and cross-tab jump-to-diff navigation
 - **Comment navigation** -- jump between comments with `]` / `[`, wrapping around
-- **Reply to threads** -- press `r` to reply to a discussion directly from the diff
+- **Reply to threads** -- press `r` to reply to a discussion from the diff or discussion tab
 - **Resolve threads** -- press `R` to resolve/unresolve a discussion (GitLab; double-press to confirm)
 - **Visual line selection** -- select multiple lines with `Shift+J` / `Shift+K` or `Ctrl+Click` for multi-line comments
 - **Suggested changes** -- press `F3` to open your `$EDITOR` with the selected code; edit it, and tongs posts a suggestion block (GitHub `suggestion` / GitLab `suggestion:-0+N` syntax)
@@ -184,6 +185,17 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 | `Escape` | Cancel (press twice if text entered) |
 | `F2` | Open in external editor |
 
+### Discussion tab
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Move between discussion cards |
+| `Enter` | Jump to diff location (inline discussions) |
+| `r` | Reply to focused discussion |
+| `R` | Resolve / unresolve (press twice) |
+| `f` | Cycle filter (All / Unresolved / Resolved) |
+| `]` / `[` | Jump to next / previous unresolved |
+
 ## Configuration
 
 tongs uses `~/.config/tongs/config.toml` (or the platform-appropriate config directory). All settings have sensible defaults.
@@ -228,7 +240,7 @@ forge_type = "github"
 | GitHub + GitLab | Yes | GitHub only | One at a time |
 | Terminal-native diffs | Yes | No | No |
 | Inline comments | Yes | No | Yes |
-| Discussion threads | Yes | No | Yes |
+| Discussion threads + tab | Yes | No | Yes |
 | Suggested changes | Yes | No | Yes |
 | Approve / Merge | Yes | No | Yes |
 | Command palette | Yes | No | N/A |
@@ -242,14 +254,14 @@ forge_type = "github"
 | 1 | Scanner, forge abstraction, GitLab client, TUI shell, inbox, repo list | Done |
 | 2 | MR detail view, diff viewer, syntax highlighting, GitHub client, commits tab | Done |
 | 3 | MR actions (approve, merge, close), inline comments, suggested changes | Done |
-| 4 | Inline discussion threads (expand/collapse, reply, resolve), command palette, comment navigation | Done |
+| 4 | Discussion threads (inline + card-based tab with diff snippets), command palette, comment navigation, cross-tab jump-to-diff | Done |
 | 5 | Pipeline/CI management (job logs, retry, cancel, trigger) | Planned |
 | 6 | Plugin system, fleet monitor plugin | Planned |
 | 7 | SQLite caching, MCP server, distribution (Homebrew, Fedora COPR) | Planned |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends. 450+ tests and growing.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends. 489 tests and growing.
 
 tongs is early enough that contributions shape the architecture. The Pipeline/CI views and plugin system are open for contributors. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 

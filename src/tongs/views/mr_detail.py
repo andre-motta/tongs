@@ -32,6 +32,11 @@ from tongs.widgets.diff_panel import (
     ReplyRequested,
     ResolveRequested,
 )
+from tongs.widgets.discussion_list import (
+    DiscussionPanel,
+    DiscussionReplyRequested,
+    JumpToDiffDiscussion,
+)
 
 
 def _ci_label(status: CIStatus) -> str:
@@ -127,6 +132,8 @@ class MRDetailScreen(Screen):
         self.mr_summary = mr_summary
         self.mr_detail: MRDetail | None = None
         self._diff_loaded = False
+        self._discussions_loaded = False
+        self._cached_diff_files: list | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -141,7 +148,8 @@ class MRDetailScreen(Screen):
                 with VerticalScroll(id="commits-scroll"):
                     yield Static("[dim]Loading commits...[/]", id="commits-content")
             with TabPane("Discussion", id="discussion"):
-                yield Static("[dim]Discussion view planned for Phase 4[/]")
+                yield Static("", id="disc-status-bar", classes="disc-status-bar")
+                yield DiscussionPanel(id="disc-panel")
             with TabPane("Pipeline", id="pipeline"):
                 yield Static("[dim]Pipeline view planned for Phase 5[/]")
         yield CommentEditor(id="comment-editor")
@@ -199,6 +207,9 @@ class MRDetailScreen(Screen):
         elif tab_id == "commits" and not self._commits_loaded:
             self._commits_loaded = True
             self._load_commits()
+        elif tab_id == "discussion" and not self._discussions_loaded:
+            self._discussions_loaded = True
+            self._load_discussions()
 
     @work(exclusive=True, group="mr-diff")
     async def _load_diff(self) -> None:
@@ -218,6 +229,7 @@ class MRDetailScreen(Screen):
 
             diff_text = self._changes_to_diff_text(changes)
             files = parse_diff(diff_text)
+            self._cached_diff_files = files
             panel.set_files(files, discussions)
         except Exception as exc:
             content.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
@@ -291,6 +303,69 @@ class MRDetailScreen(Screen):
             content.update("\n".join(lines) if lines else "[dim]No commits[/]")
         except Exception as exc:
             content.update(f"Could not load commits. ({exc})")
+
+    @work(exclusive=True, group="mr-discussions")
+    async def _load_discussions(self) -> None:
+        status = self.query_one("#disc-status-bar", Static)
+        status.update("[dim]Loading discussions...[/]")
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            discussions = await client.get_mr_discussions(
+                self.mr_summary.repo_path, self.mr_summary.number
+            )
+            if self._cached_diff_files is None:
+                try:
+                    changes = await client.get_mr_diff(
+                        self.mr_summary.repo_path, self.mr_summary.number
+                    )
+                    from tongs.diff.parser import parse_diff
+
+                    diff_text = self._changes_to_diff_text(changes or [])
+                    self._cached_diff_files = parse_diff(diff_text)
+                except Exception:
+                    self._cached_diff_files = []
+
+            panel = self.query_one("#disc-panel", DiscussionPanel)
+            panel.set_discussions(discussions, self._cached_diff_files)
+            unresolved = sum(1 for d in discussions if not d.is_resolved)
+            resolved = sum(1 for d in discussions if d.is_resolved)
+            status.update(
+                f"[yellow]{unresolved} unresolved[/]  [dim]{resolved} resolved[/]"
+            )
+        except Exception as exc:
+            status.update(f"Could not load discussions. ({exc})")
+
+    def on_jump_to_diff_discussion(self, event: JumpToDiffDiscussion) -> None:
+        """Switch to Diff tab and navigate to a discussion's location."""
+        self.action_focus_tab("diff")
+        panel = self.query_one("#diff-panel", DiffPanel)
+        panel.jump_to_discussion(event.file_path, event.line, event.discussion_id)
+
+    def on_discussion_reply_requested(self, event: DiscussionReplyRequested) -> None:
+        """Open reply editor from the Discussion tab."""
+        editor = self.query_one("#comment-editor", CommentEditor)
+        if event.file_path and event.line is not None:
+            from tongs.diff.models import DiffLine, LineType
+
+            dummy_line = DiffLine(
+                old_lineno=None,
+                new_lineno=event.line,
+                content="",
+                line_type=LineType.CONTEXT,
+            )
+            from tongs.diff.models import DiffFile, FileStatus
+
+            dummy_file = DiffFile(
+                old_path=event.file_path,
+                new_path=event.file_path,
+                status=FileStatus.MODIFIED,
+                hunks=(),
+            )
+            editor.open_reply(event.discussion_id, dummy_file, dummy_line, event.author)
+        else:
+            editor.open_reply_general(event.discussion_id, event.author)
 
     def action_open_in_browser(self) -> None:
         self.app.open_url(self.mr_summary.web_url)
@@ -560,7 +635,7 @@ class MRDetailScreen(Screen):
             )
             self.notify("[green]Reply posted[/]", severity="information")
             self._diff_loaded = False
-            self._on_tab_switch("diff")
+            self._discussions_loaded = False
         except Exception as exc:
             self.notify(f"Failed to post reply: {exc}", severity="error")
 
@@ -579,7 +654,7 @@ class MRDetailScreen(Screen):
             action = "Resolved" if resolved else "Reopened"
             self.notify(f"[green]{action} thread[/]", severity="information")
             self._diff_loaded = False
-            self._on_tab_switch("diff")
+            self._discussions_loaded = False
         except Exception as exc:
             self.notify(f"Failed to resolve thread: {exc}", severity="error")
 
@@ -629,4 +704,6 @@ class MRDetailScreen(Screen):
     def action_refresh(self) -> None:
         self._diff_loaded = False
         self._commits_loaded = False
+        self._discussions_loaded = False
+        self._cached_diff_files = None
         self._load_detail()

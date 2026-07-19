@@ -171,6 +171,17 @@ The `DiffRenderer._gutter()` method renders a comment marker `*` in the gutter f
 
 The gutter lookup uses a `comment_lines: dict[tuple[int | None, int | None], bool]` map (built by `_build_comment_lines()`), where the bool indicates whether all discussions at that position are resolved. The key is `(old_lineno, new_lineno)` matching the DiffLine's line numbers.
 
+## Cross-Tab Navigation (Phase 4)
+
+`DiffPanel.jump_to_discussion(file_path, line, discussion_id)` supports cross-tab navigation from the Discussion tab to the Diff tab. When invoked:
+1. Finds the file by matching `new_path` or `old_path` against the file list
+2. Switches to the file via `_show_file(index)`
+3. Adds `discussion_id` to `DiffOptionList._expanded_threads` so the thread renders inline
+4. Re-renders the diff via `DiffContent._show_diff()` with the expanded thread
+5. Scrolls to the target line via `ol.highlighted` and `ol.scroll_to_highlight()`
+
+This enables the Discussion tab's `Enter` key (via `JumpToDiffDiscussion` message) to jump directly to the code location with the discussion expanded.
+
 ## Planned Features
 
 - **Virtual scrolling:** only materialize visible lines as Rich Text objects

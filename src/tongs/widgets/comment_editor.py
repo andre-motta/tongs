@@ -91,6 +91,7 @@ class CommentEditor(Widget):
         self._line: DiffLine | None = None
         self._position: DiffPosition | None = None
         self._discussion_id: str | None = None
+        self._previous_focus: Widget | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="editor-header", classes="editor-header")
@@ -100,8 +101,17 @@ class CommentEditor(Widget):
             classes="editor-hint",
         )
 
+    def _save_focus_and_open(self) -> None:
+        self._previous_focus = self.app.focused
+
+    def _restore_focus(self) -> None:
+        if self._previous_focus is not None:
+            self._previous_focus.focus()
+            self._previous_focus = None
+
     def open_general(self) -> None:
         """Open for a general MR comment."""
+        self._save_focus_and_open()
         self._cancel_pending = False
         self._mode = "general"
         self._file = None
@@ -116,6 +126,7 @@ class CommentEditor(Widget):
 
     def open_inline(self, file: DiffFile, line: DiffLine) -> None:
         """Open for an inline comment on a specific diff line."""
+        self._save_focus_and_open()
         self._cancel_pending = False
         self._mode = "inline"
         self._file = file
@@ -134,6 +145,7 @@ class CommentEditor(Widget):
         self, discussion_id: str, file: DiffFile, line: DiffLine, author: str = ""
     ) -> None:
         """Open for replying to an existing discussion thread."""
+        self._save_focus_and_open()
         self._cancel_pending = False
         self._mode = "reply"
         self._file = file
@@ -144,6 +156,23 @@ class CommentEditor(Widget):
         who = f"@{author} on " if author else ""
         header = self.query_one("#editor-header", Static)
         header.update(f"[bold]Reply to {who}{file.new_path}:{line_num}[/]")
+        text_area = self.query_one("#comment-input", TextArea)
+        text_area.clear()
+        self.display = True
+        text_area.focus()
+
+    def open_reply_general(self, discussion_id: str, author: str = "") -> None:
+        """Open for replying to a general (non-inline) discussion."""
+        self._save_focus_and_open()
+        self._cancel_pending = False
+        self._mode = "reply"
+        self._file = None
+        self._line = None
+        self._discussion_id = discussion_id
+        self._position = None
+        who = f"@{author}" if author else "thread"
+        header = self.query_one("#editor-header", Static)
+        header.update(f"[bold]Reply to {who}[/]")
         text_area = self.query_one("#comment-input", TextArea)
         text_area.clear()
         self.display = True
@@ -162,6 +191,7 @@ class CommentEditor(Widget):
         else:
             self.post_message(GeneralCommentSubmitted(body))
         self.display = False
+        self._restore_focus()
 
     _cancel_pending: bool = False
 
@@ -173,6 +203,7 @@ class CommentEditor(Widget):
             return
         self._cancel_pending = False
         self.display = False
+        self._restore_focus()
 
     def action_external_editor(self) -> None:
         if platform.system() == "Windows":

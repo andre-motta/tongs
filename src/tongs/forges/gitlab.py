@@ -170,6 +170,8 @@ class GitLabClient(ForgeClient):
             if not notes:
                 continue
             root = notes[0]
+            if root.get("system", False):
+                continue
             replies = tuple(self._parse_note(n) for n in notes[1:])
             root_comment = self._parse_note(root)
             root_comment = InlineComment(

@@ -75,7 +75,9 @@ class DiffFileTree(Tree):
             unresolved = sum(1 for d in file_discs if not d.is_resolved)
             node = self.root.add(label, data=i)
             if unresolved:
-                node.add_leaf(f"{stats}  [yellow]{unresolved} comment{'s' if unresolved != 1 else ''}[/]")
+                node.add_leaf(
+                    f"{stats}  [yellow]{unresolved} comment{'s' if unresolved != 1 else ''}[/]"
+                )
             elif file_discs:
                 node.add_leaf(f"{stats}  [dim]{len(file_discs)} resolved[/]")
             else:
@@ -155,7 +157,9 @@ class DiffOptionList(OptionList):
             show=True,
             key_display="[",
         ),
-        Binding("d", "toggle_discussion", "Show/Hide thread", show=True, key_display="d"),
+        Binding(
+            "d", "toggle_discussion", "Show/Hide thread", show=True, key_display="d"
+        ),
         Binding("r", "reply_discussion", "Reply", show=True, key_display="r"),
         Binding("R", "resolve_discussion", "Resolve", show=True, key_display="R"),
         Binding("c", "comment", "Comment", show=True),
@@ -295,7 +299,6 @@ class DiffOptionList(OptionList):
                 author=disc.root_comment.author.username,
             )
         )
-
 
     def action_resolve_discussion(self) -> None:
         """Resolve or unresolve the discussion on the current line."""
@@ -523,9 +526,7 @@ class DiffContent(Widget):
                     ):
                         first_changed_idx = option_idx
                     option_idx += 1
-                    expanded_discs = [
-                        d for d in line_discs if d.id in expanded
-                    ]
+                    expanded_discs = [d for d in line_discs if d.id in expanded]
                     for block_line in _render_thread_block(expanded_discs):
                         option_list.add_option(Option(block_line, disabled=True))
                         option_idx += 1
@@ -1092,6 +1093,33 @@ class DiffPanel(Widget):
                 if dl.line_type in (LineType.ADDITION, LineType.DELETION):
                     return dl
         return None
+
+    def jump_to_discussion(
+        self, file_path: str, line: int | None, discussion_id: str = ""
+    ) -> None:
+        """Navigate to a specific file and line, expanding the discussion."""
+        for i, f in enumerate(self._files):
+            if f.new_path == file_path or f.old_path == file_path:
+                self._show_file(i)
+                ol = self.query_one(DiffOptionList)
+                if discussion_id:
+                    ol._expanded_threads.add(discussion_id)
+                if line is not None:
+                    for idx, dl in ol._line_map.items():
+                        if dl.new_lineno == line or dl.old_lineno == line:
+                            ol.highlighted = idx
+                            ol.scroll_to_highlight()
+                            break
+                if discussion_id:
+                    content = self.query_one("#diff-content", DiffContent)
+                    content._show_diff(f)
+                    if line is not None:
+                        for idx, dl in ol._line_map.items():
+                            if dl.new_lineno == line or dl.old_lineno == line:
+                                ol.highlighted = idx
+                                ol.scroll_to_highlight()
+                                break
+                return
 
     def action_preview_markdown(self) -> None:
         if self._files and 0 <= self._current_index < len(self._files):

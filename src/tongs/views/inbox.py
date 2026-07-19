@@ -11,7 +11,7 @@ from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane
 
-from tongs.errors import AuthError, NetworkError
+from tongs.errors import ForgeError
 from tongs.forges.models import CIStatus, MRSummary
 
 
@@ -180,15 +180,10 @@ class InboxScreen(Screen):
                         table.add_mr_row(mr, self.app.config.ascii_mode)
                 except NotImplementedError:
                     pass
-                except (NetworkError, AuthError) as exc:
+                except (ForgeError, Exception) as exc:
                     self.notify(
-                        f"[dim]{hostname}: {exc}[/]",
+                        f"[dim]{hostname}:[/] {exc}",
                         severity="warning",
-                    )
-                except Exception as exc:
-                    self.notify(
-                        f"[red]{hostname}:[/] {exc}",
-                        severity="error",
                     )
         finally:
             self.loading_reviews = False

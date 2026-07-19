@@ -12,10 +12,22 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
+from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Markdown, Static, Tree
 
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, LineType
+
+
+class CommentRequested(Message):
+    """Posted when the user wants to comment from the diff view."""
+
+    def __init__(
+        self, file: DiffFile | None = None, line: DiffLine | None = None
+    ) -> None:
+        super().__init__()
+        self.file = file
+        self.line = line
 
 
 class DiffFileTree(Tree):
@@ -356,6 +368,7 @@ class DiffPanel(Widget):
     BINDINGS = [
         Binding("n", "next_file", "Next file", show=True),
         Binding("shift+n", "prev_file", "Prev file", show=True),
+        Binding("c", "comment", "Comment", show=True),
         Binding("m", "preview_markdown", "Preview MD", show=True),
     ]
 
@@ -397,6 +410,16 @@ class DiffPanel(Widget):
     def action_prev_file(self) -> None:
         if self._files:
             self._show_file((self._current_index - 1) % len(self._files))
+
+    def action_comment(self) -> None:
+        self.post_message(CommentRequested())
+
+    def _find_first_changed_line(self, file: DiffFile) -> DiffLine | None:
+        for hunk in file.hunks:
+            for dl in hunk.lines:
+                if dl.line_type in (LineType.ADDITION, LineType.DELETION):
+                    return dl
+        return None
 
     def action_preview_markdown(self) -> None:
         if self._files and 0 <= self._current_index < len(self._files):

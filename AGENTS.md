@@ -66,6 +66,7 @@ src/tongs/
     app_state.py       # MRFilter, ReviewDraft dataclasses
 
   widgets/             # Reusable Textual widgets
+    comment_editor.py  # CommentEditor (bottom-docked, general + inline modes)
     diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent)
 
   views/               # Textual Screens

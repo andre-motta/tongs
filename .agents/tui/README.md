@@ -134,6 +134,7 @@ TabbedContent (initial="overview")
   TabPane "Commits"    -> VerticalScroll > Static (commit list)
   TabPane "Discussion" -> placeholder (Phase 4)
   TabPane "Pipeline"   -> placeholder (Phase 5)
+CommentEditor (bottom-docked, hidden by default)
 Footer
 ```
 
@@ -153,7 +154,7 @@ Footer
 
 **Refresh:** `action_refresh()` resets both `_diff_loaded = False` and `_commits_loaded = False`, then re-runs `_load_detail()`. Re-entering the Diff or Commits tab triggers a fresh fetch.
 
-Bindings: Esc/q = back, 1-5 = focus tab, A = approve, U = unapprove, M = merge, X = close, o = open in browser, Ctrl+Y = copy URL to clipboard, Ctrl+R = refresh.
+Bindings: Esc/q = back, 1-5 = focus tab, c = general comment, A = approve, U = unapprove, M = merge, X = close, o = open in browser, Ctrl+Y = copy URL to clipboard, Ctrl+R = refresh.
 
 ## MR Actions (MRDetailScreen)
 
@@ -192,6 +193,45 @@ Horizontal
 
 Bindings: n = next file, Shift+N = previous file (wraps around).
 
+## CommentEditor Widget
+
+`src/tongs/widgets/comment_editor.py` is a bottom-docked comment editor for both general MR comments and inline diff comments.
+
+**Bottom-dock pattern:** The widget uses `dock: bottom` CSS with `display: none` by default. Opening it sets `display = True`, which pushes content above upward while keeping it scrollable. Closing (submit or cancel) sets `display = False`. `max-height: 40%` prevents the editor from consuming the entire screen.
+
+**Two modes:**
+- `open_general()` -- general MR comment. Header shows "Add comment".
+- `open_inline(file, line)` -- inline comment on a specific diff line. Header shows the file path and line number. Computes a `DiffPosition` from the diff line via `position_from_diff_line()`.
+
+**Message flow (decoupled communication):**
+
+```
+DiffPanel                CommentEditor            MRDetailScreen
+  |                           |                        |
+  |-- CommentRequested ------>|                        |
+  |                           |-- (bubbles up) ------->|
+  |                           |                        |-- on_comment_requested()
+  |                           |                        |     opens editor (inline or general)
+  |                           |                        |
+  |                    (user types, submits)            |
+  |                           |                        |
+  |                           |-- CommentSubmitted --->|-- _post_inline_comment()
+  |                           |   (inline mode)        |     client.create_inline_comment()
+  |                           |                        |
+  |                           |-- GeneralComment   --->|-- _post_general_comment()
+  |                           |   Submitted            |     client.add_comment()
+```
+
+`DiffPanel` posts `CommentRequested` (with optional `file`/`line`). `MRDetailScreen.on_comment_requested()` receives it and opens the editor in the appropriate mode. The editor posts `CommentSubmitted` (with `body` + `DiffPosition`) or `GeneralCommentSubmitted` (with `body`). `MRDetailScreen` handles both and posts via the forge client in a `@work(exclusive=True, group="mr-comment")` method.
+
+The `c` key on `MRDetailScreen` opens the editor in general mode directly. The `c` key on `DiffPanel` posts `CommentRequested` which bubbles up to the screen.
+
+**External editor (F2):** Creates a temp file (`.md` suffix, `0o600` perms), writes current TextArea content, launches `$VISUAL` / `$EDITOR` / nvim / vim / vi / nano via `subprocess.run()` inside `app.suspend()`, then reads back the result. Temp file is cleaned up in a `finally` block. Not supported on Windows.
+
+**Unsaved-changes guard:** `action_cancel()` checks whether the TextArea has non-empty content. First Esc sets `_cancel_pending = True` and shows a warning notification. Second Esc discards.
+
+Bindings: Ctrl+S / Ctrl+J = submit (priority bindings), Esc = cancel (with guard), F2 = external editor.
+
 ## Keybinding Conventions
 
 - Lowercase = view/navigate. Uppercase = mutate (with confirmation)
@@ -202,6 +242,9 @@ Bindings: n = next file, Shift+N = previous file (wraps around).
 - `j/k` = navigate in lists/trees
 - `q` / `Esc` = back/quit
 - `o` = open in browser
+- `c` = add comment (MRDetailScreen: general, DiffPanel: via CommentRequested)
+- `Ctrl+S` / `Ctrl+J` = submit comment (CommentEditor, priority bindings)
+- `F2` = open external editor (CommentEditor)
 - `A/U/M/X` = approve/unapprove/merge/close (MRDetailScreen, double-press to confirm)
 - `/` = search (planned)
 
@@ -243,7 +286,6 @@ All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_s
 
 ## Planned Views (Phase 4+)
 
-- `CommentEditor` -- inline TextArea + optional external editor
 - `PipelineListScreen` / `PipelineDetailScreen` / `JobLogScreen`
 - Discussion tab content for MRDetailScreen (Phase 4)
 - Pipeline tab content for MRDetailScreen (Phase 5)

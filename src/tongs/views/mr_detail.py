@@ -12,7 +12,12 @@ from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
 from tongs.forges.models import CIStatus, MRDetail, MRState, MRSummary
-from tongs.widgets.diff_panel import DiffPanel
+from tongs.widgets.comment_editor import (
+    CommentEditor,
+    CommentSubmitted,
+    GeneralCommentSubmitted,
+)
+from tongs.widgets.diff_panel import CommentRequested, DiffPanel
 
 
 def _ci_label(status: CIStatus) -> str:
@@ -93,6 +98,7 @@ class MRDetailScreen(Screen):
         Binding("3", "focus_tab('commits')", "Commits", show=True),
         Binding("4", "focus_tab('discussion')", "Discussion", show=True),
         Binding("5", "focus_tab('pipeline')", "Pipeline", show=True),
+        Binding("c", "add_comment", "Comment", show=True),
         Binding("A", "approve", "Approve", show=True, key_display="A"),
         Binding("U", "unapprove", "Unapprove", show=True, key_display="U"),
         Binding("M", "merge", "Merge", show=True, key_display="M"),
@@ -124,6 +130,7 @@ class MRDetailScreen(Screen):
                 yield Static("[dim]Discussion view planned for Phase 4[/]")
             with TabPane("Pipeline", id="pipeline"):
                 yield Static("[dim]Pipeline view planned for Phase 5[/]")
+        yield CommentEditor(id="comment-editor")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -268,6 +275,10 @@ class MRDetailScreen(Screen):
         except Exception:
             self.notify(f"URL: {self.mr_summary.web_url}")
 
+    def action_add_comment(self) -> None:
+        editor = self.query_one("#comment-editor", CommentEditor)
+        editor.open_general()
+
     _pending_action: str = ""
     _action_taken: bool = False
 
@@ -396,6 +407,57 @@ class MRDetailScreen(Screen):
             self._load_detail()
         except Exception as exc:
             self.notify(f"Close failed: {exc}", severity="error")
+
+    def on_comment_requested(self, event: CommentRequested) -> None:
+        """Handle comment request from DiffPanel."""
+        editor = self.query_one("#comment-editor", CommentEditor)
+        if event.file and event.line:
+            editor.open_inline(event.file, event.line)
+        else:
+            editor.open_general()
+
+    def on_comment_submitted(self, event: CommentSubmitted) -> None:
+        """Handle inline comment submission from CommentEditor."""
+        self._post_inline_comment(event.body, event.position)
+
+    def on_general_comment_submitted(self, event: GeneralCommentSubmitted) -> None:
+        """Handle general MR comment submission."""
+        self._post_general_comment(event.body)
+
+    @work(exclusive=True, group="mr-comment")
+    async def _post_general_comment(self, body: str) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.add_comment(
+                self.mr_summary.repo_path, self.mr_summary.number, body
+            )
+            self.notify("[green]Comment posted[/]", severity="information")
+        except Exception as exc:
+            self.notify(f"Failed to post comment: {exc}", severity="error")
+
+    @work(exclusive=True, group="mr-comment")
+    async def _post_inline_comment(self, body: str, position) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.create_inline_comment(
+                self.mr_summary.repo_path,
+                self.mr_summary.number,
+                file_path=position.new_path
+                if position.side == "RIGHT"
+                else position.old_path,
+                line=position.new_line
+                if position.side == "RIGHT"
+                else position.old_line,
+                side=position.side,
+                body=body,
+            )
+            self.notify("[green]Comment posted[/]", severity="information")
+        except Exception as exc:
+            self.notify(f"Failed to post comment: {exc}", severity="error")
 
     def action_refresh(self) -> None:
         self._diff_loaded = False

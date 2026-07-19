@@ -10,6 +10,7 @@ from textual.app import App
 from textual.binding import Binding
 from textual.reactive import reactive
 
+from tongs.commands import TongsCommandProvider
 from tongs.config import Config, load_config
 from tongs.forges.registry import ForgeRegistry
 from tongs.scanner.discovery import discover_repos
@@ -46,8 +47,9 @@ class TongsApp(App):
     }
     """
 
+    COMMANDS = {TongsCommandProvider}
+
     BINDINGS = [
-        Binding("ctrl+p", "command_palette", "Command Palette", show=True),
         Binding("question_mark", "help", "Help", show=True),
     ]
 
@@ -117,6 +119,3 @@ class TongsApp(App):
 
     def action_help(self) -> None:
         self.notify("Help: press ? for keybindings, Ctrl+P for command palette")
-
-    def action_command_palette(self) -> None:
-        self.notify("Command palette not yet implemented")

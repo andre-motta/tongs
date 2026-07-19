@@ -23,8 +23,15 @@ from tongs.widgets.comment_editor import (
     CommentEditor,
     CommentSubmitted,
     GeneralCommentSubmitted,
+    ReplySubmitted,
 )
-from tongs.widgets.diff_panel import CommentMode, CommentRequested, DiffPanel
+from tongs.widgets.diff_panel import (
+    CommentMode,
+    CommentRequested,
+    DiffPanel,
+    ReplyRequested,
+    ResolveRequested,
+)
 
 
 def _ci_label(status: CIStatus) -> str:
@@ -100,17 +107,17 @@ class MRDetailScreen(Screen):
     BINDINGS = [
         Binding("escape", "go_back", "Back", show=True),
         Binding("q", "go_back", "Back", show=False),
-        Binding("1", "focus_tab('overview')", "Overview", show=True),
-        Binding("2", "focus_tab('diff')", "Diff", show=True),
-        Binding("3", "focus_tab('commits')", "Commits", show=True),
-        Binding("4", "focus_tab('discussion')", "Discussion", show=True),
-        Binding("5", "focus_tab('pipeline')", "Pipeline", show=True),
+        Binding("1", "focus_tab('overview')", "1 Overview", show=False),
+        Binding("2", "focus_tab('diff')", "2 Diff", show=False),
+        Binding("3", "focus_tab('commits')", "3 Commits", show=False),
+        Binding("4", "focus_tab('discussion')", "4 Discussion", show=False),
+        Binding("5", "focus_tab('pipeline')", "5 Pipeline", show=False),
         Binding("c", "add_comment", "Comment", show=True),
         Binding("A", "approve", "Approve", show=True, key_display="A"),
-        Binding("U", "unapprove", "Unapprove", show=True, key_display="U"),
+        Binding("U", "unapprove", "Unapprove", show=False, key_display="U"),
         Binding("M", "merge", "Merge", show=True, key_display="M"),
-        Binding("X", "close_mr", "Close", show=True, key_display="X"),
-        Binding("o", "open_in_browser", "Open", show=True),
+        Binding("X", "close_mr", "Close", show=False, key_display="X"),
+        Binding("o", "open_in_browser", "Open", show=False),
         Binding("ctrl+y", "yank_url", "Copy URL", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
     ]
@@ -202,9 +209,7 @@ class MRDetailScreen(Screen):
             client = await self.app.forge_registry.get_client(
                 self.mr_summary.forge_host.hostname
             )
-            changes = await client.get_mr_diff(
-                self.mr_summary.repo_path, self.mr_summary.number
-            )
+            changes, discussions = await self._fetch_diff_and_discussions(client)
             if not changes:
                 content.show_placeholder("No changes in this MR")
                 return
@@ -213,9 +218,26 @@ class MRDetailScreen(Screen):
 
             diff_text = self._changes_to_diff_text(changes)
             files = parse_diff(diff_text)
-            panel.set_files(files)
+            panel.set_files(files, discussions)
         except Exception as exc:
             content.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
+
+    async def _fetch_diff_and_discussions(self, client):
+        """Fetch diff changes and discussions in parallel."""
+        import asyncio
+
+        changes_task = asyncio.create_task(
+            client.get_mr_diff(self.mr_summary.repo_path, self.mr_summary.number)
+        )
+        discussions_task = asyncio.create_task(
+            client.get_mr_discussions(self.mr_summary.repo_path, self.mr_summary.number)
+        )
+        changes = await changes_task
+        try:
+            discussions = await discussions_task
+        except Exception:
+            discussions = []
+        return changes, discussions
 
     def _changes_to_diff_text(self, changes: list[dict]) -> str:
         """Convert forge API response to unified diff text.
@@ -274,9 +296,9 @@ class MRDetailScreen(Screen):
         self.app.open_url(self.mr_summary.web_url)
 
     def action_yank_url(self) -> None:
-        try:
-            import pyperclip
+        import pyperclip
 
+        try:
             pyperclip.copy(self.mr_summary.web_url)
             self.notify("URL copied to clipboard")
         except Exception:
@@ -510,6 +532,56 @@ class MRDetailScreen(Screen):
     def on_general_comment_submitted(self, event: GeneralCommentSubmitted) -> None:
         """Handle general MR comment submission."""
         self._post_general_comment(event.body)
+
+    def on_reply_requested(self, event: ReplyRequested) -> None:
+        """Open reply editor for an existing discussion thread."""
+        editor = self.query_one("#comment-editor", CommentEditor)
+        editor.open_reply(event.discussion_id, event.file, event.line, event.author)
+
+    def on_reply_submitted(self, event: ReplySubmitted) -> None:
+        """Post a reply to an existing discussion thread."""
+        self._post_reply(event.discussion_id, event.body)
+
+    def on_resolve_requested(self, event: ResolveRequested) -> None:
+        """Resolve or unresolve a discussion thread."""
+        self._resolve_thread(event.discussion_id, event.resolved)
+
+    @work(exclusive=True, group="mr-comment")
+    async def _post_reply(self, discussion_id: str, body: str) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.reply_to_discussion(
+                self.mr_summary.repo_path,
+                self.mr_summary.number,
+                discussion_id,
+                body,
+            )
+            self.notify("[green]Reply posted[/]", severity="information")
+            self._diff_loaded = False
+            self._on_tab_switch("diff")
+        except Exception as exc:
+            self.notify(f"Failed to post reply: {exc}", severity="error")
+
+    @work(exclusive=True, group="mr-comment")
+    async def _resolve_thread(self, discussion_id: str, resolved: bool) -> None:
+        try:
+            client = await self.app.forge_registry.get_client(
+                self.mr_summary.forge_host.hostname
+            )
+            await client.resolve_discussion(
+                self.mr_summary.repo_path,
+                self.mr_summary.number,
+                discussion_id,
+                resolved,
+            )
+            action = "Resolved" if resolved else "Reopened"
+            self.notify(f"[green]{action} thread[/]", severity="information")
+            self._diff_loaded = False
+            self._on_tab_switch("diff")
+        except Exception as exc:
+            self.notify(f"Failed to resolve thread: {exc}", severity="error")
 
     @work(exclusive=True, group="mr-comment")
     async def _post_general_comment(self, body: str) -> None:

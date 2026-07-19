@@ -19,7 +19,7 @@ pytest tests/test_forges/test_gitlab.py
 pytest tests/test_forges/test_gitlab.py::TestGitLabClientAsync
 ```
 
-Tests run without network access. All forge interactions are mocked. The full suite (406 tests) runs in under 0.5 seconds.
+Tests run without network access. All forge interactions are mocked. The full suite (450 tests) runs in under 1 second.
 
 ## Directory Layout
 
@@ -46,7 +46,7 @@ tests/
     test_helpers.py          # View helper functions (CI icons, relative time)
     test_suggestion.py       # Suggestion helpers: template, fence, format, position (25 tests)
   test_widgets/
-    test_diff_panel.py       # DiffOptionList, DiffContent, DiffRenderer, selection, comments (49 tests)
+    test_diff_panel.py       # DiffOptionList, DiffContent, DiffRenderer, selection, comments, discussion threading, comment navigation
   fixtures/
     builder_mr_3113.diff     # Real MR diff from builder project
     fromager_pr_1258.diff    # Real PR diff from fromager project

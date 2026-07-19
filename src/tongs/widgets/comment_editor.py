@@ -36,6 +36,15 @@ class GeneralCommentSubmitted(Message):
         self.body = body
 
 
+class ReplySubmitted(Message):
+    """Fired when a reply to an existing discussion is submitted."""
+
+    def __init__(self, discussion_id: str, body: str) -> None:
+        super().__init__()
+        self.discussion_id = discussion_id
+        self.body = body
+
+
 class CommentEditor(Widget):
     """Bottom-docked comment editor. Shows below content, not as a modal."""
 
@@ -81,6 +90,7 @@ class CommentEditor(Widget):
         self._file: DiffFile | None = None
         self._line: DiffLine | None = None
         self._position: DiffPosition | None = None
+        self._discussion_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="editor-header", classes="editor-header")
@@ -120,13 +130,34 @@ class CommentEditor(Widget):
         self.display = True
         text_area.focus()
 
+    def open_reply(
+        self, discussion_id: str, file: DiffFile, line: DiffLine, author: str = ""
+    ) -> None:
+        """Open for replying to an existing discussion thread."""
+        self._cancel_pending = False
+        self._mode = "reply"
+        self._file = file
+        self._line = line
+        self._discussion_id = discussion_id
+        self._position = None
+        line_num = line.new_lineno or line.old_lineno or ""
+        who = f"@{author} on " if author else ""
+        header = self.query_one("#editor-header", Static)
+        header.update(f"[bold]Reply to {who}{file.new_path}:{line_num}[/]")
+        text_area = self.query_one("#comment-input", TextArea)
+        text_area.clear()
+        self.display = True
+        text_area.focus()
+
     def action_submit(self) -> None:
         text_area = self.query_one("#comment-input", TextArea)
         body = text_area.text.strip()
         if not body:
             self.app.notify("Comment cannot be empty")
             return
-        if self._mode == "inline" and self._position:
+        if self._mode == "reply" and self._discussion_id:
+            self.post_message(ReplySubmitted(self._discussion_id, body))
+        elif self._mode == "inline" and self._position:
             self.post_message(CommentSubmitted(body, self._position))
         else:
             self.post_message(GeneralCommentSubmitted(body))

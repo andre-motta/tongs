@@ -55,6 +55,19 @@ This path keeps the view layer working against shared models (`DiffFile`, `DiffP
 
 The suggestion helpers are pure functions in `views/suggestion.py` with no I/O or Textual dependencies. Forge-specific differences are handled by `forge_type` parameters, not by conditional logic in the TUI layer.
 
+## Data Flow: Inline Discussion Threading (Phase 4)
+
+1. When the user switches to the Diff tab, `_load_diff()` calls `_fetch_diff_and_discussions(client)`.
+2. `_fetch_diff_and_discussions()` fires `get_mr_diff()` and `get_mr_discussions()` as parallel `asyncio.Task`s. Discussion fetch failures are caught silently (diff still loads).
+3. `DiffPanel.set_files(files, discussions)` distributes discussions by file path into `_discussions_by_file` and passes per-file lists to `DiffFileTree` (for comment counts) and `DiffContent` (for inline threading).
+4. `_build_discussion_index()` indexes inline discussions by `(old_line, new_line)` for O(1) lookup during rendering.
+5. `_build_comment_lines()` creates the gutter marker map `(old, new) -> all_resolved`.
+6. During `DiffContent._show_diff()`, `_match_discussions(dl, index)` attaches discussions to option indices in `_comment_map`. If discussions are expanded (`_expanded_threads` set), `_render_thread_block()` inserts disabled options below the code line with Rich Markdown rendering of comment bodies, author, timestamp, and replies.
+7. User interactions (`d` to toggle, `r` to reply, `R` to resolve) post messages (`_ThreadToggled`, `ReplyRequested`, `ResolveRequested`) that bubble up to `MRDetailScreen`.
+8. `MRDetailScreen` handles mutations via forge client (`reply_to_discussion`, `resolve_discussion`), then resets `_diff_loaded = False` and re-enters the diff tab to refresh.
+
+The discussion data flows through the same shared models (`Discussion`, `InlineComment`) from `forges/models.py`, keeping the view layer forge-agnostic.
+
 ## Data Flow: Commit Listing (Phase 3)
 
 1. When the user switches to the Commits tab in `MRDetailScreen`, `_on_tab_switch("commits")` triggers `_load_commits()` (lazy, same pattern as diff loading).

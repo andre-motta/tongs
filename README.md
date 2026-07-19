@@ -92,6 +92,10 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 ### Commenting
 
 - **Inline comments** -- press `c` on any diff line to open the bottom-docked comment editor
+- **Discussion threads** -- existing inline comments appear as gutter markers in the diff; press `d` to expand/collapse threads with full Markdown rendering, replies, and resolution status
+- **Comment navigation** -- jump between comments with `]` / `[`, wrapping around
+- **Reply to threads** -- press `r` to reply to a discussion directly from the diff
+- **Resolve threads** -- press `R` to resolve/unresolve a discussion (GitLab; double-press to confirm)
 - **Visual line selection** -- select multiple lines with `Shift+J` / `Shift+K` or `Ctrl+Click` for multi-line comments
 - **Suggested changes** -- press `F3` to open your `$EDITOR` with the selected code; edit it, and tongs posts a suggestion block (GitHub `suggestion` / GitLab `suggestion:-0+N` syntax)
 - **External editor** -- press `F2` inside the comment editor to switch to your preferred editor
@@ -107,6 +111,7 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 
 ### Navigation
 
+- **Command palette** (`Ctrl+P`) -- context-aware fuzzy search across all available actions
 - **Commits tab** -- browse the full commit history for any MR/PR
 - **Open in browser** (`o`) -- jump to the MR/PR in your default browser
 - **Copy URL** (`Ctrl+Y`) -- yank the MR URL to clipboard
@@ -161,6 +166,10 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 | `j` / `k` | Move cursor down / up |
 | `J` / `K` | Extend selection down / up |
 | `Ctrl+Click` | Extend selection to clicked line |
+| `]` / `[` | Jump to next / previous comment |
+| `d` | Expand / collapse discussion thread |
+| `r` | Reply to discussion on current line |
+| `R` | Resolve / unresolve discussion (press twice) |
 | `c` | Comment on current line or selection |
 | `F3` | Suggest changes (opens `$EDITOR`) |
 | `n` / `Shift+N` | Next / previous file |
@@ -219,8 +228,10 @@ forge_type = "github"
 | GitHub + GitLab | Yes | GitHub only | One at a time |
 | Terminal-native diffs | Yes | No | No |
 | Inline comments | Yes | No | Yes |
+| Discussion threads | Yes | No | Yes |
 | Suggested changes | Yes | No | Yes |
 | Approve / Merge | Yes | No | Yes |
+| Command palette | Yes | No | N/A |
 | Zero config auth | Yes | Yes | N/A |
 | Self-hosted forges | Yes | Yes | N/A |
 
@@ -231,16 +242,16 @@ forge_type = "github"
 | 1 | Scanner, forge abstraction, GitLab client, TUI shell, inbox, repo list | Done |
 | 2 | MR detail view, diff viewer, syntax highlighting, GitHub client, commits tab | Done |
 | 3 | MR actions (approve, merge, close), inline comments, suggested changes | Done |
-| 4 | Discussion tab (existing comments inline in diff), repo list search/filter | In progress |
+| 4 | Inline discussion threads (expand/collapse, reply, resolve), command palette, comment navigation | Done |
 | 5 | Pipeline/CI management (job logs, retry, cancel, trigger) | Planned |
 | 6 | Plugin system, fleet monitor plugin | Planned |
 | 7 | SQLite caching, MCP server, distribution (Homebrew, Fedora COPR) | Planned |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends. 370+ tests and growing.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add plugins or forge backends. 450+ tests and growing.
 
-tongs is early enough that contributions shape the architecture. The Discussion view, Pipeline/CI views, and plugin system are all open for contributors. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
+tongs is early enough that contributions shape the architecture. The Pipeline/CI views and plugin system are open for contributors. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 
 ## Why "tongs"?
 

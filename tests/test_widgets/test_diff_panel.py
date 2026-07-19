@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, FileStatus, LineType
+from tongs.forges.models import Discussion, InlineComment, User
 from tongs.widgets.diff_panel import (
     CommentMode,
     CommentRequested,
+    DiffFileTree,
     DiffOptionList,
     DiffRenderer,
+    ReplyRequested,
+    ResolveRequested,
+    _build_comment_lines,
+    _build_discussion_index,
     _collect_change_block,
     _is_markdown_file,
+    _match_discussions,
     _reconstruct_new_content,
 )
 
@@ -355,22 +363,21 @@ class TestGutter:
         dl = _ctx(42, 99, "text")
         gutter = renderer._gutter(dl)
         text = gutter.plain
-        # old_lineno right-aligned in 4 chars, then space, new_lineno in 4 chars, then space
-        assert text == "  42   99 "
+        assert text == "  42   99   "
 
     def test_none_old_lineno(self):
         renderer = DiffRenderer()
         dl = _add(7, "added")
         gutter = renderer._gutter(dl)
         text = gutter.plain
-        assert text == "        7 "
+        assert text == "        7   "
 
     def test_none_new_lineno(self):
         renderer = DiffRenderer()
         dl = _del(3, "deleted")
         gutter = renderer._gutter(dl)
         text = gutter.plain
-        assert text == "   3      "
+        assert text == "   3        "
 
     def test_both_none(self):
         renderer = DiffRenderer()
@@ -382,14 +389,29 @@ class TestGutter:
         )
         gutter = renderer._gutter(dl)
         text = gutter.plain
-        assert text == "          "
+        assert text == "            "
 
     def test_large_numbers(self):
         renderer = DiffRenderer()
         dl = _ctx(1234, 5678, "big")
         gutter = renderer._gutter(dl)
         text = gutter.plain
-        assert text == "1234 5678 "
+        assert text == "1234 5678   "
+
+    def test_comment_marker_unresolved(self):
+        comment_lines = {(42, 99): False}
+        renderer = DiffRenderer(comment_lines=comment_lines)
+        dl = _ctx(42, 99, "text")
+        gutter = renderer._gutter(dl)
+        text = gutter.plain
+        assert text == "  42   99 * "
+
+    def test_comment_marker_resolved(self):
+        comment_lines = {(42, 99): True}
+        renderer = DiffRenderer(comment_lines=comment_lines)
+        dl = _ctx(42, 99, "text")
+        gutter = renderer._gutter(dl)
+        assert "* " in gutter.plain
 
 
 # -- _is_markdown_file ---------------------------------------------------
@@ -553,3 +575,349 @@ class TestActionCommentGuards:
         widget.action_suggest()
         assert len(posted) == 1
         assert posted[0].mode is CommentMode.SUGGEST
+
+
+# ---------------------------------------------------------------------------
+# Discussion fixture helpers
+# ---------------------------------------------------------------------------
+
+def _make_discussion(
+    id: str = "d1",
+    old_line: int | None = None,
+    new_line: int | None = 10,
+    is_resolved: bool = False,
+    is_inline: bool = True,
+    file_path: str = "test.py",
+) -> Discussion:
+    return Discussion(
+        id=id,
+        is_inline=is_inline,
+        root_comment=InlineComment(
+            id=f"c-{id}",
+            author=User(username="testuser"),
+            body="test comment",
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            file_path=file_path,
+            old_line=old_line,
+            new_line=new_line,
+            is_resolved=is_resolved,
+        ),
+        is_resolved=is_resolved,
+    )
+
+
+# ===================================================================
+# 7. _build_discussion_index
+# ===================================================================
+
+class TestBuildDiscussionIndex:
+    def test_inline_keyed_by_old_new(self):
+        d = _make_discussion(id="d1", old_line=5, new_line=10)
+        index = _build_discussion_index([d])
+        assert (5, 10) in index
+        assert index[(5, 10)] == [d]
+
+    def test_non_inline_excluded(self):
+        d = _make_discussion(id="d1", is_inline=False)
+        index = _build_discussion_index([d])
+        assert index == {}
+
+    def test_multiple_discussions_same_line(self):
+        d1 = _make_discussion(id="d1", old_line=5, new_line=10)
+        d2 = _make_discussion(id="d2", old_line=5, new_line=10)
+        index = _build_discussion_index([d1, d2])
+        assert len(index[(5, 10)]) == 2
+        assert index[(5, 10)] == [d1, d2]
+
+    def test_empty_input(self):
+        index = _build_discussion_index([])
+        assert index == {}
+
+
+# ===================================================================
+# 8. _build_comment_lines
+# ===================================================================
+
+class TestBuildCommentLines:
+    def test_single_unresolved_returns_false(self):
+        d = _make_discussion(id="d1", old_line=5, new_line=10, is_resolved=False)
+        result = _build_comment_lines([d])
+        assert result[(5, 10)] is False
+
+    def test_single_resolved_returns_true(self):
+        d = _make_discussion(id="d1", old_line=5, new_line=10, is_resolved=True)
+        result = _build_comment_lines([d])
+        assert result[(5, 10)] is True
+
+    def test_mixed_on_same_line_returns_false(self):
+        d1 = _make_discussion(id="d1", old_line=5, new_line=10, is_resolved=True)
+        d2 = _make_discussion(id="d2", old_line=5, new_line=10, is_resolved=False)
+        result = _build_comment_lines([d1, d2])
+        assert result[(5, 10)] is False
+
+    def test_all_resolved_returns_true(self):
+        d1 = _make_discussion(id="d1", old_line=5, new_line=10, is_resolved=True)
+        d2 = _make_discussion(id="d2", old_line=5, new_line=10, is_resolved=True)
+        result = _build_comment_lines([d1, d2])
+        assert result[(5, 10)] is True
+
+    def test_empty_input(self):
+        result = _build_comment_lines([])
+        assert result == {}
+
+
+# ===================================================================
+# 9. _match_discussions
+# ===================================================================
+
+class TestMatchDiscussions:
+    def test_exact_old_new_match(self):
+        d = _make_discussion(id="d1", old_line=5, new_line=10)
+        index = {(5, 10): [d]}
+        dl = _ctx(5, 10, "code")
+        assert _match_discussions(dl, index) == [d]
+
+    def test_fallback_none_new(self):
+        d = _make_discussion(id="d1", old_line=None, new_line=10)
+        index = {(None, 10): [d]}
+        dl = _add(10, "added")  # old_lineno=None, new_lineno=10
+        # Exact match on (None, 10) first
+        assert _match_discussions(dl, index) == [d]
+
+    def test_fallback_old_none(self):
+        d = _make_discussion(id="d1", old_line=5, new_line=None)
+        index = {(5, None): [d]}
+        dl = _del(5, "deleted")  # old_lineno=5, new_lineno=None
+        # Exact match on (5, None) first
+        assert _match_discussions(dl, index) == [d]
+
+    def test_no_match_returns_empty(self):
+        d = _make_discussion(id="d1", old_line=5, new_line=10)
+        index = {(5, 10): [d]}
+        dl = _ctx(99, 99, "other")
+        assert _match_discussions(dl, index) == []
+
+    def test_exact_match_takes_priority(self):
+        """When both exact and fallback keys exist, exact wins."""
+        d_exact = _make_discussion(id="d-exact", old_line=5, new_line=10)
+        d_fallback = _make_discussion(id="d-fallback", old_line=None, new_line=10)
+        index = {(5, 10): [d_exact], (None, 10): [d_fallback]}
+        dl = _ctx(5, 10, "code")
+        result = _match_discussions(dl, index)
+        assert result == [d_exact]
+
+    def test_fallback_none_new_when_no_exact(self):
+        """Fallback to (None, new) when (old, new) is not in index."""
+        d = _make_discussion(id="d1", old_line=None, new_line=10)
+        index = {(None, 10): [d]}
+        dl = _ctx(5, 10, "code")  # (5, 10) not in index
+        result = _match_discussions(dl, index)
+        assert result == [d]
+
+    def test_fallback_old_none_when_no_exact_or_none_new(self):
+        """Fallback to (old, None) when neither (old, new) nor (None, new) exist."""
+        d = _make_discussion(id="d1", old_line=5, new_line=None)
+        index = {(5, None): [d]}
+        dl = _ctx(5, 10, "code")  # (5, 10) not in index, (None, 10) not either
+        result = _match_discussions(dl, index)
+        assert result == [d]
+
+
+# ===================================================================
+# 10. New messages: ReplyRequested, ResolveRequested
+# ===================================================================
+
+class TestReplyRequested:
+    def test_stores_all_fields(self):
+        file = _make_file()
+        line = _ctx(1, 1, "code")
+        msg = ReplyRequested(
+            discussion_id="d42", file=file, line=line, author="alice"
+        )
+        assert msg.discussion_id == "d42"
+        assert msg.file is file
+        assert msg.line is line
+        assert msg.author == "alice"
+
+    def test_author_default(self):
+        msg = ReplyRequested(
+            discussion_id="d1", file=_make_file(), line=_ctx(1, 1)
+        )
+        assert msg.author == ""
+
+
+class TestResolveRequested:
+    def test_stores_all_fields(self):
+        msg = ResolveRequested(discussion_id="d99", resolved=True)
+        assert msg.discussion_id == "d99"
+        assert msg.resolved is True
+
+    def test_resolved_false(self):
+        msg = ResolveRequested(discussion_id="d1", resolved=False)
+        assert msg.resolved is False
+
+
+# ===================================================================
+# 11. DiffOptionList._get_target_discussion
+# ===================================================================
+
+class TestGetTargetDiscussion:
+    @pytest.fixture()
+    def widget(self):
+        w = DiffOptionList()
+        from textual.widgets._option_list import Option
+        for i in range(5):
+            w.add_option(Option(f"line {i}"))
+        return w
+
+    def test_returns_none_when_highlighted_is_none(self, widget):
+        widget.highlighted = None
+        assert widget._get_target_discussion() is None
+
+    def test_returns_none_when_no_discussions(self, widget):
+        widget.highlighted = 2
+        widget._comment_map = {}
+        assert widget._get_target_discussion() is None
+
+    def test_returns_first_unresolved(self, widget):
+        d_resolved = _make_discussion(id="d1", is_resolved=True)
+        d_unresolved = _make_discussion(id="d2", is_resolved=False)
+        widget.highlighted = 2
+        widget._comment_map = {2: [d_resolved, d_unresolved]}
+        result = widget._get_target_discussion()
+        assert result is d_unresolved
+
+    def test_returns_first_when_all_resolved(self, widget):
+        d1 = _make_discussion(id="d1", is_resolved=True)
+        d2 = _make_discussion(id="d2", is_resolved=True)
+        widget.highlighted = 2
+        widget._comment_map = {2: [d1, d2]}
+        result = widget._get_target_discussion()
+        assert result is d1
+
+
+# ===================================================================
+# 12. DiffOptionList.action_toggle_discussion
+# ===================================================================
+
+class TestActionToggleDiscussion:
+    @pytest.fixture()
+    def widget(self):
+        w = DiffOptionList()
+        from textual.widgets._option_list import Option
+        for i in range(5):
+            w.add_option(Option(f"line {i}"))
+        # Stub post_message to avoid Textual internals
+        w.post_message = MagicMock()
+        return w
+
+    def test_no_op_when_no_discussions(self, widget):
+        widget.highlighted = 2
+        widget._comment_map = {}
+        # Reset the mock after highlighted setter posts OptionHighlighted
+        widget.post_message.reset_mock()
+        widget.action_toggle_discussion()
+        widget.post_message.assert_not_called()
+
+    def test_adds_disc_ids_to_expanded_when_collapsed(self, widget):
+        d1 = _make_discussion(id="d1")
+        d2 = _make_discussion(id="d2")
+        widget.highlighted = 2
+        widget._comment_map = {2: [d1, d2]}
+        widget._expanded_threads = set()
+        widget.action_toggle_discussion()
+        assert "d1" in widget._expanded_threads
+        assert "d2" in widget._expanded_threads
+
+    def test_removes_disc_ids_when_expanded(self, widget):
+        d1 = _make_discussion(id="d1")
+        widget.highlighted = 2
+        widget._comment_map = {2: [d1]}
+        widget._expanded_threads = {"d1"}
+        widget.action_toggle_discussion()
+        assert "d1" not in widget._expanded_threads
+
+
+# ===================================================================
+# 13. Comment navigation: action_next_comment / action_prev_comment
+# ===================================================================
+
+class TestCommentNavigation:
+    @pytest.fixture()
+    def widget(self):
+        w = DiffOptionList()
+        from textual.widgets._option_list import Option
+        for i in range(20):
+            w.add_option(Option(f"line {i}"))
+        return w
+
+    def test_next_comment_empty_indices_notifies(self, widget):
+        widget._comment_indices = []
+        mock_app = MagicMock()
+        with patch.object(
+            type(widget), "app", new_callable=lambda: property(lambda self: mock_app)
+        ):
+            widget.action_next_comment()
+        mock_app.notify.assert_called_once()
+        assert "No comments" in mock_app.notify.call_args[0][0]
+
+    def test_prev_comment_empty_indices_notifies(self, widget):
+        widget._comment_indices = []
+        mock_app = MagicMock()
+        with patch.object(
+            type(widget), "app", new_callable=lambda: property(lambda self: mock_app)
+        ):
+            widget.action_prev_comment()
+        mock_app.notify.assert_called_once()
+        assert "No comments" in mock_app.notify.call_args[0][0]
+
+    def test_next_comment_wraps_forward(self, widget):
+        widget._comment_indices = [3, 7, 12]
+        widget.highlighted = 12
+        widget.scroll_to_highlight = MagicMock()
+        widget.action_next_comment()
+        # Past the last index (12), bisect_right gives 3 which >= len, wraps to 0
+        assert widget.highlighted == 3
+
+    def test_prev_comment_wraps_backward(self, widget):
+        widget._comment_indices = [3, 7, 12]
+        widget.highlighted = 3
+        widget.scroll_to_highlight = MagicMock()
+        widget.action_prev_comment()
+        # bisect_left(indices, 3) = 0, minus 1 = -1, wraps to last
+        assert widget.highlighted == 12
+
+    def test_next_comment_moves_forward(self, widget):
+        widget._comment_indices = [3, 7, 12]
+        widget.highlighted = 3
+        widget.scroll_to_highlight = MagicMock()
+        widget.action_next_comment()
+        assert widget.highlighted == 7
+
+    def test_prev_comment_moves_backward(self, widget):
+        widget._comment_indices = [3, 7, 12]
+        widget.highlighted = 12
+        widget.scroll_to_highlight = MagicMock()
+        widget.action_prev_comment()
+        assert widget.highlighted == 7
+
+
+# ===================================================================
+# 14. DiffFileTree.set_files display logic
+# ===================================================================
+
+class TestDiffFileTreeSetFiles:
+    def test_basename_used_not_full_path(self):
+        """Labels show basename, not the full directory path."""
+        f = _make_file(new_path="src/deep/nested/component.py")
+        tree = DiffFileTree("Files")
+        tree.set_files([f])
+        # The root label reflects the file count
+        assert "1" in tree.root.label.plain
+        # First child node label should contain the basename
+        children = list(tree.root.children)
+        assert len(children) == 1
+        label_text = children[0].label.plain if hasattr(children[0].label, "plain") else str(children[0].label)
+        assert "component.py" in label_text
+        # Full path should NOT appear
+        assert "src/deep/nested/" not in label_text

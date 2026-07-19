@@ -22,14 +22,14 @@ class InboxScreen(Screen):
     """
 
     BINDINGS = [
-        Binding("r", "repos_or_back", "Repos", show=True, key_display="R"),
-        Binding("1", "focus_tab('reviews')", "Reviews", show=True),
-        Binding("2", "focus_tab('my-mrs')", "My MRs", show=True),
-        Binding("3", "focus_tab('all-open')", "All Open", show=True),
+        Binding("r", "repos_or_back", "Repos", show=True, key_display="r"),
+        Binding("1", "focus_tab('reviews')", "Reviews", show=False),
+        Binding("2", "focus_tab('my-mrs')", "My MRs", show=False),
+        Binding("3", "focus_tab('all-open')", "All Open", show=False),
         Binding("o", "open_in_browser", "Open", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
         Binding("escape", "go_back", "Back", show=False),
-        Binding("q", "quit_or_back", "Quit/Back", show=True),
+        Binding("q", "quit_or_back", "Quit", show=True),
     ]
 
     loading_reviews: reactive[bool] = reactive(False)

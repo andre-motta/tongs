@@ -8,9 +8,10 @@ tongs uses Textual 1.0+ with these patterns:
 - **Workers** (`@work` decorator) for async operations. Each data-loading method gets its own named worker group with `exclusive=True` to cancel previous loads on refresh.
 - **Reactive attributes** on `TongsApp` for shared state that persists across screen push/pop.
 - **DataTable** for list views with row cursor, zebra stripes (inbox, repo list).
-- **Tree** widget for hierarchical views (diff file tree).
+- **Tree** widget for hierarchical views (diff file tree with comment counts).
 - **TabbedContent** for multi-tab views (inbox tabs: My Reviews, My MRs, All Open).
 - **ComposeResult** for declarative widget layout via `compose()`.
+- **CommandProvider** for context-aware command palette (`Ctrl+P`).
 
 ## TongsApp
 
@@ -30,6 +31,23 @@ Lifecycle:
 5. `on_unmount()` closes all forge clients via `forge_registry.close_all()`
 
 Registered screens: `"inbox"` -> `InboxScreen`, `"repo_list"` -> `RepoListScreen`.
+
+## Command Palette
+
+`src/tongs/commands.py:TongsCommandProvider(Provider)` implements a context-aware command palette, registered on `TongsApp` via `COMMANDS = {TongsCommandProvider}` and invoked with `Ctrl+P`.
+
+**Context-aware command generation:** `_get_commands()` inspects `type(screen).__name__` to determine the current screen and combines global commands with screen-specific commands. Each command is a `(display, help_text, callback)` tuple.
+
+**Global commands** (always available): Repos, Inbox, Help.
+
+**Screen-specific commands:**
+- `InboxScreen`: My Reviews, My MRs, All Open (tab switches), Refresh, Open in Browser
+- `RepoListScreen`: Filter Repos, Cycle Forge, Refresh
+- `MRDetailScreen`: Overview/Diff/Commits/Discussion/Pipeline (tab switches), Comment, Approve, Unapprove, Merge, Close, Open in Browser, Copy URL, Refresh
+
+**Two query modes:**
+- `discover()` yields all commands as `DiscoveryHit` for the default palette view (no query typed)
+- `search(query)` uses `self.matcher(query)` for fuzzy matching, returning `Hit` with highlighted match text and relevance score
 
 ## AppState Design
 
@@ -140,9 +158,9 @@ Structure:
 Header (sub_title = "!{number} {title}")
 TabbedContent (initial="overview")
   TabPane "Overview"   -> VerticalScroll > MROverview (metadata) + Markdown (description)
-  TabPane "Diff"       -> DiffPanel (split-pane diff viewer)
+  TabPane "Diff"       -> DiffPanel (split-pane diff viewer with inline discussions)
   TabPane "Commits"    -> VerticalScroll > Static (commit list)
-  TabPane "Discussion" -> placeholder (Phase 4)
+  TabPane "Discussion" -> placeholder (discussions are shown inline in the Diff tab)
   TabPane "Pipeline"   -> placeholder (Phase 5)
 CommentEditor (bottom-docked, hidden by default)
 Footer
@@ -158,13 +176,20 @@ Footer
 
 **Overview loading:** `_load_detail()` worker runs on mount, fetches `MRDetail` from the forge API, populates `MROverview` with metadata, and updates the `Markdown` widget with the MR description.
 
-**Diff loading:** `_load_diff()` worker fetches changes via `client.get_mr_diff()`, converts the changes list to unified diff text via `_changes_to_diff_text()`, parses with `parse_diff()`, and passes files to `DiffPanel.set_files()`.
+**Diff loading with parallel discussions fetch (Phase 4):** `_load_diff()` worker calls `_fetch_diff_and_discussions(client)`, which uses `asyncio.create_task()` to fire `get_mr_diff()` and `get_mr_discussions()` concurrently. Discussion fetch failures are caught and silently produce an empty list, so the diff still displays. The results are passed to `DiffPanel.set_files(files, discussions)` which distributes discussions to the file tree and per-line comment maps.
 
 **Tab switching:** both number keys (1-5) and clicking tabs work. `action_focus_tab()` sets `TabbedContent.active` and calls `_on_tab_switch()`. `on_tabbed_content_tab_activated()` handles click-based tab switches.
 
 **Refresh:** `action_refresh()` resets both `_diff_loaded = False` and `_commits_loaded = False`, then re-runs `_load_detail()`. Re-entering the Diff or Commits tab triggers a fresh fetch.
 
-Bindings: Esc/q = back, 1-5 = focus tab, c = general comment, A = approve, U = unapprove, M = merge, X = close, o = open in browser, Ctrl+Y = copy URL to clipboard, Ctrl+R = refresh.
+**Discussion handling (Phase 4):** `MRDetailScreen` handles three new messages from `DiffPanel`:
+- `on_reply_requested(ReplyRequested)`: opens `CommentEditor.open_reply()` with the discussion ID, file, line, and author
+- `on_reply_submitted(ReplySubmitted)`: posts the reply via `client.reply_to_discussion()` and reloads the diff tab
+- `on_resolve_requested(ResolveRequested)`: calls `client.resolve_discussion()` with the toggled resolved state and reloads the diff tab
+
+Both `_post_reply()` and `_resolve_thread()` reset `_diff_loaded = False` and call `_on_tab_switch("diff")` to refresh discussions inline after mutation.
+
+Bindings: Esc/q = back, 1-5 = focus tab, c = general comment, A = approve, U = unapprove, M = merge, X = close, o = open in browser, Ctrl+Y = copy URL to clipboard, Ctrl+R = refresh. Most bindings have `show=False` to reduce footer clutter; all are discoverable via `Ctrl+P` command palette.
 
 ## MR Actions (MRDetailScreen)
 
@@ -197,15 +222,18 @@ Horizontal
                                                  Markdown (#diff-markdown-preview, hidden)
 ```
 
-**DiffFileTree** extends `Tree`. `set_files()` populates the tree with file entries showing status icon (M/A/D/R color-coded), path, and +/- stats. File index stored as `data` on leaf nodes.
+**DiffFileTree** extends `Tree`. `set_files()` populates the tree with file entries showing status icon (M/A/D/R color-coded), basename-only label, and +/- stats as child leaf nodes. When discussions are present, child nodes also show comment counts: unresolved comments in yellow (e.g., "2 comments"), resolved comments dimmed (e.g., "3 resolved"). File index stored as `data` on non-leaf nodes. Each file node is auto-expanded.
 
-**DiffOptionList** extends `OptionList`. Provides per-line cursor navigation and multi-line selection for diff content.
+**DiffOptionList** extends `OptionList`. Provides per-line cursor navigation, multi-line selection, and inline discussion threading for diff content.
 
 Internal state:
 - `_line_map: dict[int, DiffLine]` -- maps option index to DiffLine (only selectable lines)
 - `_line_types: dict[int, LineType]` -- maps option index to LineType (for background coloring)
 - `_current_file: DiffFile | None` -- currently displayed file
 - `_selection_anchor: int | None` -- starting option index of a visual selection (None when no selection)
+- `_comment_map: dict[int, list[Discussion]]` -- maps option index to discussions anchored at that line
+- `_expanded_threads: set[str]` -- set of discussion IDs currently expanded inline
+- `_comment_indices: list[int]` -- sorted list of option indices that have discussions (for `]`/`[` jumping)
 
 Line-level background coloring via `render_line()` override:
 - Injects bgcolor into Textual `VisualStyle` BEFORE calling `_get_option_render()`. This is critical because `Strip.apply_style()` does not work here due to style priority rules; the VisualStyle must be set before the render call.
@@ -223,7 +251,26 @@ Comment/suggest actions:
 - `F3` (`action_suggest`): posts `CommentRequested` with `CommentMode.SUGGEST`, blocks on deletion lines with notification
 - Both clear the selection anchor after posting
 
-**DiffContent** extends `Widget` (not VerticalScroll). Composes `DiffOptionList` + `Markdown` preview widget. `show_file()` populates the option list; `show_placeholder()` for loading/empty states; `toggle_markdown_preview()` switches between diff and rendered markdown for `.md` files.
+Discussion interactions (Phase 4):
+- `]` (`action_next_comment`): jump to next line with a discussion, wrapping around. Uses `bisect.bisect_right` on `_comment_indices` for O(log n) lookup
+- `[` (`action_prev_comment`): jump to previous line with a discussion, wrapping around. Uses `bisect.bisect_left`
+- `d` (`action_toggle_discussion`): expand or collapse all discussion threads on the current line. Posts `_ThreadToggled` message to trigger re-render preserving cursor position
+- `r` (`action_reply_discussion`): posts `ReplyRequested` with the target discussion (first unresolved, or first if all resolved). Bubbles up to `MRDetailScreen` which opens `CommentEditor.open_reply()`
+- `R` (`action_resolve_discussion`): double-press confirmation pattern via `_pending_resolve`. Posts `ResolveRequested` with the toggled resolved state. Checks `disc.resolvable` before proceeding
+
+**New messages (Phase 4):**
+- `ReplyRequested(discussion_id, file, line, author)` -- posted by `DiffOptionList`, handled by `MRDetailScreen`
+- `ResolveRequested(discussion_id, resolved)` -- posted by `DiffOptionList`, handled by `MRDetailScreen`
+- `_ThreadToggled()` -- internal to `DiffContent`, triggers `_show_diff()` re-render while preserving highlighted line
+- `ReplySubmitted(discussion_id, body)` -- posted by `CommentEditor`, handled by `MRDetailScreen`
+
+**Discussion plumbing in DiffContent:**
+- `_build_discussion_index(discussions)` -- indexes inline discussions by `(old_line, new_line)` tuple for O(1) lookup during rendering
+- `_build_comment_lines(discussions)` -- builds `(old_line, new_line) -> all_resolved` map for gutter markers (yellow `*` for unresolved, dim `*` for resolved)
+- `_match_discussions(dl, index)` -- matches a DiffLine to discussions by trying exact `(old, new)` match, then `(None, new)`, then `(old, None)` fallbacks
+- `_render_thread_block(discussions)` -- renders expanded discussion threads as disabled `Option` lines with Rich Markdown body rendering via `rich.markdown.Markdown` + `Console.render_lines()`. Shows author, relative timestamp, resolution status, replies indented
+
+**DiffContent** extends `Widget` (not VerticalScroll). Composes `DiffOptionList` + `Markdown` preview widget. `show_file()` populates the option list and passes per-file discussions for inline threading; `show_placeholder()` for loading/empty states; `toggle_markdown_preview()` switches between diff and rendered markdown for `.md` files. Handles `_ThreadToggled` to re-render the diff with expanded/collapsed threads while preserving cursor position.
 
 **DiffRenderer** handles syntax highlighting and word-level diffs:
 - `render_lines(hunk)` returns `list[tuple[DiffLine | None, Text]]` where `None` indicates a fold marker (non-selectable)
@@ -231,7 +278,7 @@ Comment/suggest actions:
 - Word-level diffs: consecutive deletion+addition blocks are paired; `difflib.SequenceMatcher` highlights changed words with bold+underline
 - Foreground-only styling in render methods; backgrounds come from `DiffOptionList.render_line()`
 
-**DiffPanel** extends `Widget`. Composes `DiffFileTree` + `DiffContent` in a `Horizontal` container. `set_files()` populates the tree and auto-selects the first file. `on_tree_node_selected()` switches the content pane when a file is clicked.
+**DiffPanel** extends `Widget`. Composes `DiffFileTree` + `DiffContent` in a `Horizontal` container. `set_files(files, discussions)` distributes discussions by file path into `_discussions_by_file`, populates the tree (with comment counts), and auto-selects the first file. `on_tree_node_selected()` switches the content pane when a file is clicked, passing per-file discussions to `DiffContent.show_file()`.
 
 Bindings: n = next file, Shift+N = previous file (wraps around), m = toggle markdown preview.
 
@@ -246,9 +293,10 @@ Bindings: n = next file, Shift+N = previous file (wraps around), m = toggle mark
 
 **Bottom-dock pattern:** The widget uses `dock: bottom` CSS with `display: none` by default. Opening it sets `display = True`, which pushes content above upward while keeping it scrollable. Closing (submit or cancel) sets `display = False`. `max-height: 40%` prevents the editor from consuming the entire screen.
 
-**Two modes:**
+**Three modes:**
 - `open_general()` -- general MR comment. Header shows "Add comment".
 - `open_inline(file, line)` -- inline comment on a specific diff line. Header shows the file path and line number. Computes a `DiffPosition` from the diff line via `position_from_diff_line()`.
+- `open_reply(discussion_id, file, line, author)` -- reply to an existing discussion thread. Header shows "Reply to @author on file:line". Stores `_discussion_id` for routing. On submit, posts `ReplySubmitted(discussion_id, body)` instead of `CommentSubmitted`.
 
 **Message flow (decoupled communication):**
 
@@ -268,6 +316,22 @@ DiffOptionList           CommentEditor            MRDetailScreen
   |                           |                        |
   |                           |-- GeneralComment   --->|-- _post_general_comment()
   |                           |   Submitted            |     client.add_comment()
+  |                           |                        |
+  |-- ReplyRequested -------->|                        |
+  |   (discussion_id,         |-- (bubbles up) ------->|-- on_reply_requested()
+  |    file, line, author)    |                        |     opens editor (reply mode)
+  |                           |                        |
+  |                    (user types, submits)            |
+  |                           |                        |
+  |                           |-- ReplySubmitted ----->|-- _post_reply()
+  |                           |   (discussion_id,      |     client.reply_to_discussion()
+  |                           |    body)               |     reloads diff tab
+  |                           |                        |
+  |-- ResolveRequested ------>|                        |
+  |   (discussion_id,         |-- (bubbles up) ------->|-- on_resolve_requested()
+  |    resolved)              |                        |     _resolve_thread()
+  |                           |                        |     client.resolve_discussion()
+  |                           |                        |     reloads diff tab
 ```
 
 `DiffOptionList` posts `CommentRequested` (with `file`, `line`, `mode`, and optional `context_lines` from multi-line selection). `MRDetailScreen.on_comment_requested()` receives it and opens the editor in the appropriate mode. For `CommentMode.SUGGEST`, the suggestion flow uses helpers from `views/suggestion.py` to build the template and format the forge-specific suggestion block. The editor posts `CommentSubmitted` (with `body` + `DiffPosition`) or `GeneralCommentSubmitted` (with `body`). `MRDetailScreen` handles both and posts via the forge client in a `@work(exclusive=True, group="mr-comment")` method.
@@ -285,7 +349,7 @@ Bindings: Ctrl+S / Ctrl+J = submit (priority bindings), Esc = cancel (with guard
 - Lowercase = view/navigate. Uppercase = mutate (with confirmation)
 - `Ctrl+R` = refresh everywhere
 - `Ctrl+Y` = copy URL to clipboard (MRDetailScreen)
-- `Ctrl+P` = command palette (planned)
+- `Ctrl+P` = command palette (context-aware, searches all available actions)
 - `?` = contextual help
 - `j/k` = navigate in lists/trees
 - `q` / `Esc` = back/quit
@@ -300,8 +364,15 @@ Bindings: Ctrl+S / Ctrl+J = submit (priority bindings), Esc = cancel (with guard
 - `A/U/M/X` = approve/unapprove/merge/close (MRDetailScreen, double-press to confirm)
 - `/` = search (RepoListScreen: live filter)
 - `f` = cycle forge filter (RepoListScreen: None -> GH -> GL -> None)
+- `]` = jump to next comment (DiffOptionList, wraps around)
+- `[` = jump to previous comment (DiffOptionList, wraps around)
+- `d` = toggle discussion thread expand/collapse (DiffOptionList)
+- `r` = reply to discussion (DiffOptionList, opens CommentEditor in reply mode)
+- `R` = resolve/unresolve discussion (DiffOptionList, double-press to confirm)
 
 Current bindings are defined as `BINDINGS` lists on each Screen class. Format: `Binding(key, action_name, description, show=True/False)`.
+
+**Footer cleanup (Phase 4):** Most MRDetailScreen bindings use `show=False` to keep the footer minimal. Only essential bindings (Back, Comment, Approve, Merge, Refresh) are visible by default. All actions are discoverable via `Ctrl+P` command palette. DiffOptionList bindings for comment navigation (`]`, `[`) and thread interaction (`d`, `r`, `R`) use `show=True` with `key_display` overrides for the bracket keys.
 
 ## How to Add a New Screen
 
@@ -358,5 +429,4 @@ All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_s
 ## Planned Views (Phase 5+)
 
 - `PipelineListScreen` / `PipelineDetailScreen` / `JobLogScreen`
-- Discussion tab content for MRDetailScreen
 - Pipeline tab content for MRDetailScreen

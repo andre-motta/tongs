@@ -163,7 +163,14 @@ The foreground/background split is intentional: `Strip.apply_style()` cannot rel
 
 The `create_inline_comment` ABC accepts optional `start_line`/`start_side` to support this.
 
+## Comment Anchors in Gutter (Phase 4)
+
+The `DiffRenderer._gutter()` method renders a comment marker `*` in the gutter for lines that have discussions:
+- Yellow bold `*` for lines with unresolved discussions
+- Dim `*` for lines where all discussions are resolved
+
+The gutter lookup uses a `comment_lines: dict[tuple[int | None, int | None], bool]` map (built by `_build_comment_lines()`), where the bool indicates whether all discussions at that position are resolved. The key is `(old_lineno, new_lineno)` matching the DiffLine's line numbers.
+
 ## Planned Features
 
 - **Virtual scrolling:** only materialize visible lines as Rich Text objects
-- **Comment anchors in gutter:** markers for existing comments, drafts, resolved threads

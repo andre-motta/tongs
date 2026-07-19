@@ -27,7 +27,7 @@ class RepoListScreen(Screen):
         Binding("q", "go_back", "Back", show=False),
         Binding("slash", "start_search", "Filter", show=True, key_display="/"),
         Binding("f", "cycle_forge", "Forge", show=True),
-        Binding("ctrl+r", "refresh", "Refresh", show=True),
+        Binding("ctrl+r", "refresh", "Refresh", show=False),
     ]
 
     forge_filter: reactive[ForgeType | None] = reactive(None)

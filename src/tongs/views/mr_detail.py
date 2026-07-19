@@ -8,7 +8,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
+from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
 from tongs.forges.models import CIStatus, MRDetail, MRSummary
 from tongs.widgets.diff_panel import DiffPanel
@@ -51,9 +51,6 @@ class MROverview(Static):
             f"Changes: +{mr.additions or 0} -{mr.deletions or 0}\n"
         )
 
-        if mr.description:
-            meta += f"\n---\n\n{escape(mr.description)}"
-
         self.update(meta)
 
 
@@ -83,6 +80,7 @@ class MRDetailScreen(Screen):
         with TabbedContent(initial="overview"):
             with TabPane("Overview", id="overview"):
                 yield MROverview(id="mr-overview")
+                yield Markdown(id="mr-description")
             with TabPane("Diff", id="diff"):
                 yield DiffPanel(id="diff-panel")
             with TabPane("Discussion", id="discussion"):
@@ -106,6 +104,8 @@ class MRDetailScreen(Screen):
             )
             overview = self.query_one("#mr-overview", MROverview)
             overview.set_mr(self.mr_detail)
+            description_widget = self.query_one("#mr-description", Markdown)
+            description_widget.update(self.mr_detail.description or "")
         except Exception as exc:
             self.notify(
                 f"Could not load MR details. Try Ctrl+R to refresh. ({exc})",

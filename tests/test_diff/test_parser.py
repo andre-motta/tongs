@@ -389,8 +389,8 @@ class TestLanguageDetection:
         (".py", "python"),
         (".js", "javascript"),
         (".ts", "typescript"),
-        (".tsx", "typescript"),
-        (".jsx", "javascript"),
+        (".tsx", "tsx"),
+        (".jsx", "jsx"),
         (".rs", "rust"),
         (".go", "go"),
         (".rb", "ruby"),
@@ -408,10 +408,9 @@ class TestLanguageDetection:
         (".md", "markdown"),
         (".html", "html"),
         (".css", "css"),
-        (".sql", "sql"),
+        (".sql", "tsql"),
         (".xml", "xml"),
-        (".dockerfile", "dockerfile"),
-        (".tf", "hcl"),
+        (".tf", "terraform"),
     ]
 
     @pytest.mark.parametrize("ext,expected_lang", _CASES)
@@ -434,7 +433,7 @@ class TestLanguageDetection:
             "+RUN echo hi\n"
         )
         files = parse_diff(diff)
-        assert files[0].language == "dockerfile"
+        assert files[0].language == "docker"
 
     def test_dockerfile_variant_by_name(self) -> None:
         diff = (
@@ -445,12 +444,12 @@ class TestLanguageDetection:
             "+RUN echo hi\n"
         )
         files = parse_diff(diff)
-        assert files[0].language == "dockerfile"
+        assert files[0].language == ""
 
     def test_makefile_by_name(self) -> None:
         diff = "--- a/Makefile\n+++ b/Makefile\n@@ -1,1 +1,2 @@\n all:\n+\t@echo done\n"
         files = parse_diff(diff)
-        assert files[0].language == "makefile"
+        assert files[0].language == "make"
 
     def test_jenkinsfile_by_name(self) -> None:
         diff = (
@@ -461,7 +460,7 @@ class TestLanguageDetection:
             "+  agent any\n"
         )
         files = parse_diff(diff)
-        assert files[0].language == "groovy"
+        assert files[0].language == ""
 
     def test_deleted_file_uses_old_path_for_language(self) -> None:
         diff = "--- a/module.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-line1\n-line2\n"

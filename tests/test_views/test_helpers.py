@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tongs.forges.models import CIStatus
-from tongs.views.inbox import _ci_icon, _relative_time
+from tongs.widgets.mr_table import _ci_icon, _relative_time
 
 
 class TestCiIconRichMode:

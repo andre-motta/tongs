@@ -9,7 +9,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header
 
 from tongs.scanner.repo import Repo
-from tongs.views.inbox import MRTable
+from tongs.widgets.mr_table import MRTable
 
 
 class MRListScreen(Screen):

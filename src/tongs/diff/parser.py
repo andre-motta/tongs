@@ -13,7 +13,6 @@ unified diff format. The parser handles:
 from __future__ import annotations
 
 import re
-from pathlib import PurePosixPath
 
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, FileStatus, LineType
 
@@ -23,37 +22,6 @@ FILE_HEADER_RE = re.compile(r"^--- (.+)$")
 FILE_HEADER_NEW_RE = re.compile(r"^\+\+\+ (.+)$")
 
 DIFF_GIT_RE = re.compile(r"^diff --git a/(.+) b/(.+)$")
-
-LANGUAGE_MAP = {
-    ".py": "python",
-    ".js": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".jsx": "javascript",
-    ".rs": "rust",
-    ".go": "go",
-    ".rb": "ruby",
-    ".java": "java",
-    ".c": "c",
-    ".cpp": "cpp",
-    ".h": "c",
-    ".hpp": "cpp",
-    ".cs": "csharp",
-    ".sh": "bash",
-    ".bash": "bash",
-    ".zsh": "bash",
-    ".yaml": "yaml",
-    ".yml": "yaml",
-    ".json": "json",
-    ".toml": "toml",
-    ".md": "markdown",
-    ".html": "html",
-    ".css": "css",
-    ".sql": "sql",
-    ".xml": "xml",
-    ".dockerfile": "dockerfile",
-    ".tf": "hcl",
-}
 
 
 def parse_diff(diff_text: str) -> list[DiffFile]:
@@ -366,17 +334,13 @@ def _strip_prefix(path: str) -> str:
 
 
 def _detect_language(path: str) -> str:
-    """Detect programming language from file extension."""
+    """Detect programming language from file path using Pygments."""
     if path == "/dev/null":
         return ""
-    suffix = PurePosixPath(path).suffix.lower()
-    if suffix in LANGUAGE_MAP:
-        return LANGUAGE_MAP[suffix]
-    name = PurePosixPath(path).name.lower()
-    if name == "dockerfile" or name.startswith("dockerfile."):
-        return "dockerfile"
-    if name == "makefile":
-        return "makefile"
-    if name == "jenkinsfile":
-        return "groovy"
-    return ""
+    try:
+        from pygments.lexers import get_lexer_for_filename
+
+        lexer = get_lexer_for_filename(path)
+        return lexer.aliases[0] if lexer.aliases else lexer.name.lower()
+    except Exception:
+        return ""

@@ -4,8 +4,10 @@ import sys
 
 
 def main() -> int:
-    print("tongs: multi-forge MR/CI management TUI")
-    print("coming soon -- https://github.com/andre-motta/tongs")
+    from tongs.app import TongsApp
+
+    app = TongsApp()
+    app.run()
     return 0
 
 

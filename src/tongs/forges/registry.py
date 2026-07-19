@@ -83,6 +83,14 @@ class ForgeRegistry:
         self._clients[hostname] = client
         return client
 
+    def active_hostnames(self) -> list[str]:
+        """Return all known hostnames (configured + discovered)."""
+        defaults = {"gitlab.com", "github.com"}
+        all_hosts = (
+            defaults | set(self._extra_gitlab_hosts) | set(self._extra_github_hosts)
+        )
+        return sorted(all_hosts)
+
     async def close_all(self) -> None:
         """Close all cached clients."""
         for client in self._clients.values():

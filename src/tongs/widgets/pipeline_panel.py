@@ -357,9 +357,7 @@ class PipelinePanel(Widget, can_focus=True):
                 self._job_card_map[card_idx] = job_idx
                 card_idx += 1
 
-    def set_job_log(
-        self, log_text: str, job: PipelineJob, pipeline: Pipeline
-    ) -> None:
+    def set_job_log(self, log_text: str, job: PipelineJob, pipeline: Pipeline) -> None:
         self._current_job = job
         self._current_pipeline = pipeline
         self._job_log_text = log_text

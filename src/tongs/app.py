@@ -83,14 +83,19 @@ class TongsApp(App):
     ):
         super().__init__()
         self.config = config or load_config(config_path)
+        from tongs.cache.store import CacheStore
+
+        self.cache = CacheStore(max_size_mb=self.config.max_cache_size_mb)
         self.forge_registry = ForgeRegistry(
             extra_gitlab_hosts=self.config.extra_gitlab_hosts,
             extra_github_hosts=self.config.extra_github_hosts,
             request_timeout=self.config.request_timeout,
+            cache=self.cache,
         )
         self.repos: list[Repo] = []
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
+        await self.cache.open()
         self.push_screen("inbox")
         self._discover_repos()
 
@@ -128,6 +133,7 @@ class TongsApp(App):
 
     async def on_unmount(self) -> None:
         await self.forge_registry.close_all()
+        await self.cache.close()
 
     def action_help(self) -> None:
         self.notify("Help: press ? for keybindings, Ctrl+P for command palette")

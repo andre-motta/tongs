@@ -65,6 +65,36 @@ def _review_comment_json(overrides: dict | None = None) -> dict:
     return data
 
 
+_GHE_HOST = ForgeHost(
+    hostname="github.corp.example.com",
+    forge_type=ForgeType.GITHUB,
+    api_base="https://github.corp.example.com/api/v3",
+)
+
+
+class TestGraphQLProperties:
+    def test_graphql_url_github_com(self):
+        """github.com uses api.github.com/graphql."""
+        transport = httpx.MockTransport(lambda _: httpx.Response(200))
+        http = httpx.AsyncClient(transport=transport, base_url=_TEST_HOST.api_base)
+        client = GitHubClient(_TEST_HOST, http)
+        assert client._graphql_url == "https://api.github.com/graphql"
+
+    def test_graphql_url_ghe(self):
+        """GHE hostname uses hostname/api/graphql."""
+        transport = httpx.MockTransport(lambda _: httpx.Response(200))
+        http = httpx.AsyncClient(transport=transport, base_url=_GHE_HOST.api_base)
+        client = GitHubClient(_GHE_HOST, http)
+        assert client._graphql_url == "https://github.corp.example.com/api/graphql"
+
+    def test_supports_thread_resolution_true(self):
+        """GitHubClient advertises thread resolution support."""
+        transport = httpx.MockTransport(lambda _: httpx.Response(200))
+        http = httpx.AsyncClient(transport=transport, base_url=_TEST_HOST.api_base)
+        client = GitHubClient(_TEST_HOST, http)
+        assert client.supports_thread_resolution is True
+
+
 class TestCreateInlineComment:
     @pytest.mark.asyncio
     async def test_single_line_no_start_line_or_start_side(self):

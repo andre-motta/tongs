@@ -31,6 +31,7 @@ dependencies = [
     "httpx>=0.27",
     "platformdirs>=4.0",
     "pyperclip>=1.8",
+    "aiosqlite>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,7 @@ fleet = ["claude-fleet-monitor>=0.1"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "mkdocs-material>=9.0",
 ]
 
 [project.urls]
@@ -49,6 +51,7 @@ Issues = "https://github.com/andre-motta/tongs/issues"
 
 [project.scripts]
 tongs = "tongs.__main__:main"
+tongs-mcp = "tongs.mcp.server:main"
 
 [tool.hatch.version]
 source = "vcs"

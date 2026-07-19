@@ -91,11 +91,42 @@ def _split_repo_path(repo_path: str) -> tuple[str, str]:
 
 
 class GitHubClient(ForgeClient):
-    """GitHub REST API client."""
+    """GitHub REST + GraphQL API client."""
 
     def __init__(self, host: ForgeHost, http_client: httpx.AsyncClient):
         self._host = host
         self._http = http_client
+
+    @property
+    def _graphql_url(self) -> str:
+        if self._host.hostname == "github.com":
+            return "https://api.github.com/graphql"
+        return f"https://{self._host.hostname}/api/graphql"
+
+    async def _graphql(self, query: str, variables: dict | None = None) -> dict:
+        """Execute a GraphQL query against GitHub's API."""
+        payload: dict = {"query": query}
+        if variables:
+            payload["variables"] = variables
+        try:
+            response = await self._http.post(self._graphql_url, json=payload)
+        except httpx.TimeoutException as e:
+            raise NetworkError(
+                f"GraphQL request timed out: {redact_credentials(str(e))}"
+            ) from e
+        except httpx.TransportError as e:
+            raise NetworkError(
+                f"GraphQL transport error: {redact_credentials(str(e))}"
+            ) from e
+        if response.status_code >= 400:
+            raise map_http_error(response)
+        data = response.json()
+        if "errors" in data:
+            msg = data["errors"][0].get("message", "GraphQL error")
+            from tongs.errors import ForgeError
+
+            raise ForgeError(redact_credentials(msg))
+        return data.get("data", {})
 
     async def list_mrs(
         self,
@@ -201,13 +232,14 @@ class GitHubClient(ForgeClient):
         discussions = []
         for comment in data:
             root = self._parse_review_comment(comment)
+            is_inline = bool(comment.get("path"))
             discussions.append(
                 Discussion(
                     id=str(comment["id"]),
-                    is_inline=bool(comment.get("path")),
+                    is_inline=is_inline,
                     root_comment=root,
                     is_resolved=False,
-                    resolvable=False,
+                    resolvable=is_inline,
                 )
             )
         return discussions
@@ -271,7 +303,64 @@ class GitHubClient(ForgeClient):
         discussion_id: str,
         resolved: bool,
     ) -> None:
-        """No-op: GitHub REST API does not support per-thread resolution. Check supports_thread_resolution before calling."""
+        """Resolve/unresolve a review thread via GraphQL."""
+        owner, repo = _split_repo_path(repo_path)
+        thread_node_id = await self._find_thread_node_id(
+            owner, repo, number, int(discussion_id)
+        )
+        if not thread_node_id:
+            from tongs.errors import ForgeError
+
+            raise ForgeError("Could not find review thread for this comment")
+        if resolved:
+            await self._graphql(
+                "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { reviewThread { isResolved } } }",
+                {"id": thread_node_id},
+            )
+        else:
+            await self._graphql(
+                "mutation($id: ID!) { unresolveReviewThread(input: {threadId: $id}) { reviewThread { isResolved } } }",
+                {"id": thread_node_id},
+            )
+
+    async def _find_thread_node_id(
+        self, owner: str, repo: str, number: int, comment_id: int
+    ) -> str | None:
+        """Find the GraphQL node ID of the review thread containing a comment."""
+        query = """
+        query($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                    reviewThreads(first: 100) {
+                        nodes {
+                            id
+                            comments(first: 1) {
+                                nodes { databaseId }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = await self._graphql(
+            query, {"owner": owner, "repo": repo, "number": number}
+        )
+        threads = (
+            data.get("repository", {})
+            .get("pullRequest", {})
+            .get("reviewThreads", {})
+            .get("nodes", [])
+        )
+        for thread in threads:
+            comments = thread.get("comments", {}).get("nodes", [])
+            if comments and comments[0].get("databaseId") == comment_id:
+                return thread["id"]
+        return None
+
+    @property
+    def supports_thread_resolution(self) -> bool:
+        return True
 
     async def submit_review(
         self,

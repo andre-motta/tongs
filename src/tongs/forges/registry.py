@@ -30,10 +30,12 @@ class ForgeRegistry:
         extra_gitlab_hosts: frozenset[str] = frozenset(),
         extra_github_hosts: frozenset[str] = frozenset(),
         request_timeout: float = 30.0,
+        cache: object | None = None,
     ):
         self._extra_gitlab_hosts = extra_gitlab_hosts
         self._extra_github_hosts = extra_github_hosts
         self._timeout = request_timeout
+        self._cache = cache
         self._clients: dict[str, ForgeClient] = {}
         self._hosts: dict[str, ForgeHost] = {}
 

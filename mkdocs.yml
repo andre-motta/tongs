@@ -1,0 +1,57 @@
+site_name: tongs
+site_description: Terminal-native code review across GitHub and GitLab
+site_url: https://tongs.tools
+repo_url: https://github.com/andre-motta/tongs
+repo_name: andre-motta/tongs
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - content.tabs.link
+    - search.highlight
+    - search.suggest
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - pymdownx.keys
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Guides:
+      - Inbox: guides/inbox.md
+      - Diff viewer: guides/diffs.md
+      - Discussions: guides/discussions.md
+      - Pipelines: guides/pipelines.md
+  - Reference:
+      - Keybindings: reference/keybindings.md
+      - Configuration: reference/configuration.md

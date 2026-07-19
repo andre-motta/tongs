@@ -182,7 +182,7 @@ class InboxScreen(Screen):
                     pass
                 except (ForgeError, Exception) as exc:
                     self.notify(
-                        f"[dim]{hostname}:[/] {exc}",
+                        f"[dim]Reviews {hostname}:[/] {exc}",
                         severity="warning",
                     )
         finally:
@@ -209,7 +209,7 @@ class InboxScreen(Screen):
                     pass
                 except (ForgeError, Exception) as exc:
                     self.notify(
-                        f"[dim]{hostname}:[/] {exc}",
+                        f"[dim]My MRs {hostname}:[/] {exc}",
                         severity="warning",
                     )
         finally:

@@ -29,8 +29,7 @@ class ForgeClient(ABC):
         self,
         repo_path: str,
         state: str = "open",
-        per_page: int = 20,
-        page: int = 1,
+        per_page: int = 100,
     ) -> list[MRSummary]: ...
 
     @abstractmethod

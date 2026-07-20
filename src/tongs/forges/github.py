@@ -132,15 +132,14 @@ class GitHubClient(ForgeClient):
         self,
         repo_path: str,
         state: str = "open",
-        per_page: int = 20,
-        page: int = 1,
+        per_page: int = 100,
     ) -> list[MRSummary]:
         owner, repo = _split_repo_path(repo_path)
-        data = await request(
+        data = await paginate(
             self._http,
-            "GET",
             f"/repos/{owner}/{repo}/pulls",
-            params={"state": state, "per_page": per_page, "page": page},
+            per_page=per_page,
+            params={"state": state},
         )
         return [self._parse_pr_summary(pr, repo_path) for pr in data]
 
@@ -155,7 +154,7 @@ class GitHubClient(ForgeClient):
             self._http,
             "GET",
             "/search/issues",
-            params={"q": query, "per_page": 30},
+            params={"q": query, "per_page": 100},
         )
         results = []
         for item in data.get("items", []):

@@ -33,6 +33,7 @@ def parse_remote_url(
     hostname, repo_path = _extract_host_and_path(url)
     if not hostname or not repo_path:
         return None
+    repo_path = repo_path.strip("/")
 
     hostname = _normalize_hostname(hostname)
     forge_type = _detect_forge_type(hostname, extra_gitlab_hosts, extra_github_hosts)

@@ -85,35 +85,34 @@ class GitLabClient(ForgeClient):
         self,
         repo_path: str,
         state: str = "opened",
-        per_page: int = 20,
-        page: int = 1,
+        per_page: int = 100,
     ) -> list[MRSummary]:
         project = _encode_project(repo_path)
         gitlab_state = "opened" if state == "open" else state
-        data = await request(
+        data = await paginate(
             self._http,
-            "GET",
             f"/projects/{project}/merge_requests",
-            params={"state": gitlab_state, "per_page": per_page, "page": page},
+            per_page=per_page,
+            params={"state": gitlab_state},
         )
         return [self._parse_mr_summary(mr, repo_path) for mr in data]
 
     async def list_my_reviews(self) -> list[MRSummary]:
         user_data = await request(self._http, "GET", "/user")
         username = user_data.get("username", "")
-        data = await request(
+        data = await paginate(
             self._http,
-            "GET",
             "/merge_requests",
+            per_page=100,
             params={"scope": "all", "reviewer_username": username, "state": "opened"},
         )
         return [self._parse_mr_summary(mr, self._extract_repo_path(mr)) for mr in data]
 
     async def list_my_mrs(self) -> list[MRSummary]:
-        data = await request(
+        data = await paginate(
             self._http,
-            "GET",
             "/merge_requests",
+            per_page=100,
             params={"scope": "created_by_me", "state": "opened"},
         )
         return [self._parse_mr_summary(mr, self._extract_repo_path(mr)) for mr in data]

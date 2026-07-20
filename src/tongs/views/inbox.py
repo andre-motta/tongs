@@ -220,7 +220,7 @@ class InboxScreen(Screen):
                 return
             registry = self.app.forge_registry
             semaphore = asyncio.Semaphore(self.app.config.max_parallel)
-            failed_hosts: set[str] = set()
+            failed_hosts: dict[str, str] = {}
 
             async def fetch_repo(repo):
                 async with semaphore:
@@ -234,15 +234,16 @@ class InboxScreen(Screen):
                         for mr in mrs:
                             table.add_mr_row(mr, self.app.config.ascii_mode)
                     except NotImplementedError:
-                        failed_hosts.add(repo.hostname)
-                    except Exception:
-                        failed_hosts.add(repo.hostname)
+                        failed_hosts[repo.hostname] = "not supported"
+                    except Exception as exc:
+                        failed_hosts[repo.hostname] = str(exc)
 
             await asyncio.gather(*(fetch_repo(r) for r in repos))
 
             if failed_hosts:
+                details = "; ".join(f"{h}: {e}" for h, e in failed_hosts.items())
                 self.notify(
-                    f"[dim]Skipped {len(failed_hosts)} unreachable host(s)[/]",
+                    f"[dim]Skipped host(s): {details}[/]",
                     severity="warning",
                 )
         finally:

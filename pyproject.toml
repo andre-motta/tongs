@@ -53,6 +53,9 @@ Issues = "https://github.com/andre-motta/tongs/issues"
 tongs = "tongs.__main__:main"
 tongs-mcp = "tongs.mcp.server:main"
 
+[project.entry-points."tongs.plugins"]
+mcp = "tongs.mcp.plugin:MCPPlugin"
+
 [tool.hatch.version]
 source = "vcs"
 

@@ -52,11 +52,14 @@ class TongsCommandProvider(Provider):
         return commands
 
     def _global_commands(self, app) -> list[tuple[str, str, object]]:
-        return [
+        commands = [
             ("Repos", "Open repository list", lambda: app.push_screen("repo_list")),
             ("Inbox", "Open MR inbox", lambda: app.push_screen("inbox")),
             ("Help", "Show help", lambda: app.action_help()),
         ]
+        if hasattr(app, "plugin_registry"):
+            commands.extend(app.plugin_registry.get_all_commands())
+        return commands
 
     def _inbox_commands(self, screen) -> list[tuple[str, str, object]]:
         return [

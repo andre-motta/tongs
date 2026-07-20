@@ -93,9 +93,14 @@ class TongsApp(App):
             cache=self.cache,
         )
         self.repos: list[Repo] = []
+        from tongs.plugins.registry import PluginRegistry
+
+        self.plugin_registry = PluginRegistry()
 
     async def on_mount(self) -> None:
         await self.cache.open()
+        self.plugin_registry.discover(self.config.plugin_config)
+        await self.plugin_registry.on_app_ready(self)
         self.push_screen("inbox")
         self._discover_repos()
 
@@ -132,6 +137,7 @@ class TongsApp(App):
             webbrowser.open(url)
 
     async def on_unmount(self) -> None:
+        await self.plugin_registry.on_app_shutdown(self)
         await self.forge_registry.close_all()
         await self.cache.close()
 

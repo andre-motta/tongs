@@ -134,7 +134,9 @@ Key details:
 
 **submit_review implementation:** GitHub natively supports batched reviews. `submit_review()` posts to `/repos/{owner}/{repo}/pulls/{number}/reviews` with event (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`), body, and optional inline comments in a single API call. `supports_batched_review` returns `True`.
 
-**Thread resolution:** `resolve_discussion()` is a documented no-op. GitHub REST API does not support per-thread resolution (it requires GraphQL). `supports_thread_resolution` is not overridden (defaults to `False`). Callers should check this property before attempting resolution.
+**Thread resolution (Phase 7):** `resolve_discussion()` uses GraphQL mutations to resolve/unresolve review threads. The `_graphql()` helper method handles GraphQL requests (POST to `/graphql` or `/api/graphql` for enterprise). `_find_thread_node_id()` queries `pullRequest.reviewThreads` to find the thread containing a given comment by `databaseId`, then `resolveReviewThread`/`unresolveReviewThread` mutations toggle resolution. `supports_thread_resolution` returns `True`.
+
+**GraphQL helper:** `_graphql(query, variables)` is a private method on `GitHubClient` that POSTs to the GraphQL endpoint. It handles timeouts, transport errors, and GraphQL-level errors (from the `errors` key in the response). The endpoint URL is `https://api.github.com/graphql` for `github.com` or `https://{hostname}/api/graphql` for enterprise instances.
 
 **Multi-line comment support:** `create_inline_comment()` accepts optional `start_line` and `start_side` parameters. When provided, these are included in the REST payload to create multi-line review comments. GitLab does not use these parameters; its multi-line range is encoded in the suggestion fence syntax instead.
 
@@ -143,6 +145,8 @@ Key details:
 **Commit listing:** `list_mr_commits()` paginates `/repos/{owner}/{repo}/pulls/{number}/commits` and returns `list[Commit]`. Author is parsed from the top-level `author` (GitHub user), not `commit.author` (git author name).
 
 **PR-scoped workflow runs (Phase 5):** `list_mr_pipelines()` first fetches the PR to get the head branch ref, then GETs `/repos/{owner}/{repo}/actions/runs?branch={branch}`. `retry_pipeline()` POSTs to `/actions/runs/{id}/rerun-failed-jobs`. `cancel_job` and `supports_job_cancel` are not overridden (GitHub Actions jobs are canceled at the run level via `cancel_pipeline`).
+
+**Capability summary:** `supports_batched_review = True`, `supports_thread_resolution = True` (via GraphQL), `supports_unapprove = False`, `supports_job_cancel = False`.
 
 ## Adding a New Forge Backend
 
@@ -180,7 +184,7 @@ Key details:
 | HTTP transport + error mapping | Complete |
 | ForgeRegistry | Complete (GitHub + GitLab wired) |
 | GitLabClient | Complete (all ABC methods) |
-| GitHubClient | Complete (all ABC methods; CI status from PR list is UNKNOWN) |
+| GitHubClient | Complete (all ABC methods; CI status from PR list is UNKNOWN; thread resolution via GraphQL) |
 | GitHub CI check-runs | Not implemented (requires separate API call per PR) |
 | Keyring auth | Planned (future) |
 | Rate limit auto-retry | Error raised, UI retry planned |

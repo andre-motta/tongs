@@ -262,9 +262,72 @@ hostname = "github.corp.com"
 forge_type = "github"
 ```
 
-## MCP server
+## Plugin system
 
-tongs ships an optional [Model Context Protocol](https://modelcontextprotocol.io) server that lets AI assistants interact with your merge requests programmatically.
+tongs uses a plugin architecture based on Python entry points. The MCP server, for example, is itself a plugin. You can extend tongs with new commands, screens, and lifecycle hooks by writing your own.
+
+### Writing a plugin
+
+1. Subclass `TongsPlugin`:
+
+```python
+from tongs.plugins.base import TongsPlugin
+
+class MyPlugin(TongsPlugin):
+    @property
+    def name(self) -> str:
+        return "my-plugin"
+
+    @property
+    def version(self) -> str:
+        return "0.1.0"
+
+    async def on_app_ready(self, app) -> None:
+        """Called after the TUI app is mounted."""
+
+    async def on_app_shutdown(self, app) -> None:
+        """Called before app exit."""
+
+    def get_commands(self) -> list[tuple[str, str, object]]:
+        """Return (display, help_text, callback) tuples for the command palette."""
+        return [("My Action", "Does something useful", self._do_it)]
+
+    def get_screens(self) -> dict[str, type]:
+        """Return screen_name -> Screen class mappings."""
+        return {}
+```
+
+2. Register it as an entry point in your package's `pyproject.toml`:
+
+```toml
+[project.entry-points."tongs.plugins"]
+my-plugin = "my_package.plugin:MyPlugin"
+```
+
+3. Install your package (or `pip install -e .` for development) and tongs discovers it automatically on startup.
+
+### Plugin configuration
+
+Plugins are enabled by default. To disable a plugin, add a `[plugins.<name>]` section to your config:
+
+```toml
+# ~/.config/tongs/config.toml
+[plugins.mcp]
+enabled = false
+```
+
+### Plugin hooks
+
+| Hook | When it fires |
+|------|---------------|
+| `on_app_ready(app)` | After the TUI mounts |
+| `on_app_shutdown(app)` | Before app exit |
+| `get_commands()` | Command palette collects entries |
+| `get_screens()` | Screen registry collects routes |
+
+## MCP server (plugin)
+
+tongs ships an optional [Model Context Protocol](https://modelcontextprotocol.io) server, packaged as a built-in plugin, that lets AI assistants interact with your merge requests programmatically.
 
 ### Install
 
@@ -278,7 +341,7 @@ pip install tongs[mcp]
 tongs-mcp
 ```
 
-The server communicates over stdio, so you can wire it into any MCP-compatible client (Claude Code, Claude Desktop, etc.). It reuses the same forge configuration and auth tokens as the TUI, so no extra setup is needed.
+The server communicates over stdio, so you can wire it into any MCP-compatible client (Claude Code, Claude Desktop, etc.). It reuses the same forge configuration and auth tokens as the TUI, so no extra setup is needed. The MCP plugin also adds a "Start MCP Server" command to the command palette.
 
 ### Tools
 
@@ -311,6 +374,7 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 | Approve / Merge | Yes | No | Yes |
 | Command palette | Yes | No | N/A |
 | MCP server (AI integration) | Yes | No | No |
+| Plugin system | Yes | No | No |
 | SQLite offline cache | Yes | No | N/A |
 | Zero config auth | Yes | Yes | N/A |
 | Self-hosted forges | Yes | Yes | N/A |
@@ -324,14 +388,14 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 | 3 | MR actions (approve, merge, close), inline comments, suggested changes | Done |
 | 4 | Discussion threads (inline + card-based tab with diff snippets), command palette, comment navigation, cross-tab jump-to-diff | Done |
 | 5 | Pipeline/CI management (three-level drill-down, job logs, retry, cancel, log search) | Done |
-| 6 | Plugin system | Deferred ([#2](https://github.com/andre-motta/tongs/issues/2)) |
+| 6 | Plugin system (entry-point-based, MCP refactored as plugin) | Done |
 | 7 | SQLite caching, MCP server, GitHub thread resolution, MkDocs site | Done |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add forge backends. 551 tests and growing.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add forge backends. 573 tests and growing.
 
-tongs is early enough that contributions shape the architecture. The plugin system ([#2](https://github.com/andre-motta/tongs/issues/2)) is the main open design area. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
+tongs is early enough that contributions shape the architecture. The [plugin system](#plugin-system) makes it easy to add new commands, screens, and lifecycle hooks without touching core code. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 
 ## Why "tongs"?
 

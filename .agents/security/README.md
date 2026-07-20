@@ -87,9 +87,11 @@ if branch and head_repo == repo_path:
     await request(self._http, "DELETE", f"/repos/{owner}/{repo}/git/refs/heads/{branch}")
 ```
 
-## resolve_discussion Documentation Requirement (Phase 3)
+## GitHub Thread Resolution via GraphQL (Phase 7)
 
-`GitHubClient.resolve_discussion()` is a documented no-op because the GitHub REST API does not support per-thread resolution (this would require GraphQL). The `supports_thread_resolution` property returns `False` (the default). Callers must check this property before calling `resolve_discussion()`, and the UI must not show resolution controls for GitHub PRs. The method has an explicit docstring explaining the limitation rather than silently doing nothing.
+`GitHubClient.resolve_discussion()` now uses GraphQL mutations (`resolveReviewThread`/`unresolveReviewThread`) to resolve and unresolve review threads. The `_find_thread_node_id()` method queries `pullRequest.reviewThreads` to map a comment's `databaseId` to the thread's GraphQL node ID. `supports_thread_resolution` returns `True`.
+
+The `_graphql()` helper sends POST requests to the GraphQL endpoint with the user's Bearer token (same `httpx.AsyncClient`). Error handling follows the same patterns as REST: timeouts raise `NetworkError`, transport errors raise `NetworkError`, HTTP 4xx/5xx raise mapped `ForgeError` subclasses, and GraphQL-level errors (from the response `errors` key) raise `ForgeError` with redacted messages.
 
 ## Self-Approval Error Handling
 
@@ -114,7 +116,7 @@ Only make API calls to hostnames that are either:
 - Never store tokens in config files (`config.toml`)
 - Never pass tokens as CLI arguments (visible in `ps` output)
 - Never set tokens in environment variables from within the application
-- Never include tokens in cache (SQLite, planned)
+- Never include tokens in cache (CacheStore enforces this; only API response bodies are cached)
 - Never include tokens in audit logs
 - Never log raw HTTP request/response headers (contain `Authorization: Bearer`)
 - Never display tokens in the TUI (error messages, notifications, diff content)
@@ -140,16 +142,49 @@ For external editor integration (CommentEditor F2 binding and PipelinePanel F2 j
 - Platform gate: `app.suspend()` not available on Windows
 - Job log temp files use `.log` suffix with `tongs-{job_name}-` prefix
 
-## MCP Server Security (Planned)
+## Cache Store Security (Phase 7)
 
+`src/tongs/cache/store.py:CacheStore` uses aiosqlite for async SQLite caching.
+
+**File permissions:**
+- Cache directory created with `mode=0o700`
+- Database file created with `os.open(..., os.O_CREAT | os.O_RDWR, 0o600)` before aiosqlite opens it
+- Only the owning user can read/write the cache
+
+**Data exclusions:** Keys with `_EXCLUDED_PREFIXES` (`"job_log:"`, `"stream_log:"`) are never cached. This prevents large, potentially sensitive CI log data from persisting on disk.
+
+**No credential storage:** Tokens are never included in cache keys or values. Only forge API response bodies (MR metadata, diffs, pipeline data) are cached. Auth is handled entirely by the `httpx.AsyncClient` session headers.
+
+**WAL mode:** `PRAGMA journal_mode=WAL` enables concurrent reads during writes, reducing lock contention. The WAL file (`cache.db-wal`) inherits the database file's permissions.
+
+**LRU eviction:** When total cache size exceeds `max_size_bytes`, `_enforce_size_limit()` evicts the oldest 25% of entries by `created_at` timestamp. `get()` touches `created_at` on hit (LRU behavior).
+
+## MCP Server Security
+
+`src/tongs/mcp/server.py` exposes forge operations as MCP tools.
+
+**Security boundaries:**
 - High-level tools only: `list_mrs`, `get_mr`, `get_mr_diff`, `post_comment`, `approve_mr`, `list_pipelines`
-- No raw API exposure
-- No auth primitives in MCP I/O
-- Separate entry point from TUI
+- Destructive actions (merge, close, reopen, cancel) are intentionally excluded
+- No raw API endpoint exposure
+- No auth primitives in MCP tool inputs or outputs
 
-## Plugin Security (Planned)
+**Input validation:** `_parse_host_repo()` validates `repo_path` format via regex (`_REPO_PATH_RE = r"^(?!.*\.\.)[\w.-]+(?:/[\w.-]+){2,}$"`). The `(?!.*\.\.)` negative lookahead prevents path traversal. Invalid paths raise `ValueError`.
 
-- Declarative plugin registration only
-- All plugin lifecycle calls wrapped in `try/except`
-- Disable plugin on unhandled exception
-- Plugins access forge data via `self.app.forge_registry` and `self.app.cache`, not raw HTTP clients
+**Separate process:** The MCP server runs as `tongs-mcp`, a separate entry point from the TUI. It creates its own `ForgeRegistry` from `load_config()`, inheriting the same auth cascade and hostname allowlist.
+
+**No auth in tool I/O:** Tool inputs are `repo_path` and `number` (primitives). Tool outputs are plain dicts with MR metadata. Tokens never appear in MCP messages.
+
+## Plugin Security
+
+`src/tongs/plugins/` implements the plugin discovery and lifecycle system.
+
+**Entry point discovery:** Plugins are discovered via `importlib.metadata.entry_points(group="tongs.plugins")`. Only installed Python packages can register plugins; there is no dynamic code loading from arbitrary paths.
+
+**Type validation:** Each discovered entry point is loaded and checked with `isinstance(plugin, TongsPlugin)`. Non-conforming plugins are logged and skipped.
+
+**Config filtering:** Plugins can be disabled via `[plugins.NAME] enabled = false` in `config.toml`. Disabled plugins are skipped during discovery (never loaded).
+
+**Graceful failure:** All plugin lifecycle calls (`on_app_ready`, `on_app_shutdown`) and command/screen collection (`get_commands`, `get_screens`) are wrapped in individual `try/except` blocks with `exc_info=True` logging. A failing plugin does not crash the app or affect other plugins.
+
+**Data access:** Plugins receive the `app` instance in lifecycle hooks. They access forge data via `app.forge_registry` and `app.cache`, not raw HTTP clients or tokens.

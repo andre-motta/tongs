@@ -19,16 +19,18 @@ tongs uses Textual 1.0+ with these patterns:
 
 Key attributes:
 - `config: Config` -- loaded from TOML, injected in constructor (testable)
-- `forge_registry: ForgeRegistry` -- manages authenticated forge clients
+- `cache: CacheStore` -- async SQLite cache for API responses
+- `forge_registry: ForgeRegistry` -- manages authenticated forge clients (receives cache)
+- `plugin_registry: PluginRegistry` -- discovered plugins with lifecycle management
 - `repos: list[Repo]` -- populated by background discovery worker
 - Reactive state: `current_repo`, `current_mr_number`, `mr_filter`, `pending_review`, `offline`
 
 Lifecycle:
-1. `__init__()` loads config and creates `ForgeRegistry`
-2. `on_mount()` pushes InboxScreen and starts `_discover_repos()` worker
+1. `__init__()` loads config, creates `CacheStore`, `ForgeRegistry` (with cache), and `PluginRegistry`
+2. `on_mount()` opens cache, discovers plugins via `plugin_registry.discover(config.plugin_config)`, fires `on_app_ready()` hooks, pushes InboxScreen, starts `_discover_repos()` worker
 3. `_discover_repos()` runs in a background thread (`@work(thread=True)`) to avoid blocking the UI
 4. `_on_discovery_complete()` triggers the current screen's `action_refresh()` if it has one
-5. `on_unmount()` closes all forge clients via `forge_registry.close_all()`
+5. `on_unmount()` fires `plugin_registry.on_app_shutdown(app)`, closes all forge clients via `forge_registry.close_all()`, closes cache
 
 Registered screens: `"inbox"` -> `InboxScreen`, `"repo_list"` -> `RepoListScreen`.
 
@@ -38,7 +40,7 @@ Registered screens: `"inbox"` -> `InboxScreen`, `"repo_list"` -> `RepoListScreen
 
 **Context-aware command generation:** `_get_commands()` inspects `type(screen).__name__` to determine the current screen and combines global commands with screen-specific commands. Each command is a `(display, help_text, callback)` tuple.
 
-**Global commands** (always available): Repos, Inbox, Help.
+**Global commands** (always available): Repos, Inbox, Help, plus any commands registered by plugins via `app.plugin_registry.get_all_commands()` (e.g., MCPPlugin adds "Start MCP Server").
 
 **Screen-specific commands:**
 - `InboxScreen`: My Reviews, My MRs, All Open (tab switches), Refresh, Open in Browser
@@ -562,8 +564,12 @@ All forward navigation uses `app.push_screen()`. Back navigation uses `app.pop_s
   - GitHub single-line: anchor is the first line; start_line/start_side are None
   - GitHub multi-line: anchor is the LAST line (GitHub's `line` param); start_line is the first line's `new_lineno`; start_side is `"RIGHT"`
 
-## Planned Views (Phase 6+)
+## Plugin Integration (Phase 6)
 
-- Plugin system with fleet monitor plugin
-- SQLite caching layer
-- MCP server
+Plugins can contribute commands and screens to the TUI:
+
+- **Commands:** `TongsPlugin.get_commands()` returns `(display, help_text, callback)` tuples that are merged into the command palette's global commands section. Plugin commands appear alongside built-in commands in both `discover()` and `search()` modes.
+- **Screens:** `TongsPlugin.get_screens()` returns `screen_name -> Screen class` mappings that could be registered on the app (currently collected but not auto-registered in `TongsApp.SCREENS`; plugins can register them in `on_app_ready()`).
+- **Lifecycle:** `on_app_ready(app)` fires after mount (plugin can access `app.forge_registry`, `app.cache`, `app.repos`). `on_app_shutdown(app)` fires before exit.
+- **Config filtering:** Plugins are enabled by default. Disable via `[plugins.NAME] enabled = false` in `config.toml`.
+- **Graceful failure:** All plugin lifecycle calls and command/screen collection are wrapped in `try/except` with logging. A failing plugin does not crash the app.

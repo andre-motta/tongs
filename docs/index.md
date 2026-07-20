@@ -140,6 +140,21 @@ Every action is reachable from the keyboard. A few highlights:
 
 ---
 
+## Extensible by design
+
+tongs has a plugin system based on Python entry points. Install a plugin package and
+it shows up in the command palette automatically. The built-in MCP server is itself a
+plugin, so AI assistants can query your merge requests without any extra wiring.
+
+Disable or enable plugins in your config:
+
+```toml
+[plugins.mcp]
+enabled = false
+```
+
+---
+
 ## tongs is for you if
 
 - You review code across both GitHub and GitLab
@@ -161,6 +176,8 @@ Every action is reachable from the keyboard. A few highlights:
 | Pipeline / CI drill-down | Yes | No | Yes |
 | Approve / Merge | Yes | No | Yes |
 | Command palette | Yes | No | N/A |
+| Plugin system | Yes | No | No |
+| MCP server (AI integration) | Yes | No | No |
 | Zero config auth | Yes | Yes | N/A |
 | Self-hosted forges | Yes | Yes | N/A |
 

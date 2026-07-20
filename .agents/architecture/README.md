@@ -7,14 +7,18 @@ The application has four layers. Each depends only on the layer below it.
 ```
 views/widgets  (Textual screens, UI logic)
     |
+plugins        (TongsPlugin ABC, PluginRegistry, entry point discovery)
+    |
 state          (reactive AppState, MRFilter, ReviewDraft)
     |
 forges         (ForgeClient ABC, models, registry, HTTP transport)
     |
+cache          (CacheStore, async SQLite, TTL + LRU)
+    |
 scanner        (filesystem discovery, remote parsing, Repo dataclass)
 ```
 
-The TUI layer never imports a concrete forge client. Everything goes through `ForgeRegistry` and the `ForgeClient` ABC. Views work against shared models from `forges/models.py`.
+The TUI layer never imports a concrete forge client. Everything goes through `ForgeRegistry` and the `ForgeClient` ABC. Views work against shared models from `forges/models.py`. The plugin layer sits alongside the TUI and can contribute commands and screens, but accesses forges only through `app.forge_registry`.
 
 ## Data Flow: API to TUI
 
@@ -91,6 +95,41 @@ The discussion data flows through the same shared models (`Discussion`, `InlineC
 8. Cancel/Retry: `PipelinePanel` posts `CancelPipelineRequested`, `RetryPipelineRequested`, `CancelJobRequested`, or `RetryJobRequested`. `MRDetailScreen` handles each with a `@work` method that calls the appropriate forge client method, then reloads the pipeline tab.
 
 The pipeline data flows through shared models (`Pipeline`, `PipelineJob`) from `forges/models.py`. The drill-down state (`_view_level`, `_saved_pipeline_idx`, `_saved_job_idx`) is local to `PipelinePanel`.
+
+## Data Flow: Plugin System (Phase 6)
+
+1. `TongsApp.__init__()` creates a `PluginRegistry()` instance as `self.plugin_registry`.
+2. `TongsApp.on_mount()` calls `plugin_registry.discover(config.plugin_config)`.
+3. `PluginRegistry.discover()` reads `importlib.metadata.entry_points(group="tongs.plugins")`, filters by config (plugins can be disabled via `[plugins.NAME] enabled = false` in TOML), loads each entry point, validates it is a `TongsPlugin` subclass, and appends to the internal list. Failures are logged and skipped (graceful degradation).
+4. After discovery, `on_mount()` calls `plugin_registry.on_app_ready(app)`, which invokes each plugin's `on_app_ready()` lifecycle hook.
+5. During command palette discovery, `TongsCommandProvider._global_commands()` calls `app.plugin_registry.get_all_commands()`, which aggregates `(display, help_text, callback)` tuples from all loaded plugins. These are merged into the command palette alongside built-in commands.
+6. On app exit, `TongsApp.on_unmount()` calls `plugin_registry.on_app_shutdown(app)` before closing forge clients and cache.
+
+The plugin system uses Python entry points (`tongs.plugins` group in `pyproject.toml`) for discovery. The MCPPlugin is the first-party reference implementation, registered as `mcp = "tongs.mcp.plugin:MCPPlugin"`.
+
+## Data Flow: Cache (Phase 7)
+
+1. `TongsApp.__init__()` creates a `CacheStore(max_size_mb=config.max_cache_size_mb)` as `self.cache`.
+2. `TongsApp.on_mount()` calls `cache.open()`, which creates the SQLite database file with `0o600` permissions, enables WAL journal mode, and creates the `cache` table if needed.
+3. `ForgeRegistry` receives the cache instance in its constructor and can use it for API response caching.
+4. `CacheStore.get(key)` returns cached bytes if the key exists and has not expired (TTL check). On hit, it updates `created_at` to the current time (LRU touch).
+5. `CacheStore.put(key, value, ttl)` inserts or replaces a cache entry. After each put, `_enforce_size_limit()` checks total size and evicts the oldest 25% of entries if the `max_size_bytes` limit is exceeded.
+6. Keys with `_EXCLUDED_PREFIXES` (`"job_log:"`, `"stream_log:"`) are never cached (large, ephemeral data).
+7. `CacheStore.invalidate_prefix(prefix)` supports bulk invalidation (e.g., all entries for a specific repo).
+8. Convenience methods `get_json()`/`put_json()` handle JSON serialization.
+9. `TongsApp.on_unmount()` calls `cache.close()` to close the SQLite connection.
+
+Cache database location: `platformdirs.user_cache_dir("tongs") / "cache.db"`.
+
+## Data Flow: MCP Server (Phase 7)
+
+1. The MCP server runs as a separate process via `tongs-mcp` entry point (not inside the TUI).
+2. On first tool call, `_get_registry()` lazily creates a `ForgeRegistry` from `load_config()`.
+3. Each tool receives a `repo_path` in `hostname/owner/repo` format. `_parse_host_repo()` validates the format via regex (`_REPO_PATH_RE`) and splits into `(hostname, owner/repo)`.
+4. Tools call `registry.get_client(hostname)` to get an authenticated `ForgeClient`, then invoke the corresponding forge method.
+5. Six tools are exposed: `list_mrs`, `get_mr`, `get_mr_diff`, `post_comment`, `approve_mr`, `list_pipelines`.
+6. Destructive actions (merge, close, reopen, cancel) are intentionally excluded as a security boundary.
+7. The server uses `mcp.server.fastmcp.FastMCP` and runs via `mcp.run()` (stdio transport).
 
 ## Diff Caching Between Tabs
 
@@ -185,3 +224,10 @@ class TongsApp(App):
 ```
 
 `MRFilter` and `ReviewDraft` are defined in `src/tongs/state/app_state.py`. State persists across screen push/pop. `watch_*` methods react to changes.
+
+Non-reactive instance attributes on `TongsApp`:
+- `config: Config` -- loaded from TOML
+- `cache: CacheStore` -- async SQLite cache for API responses
+- `forge_registry: ForgeRegistry` -- authenticated forge clients (receives cache)
+- `plugin_registry: PluginRegistry` -- discovered plugins (lifecycle managed)
+- `repos: list[Repo]` -- populated by background discovery worker

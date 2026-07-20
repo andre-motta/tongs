@@ -19,13 +19,14 @@ pytest tests/test_forges/test_gitlab.py
 pytest tests/test_forges/test_gitlab.py::TestGitLabClientAsync
 ```
 
-Tests run without network access. All forge interactions are mocked. The full suite (531 tests) runs in under 1 second.
+Tests run without network access. All forge interactions are mocked. The full suite (573 tests) runs in under 1 second.
 
 ## Directory Layout
 
 ```
 tests/
   conftest.py               # Shared fixtures (if any)
+  test_commands.py           # TongsCommandProvider, plugin command integration
   test_config.py             # Config loading, defaults, TOML parsing
   test_errors.py             # Error hierarchy, credential redaction patterns
   test_state.py              # MRFilter, ReviewDraft
@@ -42,6 +43,12 @@ tests/
   test_diff/
     test_parser.py           # Diff parser with inline strings + fixture files
     test_position.py         # DiffPosition creation and forge converters
+  test_cache/
+    test_store.py            # CacheStore: open, get/put, TTL, LRU eviction, JSON, invalidation
+  test_plugins/
+    test_plugin_system.py    # TongsPlugin ABC, PluginRegistry discovery, config filtering, lifecycle
+  test_mcp/
+    test_server.py           # MCP server tools: list_mrs, get_mr, get_mr_diff, post_comment, approve_mr, list_pipelines
   test_views/
     test_helpers.py          # View helper functions (CI icons, relative time)
     test_suggestion.py       # Suggestion helpers: template, fence, format, position (25 tests)

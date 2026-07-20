@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from rich.console import Console
 from rich.markdown import Markdown as RichMarkdown
 from rich.style import Style
@@ -19,6 +17,7 @@ from textual.widgets import Static
 
 from tongs.diff.models import DiffFile, DiffLine
 from tongs.forges.models import Discussion
+from tongs.helpers import relative_time
 
 
 class JumpToDiffDiscussion(Message):
@@ -106,7 +105,7 @@ class DiscussionCard(Static):
                 f"{reply_count} repl{'ies' if reply_count != 1 else 'y'}  ",
                 Style(dim=True),
             )
-        header.append(_relative_time(rc.created_at), Style(dim=True))
+        header.append(relative_time(rc.created_at), Style(dim=True))
 
         content = Text()
         content.append_text(header)
@@ -434,7 +433,7 @@ def _render_thread(disc: Discussion) -> list[Text]:
         author_line = Text()
         indent = "  " if is_reply else ""
         author_line.append(
-            f"{indent}@{comment.author.username}  {_relative_time(comment.created_at)}",
+            f"{indent}@{comment.author.username}  {relative_time(comment.created_at)}",
             Style(bold=not is_reply, dim=is_reply),
         )
         lines.append(author_line)
@@ -452,19 +451,3 @@ def _render_thread(disc: Discussion) -> list[Text]:
                 lines.append(line)
 
     return lines
-
-
-def _relative_time(dt: datetime) -> str:
-    now = datetime.now(timezone.utc)
-    delta = now - dt
-    seconds = int(delta.total_seconds())
-    if seconds < 60:
-        return "just now"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes}m ago"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h ago"
-    days = hours // 24
-    return f"{days}d ago"

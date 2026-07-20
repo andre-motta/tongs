@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from tongs.errors import NetworkError, redact_credentials
+from tongs.errors import ForgeError, NetworkError, redact_credentials
 from tongs.forges.base import ForgeClient
 from tongs.forges.http import map_http_error, paginate, request
 from tongs.forges.models import (
@@ -123,8 +123,6 @@ class GitHubClient(ForgeClient):
         data = response.json()
         if "errors" in data:
             msg = data["errors"][0].get("message", "GraphQL error")
-            from tongs.errors import ForgeError
-
             raise ForgeError(redact_credentials(msg))
         return data.get("data", {})
 
@@ -308,8 +306,6 @@ class GitHubClient(ForgeClient):
             owner, repo, number, int(discussion_id)
         )
         if not thread_node_id:
-            from tongs.errors import ForgeError
-
             raise ForgeError("Could not find review thread for this comment")
         if resolved:
             await self._graphql(
@@ -386,8 +382,6 @@ class GitHubClient(ForgeClient):
         )
 
     async def approve_mr(self, repo_path: str, number: int) -> None:
-        from tongs.errors import ForgeError
-
         try:
             await self.submit_review(repo_path, number, ReviewDecision.APPROVED, "")
         except ForgeError as exc:

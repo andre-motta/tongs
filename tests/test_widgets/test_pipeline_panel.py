@@ -8,6 +8,7 @@ from unittest.mock import patch
 from rich.style import Style
 
 from tongs.forges.models import CIStatus, Pipeline, PipelineJob
+from tongs.helpers import ci_icon_markup, ci_icon_text, format_duration, relative_time
 from tongs.widgets.pipeline_panel import (
     CancelJobRequested,
     CancelPipelineRequested,
@@ -15,59 +16,55 @@ from tongs.widgets.pipeline_panel import (
     LoadJobsRequested,
     RetryJobRequested,
     RetryPipelineRequested,
-    _ci_icon_markup,
-    _ci_icon_text,
-    _format_duration,
-    _relative_time,
 )
 
 
 # ===================================================================
-# _format_duration
+# format_duration
 # ===================================================================
 
 
 class TestFormatDuration:
-    """Tests for _format_duration()."""
+    """Tests for format_duration()."""
 
     def test_none_returns_empty(self):
-        assert _format_duration(None) == ""
+        assert format_duration(None) == ""
 
     def test_zero_returns_zero_s(self):
-        assert _format_duration(0) == "0s"
+        assert format_duration(0) == "0s"
 
     def test_seconds_only(self):
-        assert _format_duration(59) == "59s"
+        assert format_duration(59) == "59s"
 
     def test_boundary_exactly_60(self):
-        assert _format_duration(60) == "1m 00s"
+        assert format_duration(60) == "1m 00s"
 
     def test_minutes_and_seconds(self):
-        assert _format_duration(90) == "1m 30s"
+        assert format_duration(90) == "1m 30s"
 
     def test_boundary_exactly_3600(self):
-        assert _format_duration(3600) == "1h 00m"
+        assert format_duration(3600) == "1h 00m"
 
     def test_float_truncated(self):
-        assert _format_duration(362.27) == "6m 02s"
+        assert format_duration(362.27) == "6m 02s"
 
     def test_one_second(self):
-        assert _format_duration(1) == "1s"
+        assert format_duration(1) == "1s"
 
     def test_hours_with_remaining_minutes(self):
-        assert _format_duration(3661) == "1h 01m"
+        assert format_duration(3661) == "1h 01m"
 
     def test_large_hours(self):
-        assert _format_duration(36000) == "10h 00m"
+        assert format_duration(36000) == "10h 00m"
 
 
 # ===================================================================
-# _relative_time
+# relative_time
 # ===================================================================
 
 
 class TestRelativeTime:
-    """Tests for _relative_time()."""
+    """Tests for relative_time()."""
 
     def _fixed_now(self, **kwargs):
         """Return a patcher that freezes datetime.now to a fixed offset from the reference dt."""
@@ -82,131 +79,137 @@ class TestRelativeTime:
             return original_now(tz)
 
         return patch(
-            "tongs.widgets.pipeline_panel.datetime",
+            "tongs.helpers.datetime",
             wraps=datetime,
             **{"now": fake_now},
         )
 
     def test_none_returns_empty(self):
-        assert _relative_time(None) == ""
+        assert relative_time(None) == ""
 
     def test_just_now_zero_seconds(self):
         with self._fixed_now(seconds=0):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
+            assert (
+                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
+            )
 
     def test_just_now_under_60_seconds(self):
         with self._fixed_now(seconds=59):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
+            assert (
+                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
+            )
 
     def test_boundary_exactly_60_seconds(self):
         with self._fixed_now(seconds=60):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1m ago"
 
     def test_minutes_plural(self):
         with self._fixed_now(minutes=30):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "30m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "30m ago"
 
     def test_boundary_exactly_59_minutes(self):
         with self._fixed_now(minutes=59):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "59m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "59m ago"
 
     def test_boundary_exactly_60_minutes(self):
         with self._fixed_now(minutes=60):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1h ago"
 
     def test_hours_plural(self):
         with self._fixed_now(hours=5):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "5h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "5h ago"
 
     def test_boundary_exactly_23_hours(self):
         with self._fixed_now(hours=23):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "23h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "23h ago"
 
     def test_boundary_exactly_24_hours(self):
         with self._fixed_now(hours=24):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1d ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1d ago"
 
     def test_days_plural(self):
         with self._fixed_now(days=7):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "7d ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "7d ago"
 
     def test_large_day_count(self):
         with self._fixed_now(days=365):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "365d ago"
+            assert (
+                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "365d ago"
+            )
 
 
 # ===================================================================
-# _ci_icon_text
+# ci_icon_text
 # ===================================================================
 
 
 class TestCiIconText:
-    """Tests for _ci_icon_text()."""
+    """Tests for ci_icon_text()."""
 
     def test_success(self):
-        char, style = _ci_icon_text(CIStatus.SUCCESS)
+        char, style = ci_icon_text(CIStatus.SUCCESS)
         assert char == "●"
         assert style == Style(color="green")
 
     def test_failed(self):
-        char, style = _ci_icon_text(CIStatus.FAILED)
+        char, style = ci_icon_text(CIStatus.FAILED)
         assert char == "●"
         assert style == Style(color="red")
 
     def test_running(self):
-        char, style = _ci_icon_text(CIStatus.RUNNING)
+        char, style = ci_icon_text(CIStatus.RUNNING)
         assert char == "▶"
         assert style == Style(color="yellow")
 
     def test_pending(self):
-        char, style = _ci_icon_text(CIStatus.PENDING)
+        char, style = ci_icon_text(CIStatus.PENDING)
         assert char == "○"
         assert style == Style(dim=True)
 
     def test_canceled(self):
-        char, style = _ci_icon_text(CIStatus.CANCELED)
+        char, style = ci_icon_text(CIStatus.CANCELED)
         assert char == "—"
         assert style == Style(dim=True)
 
     def test_skipped(self):
-        char, style = _ci_icon_text(CIStatus.SKIPPED)
+        char, style = ci_icon_text(CIStatus.SKIPPED)
         assert char == "—"
         assert style == Style(dim=True)
 
     def test_unknown(self):
-        char, style = _ci_icon_text(CIStatus.UNKNOWN)
+        char, style = ci_icon_text(CIStatus.UNKNOWN)
         assert char == "?"
         assert style == Style(dim=True)
 
 
 # ===================================================================
-# _ci_icon_markup
+# ci_icon_markup
 # ===================================================================
 
 
 class TestCiIconMarkup:
-    """Tests for _ci_icon_markup()."""
+    """Tests for ci_icon_markup()."""
 
     def test_success(self):
-        assert _ci_icon_markup(CIStatus.SUCCESS) == "[green]●[/]"
+        assert ci_icon_markup(CIStatus.SUCCESS) == "[green]●[/]"
 
     def test_failed(self):
-        assert _ci_icon_markup(CIStatus.FAILED) == "[red]●[/]"
+        assert ci_icon_markup(CIStatus.FAILED) == "[red]●[/]"
 
     def test_running(self):
-        assert _ci_icon_markup(CIStatus.RUNNING) == "[yellow]▶[/]"
+        assert ci_icon_markup(CIStatus.RUNNING) == "[yellow]▶[/]"
 
     def test_pending(self):
-        assert _ci_icon_markup(CIStatus.PENDING) == "[dim]○[/]"
+        assert ci_icon_markup(CIStatus.PENDING) == "[dim]○[/]"
 
     def test_canceled(self):
-        assert _ci_icon_markup(CIStatus.CANCELED) == "[dim]—[/]"
+        assert ci_icon_markup(CIStatus.CANCELED) == "[dim]—[/]"
 
     def test_skipped(self):
-        assert _ci_icon_markup(CIStatus.SKIPPED) == "[dim]—[/]"
+        assert ci_icon_markup(CIStatus.SKIPPED) == "[dim]—[/]"
 
     def test_unknown(self):
-        assert _ci_icon_markup(CIStatus.UNKNOWN) == "[dim]?[/]"
+        assert ci_icon_markup(CIStatus.UNKNOWN) == "[dim]?[/]"
 
 
 # ===================================================================

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from rich.markup import escape
 
 from textual import work
@@ -285,8 +287,6 @@ class MRDetailScreen(Screen):
 
     async def _fetch_diff_and_discussions(self, client):
         """Fetch diff changes and discussions in parallel."""
-        import asyncio
-
         changes_task = asyncio.create_task(
             client.get_mr_diff(self.mr_summary.repo_path, self.mr_summary.number)
         )

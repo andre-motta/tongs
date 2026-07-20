@@ -2,53 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from textual.widgets import DataTable
 
-from tongs.forges.models import CIStatus, MRSummary
-
-
-def _ci_icon(status: CIStatus, ascii_mode: bool = False) -> str:
-    if ascii_mode:
-        return {
-            CIStatus.SUCCESS: "[OK]",
-            CIStatus.FAILED: "[!!]",
-            CIStatus.RUNNING: "[..]",
-            CIStatus.PENDING: "[..]",
-            CIStatus.CANCELED: "[--]",
-            CIStatus.SKIPPED: "[--]",
-            CIStatus.UNKNOWN: "[??]",
-        }.get(status, "[??]")
-    return {
-        CIStatus.SUCCESS: "[green]●[/]",
-        CIStatus.FAILED: "[red]●[/]",
-        CIStatus.RUNNING: "[yellow]▶[/]",
-        CIStatus.PENDING: "[dim]○[/]",
-        CIStatus.CANCELED: "[dim]—[/]",
-        CIStatus.SKIPPED: "[dim]—[/]",
-        CIStatus.UNKNOWN: "[dim]?[/]",
-    }.get(status, "[dim]?[/]")
-
-
-def _relative_time(dt: datetime) -> str:
-    now = datetime.now(timezone.utc)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    diff = now - dt
-    seconds = int(diff.total_seconds())
-    if seconds < 0:
-        return "now"
-    if seconds < 60:
-        return "now"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes}m"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h"
-    days = hours // 24
-    return f"{days}d"
+from tongs.forges.models import MRSummary
+from tongs.helpers import ci_icon, relative_time
 
 
 class MRTable(DataTable):
@@ -71,7 +28,7 @@ class MRTable(DataTable):
         self.add_column("Updated", key="updated", width=8)
 
     def add_mr_row(self, mr: MRSummary, ascii_mode: bool = False) -> None:
-        ci = _ci_icon(mr.ci_status, ascii_mode)
+        ci = ci_icon(mr.ci_status, ascii_mode)
         draft = "[dim]D [/]" if mr.is_draft else "  "
         row_key = f"{mr.forge_host.hostname}:{mr.repo_path}:{mr.number}"
         self._mr_data[row_key] = mr
@@ -83,7 +40,7 @@ class MRTable(DataTable):
         ]
         if self._show_repo:
             row.append(mr.repo_path)
-        row.append(_relative_time(mr.updated_at))
+        row.append(relative_time(mr.updated_at))
         self.add_row(*row, key=row_key)
 
     def get_selected_mr(self) -> MRSummary | None:

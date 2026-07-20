@@ -7,7 +7,6 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime, timezone
 
 from rich.style import Style
 from rich.text import Text
@@ -21,6 +20,7 @@ from textual.widget import Widget
 from textual.widgets import Input, RichLog, Static
 
 from tongs.forges.models import CIStatus, Pipeline, PipelineJob
+from tongs.helpers import ci_icon_markup, ci_icon_text, format_duration, relative_time
 
 
 class CancelPipelineRequested(Message):
@@ -60,69 +60,6 @@ class LoadJobLogRequested(Message):
         self.pipeline = pipeline
 
 
-_CI_STYLES = {
-    CIStatus.SUCCESS: ("●", Style(color="green")),
-    CIStatus.FAILED: ("●", Style(color="red")),
-    CIStatus.RUNNING: ("▶", Style(color="yellow")),
-    CIStatus.PENDING: ("○", Style(dim=True)),
-    CIStatus.CANCELED: ("—", Style(dim=True)),
-    CIStatus.SKIPPED: ("—", Style(dim=True)),
-    CIStatus.UNKNOWN: ("?", Style(dim=True)),
-}
-
-
-def _ci_icon_text(status: CIStatus) -> tuple[str, Style]:
-    return _CI_STYLES.get(status, ("?", Style(dim=True)))
-
-
-_CI_MARKUP = {
-    CIStatus.SUCCESS: "[green]●[/]",
-    CIStatus.FAILED: "[red]●[/]",
-    CIStatus.RUNNING: "[yellow]▶[/]",
-    CIStatus.PENDING: "[dim]○[/]",
-    CIStatus.CANCELED: "[dim]—[/]",
-    CIStatus.SKIPPED: "[dim]—[/]",
-    CIStatus.UNKNOWN: "[dim]?[/]",
-}
-
-
-def _ci_icon_markup(status: CIStatus) -> str:
-    return _CI_MARKUP.get(status, "[dim]?[/]")
-
-
-def _format_duration(seconds: int | float | None) -> str:
-    if seconds is None:
-        return ""
-    seconds = int(seconds)
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes = seconds // 60
-    secs = seconds % 60
-    if minutes < 60:
-        return f"{minutes}m {secs:02d}s"
-    hours = minutes // 60
-    mins = minutes % 60
-    return f"{hours}h {mins:02d}m"
-
-
-def _relative_time(dt: datetime | None) -> str:
-    if dt is None:
-        return ""
-    now = datetime.now(timezone.utc)
-    delta = now - dt
-    seconds = int(delta.total_seconds())
-    if seconds < 60:
-        return "just now"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes}m ago"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h ago"
-    days = hours // 24
-    return f"{days}d ago"
-
-
 class PipelineCard(Static):
     """A single pipeline rendered as a card."""
 
@@ -152,16 +89,16 @@ class PipelineCard(Static):
 
     def on_mount(self) -> None:
         p = self.pipeline
-        icon_char, icon_style = _ci_icon_text(p.status)
+        icon_char, icon_style = ci_icon_text(p.status)
         content = Text()
         content.append(f"{icon_char} ", icon_style)
         content.append(f"Pipeline #{p.id}", Style(bold=True))
-        content.append(f"  {_relative_time(p.created_at)}", Style(dim=True))
+        content.append(f"  {relative_time(p.created_at)}", Style(dim=True))
         content.append("\n")
         content.append(f"  {p.sha[:7]}  {p.ref}", Style(dim=True))
         if p.source:
             content.append(f"  {p.source}", Style(dim=True))
-        dur = _format_duration(p.duration_seconds)
+        dur = format_duration(p.duration_seconds)
         if dur:
             content.append(f"  {dur}", Style(dim=True))
 
@@ -195,11 +132,11 @@ class JobCard(Static):
 
     def on_mount(self) -> None:
         j = self.job
-        icon_char, icon_style = _ci_icon_text(j.status)
+        icon_char, icon_style = ci_icon_text(j.status)
         content = Text()
         content.append(f"  {icon_char} ", icon_style)
         content.append(f"{j.name:<30}", Style(bold=j.status == CIStatus.FAILED))
-        dur = _format_duration(j.duration_seconds)
+        dur = format_duration(j.duration_seconds)
         if dur:
             content.append(f"  {dur}", Style(dim=True))
         if j.status == CIStatus.FAILED:
@@ -331,8 +268,8 @@ class PipelinePanel(Widget, can_focus=True):
         if self._current_pipeline:
             p = self._current_pipeline
             header = Static(
-                f"Pipeline #{p.id}  {_ci_icon_markup(p.status)} {p.status.value}  "
-                f"{_format_duration(p.duration_seconds)}"
+                f"Pipeline #{p.id}  {ci_icon_markup(p.status)} {p.status.value}  "
+                f"{format_duration(p.duration_seconds)}"
             )
             scroll.mount(header)
 
@@ -375,8 +312,8 @@ class PipelinePanel(Widget, can_focus=True):
         if job:
             header = self.query_one("#job-log-header", Static)
             header.update(
-                f"Job: {job.name}  {_ci_icon_markup(job.status)} {job.status.value}  "
-                f"{_format_duration(job.duration_seconds)}  "
+                f"Job: {job.name}  {ci_icon_markup(job.status)} {job.status.value}  "
+                f"{format_duration(job.duration_seconds)}  "
                 f"Stage: {job.stage}  "
                 f"[dim]F2 open in editor  / search[/]"
             )

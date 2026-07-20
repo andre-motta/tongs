@@ -24,6 +24,7 @@ from textual.widgets._option_list import Option
 
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, LineType
 from tongs.forges.models import Discussion
+from tongs.helpers import relative_time
 
 
 class CommentMode(Enum):
@@ -863,23 +864,6 @@ def _render_thread_block(discussions: list[Discussion]) -> list[Text]:
     if not discussions:
         return []
 
-    from datetime import datetime, timezone
-
-    def _relative_time(dt: datetime) -> str:
-        now = datetime.now(timezone.utc)
-        delta = now - dt
-        seconds = int(delta.total_seconds())
-        if seconds < 60:
-            return "just now"
-        minutes = seconds // 60
-        if minutes < 60:
-            return f"{minutes}m ago"
-        hours = minutes // 60
-        if hours < 24:
-            return f"{hours}h ago"
-        days = hours // 24
-        return f"{days}d ago"
-
     def _render_body_as_markdown(body: str, indent: str = "") -> list[Text]:
         from rich.console import Console
         from rich.markdown import Markdown as RichMarkdown
@@ -906,7 +890,7 @@ def _render_thread_block(discussions: list[Discussion]) -> list[Text]:
         author_text = Text()
         author_text.append(_GUTTER_PREFIX, Style(dim=True))
         author_text.append(
-            f"{indent}@{comment.author.username}  {_relative_time(comment.created_at)}",
+            f"{indent}@{comment.author.username}  {relative_time(comment.created_at)}",
             Style(bold=not is_reply, dim=is_reply),
         )
         lines.append(author_text)

@@ -6,14 +6,13 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 
-
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, FileStatus, LineType
 from tongs.forges.models import Discussion, InlineComment, User
+from tongs.helpers import relative_time
 from tongs.widgets.discussion_list import (
     DiscussionPanel,
     DiscussionReplyRequested,
     JumpToDiffDiscussion,
-    _relative_time,
     _render_thread,
     render_diff_snippet,
 )
@@ -22,6 +21,7 @@ from tongs.widgets.discussion_list import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_disc(
     id="d1",
@@ -81,11 +81,12 @@ def _make_file(
 
 
 # ===================================================================
-# _relative_time
+# relative_time
 # ===================================================================
 
+
 class TestRelativeTime:
-    """Tests for _relative_time()."""
+    """Tests for relative_time()."""
 
     def _fixed_now(self, **kwargs):
         """Return a patcher that freezes datetime.now to a fixed offset from the reference dt."""
@@ -100,71 +101,83 @@ class TestRelativeTime:
             return original_now(tz)
 
         return patch(
-            "tongs.widgets.discussion_list.datetime",
+            "tongs.helpers.datetime",
             wraps=datetime,
             **{"now": fake_now},
         )
 
     def test_just_now_zero_seconds(self):
         with self._fixed_now(seconds=0):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
+            assert (
+                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
+            )
 
     def test_just_now_under_60_seconds(self):
         with self._fixed_now(seconds=59):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
+            assert (
+                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
+            )
 
     def test_boundary_exactly_60_seconds(self):
         with self._fixed_now(seconds=60):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1m ago"
 
     def test_minutes_plural(self):
         with self._fixed_now(minutes=30):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "30m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "30m ago"
 
     def test_boundary_exactly_59_minutes(self):
         with self._fixed_now(minutes=59):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "59m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "59m ago"
 
     def test_boundary_exactly_60_minutes(self):
         with self._fixed_now(minutes=60):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1h ago"
 
     def test_hours_plural(self):
         with self._fixed_now(hours=5):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "5h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "5h ago"
 
     def test_boundary_exactly_23_hours(self):
         with self._fixed_now(hours=23):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "23h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "23h ago"
 
     def test_boundary_exactly_24_hours(self):
         with self._fixed_now(hours=24):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1d ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1d ago"
 
     def test_days_plural(self):
         with self._fixed_now(days=7):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "7d ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "7d ago"
 
     def test_large_day_count(self):
         with self._fixed_now(days=365):
-            assert _relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "365d ago"
+            assert (
+                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "365d ago"
+            )
 
 
 # ===================================================================
 # render_diff_snippet
 # ===================================================================
 
+
 class TestRenderDiffSnippet:
     """Tests for render_diff_snippet()."""
 
     def test_target_line_none_returns_empty(self):
-        file = _make_file(hunks=(
-            DiffHunk(
-                header="@@ -1,3 +1,3 @@", old_start=1, old_count=3,
-                new_start=1, new_count=3,
-                lines=(_ctx(1, 1, "a"), _ctx(2, 2, "b"), _ctx(3, 3, "c")),
-            ),
-        ))
+        file = _make_file(
+            hunks=(
+                DiffHunk(
+                    header="@@ -1,3 +1,3 @@",
+                    old_start=1,
+                    old_count=3,
+                    new_start=1,
+                    new_count=3,
+                    lines=(_ctx(1, 1, "a"), _ctx(2, 2, "b"), _ctx(3, 3, "c")),
+                ),
+            )
+        )
         assert render_diff_snippet(file, None) == []
 
     def test_empty_hunks_returns_empty(self):
@@ -172,13 +185,18 @@ class TestRenderDiffSnippet:
         assert render_diff_snippet(file, 5) == []
 
     def test_target_not_found_returns_empty(self):
-        file = _make_file(hunks=(
-            DiffHunk(
-                header="@@ -1,3 +1,3 @@", old_start=1, old_count=3,
-                new_start=1, new_count=3,
-                lines=(_ctx(1, 1, "a"), _ctx(2, 2, "b"), _ctx(3, 3, "c")),
-            ),
-        ))
+        file = _make_file(
+            hunks=(
+                DiffHunk(
+                    header="@@ -1,3 +1,3 @@",
+                    old_start=1,
+                    old_count=3,
+                    new_start=1,
+                    new_count=3,
+                    lines=(_ctx(1, 1, "a"), _ctx(2, 2, "b"), _ctx(3, 3, "c")),
+                ),
+            )
+        )
         assert render_diff_snippet(file, 999) == []
 
     def test_found_target_with_context(self):
@@ -189,12 +207,18 @@ class TestRenderDiffSnippet:
             _ctx(4, 4, "line4"),
             _ctx(5, 5, "line5"),
         )
-        file = _make_file(hunks=(
-            DiffHunk(
-                header="@@ -1,5 +1,5 @@", old_start=1, old_count=5,
-                new_start=1, new_count=5, lines=lines,
-            ),
-        ))
+        file = _make_file(
+            hunks=(
+                DiffHunk(
+                    header="@@ -1,5 +1,5 @@",
+                    old_start=1,
+                    old_count=5,
+                    new_start=1,
+                    new_count=5,
+                    lines=lines,
+                ),
+            )
+        )
         result = render_diff_snippet(file, 3, context=2)
         assert len(result) == 5
 
@@ -204,12 +228,18 @@ class TestRenderDiffSnippet:
             _ctx(2, 2, "line2"),
             _ctx(3, 3, "line3"),
         )
-        file = _make_file(hunks=(
-            DiffHunk(
-                header="@@ -1,3 +1,3 @@", old_start=1, old_count=3,
-                new_start=1, new_count=3, lines=lines,
-            ),
-        ))
+        file = _make_file(
+            hunks=(
+                DiffHunk(
+                    header="@@ -1,3 +1,3 @@",
+                    old_start=1,
+                    old_count=3,
+                    new_start=1,
+                    new_count=3,
+                    lines=lines,
+                ),
+            )
+        )
         result = render_diff_snippet(file, 2, context=1)
         # The target line (line 2) should start with "> "
         texts = [r.plain for r in result]
@@ -226,12 +256,18 @@ class TestRenderDiffSnippet:
             _del(2, "removed"),
             _ctx(3, 2, "after"),
         )
-        file = _make_file(hunks=(
-            DiffHunk(
-                header="@@ -1,3 +1,2 @@", old_start=1, old_count=3,
-                new_start=1, new_count=2, lines=lines,
-            ),
-        ))
+        file = _make_file(
+            hunks=(
+                DiffHunk(
+                    header="@@ -1,3 +1,2 @@",
+                    old_start=1,
+                    old_count=3,
+                    new_start=1,
+                    new_count=2,
+                    lines=lines,
+                ),
+            )
+        )
         # Target line 2 matches old_lineno=2 on the deletion line
         result = render_diff_snippet(file, 2, context=1)
         assert len(result) > 0
@@ -244,12 +280,18 @@ class TestRenderDiffSnippet:
             _ctx(1, 1, "first"),
             _ctx(2, 2, "second"),
         )
-        file = _make_file(hunks=(
-            DiffHunk(
-                header="@@ -1,2 +1,2 @@", old_start=1, old_count=2,
-                new_start=1, new_count=2, lines=lines,
-            ),
-        ))
+        file = _make_file(
+            hunks=(
+                DiffHunk(
+                    header="@@ -1,2 +1,2 @@",
+                    old_start=1,
+                    old_count=2,
+                    new_start=1,
+                    new_count=2,
+                    lines=lines,
+                ),
+            )
+        )
         # Target is line 1 (index 0), context=2 should clamp start to 0
         result = render_diff_snippet(file, 1, context=2)
         assert len(result) == 2
@@ -259,12 +301,18 @@ class TestRenderDiffSnippet:
             _ctx(1, 1, "first"),
             _ctx(2, 2, "last"),
         )
-        file = _make_file(hunks=(
-            DiffHunk(
-                header="@@ -1,2 +1,2 @@", old_start=1, old_count=2,
-                new_start=1, new_count=2, lines=lines,
-            ),
-        ))
+        file = _make_file(
+            hunks=(
+                DiffHunk(
+                    header="@@ -1,2 +1,2 @@",
+                    old_start=1,
+                    old_count=2,
+                    new_start=1,
+                    new_count=2,
+                    lines=lines,
+                ),
+            )
+        )
         # Target is line 2 (index 1), context=2 should clamp end to len
         result = render_diff_snippet(file, 2, context=2)
         assert len(result) == 2
@@ -273,6 +321,7 @@ class TestRenderDiffSnippet:
 # ===================================================================
 # _render_thread
 # ===================================================================
+
 
 class TestRenderThread:
     """Tests for _render_thread()."""
@@ -329,6 +378,7 @@ class TestRenderThread:
 # ===================================================================
 # DiscussionPanel._apply_filter
 # ===================================================================
+
 
 class TestApplyFilter:
     """Tests for DiscussionPanel._apply_filter()."""
@@ -394,6 +444,7 @@ class TestApplyFilter:
 # DiscussionPanel._sort_discussions
 # ===================================================================
 
+
 class TestSortDiscussions:
     """Tests for DiscussionPanel._sort_discussions()."""
 
@@ -405,7 +456,9 @@ class TestSortDiscussions:
         panel = self._make_panel()
         discs = [
             _make_disc(id="resolved1", is_resolved=True, file_path="a.py", new_line=1),
-            _make_disc(id="unresolved1", is_resolved=False, file_path="a.py", new_line=1),
+            _make_disc(
+                id="unresolved1", is_resolved=False, file_path="a.py", new_line=1
+            ),
         ]
         result = panel._sort_discussions(discs)
         assert not result[0].is_resolved
@@ -463,6 +516,7 @@ class TestSortDiscussions:
 # ===================================================================
 # Messages
 # ===================================================================
+
 
 class TestMessages:
     """Tests for message dataclasses."""

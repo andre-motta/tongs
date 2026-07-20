@@ -10,9 +10,11 @@ from textual.app import App
 from textual.binding import Binding
 from textual.reactive import reactive
 
+from tongs.cache.store import CacheStore
 from tongs.commands import TongsCommandProvider
 from tongs.config import Config, load_config
 from tongs.forges.registry import ForgeRegistry
+from tongs.plugins.registry import PluginRegistry
 from tongs.scanner.discovery import discover_repos
 from tongs.scanner.repo import Repo
 from tongs.state.app_state import MRFilter, ReviewDraft
@@ -83,8 +85,6 @@ class TongsApp(App):
     ):
         super().__init__()
         self.config = config or load_config(config_path)
-        from tongs.cache.store import CacheStore
-
         self.cache = CacheStore(max_size_mb=self.config.max_cache_size_mb)
         self.forge_registry = ForgeRegistry(
             extra_gitlab_hosts=self.config.extra_gitlab_hosts,
@@ -93,8 +93,6 @@ class TongsApp(App):
             cache=self.cache,
         )
         self.repos: list[Repo] = []
-        from tongs.plugins.registry import PluginRegistry
-
         self.plugin_registry = PluginRegistry()
 
     async def on_mount(self) -> None:

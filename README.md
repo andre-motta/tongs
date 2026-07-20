@@ -51,9 +51,15 @@ uv pip install -e ".[dev]"
 # Run tongs -- it scans ~/git by default
 tongs
 
-# Configure a different scan root in ~/.config/tongs/config.toml:
-#   [general]
-#   scan_root = "~/projects"
+# Override the scan root for a single run
+tongs --scan-root ~/projects
+```
+
+To change the default permanently, set `scan_root` in `~/.config/tongs/config.toml`:
+
+```toml
+[general]
+scan_root = "~/projects"
 ```
 
 tongs discovers repos under your scan root, reads their git remotes, and populates the inbox. Auth tokens come from your existing `gh` and `glab` CLI logins automatically.

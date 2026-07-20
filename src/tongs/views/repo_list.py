@@ -103,7 +103,7 @@ class RepoListScreen(Screen):
         show_host = getattr(self, "_show_host", False)
 
         for repo in filtered:
-            key = f"{repo.hostname or ''}:{repo.display_name}"
+            key = str(repo.path)
             self._repo_data[key] = repo
             row = [
                 _forge_label(repo.forge_type),

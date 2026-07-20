@@ -446,6 +446,10 @@ class DiffContent(Widget):
     DiffContent {
         height: 1fr;
     }
+    #diff-markdown-preview {
+        height: 1fr;
+        overflow-y: auto;
+    }
     """
 
     def __init__(self, **kwargs) -> None:

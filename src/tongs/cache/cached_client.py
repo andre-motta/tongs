@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
+
 from tongs.cache.store import CacheStore
 from tongs.forges.base import ForgeClient
 from tongs.forges.models import (
@@ -66,7 +67,7 @@ def _dict_to_mr_summary(d: dict) -> MRSummary:
     )
 
 
-class CachedForgeClient(ForgeClient):
+class CachedForgeClient:
     """Wraps a ForgeClient with SQLite caching on read methods.
 
     Mutations bypass the cache and invalidate related entries.

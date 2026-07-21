@@ -2,18 +2,50 @@
 
 from __future__ import annotations
 
+from textual.binding import Binding
 from textual.widgets import DataTable
 
-from tongs.forges.models import MRSummary
+from tongs.forges.models import CIStatus, MRSummary
 from tongs.helpers import ci_icon, relative_time
+
+MR_SORT_KEYS = ("updated", "title", "ci", "author")
+
+_CI_PRIORITY = {
+    CIStatus.FAILED: 0,
+    CIStatus.RUNNING: 1,
+    CIStatus.PENDING: 2,
+    CIStatus.SUCCESS: 3,
+    CIStatus.CANCELED: 4,
+    CIStatus.SKIPPED: 5,
+    CIStatus.UNKNOWN: 6,
+}
+
+
+def sort_mrs(mrs: list[MRSummary], key: str) -> list[MRSummary]:
+    if key == "title":
+        return sorted(mrs, key=lambda m: m.title.lower())
+    if key == "ci":
+        return sorted(
+            mrs, key=lambda m: (_CI_PRIORITY.get(m.ci_status, 9), m.title.lower())
+        )
+    if key == "author":
+        return sorted(mrs, key=lambda m: (m.author.username.lower(), m.title.lower()))
+    return sorted(
+        mrs, key=lambda m: m.updated_at or m.created_at or m.updated_at, reverse=True
+    )
 
 
 class MRTable(DataTable):
     """MR list table with consistent columns."""
 
+    BINDINGS = [
+        Binding("s", "cycle_sort", "Sort", show=True, key_display="s"),
+    ]
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._mr_data: dict[str, MRSummary] = {}
+        self._sort_key: str = "updated"
 
     _show_repo: bool = True
 
@@ -51,6 +83,22 @@ class MRTable(DataTable):
             return self._mr_data.get(row_key.value)
         except Exception:
             return None
+
+    def action_cycle_sort(self) -> None:
+        idx = (
+            MR_SORT_KEYS.index(self._sort_key) if self._sort_key in MR_SORT_KEYS else -1
+        )
+        self._sort_key = MR_SORT_KEYS[(idx + 1) % len(MR_SORT_KEYS)]
+        self._rerender_sorted()
+        self.app.notify(f"Sort: {self._sort_key}", timeout=2)
+
+    def _rerender_sorted(self) -> None:
+        mrs = list(self._mr_data.values())
+        sorted_mrs = sort_mrs(mrs, self._sort_key)
+        ascii_mode = getattr(self.app, "config", None) and self.app.config.ascii_mode
+        super().clear()
+        for mr in sorted_mrs:
+            self.add_mr_row(mr, ascii_mode=bool(ascii_mode))
 
     def clear(self, *args, **kwargs) -> None:
         self._mr_data.clear()

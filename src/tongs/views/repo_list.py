@@ -27,8 +27,11 @@ class RepoListScreen(Screen):
         Binding("q", "go_back", "Back", show=False),
         Binding("slash", "start_search", "Filter", show=True, key_display="/"),
         Binding("f", "cycle_forge", "Forge", show=True),
+        Binding("s", "cycle_sort", "Sort", show=True, key_display="s"),
         Binding("ctrl+r", "refresh", "Refresh", show=False),
     ]
+
+    REPO_SORT_KEYS = ("name", "forge", "host")
 
     forge_filter: reactive[ForgeType | None] = reactive(None)
     search_text: reactive[str] = reactive("")
@@ -54,6 +57,7 @@ class RepoListScreen(Screen):
         table.cursor_type = "row"
         table.zebra_stripes = True
         self._repo_data: dict[str, Repo] = {}
+        self._sort_key: str = "name"
         self._apply_filters()
 
     def action_go_back(self) -> None:
@@ -96,6 +100,22 @@ class RepoListScreen(Screen):
         if search:
             filtered = [r for r in filtered if search in r.display_name.lower()]
 
+        sort_key = getattr(self, "_sort_key", "name")
+        if sort_key == "forge":
+            filtered = sorted(
+                filtered,
+                key=lambda r: (
+                    r.forge_type.value if r.forge_type else "",
+                    r.display_name.lower(),
+                ),
+            )
+        elif sort_key == "host":
+            filtered = sorted(
+                filtered, key=lambda r: (r.hostname or "", r.display_name.lower())
+            )
+        else:
+            filtered = sorted(filtered, key=lambda r: r.display_name.lower())
+
         table = self.query_one("#repo-table", DataTable)
         table.clear()
         self._repo_data.clear()
@@ -122,12 +142,19 @@ class RepoListScreen(Screen):
         status = self.query_one("#repo-status", Static)
         total = len(repos)
         shown = len(filtered)
+        sort_label = f"[dim]sort:{self._sort_key}[/]"
         if shown == total:
-            status.update(f"[dim]{total} repositories[/]  [bold][{forge_label}][/]")
+            status.update(f"[dim]{total} repositories[/]  [bold][{forge_label}][/]  {sort_label}")
         else:
             status.update(
-                f"[dim]{shown} of {total} repositories[/]  [bold][{forge_label}][/]"
+                f"[dim]{shown} of {total} repositories[/]  [bold][{forge_label}][/]  {sort_label}"
             )
+
+    def action_cycle_sort(self) -> None:
+        keys = self.REPO_SORT_KEYS
+        idx = keys.index(self._sort_key) if self._sort_key in keys else -1
+        self._sort_key = keys[(idx + 1) % len(keys)]
+        self._apply_filters()
 
     def action_refresh(self) -> None:
         self._apply_filters()

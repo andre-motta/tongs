@@ -309,9 +309,7 @@ class MRDetailScreen(Screen):
         for change in changes:
             new_path = change.get("new_path") or change.get("filename", "")
             old_path = (
-                change.get("old_path")
-                or change.get("previous_filename")
-                or new_path
+                change.get("old_path") or change.get("previous_filename") or new_path
             )
             diff = change.get("diff") or change.get("patch") or ""
             if not diff.strip() and new_path and new_path not in existing_paths:

@@ -494,31 +494,43 @@ class DiffContent(Widget):
             return
 
         if not file.hunks:
-            option_list.add_option(
-                Option(Text("[No changes]", style=Style(dim=True)), disabled=True)
+            msg = Text()
+            msg.append(
+                "Diff not available. May be too large for the API. ",
+                Style(dim=True),
             )
+            msg.append("Press ", Style(dim=True))
+            msg.append("o", Style(bold=True))
+            msg.append(" to view in browser.", Style(dim=True))
+            option_list.add_option(Option(msg, disabled=True))
             return
 
         disc_index = _build_discussion_index(self._file_discussions)
         comment_lines = _build_comment_lines(self._file_discussions)
         expanded = option_list._expanded_threads
-        renderer = DiffRenderer(file.language, comment_lines=comment_lines)
+
+        highlight_map = _build_highlight_map(file)
+        renderer = DiffRenderer(
+            file.language, comment_lines=comment_lines, highlight_map=highlight_map
+        )
+
+        all_options: list[Option] = []
         option_idx = 0
         first_changed_idx: int | None = None
 
         for hunk in file.hunks:
             header_text = Text(f"  {hunk.header}", style=Style(bold=True, dim=True))
-            option_list.add_option(Option(header_text, disabled=True))
+            all_options.append(Option(header_text, disabled=True))
             option_idx += 1
 
             for dl, text in renderer.render_lines(hunk):
                 if dl is None:
-                    option_list.add_option(Option(text, disabled=True))
+                    all_options.append(Option(text, disabled=True))
                 elif dl.line_type == LineType.NO_NEWLINE:
-                    option_list.add_option(Option(text, disabled=True))
+                    all_options.append(Option(text, disabled=True))
                     option_list._line_types[option_idx] = dl.line_type
                 else:
-                    option_list.add_option(Option(text))
+                    all_options.append(Option(text))
                     option_list._line_map[option_idx] = dl
                     option_list._line_types[option_idx] = dl.line_type
                     line_discs = _match_discussions(dl, disc_index)
@@ -533,10 +545,12 @@ class DiffContent(Widget):
                     option_idx += 1
                     expanded_discs = [d for d in line_discs if d.id in expanded]
                     for block_line in _render_thread_block(expanded_discs):
-                        option_list.add_option(Option(block_line, disabled=True))
+                        all_options.append(Option(block_line, disabled=True))
                         option_idx += 1
                     continue
                 option_idx += 1
+
+        option_list.add_options(all_options)
 
         if first_changed_idx is not None:
             option_list.highlighted = first_changed_idx
@@ -597,9 +611,11 @@ class DiffRenderer:
         self,
         language: str = "",
         comment_lines: dict[tuple[int | None, int | None], bool] | None = None,
+        highlight_map: dict[int, Text] | None = None,
     ):
         self._language = language or "text"
         self._comment_lines = comment_lines or {}
+        self._highlight_map = highlight_map or {}
 
     CONTEXT_LINES = 3
 
@@ -712,7 +728,8 @@ class DiffRenderer:
         does not conflict.
         """
         gutter = self._gutter(dl)
-        content = self._highlight_content(dl.content)
+        cached = self._highlight_map.get(id(dl))
+        content = cached if cached is not None else self._highlight_content(dl.content)
 
         line = Text()
         line.append_text(gutter)
@@ -926,6 +943,41 @@ def _render_thread_block(discussions: list[Discussion]) -> list[Text]:
             result.extend(_render_comment(reply, is_reply=True))
 
     return result
+
+
+def _build_highlight_map(file: DiffFile) -> dict[int, Text]:
+    """Bulk-highlight all diff lines in one Pygments call, keyed by id(DiffLine)."""
+    language = file.language or "text"
+    if language == "text" or not file.hunks:
+        return {}
+
+    all_lines: list[DiffLine] = []
+    for hunk in file.hunks:
+        for dl in hunk.lines:
+            all_lines.append(dl)
+
+    if not all_lines:
+        return {}
+
+    bulk_content = "\n".join(dl.content for dl in all_lines)
+    try:
+        syntax = Syntax(
+            bulk_content,
+            language,
+            theme="monokai",
+            line_numbers=False,
+            word_wrap=False,
+        )
+        highlighted = syntax.highlight(bulk_content)
+        highlighted.rstrip()
+        parts = highlighted.split("\n")
+        result: dict[int, Text] = {}
+        for dl, part in zip(all_lines, parts):
+            part.rstrip()
+            result[id(dl)] = part
+        return result
+    except Exception:
+        return {}
 
 
 def _build_discussion_index(

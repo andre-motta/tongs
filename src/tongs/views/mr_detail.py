@@ -280,6 +280,7 @@ class MRDetailScreen(Screen):
 
             diff_text = self._changes_to_diff_text(changes)
             files = parse_diff(diff_text)
+            files = self._add_truncated_files(files, changes)
             self._cached_diff_files = files
             panel.set_files(files, discussions)
         except Exception as exc:
@@ -299,6 +300,36 @@ class MRDetailScreen(Screen):
         except Exception:
             discussions = []
         return changes, discussions
+
+    def _add_truncated_files(self, files: list, changes: list[dict]) -> list:
+        """Add placeholder DiffFile entries for files with truncated diffs."""
+        from tongs.diff.models import DiffFile, FileStatus
+
+        existing_paths = {f.new_path for f in files}
+        for change in changes:
+            new_path = change.get("new_path") or change.get("filename", "")
+            old_path = (
+                change.get("old_path")
+                or change.get("previous_filename")
+                or new_path
+            )
+            diff = change.get("diff") or change.get("patch") or ""
+            if not diff.strip() and new_path and new_path not in existing_paths:
+                additions = change.get("additions", 0) or 0
+                deletions = change.get("deletions", 0) or 0
+                if additions or deletions or change.get("too_large"):
+                    files.append(
+                        DiffFile(
+                            old_path=old_path,
+                            new_path=new_path,
+                            status=FileStatus.MODIFIED,
+                            hunks=(),
+                            language="",
+                            additions=additions,
+                            deletions=deletions,
+                        )
+                    )
+        return files
 
     def _changes_to_diff_text(self, changes: list[dict]) -> str:
         """Convert forge API response to unified diff text.

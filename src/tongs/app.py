@@ -91,6 +91,8 @@ class TongsApp(App):
             extra_github_hosts=self.config.extra_github_hosts,
             request_timeout=self.config.request_timeout,
             cache=self.cache,
+            mr_list_ttl=self.config.mr_list_ttl,
+            diff_ttl=self.config.diff_ttl,
         )
         self.repos: list[Repo] = []
         self.plugin_registry = PluginRegistry()

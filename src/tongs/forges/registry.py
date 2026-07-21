@@ -31,11 +31,15 @@ class ForgeRegistry:
         extra_github_hosts: frozenset[str] = frozenset(),
         request_timeout: float = 30.0,
         cache: object | None = None,
+        mr_list_ttl: int = 60,
+        diff_ttl: int = 300,
     ):
         self._extra_gitlab_hosts = extra_gitlab_hosts
         self._extra_github_hosts = extra_github_hosts
         self._timeout = request_timeout
         self._cache = cache
+        self._mr_list_ttl = mr_list_ttl
+        self._diff_ttl = diff_ttl
         self._clients: dict[str, ForgeClient] = {}
         self._hosts: dict[str, ForgeHost] = {}
 
@@ -83,6 +87,17 @@ class ForgeRegistry:
             from tongs.forges.github import GitHubClient
 
             client = GitHubClient(host, http_client)
+
+        if self._cache is not None:
+            from tongs.cache.cached_client import CachedForgeClient
+
+            client = CachedForgeClient(
+                inner=client,
+                cache=self._cache,
+                hostname=hostname,
+                mr_list_ttl=self._mr_list_ttl,
+                diff_ttl=self._diff_ttl,
+            )
 
         self._clients[hostname] = client
         return client

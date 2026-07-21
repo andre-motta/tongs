@@ -178,16 +178,16 @@ class GitLabClient(ForgeClient):
         mr_task = asyncio.create_task(
             request(self._http, "GET", f"/projects/{project}/merge_requests/{number}")
         )
-        approvals_task = asyncio.create_task(
-            self._fetch_approvals(project, number)
-        )
+        approvals_task = asyncio.create_task(self._fetch_approvals(project, number))
         data = await mr_task
         approvals = await approvals_task
         detail = self._parse_mr_detail(data, repo_path)
         if approvals:
             detail = MRDetail(
                 **{
-                    f.name: (approvals if f.name == "approvals" else getattr(detail, f.name))
+                    f.name: (
+                        approvals if f.name == "approvals" else getattr(detail, f.name)
+                    )
                     for f in fields(detail)
                 }
             )
@@ -201,8 +201,7 @@ class GitLabClient(ForgeClient):
                 f"/projects/{project}/merge_requests/{number}/approvals",
             )
             return tuple(
-                _parse_user(a.get("user", a))
-                for a in data.get("approved_by", [])
+                _parse_user(a.get("user", a)) for a in data.get("approved_by", [])
             )
         except Exception:
             return ()

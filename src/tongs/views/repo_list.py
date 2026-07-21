@@ -144,7 +144,9 @@ class RepoListScreen(Screen):
         shown = len(filtered)
         sort_label = f"[dim]sort:{self._sort_key}[/]"
         if shown == total:
-            status.update(f"[dim]{total} repositories[/]  [bold][{forge_label}][/]  {sort_label}")
+            status.update(
+                f"[dim]{total} repositories[/]  [bold][{forge_label}][/]  {sort_label}"
+            )
         else:
             status.update(
                 f"[dim]{shown} of {total} repositories[/]  [bold][{forge_label}][/]  {sort_label}"

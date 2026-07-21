@@ -41,10 +41,18 @@ Select multiple lines for multi-line comments:
 | ++ctrl++ + click | Extend selection to clicked line |
 | ++escape++ | Clear selection |
 
+## Truncated diffs
+
+When a forge API truncates a large diff (returning no patch content), the file
+still appears in the file tree with its +/- stats. The diff pane shows a
+"Diff not available" message with a prompt to press ++o++ to view the full file
+in your browser.
+
 ## Syntax highlighting
 
-tongs uses Pygments to apply syntax highlighting to 500+ languages. Highlighting
-is applied per-line inside the diff, matching the file's language.
+tongs uses Pygments to apply syntax highlighting to 500+ languages. All lines in
+a file are highlighted in a single bulk Pygments call for performance, rather
+than per-line.
 
 ## Word-level diffs
 

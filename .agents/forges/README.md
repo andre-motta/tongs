@@ -128,7 +128,8 @@ Key details:
 - **Repo path splitting:** `_split_repo_path(repo_path)` splits `"owner/repo"` into a tuple. Called on every API method to construct `/repos/{owner}/{repo}/...` paths.
 - **Search API for inbox:** `list_my_reviews()` and `list_my_mrs()` use `_search_prs()`, which queries `/search/issues` with `review-requested:@me` or `author:@me`. Search results are issue-shaped (missing PR fields like `mergeable_state`), so each result is re-fetched via `/repos/{owner}/{repo}/pulls/{number}` to get full PR data.
 - **SSRF prevention:** `_repo_path_from_api_url(repo_url)` validates that the `repository_url` from search results starts with the client's `base_url + "/repos/"` before extracting the repo path. Results that do not match are silently skipped, preventing crafted API responses from redirecting requests to arbitrary hosts.
-- **CI status:** `ci_status` is always `CIStatus.UNKNOWN` in PR list/detail responses. GitHub does not include check-run status in the PR payload; it requires a separate `GET /repos/{owner}/{repo}/commits/{ref}/check-runs` call which is not implemented yet.
+- **CI status from check-runs:** `get_mr()` concurrently fetches CI status via `_fetch_ci_status()`, which calls `GET /repos/{owner}/{repo}/commits/{sha}/check-runs`. The method aggregates all check-run statuses: FAILED if any failed, RUNNING if any running, PENDING if any pending, SUCCESS if all succeeded. Falls back to `CIStatus.UNKNOWN` on error.
+- **Approvals from reviews API:** `get_mr()` concurrently fetches approvals via `_fetch_approvals()`, which paginates `GET /repos/{owner}/{repo}/pulls/{number}/reviews`. Tracks approval state per user: `APPROVED` adds the user, `CHANGES_REQUESTED` or `DISMISSED` removes them. Returns the final set of approving users. Falls back to empty tuple on error.
 - **State mapping:** GitHub uses `"open"/"closed"`, plus the `merged` flag on the PR object for merged state. `_parse_mr_state()` handles the translation.
 - **CI status mapping:** `_parse_ci_status(status, conclusion)` maps GitHub Actions two-field status (status + conclusion) to `CIStatus`. Example: `status="completed"` + `conclusion="success"` becomes `CIStatus.SUCCESS`.
 
@@ -143,6 +144,8 @@ Key details:
 **Branch deletion safety:** `merge_mr()` with `delete_branch=True` verifies that `head.repo.full_name` matches the target `repo_path` before deleting the branch. This prevents accidental deletion of branches on fork repositories in cross-fork PRs.
 
 **Commit listing:** `list_mr_commits()` paginates `/repos/{owner}/{repo}/pulls/{number}/commits` and returns `list[Commit]`. Author is parsed from the top-level `author` (GitHub user), not `commit.author` (git author name).
+
+**Concurrent detail fetches:** `get_mr()` fires three concurrent tasks: the PR detail fetch, `_fetch_ci_status()`, and `_fetch_approvals()`. CI status and approvals are merged into the `MRDetail` after all three complete.
 
 **PR-scoped workflow runs (Phase 5):** `list_mr_pipelines()` first fetches the PR to get the head branch ref, then GETs `/repos/{owner}/{repo}/actions/runs?branch={branch}`. `retry_pipeline()` POSTs to `/actions/runs/{id}/rerun-failed-jobs`. `cancel_job` and `supports_job_cancel` are not overridden (GitHub Actions jobs are canceled at the run level via `cancel_pipeline`).
 
@@ -185,6 +188,9 @@ Key details:
 | ForgeRegistry | Complete (GitHub + GitLab wired) |
 | GitLabClient | Complete (all ABC methods) |
 | GitHubClient | Complete (all ABC methods; CI status from PR list is UNKNOWN; thread resolution via GraphQL) |
-| GitHub CI check-runs | Not implemented (requires separate API call per PR) |
-| Keyring auth | Planned (future) |
-| Rate limit auto-retry | Error raised, UI retry planned |
+| GitHub CI check-runs | Complete (concurrent fetch via _fetch_ci_status, aggregates all check-run statuses) |
+| GitHub approvals | Complete (concurrent fetch via _fetch_approvals from reviews API) |
+| GitLab approvals | Complete (concurrent fetch from /approvals endpoint) |
+| Keyring auth | Complete (optional fallback via `keyring` package) |
+| Rate limit auto-retry | Complete (429 -> wait retry_after seconds, retry once) |
+| CachedForgeClient | Complete (wraps forge clients with SQLite cache on reads) |

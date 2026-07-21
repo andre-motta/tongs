@@ -42,7 +42,7 @@ pip install -e ".[dev]"
 ```
 src/tongs/
   app.py              # TongsApp (Textual App), reactive state, discovery
-  commands.py          # TongsCommandProvider (command palette, context-aware discover/search)
+  commands.py          # TongsCommandProvider (command palette, context-aware discover/search, Clear Cache)
   config.py            # TOML config loader, Config dataclass, platformdirs paths
   errors.py            # ForgeError hierarchy + credential redaction
 
@@ -54,11 +54,11 @@ src/tongs/
   forges/              # Forge abstraction layer
     base.py            # ForgeClient ABC (MR, comment, review, pipeline, commit ops; list_mr_pipelines, retry_pipeline, cancel_job, supports_job_cancel)
     models.py          # Shared dataclasses (MRSummary, MRDetail, Pipeline, PipelineJob, Commit, etc.)
-    auth.py            # Token resolution cascade: CLI -> .netrc -> error
-    http.py            # httpx transport: create_client, request, paginate, error mapping
-    gitlab.py          # GitLabClient implementation (API v4)
-    github.py          # GitHubClient implementation (REST API)
-    registry.py        # ForgeRegistry: hostname -> authenticated ForgeClient
+    auth.py            # Token resolution cascade: CLI -> .netrc -> keyring -> error
+    http.py            # httpx transport: create_client, request, paginate, error mapping, rate limit auto-retry
+    gitlab.py          # GitLabClient implementation (API v4, /approvals endpoint for MR approvers)
+    github.py          # GitHubClient implementation (REST API, check-runs CI status, reviews API approvals)
+    registry.py        # ForgeRegistry: hostname -> authenticated ForgeClient, wraps in CachedForgeClient
 
   diff/                # Diff parsing engine (Phase 2)
     models.py          # DiffFile, DiffHunk, DiffLine, LineType, FileStatus
@@ -72,14 +72,16 @@ src/tongs/
     comment_editor.py  # CommentEditor (bottom-docked, general + inline + reply + reply_general modes, focus save/restore)
     diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent(DiffOptionList + Markdown)), discussion threading, jump_to_discussion()
     discussion_list.py # DiscussionPanel (card-based discussion tab), DiscussionCard, render_diff_snippet(), JumpToDiffDiscussion/DiscussionReplyRequested messages
-    mr_table.py        # MRTable (DataTable subclass, setup_columns(show_repo) toggle)
+    mr_table.py        # MRTable (DataTable subclass, setup_columns(show_repo) toggle, sort cycling via s key)
     pipeline_panel.py  # PipelinePanel (three-level drill-down: pipelines -> jobs -> log), PipelineCard, JobCard, RichLog-based log viewer
 
   cache/               # API response caching
     store.py           # CacheStore: async SQLite (aiosqlite), TTL, LRU eviction, WAL mode, 0o600 perms
+    cached_client.py   # CachedForgeClient: wraps ForgeClient with SQLite cache on reads, invalidation on mutations
 
   plugins/             # Plugin system (Phase 6)
-    base.py            # TongsPlugin ABC (name, version, get_commands, get_screens, lifecycle hooks)
+    base.py            # TongsPlugin ABC (name, version, get_commands, get_screens, lifecycle hooks via PluginContext)
+    context.py         # PluginContext: security facade exposing forge_registry, cache, config, repos, notify
     registry.py        # PluginRegistry: entry point discovery, config filtering, graceful failure
 
   mcp/                 # MCP server for AI agent integration
@@ -88,7 +90,7 @@ src/tongs/
 
   views/               # Textual Screens
     inbox.py           # InboxScreen: MR inbox with tabs (My Reviews/My MRs/All Open), supports scoped mode
-    repo_list.py       # RepoListScreen: searchable DataTable with live filter and forge cycling
+    repo_list.py       # RepoListScreen: searchable DataTable with live filter, forge cycling, sort cycling (s key)
     mr_detail.py       # MRDetailScreen: tabbed MR detail (Overview/Diff/Discussion/Pipeline)
     suggestion.py      # Pure helpers for suggestion comments (template, fence, forge-specific blocks)
 ```
@@ -108,7 +110,7 @@ src/tongs/
 
 ## Development Status
 
-Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). Phase 3 complete (GitHub REST API client, Commit model, commits tab in MR detail, scrollable overview with Markdown description, SSRF prevention, cross-fork safety). Phase 4 complete (inline discussion threads with expand/collapse/reply/resolve, command palette, comment navigation, parallel diff+discussions fetch, file tree with comment counts, footer cleanup with context-aware bindings, card-based Discussion tab with diff snippets and Rich Markdown threads, cross-tab jump-to-diff navigation, diff caching between tabs, GitLab system note filtering, CommentEditor focus restoration). Phase 5 complete (Pipeline/CI management with three-level drill-down: pipelines, jobs, log viewer; cancel/retry pipelines and jobs; RichLog-based ANSI log rendering; F2 open in editor; / search in log; list_mr_pipelines, retry_pipeline, cancel_job backend methods; supports_job_cancel capability property). Phase 6 complete (plugin system with TongsPlugin ABC, PluginRegistry with entry point discovery and config filtering, MCPPlugin as first-party plugin, plugin commands merged into command palette, `tongs.plugins` entry point group in pyproject.toml). Phase 7 complete (CacheStore with aiosqlite/TTL/LRU/WAL/0o600 perms, GitHub GraphQL _graphql helper with resolve_discussion via mutations and supports_thread_resolution, MCP server with 6 read/comment/approve tools and tongs-mcp entry point, MkDocs Material site at tongs.tools).
+Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). Phase 3 complete (GitHub REST API client, Commit model, commits tab in MR detail, scrollable overview with Markdown description, SSRF prevention, cross-fork safety). Phase 4 complete (inline discussion threads with expand/collapse/reply/resolve, command palette, comment navigation, parallel diff+discussions fetch, file tree with comment counts, footer cleanup with context-aware bindings, card-based Discussion tab with diff snippets and Rich Markdown threads, cross-tab jump-to-diff navigation, diff caching between tabs, GitLab system note filtering, CommentEditor focus restoration). Phase 5 complete (Pipeline/CI management with three-level drill-down: pipelines, jobs, log viewer; cancel/retry pipelines and jobs; RichLog-based ANSI log rendering; F2 open in editor; / search in log; list_mr_pipelines, retry_pipeline, cancel_job backend methods; supports_job_cancel capability property). Phase 6 complete (plugin system with TongsPlugin ABC, PluginRegistry with entry point discovery and config filtering, MCPPlugin as first-party plugin, plugin commands merged into command palette, `tongs.plugins` entry point group in pyproject.toml, PluginContext security facade). Phase 7 complete (CacheStore with aiosqlite/TTL/LRU/WAL/0o600 perms, CachedForgeClient wrapping forge clients with SQLite cache, GitHub GraphQL _graphql helper with resolve_discussion via mutations and supports_thread_resolution, MCP server with 6 read/comment/approve tools and tongs-mcp entry point, MkDocs Material site at tongs.tools). Phase 8 complete (GitHub CI status from check-runs API with concurrent fetch, GitHub approvals from reviews API, GitLab approvals from /approvals endpoint, rate limit auto-retry in http.py, keyring auth support as optional fallback, bulk Pygments highlighting via _build_highlight_map, batch add_options for diff rendering, truncated diff handling with placeholder DiffFile entries, sort cycling on MRTable and RepoListScreen via s key, Clear Cache command in palette, 618 tests).
 
 ## Gate Process
 

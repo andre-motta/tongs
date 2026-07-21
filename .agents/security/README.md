@@ -15,11 +15,15 @@ Token resolution cascade defined in `src/tongs/forges/auth.py:resolve_token()`:
    - POSIX: enforces `0o600` permissions, raises `AuthError` if group/other readable
    - Windows: reads `_netrc`, no permission enforcement (warning only)
 
-3. **Error with instructions**
+3. **System keyring** (optional fallback)
+   - Uses the `keyring` package (optional dependency, imported with try/except)
+   - Reads from `keyring.get_password("tongs", hostname)`
+   - Silently returns None if keyring is not installed or lookup fails
+   - Users store tokens via `keyring set tongs <hostname>`
+
+4. **Error with instructions**
    - Raises `AuthError` with forge-specific setup command
    - Never silently fails or uses empty tokens
-
-Planned future step: system keyring via `keyring` package (optional dependency).
 
 ## Token Lifecycle
 
@@ -187,4 +191,4 @@ For external editor integration (CommentEditor F2 binding and PipelinePanel F2 j
 
 **Graceful failure:** All plugin lifecycle calls (`on_app_ready`, `on_app_shutdown`) and command/screen collection (`get_commands`, `get_screens`) are wrapped in individual `try/except` blocks with `exc_info=True` logging. A failing plugin does not crash the app or affect other plugins.
 
-**Data access:** Plugins receive the `app` instance in lifecycle hooks. They access forge data via `app.forge_registry` and `app.cache`, not raw HTTP clients or tokens.
+**Data access:** Plugins receive a `PluginContext` security facade in lifecycle hooks, not the raw `TongsApp` instance. `PluginContext` (defined in `src/tongs/plugins/context.py`) exposes only safe, read-only properties: `forge_registry`, `cache`, `config`, `repos`, plus `notify()`, `push_screen()`, `pop_screen()`, and `plugin_config()`. This prevents plugins from accessing internal app state, mutating reactive attributes, or interfering with the TUI event loop directly.

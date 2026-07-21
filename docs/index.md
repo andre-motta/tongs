@@ -178,6 +178,7 @@ enabled = false
 | Command palette | Yes | No | N/A |
 | Plugin system | Yes | No | No |
 | MCP server (AI integration) | Yes | No | No |
+| Rate limit auto-retry | Yes | No | N/A |
 | Zero config auth | Yes | Yes | N/A |
 | Self-hosted forges | Yes | Yes | N/A |
 

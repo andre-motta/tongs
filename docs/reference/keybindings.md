@@ -21,6 +21,7 @@ These bindings work everywhere in the application.
 | ++1++ | Switch to My Reviews tab |
 | ++2++ | Switch to My MRs tab |
 | ++3++ | Switch to All Open tab |
+| ++s++ | Cycle sort order (updated / title / CI / author) |
 | ++r++ | Toggle repo list |
 | ++enter++ | Open MR detail view |
 
@@ -30,6 +31,7 @@ These bindings work everywhere in the application.
 |-----|--------|
 | ++slash++ | Filter repos by name |
 | ++f++ | Cycle forge filter (All / GH / GL) |
+| ++s++ | Cycle sort order (name / forge / host) |
 | ++enter++ | Open scoped inbox for selected repo |
 
 ## MR detail

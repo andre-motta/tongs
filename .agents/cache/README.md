@@ -53,11 +53,24 @@ CREATE TABLE IF NOT EXISTS cache (
 
 Keys starting with `_EXCLUDED_PREFIXES` (`"job_log:"`, `"stream_log:"`) are silently ignored by both `get()` and `put()`. This prevents large, ephemeral CI log data from being cached.
 
+## CachedForgeClient
+
+`src/tongs/cache/cached_client.py` wraps any `ForgeClient` with transparent SQLite caching. `ForgeRegistry.get_client()` automatically wraps every forge client in `CachedForgeClient` when a cache is configured.
+
+- **Cached reads:** `list_mrs` (keyed by repo_path + state, TTL = mr_list_ttl) and `get_mr_diff` (keyed by repo_path + MR number, TTL = diff_ttl). On cache hit, returns deserialized JSON without an API call.
+- **Mutation invalidation:** `approve_mr`, `unapprove_mr`, `close_mr`, `reopen_mr` invalidate MR list entries. `merge_mr` invalidates all entries for the repo (broader scope).
+- **Pass-through:** All other methods (comments, discussions, pipelines, etc.) forward directly to the inner client via `__getattr__`.
+- **Serialization:** `_mr_summary_to_dict` / `_dict_to_mr_summary` handle MRSummary round-trip through JSON, including enum values (CIStatus, MRState, ForgeType) and datetime fields.
+
+## Clear Cache Command
+
+The command palette includes a "Clear Cache" command that calls `cache.clear()` to delete all cached entries. Useful when cached data is stale or the user wants to force a fresh fetch.
+
 ## Integration
 
 - `TongsApp.__init__()` creates `CacheStore(max_size_mb=config.max_cache_size_mb)`.
 - `TongsApp.on_mount()` calls `cache.open()`.
-- `ForgeRegistry` receives the cache instance in its constructor.
+- `ForgeRegistry` receives the cache instance in its constructor and wraps clients in `CachedForgeClient`.
 - `TongsApp.on_unmount()` calls `cache.close()`.
 - Cache size is configurable via `[cache] max_size_mb` in `config.toml` (default 100).
 - TTL values are configurable: `mr_list_ttl` (default 60s), `diff_ttl` (default 300s).

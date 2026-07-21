@@ -13,8 +13,9 @@ A plugin can contribute any combination of:
 - **Lifecycle hooks** -- async callbacks that run when the app starts up
   (`on_app_ready`) or shuts down (`on_app_shutdown`)
 
-Plugins receive the full `TongsApp` instance at lifecycle time, giving them
-access to forge clients, configuration, and the cache layer.
+Plugins receive a `PluginContext` security facade at lifecycle time, giving them
+controlled access to forge clients, configuration, the cache layer, and
+notifications without exposing internal app state.
 
 ## Writing a plugin
 
@@ -40,10 +41,10 @@ class TongsPlugin:
         """Semver string. Defaults to '0.0.0'."""
         ...
 
-    async def on_app_ready(self, app) -> None:
+    async def on_app_ready(self, ctx: PluginContext) -> None:
         """Called after the TUI app is mounted."""
 
-    async def on_app_shutdown(self, app) -> None:
+    async def on_app_shutdown(self, ctx: PluginContext) -> None:
         """Called before app exit."""
 
     def get_commands(self) -> list[tuple[str, str, object]]:
@@ -133,24 +134,27 @@ its own configuration schema.
 If a `[plugins.<name>]` section is absent entirely, the plugin is loaded with
 default settings.
 
-## What the app object provides
+## What the PluginContext provides
 
-Both `on_app_ready` and `on_app_shutdown` receive the `TongsApp` instance as
-their `app` argument. The most useful attributes for plugin authors:
+Both `on_app_ready` and `on_app_shutdown` receive a `PluginContext` instance.
+This is a security facade that exposes a controlled subset of the application:
 
-| Attribute | Type | Description |
+| Attribute / Method | Type | Description |
 |-----------|------|-------------|
-| `app.forge_registry` | `ForgeRegistry` | Manages HTTP clients for GitHub and GitLab. Use it to make authenticated API calls against any configured forge. |
-| `app.cache` | `CacheStore` | Key-value cache with TTL support. Plugins can read and write cached data to avoid redundant API calls. |
-| `app.config` | `Config` | The resolved configuration object. Access `app.config.plugin_config` to read your plugin's settings. |
-| `app.repos` | `list[Repo]` | All discovered git repositories under the scan root. May be empty during `on_app_ready` because discovery runs in a background thread. |
-| `app.plugin_registry` | `PluginRegistry` | The registry itself, if you need to inspect other loaded plugins. |
+| `ctx.forge_registry` | `ForgeRegistry` | Manages HTTP clients for GitHub and GitLab. Use it to make authenticated API calls against any configured forge. |
+| `ctx.cache` | `CacheStore` | Key-value cache with TTL support. Plugins can read and write cached data to avoid redundant API calls. |
+| `ctx.config` | `Config` | The resolved configuration object. |
+| `ctx.repos` | `list[Repo]` | All discovered git repositories under the scan root. May be empty during `on_app_ready` because discovery runs in a background thread. |
+| `ctx.notify(message, severity)` | method | Send a user-visible notification through the TUI. |
+| `ctx.push_screen(screen)` | method | Push a screen onto the TUI screen stack. |
+| `ctx.pop_screen()` | method | Pop the current screen. |
+| `ctx.plugin_config(name)` | method | Return the config section for a specific plugin (as a dict copy). |
 
 ### Accessing your plugin config
 
 ```python
-async def on_app_ready(self, app) -> None:
-    my_conf = app.config.plugin_config.get(self.name, {})
+async def on_app_ready(self, ctx) -> None:
+    my_conf = ctx.plugin_config(self.name)
     interval = my_conf.get("monitor_interval", 60)
     # use interval...
 ```
@@ -216,9 +220,9 @@ class StatsPlugin(TongsPlugin):
     def version(self) -> str:
         return "1.0.0"
 
-    async def on_app_ready(self, app) -> None:
-        """Stash the app reference for later use."""
-        self._app = app
+    async def on_app_ready(self, ctx) -> None:
+        """Stash the context reference for later use."""
+        self._ctx = ctx
 
     def get_commands(self) -> list[tuple[str, str, object]]:
         return [
@@ -226,10 +230,9 @@ class StatsPlugin(TongsPlugin):
         ]
 
     def _show_stats(self) -> None:
-        repo_count = len(self._app.repos)
-        host_count = len(self._app.get_repo_hostnames())
-        self._app.notify(
-            f"Tracking {repo_count} repos across {host_count} hosts"
+        repo_count = len(self._ctx.repos)
+        self._ctx.notify(
+            f"Tracking {repo_count} repos"
         )
 ```
 

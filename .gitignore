@@ -8,3 +8,5 @@ build/
 .ruff_cache/
 *.egg
 .tox/
+site/
+tongs-test-sandbox/

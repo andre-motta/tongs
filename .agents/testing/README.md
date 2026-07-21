@@ -19,7 +19,7 @@ pytest tests/test_forges/test_gitlab.py
 pytest tests/test_forges/test_gitlab.py::TestGitLabClientAsync
 ```
 
-Tests run without network access. All forge interactions are mocked. The full suite (573 tests) runs in under 1 second.
+Tests run without network access. All forge interactions are mocked. The full suite (618 tests) runs in under 1 second.
 
 ## Directory Layout
 
@@ -38,7 +38,7 @@ tests/
     test_auth.py             # Token resolution cascade
     test_http.py             # HTTP transport, error mapping
     test_gitlab.py           # GitLab client parsing and async methods
-    test_github.py           # GitHub client: inline comment, multi-line params (3 tests)
+    test_github.py           # GitHub client: inline comment, multi-line params, CI check-runs, approvals
     test_registry.py         # ForgeRegistry hostname mapping
   test_diff/
     test_parser.py           # Diff parser with inline strings + fixture files

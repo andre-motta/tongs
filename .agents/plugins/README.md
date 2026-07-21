@@ -18,8 +18,8 @@ class TongsPlugin(ABC):
     def version(self) -> str:         # Defaults to "0.0.0"
         return "0.0.0"
 
-    async def on_app_ready(self, app) -> None: ...    # After TUI mount
-    async def on_app_shutdown(self, app) -> None: ... # Before app exit
+    async def on_app_ready(self, ctx: PluginContext) -> None: ...    # After TUI mount
+    async def on_app_shutdown(self, ctx: PluginContext) -> None: ... # Before app exit
 
     def get_commands(self) -> list[tuple[str, str, object]]:  # (display, help, callback)
         return []
@@ -40,7 +40,7 @@ Defined in `src/tongs/plugins/registry.py`. Manages plugin discovery and lifecyc
 3. Validates `isinstance(plugin, TongsPlugin)`. Non-conforming plugins are skipped (logged at WARNING).
 4. On any exception during load/instantiate, logs the error with traceback and continues.
 
-**Lifecycle hooks:** `on_app_ready(app)` and `on_app_shutdown(app)` iterate all loaded plugins and call each hook. Each call is wrapped in its own `try/except` so a failing plugin does not affect others.
+**Lifecycle hooks:** `on_app_ready(app)` and `on_app_shutdown(app)` create a `PluginContext(app)` security facade and pass it to each plugin's hook. Each call is wrapped in its own `try/except` so a failing plugin does not affect others.
 
 **Command/screen aggregation:** `get_all_commands()` and `get_all_screens()` collect results from all plugins. Each plugin's call is wrapped in `try/except`. Commands are merged into the command palette; screens are collected as a dict.
 
@@ -112,7 +112,23 @@ Defined in `src/tongs/mcp/server.py`. Runs as a separate process (not inside the
 4. Install the package in the same environment as tongs.
 5. The plugin will be discovered on next app launch.
 
-In lifecycle hooks, access forge data via `app.forge_registry`, cache via `app.cache`, and repos via `app.repos`. Do not access raw HTTP clients or tokens.
+## PluginContext Security Facade
+
+Defined in `src/tongs/plugins/context.py`. Plugins receive a `PluginContext` instead of the raw `TongsApp` instance, preventing access to internal state.
+
+**Exposed properties (read-only):**
+- `forge_registry` -- access to authenticated forge clients
+- `cache` -- access to the SQLite cache store
+- `config` -- application configuration
+- `repos` -- list of discovered repositories
+
+**Exposed methods:**
+- `notify(message, severity)` -- send a user-visible notification
+- `push_screen(screen)` -- push a screen onto the TUI stack
+- `pop_screen()` -- pop the current screen
+- `plugin_config(plugin_name)` -- return the config section for a specific plugin (returns a copy, not a reference)
+
+In lifecycle hooks, access forge data via `ctx.forge_registry`, cache via `ctx.cache`, and repos via `ctx.repos`. Do not access raw HTTP clients or tokens.
 
 ## Testing
 

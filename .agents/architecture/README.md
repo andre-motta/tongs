@@ -26,7 +26,7 @@ The TUI layer never imports a concrete forge client. Everything goes through `Fo
 2. `TongsApp._discover_repos()` runs discovery in a background thread (`@work(thread=True)`) to avoid blocking the UI.
 3. `TongsApp.get_repo_hostnames()` extracts unique hostnames from discovered repos (not hardcoded).
 4. `InboxScreen.load_reviews()` iterates hostnames, calls `ForgeRegistry.get_client(hostname)` which lazily creates an authenticated `ForgeClient`.
-5. `ForgeRegistry.get_client()` resolves auth via `auth.py:resolve_token()`, creates an `httpx.AsyncClient` via `http.py:create_client()`, wraps it in a forge-specific client (`GitLabClient` or `GitHubClient`, selected by `ForgeType`).
+5. `ForgeRegistry.get_client()` resolves auth via `auth.py:resolve_token()` (CLI -> .netrc -> keyring cascade), creates an `httpx.AsyncClient` via `http.py:create_client()`, wraps it in a forge-specific client (`GitLabClient` or `GitHubClient`, selected by `ForgeType`), then wraps the client in `CachedForgeClient` if a cache is configured.
 6. The forge client makes API calls using `http.py:request()`, which maps HTTP errors to `ForgeError` subclasses.
 7. Forge client methods return shared dataclasses (`MRSummary`, `MRDetail`, `Commit`, etc.) to the view layer.
 8. Views populate Textual widgets (DataTable, Tree, Static) with the returned data.
@@ -101,7 +101,7 @@ The pipeline data flows through shared models (`Pipeline`, `PipelineJob`) from `
 1. `TongsApp.__init__()` creates a `PluginRegistry()` instance as `self.plugin_registry`.
 2. `TongsApp.on_mount()` calls `plugin_registry.discover(config.plugin_config)`.
 3. `PluginRegistry.discover()` reads `importlib.metadata.entry_points(group="tongs.plugins")`, filters by config (plugins can be disabled via `[plugins.NAME] enabled = false` in TOML), loads each entry point, validates it is a `TongsPlugin` subclass, and appends to the internal list. Failures are logged and skipped (graceful degradation).
-4. After discovery, `on_mount()` calls `plugin_registry.on_app_ready(app)`, which invokes each plugin's `on_app_ready()` lifecycle hook.
+4. After discovery, `on_mount()` calls `plugin_registry.on_app_ready(app)`, which creates a `PluginContext(app)` security facade and passes it to each plugin's `on_app_ready()` lifecycle hook. Plugins receive the restricted `PluginContext` instead of the raw `TongsApp` instance.
 5. During command palette discovery, `TongsCommandProvider._global_commands()` calls `app.plugin_registry.get_all_commands()`, which aggregates `(display, help_text, callback)` tuples from all loaded plugins. These are merged into the command palette alongside built-in commands.
 6. On app exit, `TongsApp.on_unmount()` calls `plugin_registry.on_app_shutdown(app)` before closing forge clients and cache.
 
@@ -130,6 +130,18 @@ Cache database location: `platformdirs.user_cache_dir("tongs") / "cache.db"`.
 5. Six tools are exposed: `list_mrs`, `get_mr`, `get_mr_diff`, `post_comment`, `approve_mr`, `list_pipelines`.
 6. Destructive actions (merge, close, reopen, cancel) are intentionally excluded as a security boundary.
 7. The server uses `mcp.server.fastmcp.FastMCP` and runs via `mcp.run()` (stdio transport).
+
+## Data Flow: CachedForgeClient (Phase 8)
+
+`CachedForgeClient` in `src/tongs/cache/cached_client.py` wraps any `ForgeClient` with transparent SQLite caching. `ForgeRegistry.get_client()` wraps every forge client in `CachedForgeClient` when a cache is configured.
+
+1. Read methods (`list_mrs`, `get_mr_diff`) check the cache first via `CacheStore.get_json()`. On hit, the cached JSON is deserialized and returned without making an API call.
+2. On cache miss, the inner client's method is called, and the result is stored via `CacheStore.put_json()` with the appropriate TTL (`mr_list_ttl` for MR lists, `diff_ttl` for diffs).
+3. Mutation methods (`approve_mr`, `unapprove_mr`, `merge_mr`, `close_mr`, `reopen_mr`) bypass the cache and delegate directly to the inner client. After the mutation completes, related cache entries are invalidated via `CacheStore.invalidate_prefix()`.
+4. All other methods are forwarded to the inner client via `__getattr__` (transparent proxy).
+5. Cache keys use the format `{hostname}:{repo_path}:{operation}[:params]`.
+
+The wrapper preserves all capability properties (`supports_batched_review`, etc.) from the inner client via attribute forwarding.
 
 ## Diff Caching Between Tabs
 
@@ -166,7 +178,7 @@ Benefits:
 The HTTP layer lives in `src/tongs/forges/http.py`:
 
 - `create_client(base_url, token, timeout)` -- returns configured `httpx.AsyncClient` with Bearer auth header
-- `request(client, method, path, **kwargs)` -- makes request, maps errors, returns parsed JSON
+- `request(client, method, path, **kwargs)` -- makes request, maps errors, returns parsed JSON. On 429 (rate limit), waits `retry_after` seconds (from Retry-After header, defaults to 5s) and retries once via `_retried` flag
 - `paginate(client, path, per_page, max_pages)` -- collects paginated GET results
 - `map_http_error(response)` -- maps HTTP status codes to `ForgeError` subclasses
 
@@ -177,7 +189,7 @@ Defined in `src/tongs/errors.py`:
 ```
 ForgeError (base)
   AuthError           -- 401, missing credentials -> "Run glab/gh auth login"
-  RateLimitError      -- 429, has retry_after attribute -> auto-retry with countdown
+  RateLimitError      -- 429, has retry_after attribute -> auto-retry once in http.py:request()
   NetworkError        -- timeout, transport errors -> switch to offline mode
   NotFoundError       -- 404 -> "MR not found (may have been deleted)"
   ConflictError       -- 409 -> "Cannot merge: resolve conflicts first"

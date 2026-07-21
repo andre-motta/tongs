@@ -182,6 +182,18 @@ The gutter lookup uses a `comment_lines: dict[tuple[int | None, int | None], boo
 
 This enables the Discussion tab's `Enter` key (via `JumpToDiffDiscussion` message) to jump directly to the code location with the discussion expanded.
 
+## Truncated Diff Handling
+
+When forge APIs truncate large diffs (returning no patch content), `MRDetailScreen._add_truncated_files()` creates placeholder `DiffFile` entries for the missing files. These placeholders have empty `hunks` but retain the file's `old_path`, `new_path`, `additions`, and `deletions` counts from the API metadata. In the diff viewer, files with empty hunks display a "Diff not available. May be too large for the API. Press o to view in browser." message. This ensures truncated files still appear in the file tree with their +/- stats.
+
+Detection logic: if a change entry has no `diff`/`patch` content, its `new_path` is not already in the parsed files, and it has nonzero additions/deletions or a `too_large` flag, a placeholder DiffFile is appended.
+
+## Bulk Pygments Highlighting
+
+`_build_highlight_map(file)` in `src/tongs/widgets/diff_panel.py` performs a single Pygments call per file rather than per-line. It concatenates all diff line contents, highlights the bulk string via `rich.syntax.Syntax`, then splits the highlighted `Text` back into per-line entries keyed by `id(DiffLine)`. The `DiffRenderer` receives this map and uses pre-highlighted text instead of re-highlighting each line individually.
+
+The batch `add_options()` call on `DiffOptionList` replaces the previous per-line `add_option()` loop, reducing Textual widget overhead for large files.
+
 ## Planned Features
 
 - **Virtual scrolling:** only materialize visible lines as Rich Text objects

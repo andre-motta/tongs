@@ -40,7 +40,7 @@ Registered screens: `"inbox"` -> `InboxScreen`, `"repo_list"` -> `RepoListScreen
 
 **Context-aware command generation:** `_get_commands()` inspects `type(screen).__name__` to determine the current screen and combines global commands with screen-specific commands. Each command is a `(display, help_text, callback)` tuple.
 
-**Global commands** (always available): Repos, Inbox, Help, plus any commands registered by plugins via `app.plugin_registry.get_all_commands()` (e.g., MCPPlugin adds "Start MCP Server").
+**Global commands** (always available): Repos, Inbox, Clear Cache, Help, plus any commands registered by plugins via `app.plugin_registry.get_all_commands()` (e.g., MCPPlugin adds "Start MCP Server").
 
 **Screen-specific commands:**
 - `InboxScreen`: My Reviews, My MRs, All Open (tab switches), Refresh, Open in Browser
@@ -88,6 +88,7 @@ Footer
 - `setup_columns(show_repo=True)` adds CI, #, Title, Author, Updated columns. When `show_repo=True` (default), also adds a Repo column. Scoped inbox passes `show_repo=False` to hide the redundant repo column.
 - `add_mr_row(mr, ascii_mode)` adds a row from `MRSummary`, stores the MR data keyed by `"{hostname}:{repo_path}:{number}"`. Conditionally includes repo_path based on `_show_repo`.
 - `get_selected_mr()` returns the `MRSummary` for the cursor row using `coordinate_to_cell_key()` and `RowKey.value`
+- **Sort cycling (`s`):** `action_cycle_sort()` cycles `_sort_key` through `MR_SORT_KEYS` (updated, title, ci, author). Calls `sort_mrs()` to re-sort and repopulates the table. Shows a notification with the current sort key.
 
 **Lazy loading:** tabs are loaded on first focus, not on mount. `_loaded_tabs` set tracks which tabs have been loaded. `on_tabbed_content_tab_activated()` checks the set before loading. `action_refresh()` discards the current tab from the set and reloads.
 
@@ -142,13 +143,15 @@ Footer
 
 **Forge filter (`f`):** Cycles `forge_filter` reactive through `None` (all) -> `GitHub` -> `GitLab` -> `None`. Current filter shown in the status bar.
 
+**Sort cycling (`s`):** `action_cycle_sort()` cycles `_sort_key` through `["name", "forge", "host"]`. Re-applies filters and sorting via `_apply_filters()`. Current sort key shown in the status bar (e.g., `sort:name`).
+
 **Compound row keys:** Each row is keyed by `"{hostname}:{display_name}"`, stored in `_repo_data` dict mapping keys to `Repo` objects.
 
 **Forge icons:** `[blue]GL[/]` for GitLab, `[white]GH[/]` for GitHub, `[dim]--[/]` for unknown.
 
 **Navigation:** Selecting a repo (`on_data_table_row_selected`) pushes `InboxScreen(repo=repo)` -- the scoped inbox for that repository.
 
-Bindings: Esc/q = back, `/` = search, f = cycle forge filter, Ctrl+R = refresh.
+Bindings: Esc/q = back, `/` = search, f = cycle forge filter, s = cycle sort, Ctrl+R = refresh.
 
 ## MRDetailScreen
 
@@ -489,6 +492,7 @@ Bindings: j/k = navigate cards, Enter = drill in, Escape = drill out, C = cancel
 - `A/U/M/X` = approve/unapprove/merge/close (MRDetailScreen, double-press to confirm)
 - `/` = search (RepoListScreen: live filter)
 - `f` = cycle forge filter (RepoListScreen: None -> GH -> GL -> None)
+- `s` = cycle sort (MRTable: updated -> title -> ci -> author; RepoListScreen: name -> forge -> host)
 - `]` = jump to next comment (DiffOptionList, wraps around)
 - `[` = jump to previous comment (DiffOptionList, wraps around)
 - `d` = toggle discussion thread expand/collapse (DiffOptionList)

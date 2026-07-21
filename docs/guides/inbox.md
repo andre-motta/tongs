@@ -40,6 +40,8 @@ Each row in the inbox shows:
 - **Comment count**
 - **Author** and **last updated** timestamp
 
+Press ++s++ to cycle the sort order (updated, title, CI status, author).
+
 Press ++enter++ on any row to open the MR detail view.
 
 ## Per-repo scoped inbox
@@ -49,7 +51,8 @@ You can filter the inbox to a single project:
 1. Press ++r++ to open the **repo list**
 2. Use ++slash++ to search repos by name
 3. Press ++f++ to cycle the forge filter (All / GH / GL)
-4. Press ++enter++ on a repo to show only MRs from that project
+4. Press ++s++ to cycle the sort order (name / forge / host)
+5. Press ++enter++ on a repo to show only MRs from that project
 
 Press ++r++ again to return to the full inbox.
 

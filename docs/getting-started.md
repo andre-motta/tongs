@@ -81,6 +81,17 @@ machine gitlab.com
   password glpat-your_token
 ```
 
+### Fallback: system keyring
+
+If you have the optional `keyring` package installed, tongs also checks the
+system keyring (after `.netrc`):
+
+```bash
+pip install keyring
+keyring set tongs github.com       # paste your GitHub token when prompted
+keyring set tongs gitlab.com       # paste your GitLab token when prompted
+```
+
 ## First run
 
 ```bash

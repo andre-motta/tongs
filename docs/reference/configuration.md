@@ -107,6 +107,14 @@ forge_type = "github"
     gh auth login --hostname github.corp.com
     ```
 
+    Alternatively, if you have the optional `keyring` package installed, you can
+    store tokens in your system keyring:
+
+    ```bash
+    pip install keyring
+    keyring set tongs gitlab.example.com    # paste your token when prompted
+    ```
+
 ## `[plugins.*]`
 
 Plugin-specific configuration. Each plugin uses its own sub-table with

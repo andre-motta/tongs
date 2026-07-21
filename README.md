@@ -77,7 +77,7 @@ glab auth login
 glab auth login --hostname gitlab.example.com
 ```
 
-tongs never stores your tokens. It delegates to `gh auth token` / `glab auth token` at runtime, falling back to `~/.netrc`.
+tongs never stores your tokens. It delegates to `gh auth token` / `glab auth token` at runtime, falling back to `~/.netrc` and then the system keyring (if the optional `keyring` package is installed).
 
 ## Features
 
@@ -86,14 +86,16 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 - **Multi-forge inbox** -- GitHub PRs and GitLab MRs in one view, auto-detected from your git remotes
 - **Three tabs** -- My Reviews, My MRs, All Open with lazy loading and parallel fetching
 - **Per-repo scope** -- click any repo in the repo list to filter the inbox to just that project
-- **Repo list** -- searchable, filterable by forge type (GH/GL/All), grouped by namespace
+- **Sortable** -- press `s` to cycle sort order (updated, title, CI status, author)
+- **Repo list** -- searchable, filterable by forge type (GH/GL/All), sortable by name/forge/host
 
 ### Diff review
 
 - **Split-pane viewer** -- file tree on the left, diff content on the right
-- **Syntax highlighting** -- 500+ languages via Pygments, applied per-line inside the diff
+- **Syntax highlighting** -- 500+ languages via Pygments, bulk-highlighted per file for performance
 - **Word-level diffs** -- changed words highlighted bold+underline within modified lines
 - **Context folding** -- long unchanged sections collapse to "... N unchanged lines ..." markers
+- **Truncated diff handling** -- files too large for the API appear in the file tree with +/- stats and a "view in browser" prompt
 - **Markdown preview** -- toggle rendered preview for `.md` files with `m`
 - **File navigation** -- jump between files with `n` / `Shift+N`
 
@@ -124,9 +126,11 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 ### Caching
 
 - **SQLite-backed cache** -- API responses are cached locally in SQLite (via aiosqlite) for snappy navigation
+- **Transparent caching layer** -- `CachedForgeClient` wraps forge clients, caching reads and invalidating on mutations
 - **Per-key TTL** -- MR lists (60s) and diffs (300s) have configurable time-to-live; expired entries are pruned automatically
 - **LRU eviction** -- size-capped at 100 MB by default; recently accessed entries are protected from eviction
 - **WAL mode** -- concurrent reads never block the UI event loop
+- **Clear Cache** -- available from the command palette (`Ctrl+P`) to force a fresh fetch
 
 ### Actions
 
@@ -163,6 +167,7 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 | `1` | My Reviews tab |
 | `2` | My MRs tab |
 | `3` | All Open tab |
+| `s` | Cycle sort order |
 | `r` | Repo list / Back |
 | `Enter` | Open MR detail |
 
@@ -172,6 +177,7 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 |-----|--------|
 | `/` | Filter repos |
 | `f` | Cycle forge filter (All/GH/GL) |
+| `s` | Cycle sort order (name/forge/host) |
 | `Enter` | Open scoped inbox for repo |
 
 ### MR detail
@@ -382,6 +388,7 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 | MCP server (AI integration) | Yes | No | No |
 | Plugin system | Yes | No | No |
 | SQLite offline cache | Yes | No | N/A |
+| Rate limit auto-retry | Yes | No | N/A |
 | Zero config auth | Yes | Yes | N/A |
 | Self-hosted forges | Yes | Yes | N/A |
 
@@ -396,10 +403,11 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 | 5 | Pipeline/CI management (three-level drill-down, job logs, retry, cancel, log search) | Done |
 | 6 | Plugin system (entry-point-based, MCP refactored as plugin) | Done |
 | 7 | SQLite caching, MCP server, GitHub thread resolution, MkDocs site | Done |
+| 8 | CachedForgeClient, GitHub CI/approvals, rate limit retry, keyring auth, sort cycling, bulk highlighting, truncated diffs | Done |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add forge backends. 573 tests and growing.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add forge backends. 618 tests and growing.
 
 tongs is early enough that contributions shape the architecture. The [plugin system](#plugin-system) makes it easy to add new commands, screens, and lifecycle hooks without touching core code. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 

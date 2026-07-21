@@ -19,6 +19,7 @@ from tongs.widgets.diff_panel import (
     ResolveRequested,
     _build_comment_lines,
     _build_discussion_index,
+    _build_highlight_map,
     _collect_change_block,
     _is_markdown_file,
     _match_discussions,
@@ -921,3 +922,75 @@ class TestDiffFileTreeSetFiles:
         assert "component.py" in label_text
         # Full path should NOT appear
         assert "src/deep/nested/" not in label_text
+
+
+# ===================================================================
+# 15. _build_highlight_map
+# ===================================================================
+
+class TestBuildHighlightMap:
+    def test_returns_empty_for_text_language(self):
+        """Language 'text' skips highlighting entirely."""
+        hunk = DiffHunk(
+            header="@@ -1,1 +1,1 @@",
+            old_start=1, old_count=1, new_start=1, new_count=1,
+            lines=(_ctx(1, 1, "hello world"),),
+        )
+        f = _make_file(hunks=(hunk,), language="text")
+        result = _build_highlight_map(f)
+        assert result == {}
+
+    def test_returns_empty_for_no_hunks(self):
+        """Empty hunks returns empty dict."""
+        f = _make_file(hunks=(), language="python")
+        result = _build_highlight_map(f)
+        assert result == {}
+
+    def test_returns_dict_keyed_by_id_for_valid_file(self):
+        """A Python file with real code produces a map keyed by id(DiffLine)."""
+        line1 = _ctx(1, 1, "def hello():")
+        line2 = _add(2, "    return 42")
+        line3 = _del(1, "    pass")
+        hunk = DiffHunk(
+            header="@@ -1,2 +1,2 @@",
+            old_start=1, old_count=2, new_start=1, new_count=2,
+            lines=(line1, line2, line3),
+        )
+        f = _make_file(hunks=(hunk,), language="python")
+        result = _build_highlight_map(f)
+        assert isinstance(result, dict)
+        assert len(result) == 3
+        # Keys are id(DiffLine)
+        assert id(line1) in result
+        assert id(line2) in result
+        assert id(line3) in result
+        # Values are rich Text objects
+        from rich.text import Text as RichText
+        for v in result.values():
+            assert isinstance(v, RichText)
+
+    def test_handles_pygments_failure_gracefully(self):
+        """If Pygments/Syntax raises, returns empty dict."""
+        line = _ctx(1, 1, "some code")
+        hunk = DiffHunk(
+            header="@@ -1,1 +1,1 @@",
+            old_start=1, old_count=1, new_start=1, new_count=1,
+            lines=(line,),
+        )
+        f = _make_file(hunks=(hunk,), language="python")
+        with patch("tongs.widgets.diff_panel.Syntax", side_effect=Exception("boom")):
+            result = _build_highlight_map(f)
+        assert result == {}
+
+    def test_empty_language_treated_as_text(self):
+        """When language is empty string, DiffFile.language defaults to '', which
+        _build_highlight_map treats as 'text' and returns empty."""
+        line = _ctx(1, 1, "content")
+        hunk = DiffHunk(
+            header="@@ -1,1 +1,1 @@",
+            old_start=1, old_count=1, new_start=1, new_count=1,
+            lines=(line,),
+        )
+        f = _make_file(hunks=(hunk,), language="")
+        result = _build_highlight_map(f)
+        assert result == {}

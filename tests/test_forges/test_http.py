@@ -146,6 +146,46 @@ class TestRequest:
                 await request(client, "GET", "/projects/999")
 
 
+class TestRateLimitRetry:
+    @pytest.mark.asyncio
+    async def test_429_with_retry_after_retries_and_succeeds(self):
+        """A 429 with Retry-After header triggers a single retry that succeeds."""
+        call_count = 0
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return httpx.Response(
+                    429,
+                    json={"message": "Too Many Requests"},
+                    headers={"Retry-After": "0"},
+                )
+            return httpx.Response(200, json={"ok": True})
+
+        client = _make_async_client(handler)
+        async with client:
+            result = await request(client, "GET", "/projects/1")
+        assert result == {"ok": True}
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_429_twice_fails_on_second_attempt(self):
+        """If the retry also returns 429, the error is raised (only one retry)."""
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                429,
+                json={"message": "Too Many Requests"},
+                headers={"Retry-After": "0"},
+            )
+
+        client = _make_async_client(handler)
+        async with client:
+            with pytest.raises(RateLimitError):
+                await request(client, "GET", "/projects/1")
+
+
 class TestPaginate:
     @pytest.mark.asyncio
     async def test_paginate_single_page(self):

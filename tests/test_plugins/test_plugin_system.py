@@ -217,6 +217,71 @@ class TestPluginLifecycle:
         await reg.on_app_shutdown(None)
 
 
+class TestPluginContext:
+    @pytest.fixture()
+    def app(self):
+        mock_app = MagicMock()
+        mock_app.forge_registry = MagicMock(name="forge_registry")
+        mock_app.cache = MagicMock(name="cache")
+        mock_app.config = MagicMock(name="config")
+        mock_app.config.plugin_config = {
+            "mcp": {"enabled": True, "port": 8080},
+            "other": {"key": "value"},
+        }
+        mock_app.repos = [MagicMock(name="repo1"), MagicMock(name="repo2")]
+        return mock_app
+
+    @pytest.fixture()
+    def ctx(self, app):
+        from tongs.plugins.context import PluginContext
+
+        return PluginContext(app)
+
+    def test_forge_registry_returns_app_registry(self, ctx, app):
+        assert ctx.forge_registry is app.forge_registry
+
+    def test_cache_returns_app_cache(self, ctx, app):
+        assert ctx.cache is app.cache
+
+    def test_config_returns_app_config(self, ctx, app):
+        assert ctx.config is app.config
+
+    def test_repos_returns_app_repos(self, ctx, app):
+        assert ctx.repos is app.repos
+        assert len(ctx.repos) == 2
+
+    def test_notify_calls_app_notify(self, ctx, app):
+        ctx.notify("hello", severity="warning")
+        app.notify.assert_called_once_with("hello", severity="warning")
+
+    def test_notify_default_severity(self, ctx, app):
+        ctx.notify("info message")
+        app.notify.assert_called_once_with("info message", severity="information")
+
+    def test_push_screen_calls_app_push_screen(self, ctx, app):
+        screen = MagicMock()
+        ctx.push_screen(screen)
+        app.push_screen.assert_called_once_with(screen)
+
+    def test_pop_screen_calls_app_pop_screen(self, ctx, app):
+        ctx.pop_screen()
+        app.pop_screen.assert_called_once()
+
+    def test_plugin_config_returns_correct_dict(self, ctx):
+        result = ctx.plugin_config("mcp")
+        assert result == {"enabled": True, "port": 8080}
+
+    def test_plugin_config_returns_copy(self, ctx):
+        """Returned dict is a copy, not the original."""
+        result = ctx.plugin_config("mcp")
+        result["extra"] = "injected"
+        assert "extra" not in ctx.plugin_config("mcp")
+
+    def test_plugin_config_missing_returns_empty(self, ctx):
+        result = ctx.plugin_config("nonexistent")
+        assert result == {}
+
+
 class TestMCPPlugin:
     def test_mcp_plugin_available(self):
         try:

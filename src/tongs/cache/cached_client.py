@@ -57,6 +57,8 @@ def _dict_to_mr_summary(d: dict) -> MRSummary:
         ci_status=CIStatus(d["ci_status"]),
         web_url=d["web_url"],
         repo_path=d["repo_path"],
+        local_path=d.get("local_path", ""),
+        is_draft=d.get("is_draft", False),
         forge_host=ForgeHost(
             hostname=d["forge_host"]["hostname"],
             forge_type=ForgeType(d["forge_host"]["forge_type"]),

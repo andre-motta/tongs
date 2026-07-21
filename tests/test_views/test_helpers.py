@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tongs.forges.models import CIStatus
-from tongs.helpers import ci_icon, relative_time
+from tongs.helpers import ci_icon, format_duration, relative_time
 
 
 class TestCiIconRichMode:
@@ -72,3 +72,32 @@ class TestRelativeTime:
 
     def test_none_returns_empty(self):
         assert relative_time(None) == ""
+
+
+class TestFormatDuration:
+    def test_none_returns_empty(self):
+        assert format_duration(None) == ""
+
+    def test_zero_seconds(self):
+        assert format_duration(0) == "0s"
+
+    def test_under_one_minute(self):
+        assert format_duration(59) == "59s"
+
+    def test_exactly_one_minute(self):
+        assert format_duration(60) == "1m 00s"
+
+    def test_minutes_and_seconds(self):
+        assert format_duration(154) == "2m 34s"
+
+    def test_exactly_one_hour(self):
+        assert format_duration(3600) == "1h 00m"
+
+    def test_hours_and_minutes(self):
+        assert format_duration(3960) == "1h 06m"
+
+    def test_float_input_truncates(self):
+        assert format_duration(59.9) == "59s"
+
+    def test_float_over_minute(self):
+        assert format_duration(90.7) == "1m 30s"

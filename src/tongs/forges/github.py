@@ -132,6 +132,8 @@ class GitHubClient(ForgeClient):
         state: str = "open",
         per_page: int = 100,
     ) -> list[MRSummary]:
+        import asyncio
+
         owner, repo = _split_repo_path(repo_path)
         data = await paginate(
             self._http,
@@ -139,7 +141,15 @@ class GitHubClient(ForgeClient):
             per_page=per_page,
             params={"state": state},
         )
-        return [self._parse_pr_summary(pr, repo_path) for pr in data]
+        ci_tasks = [
+            self._fetch_ci_status(owner, repo, pr.get("head", {}).get("sha", ""))
+            for pr in data
+        ]
+        ci_results = await asyncio.gather(*ci_tasks)
+        return [
+            self._parse_pr_summary(pr, repo_path, ci_status=ci)
+            for pr, ci in zip(data, ci_results)
+        ]
 
     async def list_my_reviews(self) -> list[MRSummary]:
         return await self._search_prs("is:pr is:open review-requested:@me")
@@ -183,13 +193,29 @@ class GitHubClient(ForgeClient):
         return ""
 
     async def get_mr(self, repo_path: str, number: int) -> MRDetail:
+        import asyncio
+
         owner, repo = _split_repo_path(repo_path)
         data = await request(
             self._http,
             "GET",
             f"/repos/{owner}/{repo}/pulls/{number}",
         )
-        return self._parse_pr_detail(data, repo_path)
+        sha = data.get("head", {}).get("sha", "")
+        ci_task = asyncio.create_task(self._fetch_ci_status(owner, repo, sha))
+        approvals_task = asyncio.create_task(self._fetch_approvals(owner, repo, number))
+        ci_status = await ci_task
+        approvals = await approvals_task
+        detail = self._parse_pr_detail(data, repo_path)
+        return MRDetail(
+            **{
+                f.name: getattr(detail, f.name)
+                for f in fields(detail)
+                if f.name not in ("ci_status", "approvals")
+            },
+            ci_status=ci_status,
+            approvals=approvals,
+        )
 
     async def get_mr_diff(self, repo_path: str, number: int) -> list[dict]:
         owner, repo = _split_repo_path(repo_path)
@@ -540,7 +566,9 @@ class GitHubClient(ForgeClient):
     async def close(self) -> None:
         await self._http.aclose()
 
-    def _parse_pr_summary(self, data: dict, repo_path: str) -> MRSummary:
+    def _parse_pr_summary(
+        self, data: dict, repo_path: str, ci_status: CIStatus = CIStatus.UNKNOWN
+    ) -> MRSummary:
         head = data.get("head", {})
         base = data.get("base", {})
         user = data.get("user", {})
@@ -557,7 +585,7 @@ class GitHubClient(ForgeClient):
             is_draft=data.get("draft", False),
             source_branch=head.get("ref", ""),
             target_branch=base.get("ref", ""),
-            ci_status=CIStatus.UNKNOWN,
+            ci_status=ci_status,
             created_at=_parse_datetime(data.get("created_at"))
             or datetime.now(timezone.utc),
             updated_at=_parse_datetime(data.get("updated_at"))
@@ -569,6 +597,54 @@ class GitHubClient(ForgeClient):
             additions=data.get("additions"),
             deletions=data.get("deletions"),
         )
+
+    async def _fetch_ci_status(self, owner: str, repo: str, sha: str) -> CIStatus:
+        """Fetch combined CI status from check-runs API."""
+        try:
+            data = await request(
+                self._http,
+                "GET",
+                f"/repos/{owner}/{repo}/commits/{sha}/check-runs",
+                params={"per_page": 100},
+            )
+            runs = data.get("check_runs", [])
+            if not runs:
+                return CIStatus.UNKNOWN
+            statuses = [
+                _parse_ci_status(r.get("status"), r.get("conclusion")) for r in runs
+            ]
+            if any(s == CIStatus.FAILED for s in statuses):
+                return CIStatus.FAILED
+            if any(s == CIStatus.RUNNING for s in statuses):
+                return CIStatus.RUNNING
+            if any(s == CIStatus.PENDING for s in statuses):
+                return CIStatus.PENDING
+            if all(s == CIStatus.SUCCESS for s in statuses):
+                return CIStatus.SUCCESS
+            return CIStatus.UNKNOWN
+        except Exception:
+            return CIStatus.UNKNOWN
+
+    async def _fetch_approvals(
+        self, owner: str, repo: str, number: int
+    ) -> tuple[User, ...]:
+        """Fetch users who approved the PR from reviews API."""
+        try:
+            reviews = await paginate(
+                self._http,
+                f"/repos/{owner}/{repo}/pulls/{number}/reviews",
+            )
+            approvers = {}
+            for r in reviews:
+                user = _parse_user(r.get("user"))
+                state = r.get("state", "")
+                if state == "APPROVED":
+                    approvers[user.username] = user
+                elif state in ("CHANGES_REQUESTED", "DISMISSED"):
+                    approvers.pop(user.username, None)
+            return tuple(approvers.values())
+        except Exception:
+            return ()
 
     def _parse_pr_detail(self, data: dict, repo_path: str) -> MRDetail:
         summary = self._parse_pr_summary(data, repo_path)

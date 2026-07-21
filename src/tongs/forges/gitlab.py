@@ -95,7 +95,7 @@ class GitLabClient(ForgeClient):
             per_page=per_page,
             params={"state": gitlab_state},
         )
-        return [self._parse_mr_summary(mr, repo_path) for mr in data]
+        return await self._enrich_ci_status(data, repo_path)
 
     async def list_my_reviews(self) -> list[MRSummary]:
         user_data = await request(self._http, "GET", "/user")
@@ -106,7 +106,11 @@ class GitLabClient(ForgeClient):
             per_page=100,
             params={"scope": "all", "reviewer_username": username, "state": "opened"},
         )
-        return [self._parse_mr_summary(mr, self._extract_repo_path(mr)) for mr in data]
+        results = []
+        for mr in data:
+            rp = self._extract_repo_path(mr)
+            results.append(self._parse_mr_summary(mr, rp))
+        return results
 
     async def list_my_mrs(self) -> list[MRSummary]:
         data = await paginate(
@@ -115,16 +119,93 @@ class GitLabClient(ForgeClient):
             per_page=100,
             params={"scope": "created_by_me", "state": "opened"},
         )
-        return [self._parse_mr_summary(mr, self._extract_repo_path(mr)) for mr in data]
+        results = []
+        for mr in data:
+            rp = self._extract_repo_path(mr)
+            results.append(self._parse_mr_summary(mr, rp))
+        return results
+
+    async def _enrich_ci_status(
+        self, mrs_data: list[dict], repo_path: str
+    ) -> list[MRSummary]:
+        """Parse MR summaries, fetching pipeline status if not in listing data."""
+        import asyncio
+
+        summaries = [self._parse_mr_summary(mr, repo_path) for mr in mrs_data]
+        needs_ci = [
+            (i, mr)
+            for i, (s, mr) in enumerate(zip(summaries, mrs_data))
+            if s.ci_status == CIStatus.UNKNOWN and mr.get("iid")
+        ]
+        if not needs_ci:
+            return summaries
+
+        project = _encode_project(repo_path)
+
+        async def fetch_ci(iid: int) -> CIStatus:
+            try:
+                pipelines = await request(
+                    self._http,
+                    "GET",
+                    f"/projects/{project}/merge_requests/{iid}/pipelines",
+                    params={"per_page": 1},
+                )
+                if pipelines and isinstance(pipelines, list) and pipelines[0]:
+                    return _parse_ci_status(pipelines[0].get("status"))
+            except Exception:
+                pass
+            return CIStatus.UNKNOWN
+
+        ci_tasks = [fetch_ci(mr.get("iid")) for _, mr in needs_ci]
+        ci_results = await asyncio.gather(*ci_tasks)
+
+        for (idx, _), ci in zip(needs_ci, ci_results):
+            if ci != CIStatus.UNKNOWN:
+                old = summaries[idx]
+                summaries[idx] = MRSummary(
+                    **{
+                        f.name: (ci if f.name == "ci_status" else getattr(old, f.name))
+                        for f in fields(old)
+                    }
+                )
+
+        return summaries
 
     async def get_mr(self, repo_path: str, number: int) -> MRDetail:
+        import asyncio
+
         project = _encode_project(repo_path)
-        data = await request(
-            self._http,
-            "GET",
-            f"/projects/{project}/merge_requests/{number}",
+        mr_task = asyncio.create_task(
+            request(self._http, "GET", f"/projects/{project}/merge_requests/{number}")
         )
-        return self._parse_mr_detail(data, repo_path)
+        approvals_task = asyncio.create_task(
+            self._fetch_approvals(project, number)
+        )
+        data = await mr_task
+        approvals = await approvals_task
+        detail = self._parse_mr_detail(data, repo_path)
+        if approvals:
+            detail = MRDetail(
+                **{
+                    f.name: (approvals if f.name == "approvals" else getattr(detail, f.name))
+                    for f in fields(detail)
+                }
+            )
+        return detail
+
+    async def _fetch_approvals(self, project: str, number: int) -> tuple[User, ...]:
+        try:
+            data = await request(
+                self._http,
+                "GET",
+                f"/projects/{project}/merge_requests/{number}/approvals",
+            )
+            return tuple(
+                _parse_user(a.get("user", a))
+                for a in data.get("approved_by", [])
+            )
+        except Exception:
+            return ()
 
     async def get_mr_diff(self, repo_path: str, number: int) -> list[dict]:
         project = _encode_project(repo_path)

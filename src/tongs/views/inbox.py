@@ -39,6 +39,7 @@ class InboxScreen(Screen):
     def __init__(self, repo: Repo | None = None):
         super().__init__()
         self.scoped_repo = repo
+        self._loaded_tabs: set[str] = set()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -52,7 +53,6 @@ class InboxScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._loaded_tabs: set[str] = set()
         show_repo = self.scoped_repo is None
         for table in self.query(MRTable):
             table.setup_columns(show_repo=show_repo)

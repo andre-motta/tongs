@@ -1,6 +1,6 @@
 """Token resolution for forge authentication.
 
-Cascade: CLI credential store -> .netrc -> error with instructions.
+Cascade: CLI credential store -> .netrc -> keyring -> error with instructions.
 """
 
 from __future__ import annotations
@@ -21,13 +21,18 @@ def resolve_token(hostname: str, forge_type: ForgeType) -> str:
     Tries in order:
     1. CLI credential store (gh auth token / glab auth token)
     2. ~/.netrc
-    3. Raises AuthError with setup instructions
+    3. System keyring (requires optional ``keyring`` package)
+    4. Raises AuthError with setup instructions
     """
     token = _token_from_cli(hostname, forge_type)
     if token:
         return token
 
     token = _token_from_netrc(hostname)
+    if token:
+        return token
+
+    token = _token_from_keyring(hostname)
     if token:
         return token
 
@@ -96,4 +101,19 @@ def _token_from_netrc(hostname: str) -> str | None:
         return None
 
     _login, _account, password = auth
+    return password if password else None
+
+
+def _token_from_keyring(hostname: str) -> str | None:
+    """Read token from system keyring (optional dependency)."""
+    try:
+        import keyring
+    except ImportError:
+        return None
+
+    try:
+        password = keyring.get_password("tongs", hostname)
+    except Exception:
+        return None
+
     return password if password else None

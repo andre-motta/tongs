@@ -6,6 +6,7 @@ import logging
 from importlib.metadata import entry_points
 
 from tongs.plugins.base import TongsPlugin
+from tongs.plugins.context import PluginContext
 
 log = logging.getLogger(__name__)
 
@@ -44,16 +45,18 @@ class PluginRegistry:
                 log.warning("Failed to load plugin %s", ep.name, exc_info=True)
 
     async def on_app_ready(self, app) -> None:
+        ctx = PluginContext(app)
         for plugin in self._plugins:
             try:
-                await plugin.on_app_ready(app)
+                await plugin.on_app_ready(ctx)
             except Exception:
                 log.warning("Plugin %s.on_app_ready failed", plugin.name, exc_info=True)
 
     async def on_app_shutdown(self, app) -> None:
+        ctx = PluginContext(app)
         for plugin in self._plugins:
             try:
-                await plugin.on_app_shutdown(app)
+                await plugin.on_app_shutdown(ctx)
             except Exception:
                 log.warning(
                     "Plugin %s.on_app_shutdown failed",

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 import httpx
 
 from tongs.errors import (
@@ -14,6 +17,8 @@ from tongs.errors import (
     RateLimitError,
     redact_credentials,
 )
+
+log = logging.getLogger(__name__)
 
 
 def create_client(
@@ -60,12 +65,15 @@ async def request(
     client: httpx.AsyncClient,
     method: str,
     path: str,
+    *,
+    _retried: bool = False,
     **kwargs,
 ) -> dict | list:
     """Make an authenticated API request with error mapping.
 
     Returns parsed JSON response body.
     Raises appropriate ForgeError subclass on failure.
+    On 429 (rate limit), waits ``retry_after`` seconds and retries once.
     """
     try:
         response = await client.request(method, path, **kwargs)
@@ -75,7 +83,13 @@ async def request(
         raise NetworkError(f"Transport error: {redact_credentials(str(e))}") from e
 
     if response.status_code >= 400:
-        raise map_http_error(response)
+        err = map_http_error(response)
+        if isinstance(err, RateLimitError) and not _retried:
+            delay = err.retry_after if err.retry_after is not None else 5
+            log.warning("Rate limited on %s %s, retrying in %ds", method, path, delay)
+            await asyncio.sleep(delay)
+            return await request(client, method, path, _retried=True, **kwargs)
+        raise err
 
     if response.status_code == 204:
         return {}

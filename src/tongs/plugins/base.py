@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tongs.plugins.context import PluginContext
 
 
 class TongsPlugin(ABC):
@@ -22,11 +26,11 @@ class TongsPlugin(ABC):
     def version(self) -> str:
         return "0.0.0"
 
-    async def on_app_ready(self, app) -> None:
-        """Called after the TUI app is mounted."""
+    async def on_app_ready(self, ctx: PluginContext) -> None:
+        """Called after the TUI app is mounted with a restricted context."""
 
-    async def on_app_shutdown(self, app) -> None:
-        """Called before app exit."""
+    async def on_app_shutdown(self, ctx: PluginContext) -> None:
+        """Called before app exit with a restricted context."""
 
     def get_commands(self) -> list[tuple[str, str, object]]:
         """Return (display, help_text, callback) tuples for the command palette."""

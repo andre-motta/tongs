@@ -57,6 +57,7 @@ nav:
       - Diff viewer: guides/diffs.md
       - Discussions: guides/discussions.md
       - Pipelines: guides/pipelines.md
+      - Plugins: guides/plugins.md
   - Reference:
       - Keybindings: reference/keybindings.md
       - Configuration: reference/configuration.md

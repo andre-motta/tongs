@@ -34,7 +34,7 @@ class TestGlobalCommands:
     def test_returns_three_entries(self):
         provider = _make_provider()
         commands = provider._global_commands(MagicMock())
-        assert len(commands) == 3
+        assert len(commands) == 4
 
     def test_command_names(self):
         provider = _make_provider()
@@ -58,7 +58,7 @@ class TestGetCommandsUnknown:
         assert "Inbox" in names
         assert "Help" in names
         # Should be exactly the 3 globals, no extra screen-specific commands
-        assert len(commands) == 3
+        assert len(commands) == 4
 
 
 # ===================================================================
@@ -110,8 +110,8 @@ class TestGetCommandsDispatch:
         provider = _make_provider("InboxScreen")
         commands = provider._get_commands()
         names = [c[0] for c in commands]
-        # Globals (3) + inbox (5) = 8
-        assert len(commands) == 8
+        # Globals (4) + inbox (5) = 8
+        assert len(commands) == 9
         assert "My Reviews" in names
         assert "Repos" in names
 
@@ -119,8 +119,8 @@ class TestGetCommandsDispatch:
         provider = _make_provider("MRDetailScreen")
         commands = provider._get_commands()
         names = [c[0] for c in commands]
-        # Globals (3) + detail (13) = 16
-        assert len(commands) == 16
+        # Globals (4) + detail (13) = 16
+        assert len(commands) == 17
         assert "Approve" in names
         assert "Merge" in names
         assert "Help" in names
@@ -129,8 +129,8 @@ class TestGetCommandsDispatch:
         provider = _make_provider("RepoListScreen")
         commands = provider._get_commands()
         names = [c[0] for c in commands]
-        # Globals (3) + repo (3) = 6
-        assert len(commands) == 6
+        # Globals (4) + repo (3) = 7
+        assert len(commands) == 7
         assert "Filter Repos" in names
         assert "Cycle Forge" in names
         assert "Repos" in names

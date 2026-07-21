@@ -52,9 +52,15 @@ class TongsCommandProvider(Provider):
         return commands
 
     def _global_commands(self, app) -> list[tuple[str, str, object]]:
+        async def _clear_cache() -> None:
+            if hasattr(app, "cache"):
+                await app.cache.clear()
+                app.notify("Cache cleared")
+
         commands = [
             ("Repos", "Open repository list", lambda: app.push_screen("repo_list")),
             ("Inbox", "Open MR inbox", lambda: app.push_screen("inbox")),
+            ("Clear Cache", "Clear all cached API responses", _clear_cache),
             ("Help", "Show help", lambda: app.action_help()),
         ]
         if hasattr(app, "plugin_registry"):

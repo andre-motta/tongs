@@ -119,10 +119,36 @@ class BlockingCache(FakeCache):
         await self.release.wait()
 
 
+class CancellationResistantOpenCache(BlockingCache):
+    async def open(self) -> None:
+        self.open_calls += 1
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await self.release.wait()
+
+
 class BlockingCloseCache(FakeCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
     async def close(self) -> None:
         self.close_calls += 1
-        await asyncio.Event().wait()
+        self.started.set()
+        await self.release.wait()
+
+
+class FatalStartup(BaseException):
+    pass
+
+
+class FatalOpenCache(FakeCache):
+    async def open(self) -> None:
+        self.open_calls += 1
+        raise FatalStartup("process-control exit")
 
 
 class FakeClient:
@@ -193,6 +219,18 @@ class FakeClient:
         return "safe log"
 
 
+class BlockingReviewClient(FakeClient):
+    def __init__(self, detail: MRDetail | None = None) -> None:
+        super().__init__(detail)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def list_my_reviews(self) -> list[MRSummary]:
+        self.started.set()
+        await self.release.wait()
+        return self.my_reviews
+
+
 class FakeRegistry:
     def __init__(
         self,
@@ -226,6 +264,36 @@ class FakeRegistry:
         self.close_calls += 1
         if self.close_error is not None:
             raise self.close_error
+
+
+class ClosingAwareRegistry(FakeRegistry):
+    def __init__(self, clients: dict[str, object]) -> None:
+        super().__init__(clients)
+        self.closed = False
+        self.get_client_after_close: list[str] = []
+
+    async def get_client(self, hostname: str) -> ForgeClient:
+        if self.closed:
+            self.get_client_after_close.append(hostname)
+        return await super().get_client(hostname)
+
+    async def close_all(self) -> None:
+        self.closed = True
+        await super().close_all()
+
+
+class BlockingGetClientRegistry(ClosingAwareRegistry):
+    def __init__(self, clients: dict[str, object]) -> None:
+        super().__init__(clients)
+        self.get_client_started = asyncio.Event()
+        self.get_client_release = asyncio.Event()
+        self.block_get_client = False
+
+    async def get_client(self, hostname: str) -> ForgeClient:
+        if self.block_get_client:
+            self.get_client_started.set()
+            await self.get_client_release.wait()
+        return await super().get_client(hostname)
 
 
 def make_repo(
@@ -296,6 +364,9 @@ class TestLifecycle:
         assert cache.open_calls == 1
         assert cache.close_calls == 1
         assert registry.close_calls == 1
+        with pytest.raises(ServiceError) as caught:
+            await session.start()
+        assert caught.value.code == ServiceErrorCode.CLOSED
 
     @pytest.mark.asyncio
     async def test_start_failure_closes_partially_opened_cache(self) -> None:
@@ -305,6 +376,19 @@ class TestLifecycle:
             await session.start()
         assert caught.value.code == ServiceErrorCode.INTERNAL
         assert "ghp_secret" not in str(caught.value)
+        assert cache.open_calls == 1
+        assert cache.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_base_exception_during_start_closes_cache_and_propagates(
+        self,
+    ) -> None:
+        cache = FatalOpenCache()
+        session = ApplicationSession(config=Config(), cache=cache)
+
+        with pytest.raises(FatalStartup, match="process-control exit"):
+            await session.start()
+
         assert cache.open_calls == 1
         assert cache.close_calls == 1
 
@@ -320,7 +404,9 @@ class TestLifecycle:
         assert cache.close_calls == 1
 
     @pytest.mark.asyncio
-    async def test_close_waits_for_start_then_closes_created_resources(self) -> None:
+    async def test_close_cancels_stalled_start_and_closes_created_resources(
+        self,
+    ) -> None:
         cache = BlockingCache()
         registry = FakeRegistry()
         session = ApplicationSession(
@@ -330,12 +416,53 @@ class TestLifecycle:
         await cache.started.wait()
 
         close_task = asyncio.create_task(session.close())
-        await asyncio.sleep(0)
-        assert not close_task.done()
+        await close_task
+
+        with pytest.raises(asyncio.CancelledError):
+            await start_task
+        assert cache.close_calls == 1
+        assert registry.close_calls == 0
+        with pytest.raises(ServiceError) as caught:
+            session.emit_change(ServiceEventKind.REVIEW_CHANGED)
+        assert caught.value.code == ServiceErrorCode.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_close_is_bounded_when_start_ignores_cancellation(self) -> None:
+        cache = CancellationResistantOpenCache()
+        session = ApplicationSession(
+            config=Config(),
+            cache=cache,
+            forge_registry=FakeRegistry(),
+            shutdown_timeout=0.01,
+        )
+        start_task = asyncio.create_task(session.start())
+        await cache.started.wait()
+
+        with pytest.raises(ServiceError) as caught:
+            await asyncio.wait_for(session.close(), timeout=0.1)
+        assert caught.value.code == ServiceErrorCode.SHUTDOWN_FAILED
+        assert cache.close_calls == 1
 
         cache.release.set()
-        assert await start_task is session
-        await close_task
+        with pytest.raises(ServiceError) as start_error:
+            await start_task
+        assert start_error.value.code == ServiceErrorCode.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_cancelled_close_still_finishes_cleanup(self) -> None:
+        cache = BlockingCloseCache()
+        registry = FakeRegistry()
+        session = await start_session(registry, cache=cache)
+        close_task = asyncio.create_task(session.close())
+        await cache.started.wait()
+
+        close_task.cancel()
+        await asyncio.sleep(0)
+        assert not close_task.done()
+        cache.release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
         assert cache.close_calls == 1
         assert registry.close_calls == 1
         with pytest.raises(ServiceError) as caught:
@@ -483,6 +610,22 @@ class TestReviewReads:
         await session.close()
 
     @pytest.mark.asyncio
+    async def test_missing_gitlab_start_sha_keeps_review_detail_available(self) -> None:
+        client = FakeClient(make_detail(GITLAB_HOST, start=None))
+        client.repository_reviews = [make_summary(GITLAB_HOST)]
+        registry = FakeRegistry({"gitlab.com": client})
+        session = await start_session(registry)
+        repo = await session.open_repository("gitlab.com", "acme/widgets")
+
+        snapshot = await session.get_review(ReviewRef(repo.ref, 7))
+
+        assert snapshot.detail.description == "Details"
+        assert snapshot.revision is None
+        assert snapshot.revision_error is not None
+        assert snapshot.revision_error.code == ServiceErrorCode.REVISION_UNAVAILABLE
+        await session.close()
+
+    @pytest.mark.asyncio
     async def test_discussion_commit_and_ci_reads_use_issued_repository(self) -> None:
         registry = FakeRegistry()
         session = await start_session(registry)
@@ -509,6 +652,57 @@ class TestReviewReads:
         with pytest.raises(asyncio.CancelledError):
             await task
         await session.close()
+
+    @pytest.mark.asyncio
+    async def test_delayed_read_cannot_create_clients_or_issue_refs_after_close(
+        self,
+    ) -> None:
+        github = BlockingReviewClient()
+        gitlab = FakeClient(make_detail(GITLAB_HOST, start="start-1"))
+        gitlab.my_reviews = [make_summary(GITLAB_HOST, project="other/widgets")]
+        registry = ClosingAwareRegistry({"github.com": github, "gitlab.com": gitlab})
+        session = await ApplicationSession(
+            config=Config(max_parallel=1),
+            cache=FakeCache(),
+            forge_registry=registry,
+        ).start()
+        read_task = asyncio.create_task(
+            session.list_reviews(ReviewQuery(ReviewScope.MY_REVIEWS))
+        )
+        await github.started.wait()
+
+        await session.close()
+        github.release.set()
+
+        with pytest.raises(ServiceError) as caught:
+            await read_task
+        assert caught.value.code == ServiceErrorCode.CLOSED
+        assert registry.get_client_after_close == []
+        assert session._issued_repositories == set()
+
+    @pytest.mark.asyncio
+    async def test_client_created_during_close_is_closed_once_and_not_returned(
+        self,
+    ) -> None:
+        client = FakeClient()
+        registry = BlockingGetClientRegistry({"github.com": client})
+        session = await start_session(registry)
+        repository = await session.open_repository("github.com", "acme/widgets")
+        registry.block_get_client = True
+        read_task = asyncio.create_task(
+            session.get_review(ReviewRef(repository.ref, 7))
+        )
+        await registry.get_client_started.wait()
+        close_task = asyncio.create_task(session.close())
+        await asyncio.sleep(0)
+
+        registry.get_client_release.set()
+
+        with pytest.raises(ServiceError) as caught:
+            await read_task
+        assert caught.value.code == ServiceErrorCode.CLOSED
+        await close_task
+        assert registry.close_calls == 1
 
 
 class TestRevisionBoundDiff:

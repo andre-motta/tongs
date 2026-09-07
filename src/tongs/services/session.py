@@ -24,7 +24,7 @@ from tongs.forges.models import (
 )
 from tongs.forges.registry import ForgeRegistry
 from tongs.scanner.discovery import discover_repos
-from tongs.scanner.repo import Repo
+from tongs.scanner.repo import ForgeType, Repo
 from tongs.services.errors import ServiceError, ServiceErrorCode, translate_error
 from tongs.services.models import (
     ForgeCapabilities,
@@ -131,9 +131,16 @@ class ApplicationSession:
         self._state = _SessionState.NEW
         self._start_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
+        self._client_lock = asyncio.Lock()
+        self._startup_settled = asyncio.Event()
+        self._startup_settled.set()
+        self._start_task: asyncio.Task[object] | None = None
         self._close_task: asyncio.Task[None] | None = None
+        self._close_requested = False
         self._cache_open_attempted = False
         self._registry_owned = False
+        self._registry_close_attempted = False
+        self._registry_close_failure: BaseException | None = None
         self._shutdown_error: ServiceError | None = None
 
     async def __aenter__(self) -> Self:
@@ -171,6 +178,11 @@ class ApplicationSession:
     async def start(self) -> ApplicationSession:
         """Open owned resources exactly once and return this session."""
         async with self._start_lock:
+            if self._close_requested:
+                raise ServiceError(
+                    ServiceErrorCode.CLOSED,
+                    "The application session cannot be started again.",
+                )
             if self._state == _SessionState.STARTED:
                 return self
             if self._state != _SessionState.NEW:
@@ -179,54 +191,73 @@ class ApplicationSession:
                     "The application session cannot be started again.",
                 )
             self._state = _SessionState.STARTING
+            self._startup_settled.clear()
+            self._start_task = cast(asyncio.Task[object], asyncio.current_task())
             try:
-                self._config = self._provided_config or self._config_loader(
-                    self._config_path
-                )
-                self._cache = self._provided_cache or CacheStore(
-                    db_path=self._cache_path,
-                    max_size_mb=self._config.max_cache_size_mb,
-                )
-                self._cache_open_attempted = True
-                await self._cache.open()
-                self._registry = self._provided_registry or ForgeRegistry(
-                    extra_gitlab_hosts=self._config.extra_gitlab_hosts,
-                    extra_github_hosts=self._config.extra_github_hosts,
-                    request_timeout=self._config.request_timeout,
-                    cache=self._cache,
-                    mr_list_ttl=self._config.mr_list_ttl,
-                    diff_ttl=self._config.diff_ttl,
-                )
-                self._registry_owned = True
-                hosts = self._registry.active_hostnames()
-                if self._config.max_parallel <= 0:
-                    raise ValueError("max_parallel must be positive")
-                for hostname in hosts:
-                    validate_hostname(hostname)
-                self._configured_hosts = frozenset(hosts)
-                self._state = _SessionState.STARTED
-                return self
-            except asyncio.CancelledError:
+                try:
+                    self._config = self._provided_config or self._config_loader(
+                        self._config_path
+                    )
+                    self._cache = self._provided_cache or CacheStore(
+                        db_path=self._cache_path,
+                        max_size_mb=self._config.max_cache_size_mb,
+                    )
+                    self._cache_open_attempted = True
+                    await self._cache.open()
+                    self._require_start_open()
+                    self._registry = self._provided_registry or ForgeRegistry(
+                        extra_gitlab_hosts=self._config.extra_gitlab_hosts,
+                        extra_github_hosts=self._config.extra_github_hosts,
+                        request_timeout=self._config.request_timeout,
+                        cache=self._cache,
+                        mr_list_ttl=self._config.mr_list_ttl,
+                        diff_ttl=self._config.diff_ttl,
+                    )
+                    self._registry_owned = True
+                    hosts = self._registry.active_hostnames()
+                    if self._config.max_parallel <= 0:
+                        raise ValueError("max_parallel must be positive")
+                    for hostname in hosts:
+                        validate_hostname(hostname)
+                    self._configured_hosts = frozenset(hosts)
+                    self._require_start_open()
+                    self._state = _SessionState.STARTED
+                    return self
+                finally:
+                    self._start_task = None
+                    self._startup_settled.set()
+            except BaseException as error:  # Ensure cleanup for process-control exits.
                 await self._cleanup_after_failed_start()
-                raise
-            except Exception as error:  # noqa: BLE001 - Sanitize startup boundary.
-                await self._cleanup_after_failed_start()
+                if not isinstance(error, Exception):
+                    raise
                 raise translate_error(error, operation="start_session") from None
 
     async def close(self) -> None:
         """Close registry and cache once, within the configured time bound."""
-        # Serialize the transition with startup. A close requested while an owned
-        # resource is opening waits for startup to finish, then closes everything
-        # startup created before returning.
-        async with self._start_lock:
-            task = await self._ensure_close_task()
+        task = await self._ensure_close_task()
         await self._await_close_task(task)
 
     async def _ensure_close_task(self) -> asyncio.Task[None]:
         async with self._close_lock:
             if self._close_task is None:
-                self._close_task = asyncio.create_task(self._close_resources())
+                self._close_requested = True
+                start_task = self._start_task
+                self._close_task = asyncio.create_task(
+                    self._coordinate_close(start_task)
+                )
             return self._close_task
+
+    async def _coordinate_close(self, start_task: asyncio.Task[object] | None) -> None:
+        startup_timed_out = False
+        if start_task is not None and not start_task.done():
+            start_task.cancel()
+            try:
+                await asyncio.wait_for(
+                    self._startup_settled.wait(), timeout=self._shutdown_timeout
+                )
+            except TimeoutError:
+                startup_timed_out = True
+        await self._close_resources(startup_timed_out=startup_timed_out)
 
     async def _await_close_task(self, task: asyncio.Task[None]) -> None:
         try:
@@ -243,16 +274,18 @@ class ApplicationSession:
         except (asyncio.CancelledError, ServiceError):
             pass
 
-    async def _close_resources(self) -> None:
+    async def _close_resources(self, *, startup_timed_out: bool = False) -> None:
         if self._state == _SessionState.CLOSED:
             return
         self._state = _SessionState.CLOSING
         failures: list[Exception] = []
+        if startup_timed_out:
+            failures.append(RuntimeError("application startup did not stop"))
         try:
             if self._registry_owned and self._registry is not None:
                 try:
                     await asyncio.wait_for(
-                        self._registry.close_all(), timeout=self._shutdown_timeout
+                        self._close_registry(), timeout=self._shutdown_timeout
                     )
                 except asyncio.CancelledError:
                     failures.append(RuntimeError("forge registry cleanup cancelled"))
@@ -279,6 +312,23 @@ class ApplicationSession:
             )
             raise self._shutdown_error
 
+    async def _close_registry(self) -> None:
+        async with self._client_lock:
+            await self._close_registry_once()
+
+    async def _close_registry_once(self) -> None:
+        if self._registry_close_attempted:
+            if self._registry_close_failure is not None:
+                raise self._registry_close_failure
+            return
+        self._registry_close_attempted = True
+        registry = cast(ForgeRegistryResource, self._registry)
+        try:
+            await registry.close_all()
+        except BaseException as error:
+            self._registry_close_failure = error
+            raise
+
     async def discover_repositories(self) -> tuple[RepositorySnapshot, ...]:
         """Discover local repositories and issue their semantic references."""
         self._require_started()
@@ -291,6 +341,7 @@ class ApplicationSession:
                 extra_gitlab_hosts=config.extra_gitlab_hosts,
                 extra_github_hosts=config.extra_github_hosts,
             )
+            self._require_started()
             snapshots: dict[RepositoryRef, RepositorySnapshot] = {}
             for repo in repos:
                 remote = repo.primary_remote
@@ -305,6 +356,8 @@ class ApplicationSession:
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - Sanitize discovery boundary.
+            if self._close_requested:
+                self._require_started()
             raise translate_error(error, operation="discover_repositories") from None
 
         changed = snapshots != self._repositories
@@ -335,7 +388,11 @@ class ApplicationSession:
             )
         client = await self._get_client(hostname, "open_repository")
         try:
-            summaries = await client.list_mrs(project_path, state="open", per_page=1)
+            summaries = await self._call(
+                client.list_mrs(project_path, state="open", per_page=1),
+                operation="open_repository",
+                hostname=hostname,
+            )
             self._validate_summaries(summaries, hostname, expected_repository=ref)
         except asyncio.CancelledError:
             raise
@@ -394,6 +451,7 @@ class ApplicationSession:
                         summaries = await client.list_my_reviews()
                     else:
                         summaries = await client.list_my_mrs()
+                    self._require_started()
                     items = self._accept_summaries(
                         summaries,
                         hostname,
@@ -425,6 +483,7 @@ class ApplicationSession:
         items = [item for result, _failure in results for item in result]
         failures = [failure for _result, failure in results if failure is not None]
         items.sort(key=lambda item: item.summary.updated_at, reverse=True)
+        self._require_started()
         return ReviewPage(tuple(items), tuple(failures))
 
     async def get_review(self, ref: ReviewRef) -> ReviewSnapshot:
@@ -432,6 +491,7 @@ class ApplicationSession:
         client = await self._client_for_review(ref, "get_review")
         try:
             detail = await client.get_mr_fresh(ref.repository.project_path, ref.number)
+            self._require_started()
             self._validate_detail(detail, ref)
             capabilities = self._capabilities(client)
             try:
@@ -452,6 +512,8 @@ class ApplicationSession:
         except Exception as error:
             if isinstance(error, ServiceError):
                 raise
+            if self._close_requested:
+                self._require_started()
             raise translate_error(
                 error, operation="get_review", hostname=ref.repository.hostname
             ) from None
@@ -463,14 +525,17 @@ class ApplicationSession:
             before_detail = await client.get_mr_fresh(
                 ref.repository.project_path, ref.number
             )
+            self._require_started()
             self._validate_detail(before_detail, ref)
             before = self._revision_from_detail(before_detail)
             changes = await client.get_mr_diff_fresh(
                 ref.repository.project_path, ref.number
             )
+            self._require_started()
             after_detail = await client.get_mr_fresh(
                 ref.repository.project_path, ref.number
             )
+            self._require_started()
             self._validate_detail(after_detail, ref)
             after = self._revision_from_detail(after_detail)
             if before != after:
@@ -493,6 +558,8 @@ class ApplicationSession:
         except Exception as error:
             if isinstance(error, ServiceError):
                 raise
+            if self._close_requested:
+                self._require_started()
             raise translate_error(
                 error, operation="get_raw_diff", hostname=ref.repository.hostname
             ) from None
@@ -631,14 +698,30 @@ class ApplicationSession:
 
     async def _get_client(self, hostname: str, operation: str) -> ForgeClient:
         registry = cast(ForgeRegistryResource, self._registry)
-        try:
-            return await registry.get_client(hostname)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:  # noqa: BLE001 - Sanitize registry boundary.
-            raise translate_error(
-                error, operation=operation, hostname=hostname
-            ) from None
+        async with self._client_lock:
+            self._require_started()
+            try:
+                client = await registry.get_client(hostname)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - Sanitize registry boundary.
+                if self._close_requested:
+                    self._require_started()
+                raise translate_error(
+                    error, operation=operation, hostname=hostname
+                ) from None
+            if self._close_requested:
+                # The close coordinator normally waits for this lock and closes the
+                # newly created client. Close it here as well so a client acquisition
+                # that outlives the coordinator's bound cannot leak a late client.
+                try:
+                    await asyncio.wait_for(
+                        self._close_registry_once(), timeout=self._shutdown_timeout
+                    )
+                except Exception as error:  # noqa: BLE001 - Coordinator reports safely.
+                    self._registry_close_failure = error
+                self._require_started()
+            return client
 
     async def _call(
         self,
@@ -648,10 +731,14 @@ class ApplicationSession:
         hostname: str,
     ) -> _ResultT:
         try:
-            return await awaitable
+            result = await awaitable
+            self._require_started()
+            return result
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - Sanitize forge boundary.
+            if self._close_requested:
+                self._require_started()
             raise translate_error(
                 error, operation=operation, hostname=hostname
             ) from None
@@ -664,6 +751,7 @@ class ApplicationSession:
         expected_repository: RepositoryRef | None,
         filter_repository: RepositoryRef | None,
     ) -> tuple[ReviewListItem, ...]:
+        self._require_started()
         refs = self._validate_summaries(
             summaries, hostname, expected_repository=expected_repository
         )
@@ -738,7 +826,15 @@ class ApplicationSession:
 
     def _revision_from_detail(self, detail: MRDetail) -> ReviewRevision:
         try:
-            return ReviewRevision(detail.head_sha, detail.base_sha, detail.start_sha)
+            revision = ReviewRevision(
+                detail.head_sha, detail.base_sha, detail.start_sha
+            )
+            if (
+                detail.forge_host.forge_type == ForgeType.GITLAB
+                and revision.start_sha is None
+            ):
+                raise ValueError("GitLab start_sha is required")
+            return revision
         except ValueError:
             raise ServiceError(
                 ServiceErrorCode.REVISION_UNAVAILABLE,
@@ -820,11 +916,15 @@ class ApplicationSession:
             )
 
     def _issue_repository(self, snapshot: RepositorySnapshot) -> None:
+        self._require_started()
         self._issued_repositories.add(snapshot.ref)
         self._repositories[snapshot.ref] = snapshot
 
     def _require_started(self) -> None:
-        if self._state == _SessionState.CLOSED:
+        if self._close_requested or self._state in {
+            _SessionState.CLOSING,
+            _SessionState.CLOSED,
+        }:
             raise ServiceError(
                 ServiceErrorCode.CLOSED,
                 "The application session is closed.",
@@ -833,6 +933,13 @@ class ApplicationSession:
             raise ServiceError(
                 ServiceErrorCode.NOT_STARTED,
                 "The application session has not started.",
+            )
+
+    def _require_start_open(self) -> None:
+        if self._close_requested:
+            raise ServiceError(
+                ServiceErrorCode.CLOSED,
+                "The application session is closing.",
             )
 
     @staticmethod

@@ -31,6 +31,7 @@ function hardwareReport() {
       },
       process: { pid: 101, type: "GPU" },
       process_sandbox: { NoNewPrivs: "1", Seccomp: "2", Seccomp_filters: "1" },
+      parent_sandbox: { NoNewPrivs: "1", Seccomp: "0", Seccomp_filters: "0" },
     },
     renderer_process: {
       sandbox: { NoNewPrivs: "1", Seccomp: "2", Seccomp_filters: "1" },
@@ -49,6 +50,19 @@ test("hardware evidence requires a physical renderer and sandboxed processes", (
   assert.deepEqual(evaluateGpuEvidence(software).failed, [
     "physical_device",
     "hardware_webgl",
+    "gpu_process_sandbox",
+  ]);
+});
+
+test("GPU sandbox proof requires a filter gained after the parent process", () => {
+  const inheritedFilter = hardwareReport();
+  inheritedFilter.gpu.parent_sandbox = {
+    NoNewPrivs: "1",
+    Seccomp: "2",
+    Seccomp_filters: "1",
+  };
+
+  assert.deepEqual(evaluateGpuEvidence(inheritedFilter).failed, [
     "gpu_process_sandbox",
   ]);
 });

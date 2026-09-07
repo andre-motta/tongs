@@ -73,11 +73,15 @@ Pass `--require-hardware-gpu` to reject software rendering, disabled hardware
 features, sandbox-disabling flags, missing GPU and renderer processes, inactive
 seccomp filters, or child-process crashes. The JSON report records Chromium's
 feature status and active PCI IDs, the unmasked WebGL renderer, GPU and renderer
-process security state from `/proc`, and the exact graphics switches. The
-initial graphics snapshot is retained for diagnosis. Hardware, device, process,
+process security state from `/proc`, each child's parent status, and the exact
+graphics switches. The measured zygote parent has `NoNewPrivs: 1` but
+`Seccomp: 0` and no filter. The GPU gate requires the child to have `Seccomp: 2`
+and at least one filter while its parent has none, proving the GPU child gained
+the filter rather than merely inheriting a generic zygote filter. The initial
+graphics snapshot is retained for diagnosis. Hardware, device, process,
 sandbox, and failure evidence is collected again after the UI probe and
-screenshot, then the final verdict is computed immediately before the report
-is written. A passing flag or the mere presence of a GPU process is deliberately
+screenshot, then the final verdict is computed immediately before the report is
+written. A passing flag or the mere presence of a GPU process is deliberately
 insufficient.
 
 The report also records the privileged Electron main process separately from

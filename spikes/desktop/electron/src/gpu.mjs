@@ -34,7 +34,9 @@ export function evaluateGpuEvidence(report) {
   checks.gpu_process_sandbox =
     gpu.process_sandbox?.NoNewPrivs === "1" &&
     gpu.process_sandbox?.Seccomp === "2" &&
-    Number(gpu.process_sandbox?.Seccomp_filters) >= 1;
+    Number(gpu.process_sandbox?.Seccomp_filters) >= 1 &&
+    gpu.parent_sandbox?.Seccomp === "0" &&
+    Number(gpu.parent_sandbox?.Seccomp_filters) === 0;
   checks.renderer_process_sandbox =
     report.renderer_process?.sandbox?.NoNewPrivs === "1" &&
     report.renderer_process?.sandbox?.Seccomp === "2" &&

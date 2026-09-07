@@ -156,6 +156,10 @@ async function collectGraphicsEvidence(window) {
     readLinuxSandboxStatus(gpuProcess?.pid),
     readLinuxSandboxStatus(rendererPid),
   ]);
+  const [gpuParentSandbox, rendererParentSandbox] = await Promise.all([
+    readLinuxSandboxStatus(Number(gpuSandbox?.PPid)),
+    readLinuxSandboxStatus(Number(rendererSandbox?.PPid)),
+  ]);
   const rendererSecurity = await window.webContents.executeJavaScript(
     `({
       process_global: typeof process,
@@ -173,10 +177,12 @@ async function collectGraphicsEvidence(window) {
       webgl,
       process: gpuProcess,
       process_sandbox: gpuSandbox,
+      parent_sandbox: gpuParentSandbox,
     },
     renderer_process: {
       pid: rendererPid,
       sandbox: rendererSandbox,
+      parent_sandbox: rendererParentSandbox,
       security: rendererSecurity,
     },
     main_process: { pid: process.pid, sandbox: mainSandbox },

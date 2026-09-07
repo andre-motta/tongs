@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import fields
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import quote as urlquote
 
 import httpx
 
-from tongs.errors import NetworkError, redact_credentials
+from tongs.errors import ForgeError, NetworkError, redact_credentials
 from tongs.forges.base import ForgeClient
 from tongs.forges.http import map_http_error, paginate, request
 from tongs.forges.models import (
@@ -35,7 +35,7 @@ def _encode_project(repo_path: str) -> str:
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.fromisoformat(value)
 
 
 def _parse_ci_status(value: str | None) -> CIStatus:
@@ -152,8 +152,8 @@ class GitLabClient(ForgeClient):
                 )
                 if pipelines and isinstance(pipelines, list) and pipelines[0]:
                     return _parse_ci_status(pipelines[0].get("status"))
-            except Exception:
-                pass
+            except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
+                return CIStatus.UNKNOWN
             return CIStatus.UNKNOWN
 
         ci_tasks = [fetch_ci(mr.get("iid")) for _, mr in needs_ci]
@@ -203,7 +203,7 @@ class GitLabClient(ForgeClient):
             return tuple(
                 _parse_user(a.get("user", a)) for a in data.get("approved_by", [])
             )
-        except Exception:
+        except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
             return ()
 
     async def get_mr_diff(self, repo_path: str, number: int) -> list[dict]:
@@ -555,10 +555,8 @@ class GitLabClient(ForgeClient):
             source_branch=data.get("source_branch", ""),
             target_branch=data.get("target_branch", ""),
             ci_status=_parse_ci_status(pipeline.get("status")),
-            created_at=_parse_datetime(data.get("created_at"))
-            or datetime.now(timezone.utc),
-            updated_at=_parse_datetime(data.get("updated_at"))
-            or datetime.now(timezone.utc),
+            created_at=_parse_datetime(data.get("created_at")) or datetime.now(UTC),
+            updated_at=_parse_datetime(data.get("updated_at")) or datetime.now(UTC),
             web_url=data.get("web_url", ""),
             comment_count=data.get("user_notes_count", 0),
             has_conflicts=data.get("has_conflicts", False),
@@ -587,8 +585,7 @@ class GitLabClient(ForgeClient):
             id=str(data.get("id", "")),
             author=_parse_user(data.get("author")),
             body=data.get("body", ""),
-            created_at=_parse_datetime(data.get("created_at"))
-            or datetime.now(timezone.utc),
+            created_at=_parse_datetime(data.get("created_at")) or datetime.now(UTC),
             file_path=position.get("new_path", ""),
             old_line=position.get("old_line"),
             new_line=position.get("new_line"),

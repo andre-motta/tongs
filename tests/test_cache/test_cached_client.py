@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 
-from tongs.cache.store import CacheStore
 from tongs.cache.cached_client import CachedForgeClient
+from tongs.cache.store import CacheStore
 from tongs.forges.models import (
     CIStatus,
     ForgeHost,
@@ -38,8 +38,8 @@ def _make_mr(number: int = 1, title: str = "Fix bug") -> MRSummary:
         source_branch="feature",
         target_branch="main",
         ci_status=CIStatus.SUCCESS,
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 2, tzinfo=UTC),
         web_url="https://gitlab.example.com/org/repo/-/merge_requests/1",
     )
 

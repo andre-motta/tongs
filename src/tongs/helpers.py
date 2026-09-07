@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from rich.style import Style
 
@@ -13,7 +13,7 @@ def relative_time(dt: datetime | None) -> str:
     """Format a datetime as a relative time string (e.g., '3m ago')."""
     if dt is None:
         return ""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     delta = now - dt
     seconds = int(delta.total_seconds())
     if seconds < 60:
@@ -28,7 +28,7 @@ def relative_time(dt: datetime | None) -> str:
     return f"{days}d ago"
 
 
-def format_duration(seconds: int | float | None) -> str:
+def format_duration(seconds: float | None) -> str:
     """Format seconds as '45s', '2m 34s', '1h 05m'."""
     if seconds is None:
         return ""

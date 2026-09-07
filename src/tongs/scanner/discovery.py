@@ -101,6 +101,7 @@ def _read_remotes(
     try:
         result = subprocess.run(
             ["git", "remote", "-v"],
+            check=False,
             cwd=repo_path,
             capture_output=True,
             text=True,

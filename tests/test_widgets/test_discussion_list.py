@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
-
 
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, FileStatus, LineType
 from tongs.forges.models import Discussion, InlineComment, User
@@ -16,7 +15,6 @@ from tongs.widgets.discussion_list import (
     _render_thread,
     render_diff_snippet,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,7 +36,7 @@ def _make_disc(
             id=f"c-{id}",
             author=User(username="testuser"),
             body=body,
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
             file_path=file_path if is_inline else "",
             old_line=None,
             new_line=new_line if is_inline else None,
@@ -90,7 +88,7 @@ class TestRelativeTime:
 
     def _fixed_now(self, **kwargs):
         """Return a patcher that freezes datetime.now to a fixed offset from the reference dt."""
-        ref = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        ref = datetime(2026, 1, 1, tzinfo=UTC)
         frozen = ref + timedelta(**kwargs)
 
         original_now = datetime.now
@@ -103,58 +101,52 @@ class TestRelativeTime:
         return patch(
             "tongs.helpers.datetime",
             wraps=datetime,
-            **{"now": fake_now},
+            now=fake_now,
         )
 
     def test_just_now_zero_seconds(self):
         with self._fixed_now(seconds=0):
-            assert (
-                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
-            )
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "just now"
 
     def test_just_now_under_60_seconds(self):
         with self._fixed_now(seconds=59):
-            assert (
-                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
-            )
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "just now"
 
     def test_boundary_exactly_60_seconds(self):
         with self._fixed_now(seconds=60):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1m ago"
 
     def test_minutes_plural(self):
         with self._fixed_now(minutes=30):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "30m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "30m ago"
 
     def test_boundary_exactly_59_minutes(self):
         with self._fixed_now(minutes=59):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "59m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "59m ago"
 
     def test_boundary_exactly_60_minutes(self):
         with self._fixed_now(minutes=60):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1h ago"
 
     def test_hours_plural(self):
         with self._fixed_now(hours=5):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "5h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "5h ago"
 
     def test_boundary_exactly_23_hours(self):
         with self._fixed_now(hours=23):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "23h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "23h ago"
 
     def test_boundary_exactly_24_hours(self):
         with self._fixed_now(hours=24):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1d ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1d ago"
 
     def test_days_plural(self):
         with self._fixed_now(days=7):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "7d ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "7d ago"
 
     def test_large_day_count(self):
         with self._fixed_now(days=365):
-            assert (
-                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "365d ago"
-            )
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "365d ago"
 
 
 # ===================================================================
@@ -338,7 +330,7 @@ class TestRenderThread:
             id="reply-1",
             author=User(username="reviewer"),
             body="Looks good",
-            created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 2, tzinfo=UTC),
             file_path="test.py",
         )
         disc = Discussion(
@@ -348,7 +340,7 @@ class TestRenderThread:
                 id="root",
                 author=User(username="author"),
                 body="Please review",
-                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
                 file_path="test.py",
                 new_line=5,
                 replies=(reply,),

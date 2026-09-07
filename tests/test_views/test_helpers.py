@@ -1,6 +1,8 @@
 """Tests for inbox view helper functions."""
 
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -44,7 +46,7 @@ class TestCiIconAsciiMode:
 
 class TestRelativeTime:
     def _ago(self, **kwargs) -> datetime:
-        return datetime.now(timezone.utc) - timedelta(**kwargs)
+        return datetime.now(UTC) - timedelta(**kwargs)
 
     def test_seconds_ago_shows_just_now(self):
         assert relative_time(self._ago(seconds=30)) == "just now"

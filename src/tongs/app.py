@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import webbrowser
 from pathlib import Path
+from typing import ClassVar
 
 from textual import work
 from textual.app import App
@@ -61,13 +62,13 @@ class TongsApp(App):
     }
     """
 
-    COMMANDS = {TongsCommandProvider}
+    COMMANDS: ClassVar[set] = {TongsCommandProvider}
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("question_mark", "help", "Help", show=True),
     ]
 
-    SCREENS = {
+    SCREENS: ClassVar[dict] = {
         "inbox": InboxScreen,
         "repo_list": RepoListScreen,
     }

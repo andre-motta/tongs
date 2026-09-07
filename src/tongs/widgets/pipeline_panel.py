@@ -7,13 +7,15 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from contextlib import suppress
+from typing import ClassVar
 
 from rich.style import Style
 from rich.text import Text
-
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -177,7 +179,7 @@ class PipelinePanel(Widget, can_focus=True):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("j", "next_item", "Down", show=False),
         Binding("k", "prev_item", "Up", show=False),
         Binding("down", "next_item", "Down", show=False),
@@ -274,11 +276,9 @@ class PipelinePanel(Widget, can_focus=True):
             scroll.mount(header)
 
         stages: dict[str, list[tuple[int, PipelineJob]]] = {}
-        job_index = 0
-        for j in self._jobs:
+        for job_index, j in enumerate(self._jobs):
             stage = j.stage or "default"
             stages.setdefault(stage, []).append((job_index, j))
-            job_index += 1
 
         g = self._render_gen
         card_idx = 0
@@ -356,13 +356,13 @@ class PipelinePanel(Widget, can_focus=True):
         try:
             old_card = self.query_one(f"#{prefix}-{old}")
             old_card.remove_class("focused")
-        except Exception:
+        except NoMatches:
             pass
         try:
             new_card = self.query_one(f"#{prefix}-{new}")
             new_card.add_class("focused")
             new_card.scroll_visible()
-        except Exception:
+        except NoMatches:
             pass
 
     def _max_index(self) -> int:
@@ -496,14 +496,12 @@ class PipelinePanel(Widget, can_focus=True):
                 f.write(self._job_log_text)
             with self.app.suspend():
                 subprocess.run([*shlex.split(editor_cmd), tmp_path], check=False)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.app.notify(f"Editor failed: {exc}")
         finally:
             if tmp_path:
-                try:
+                with suppress(OSError):
                     os.unlink(tmp_path)
-                except Exception:
-                    pass
 
     def action_search_log(self) -> None:
         if self._view_level != 2:

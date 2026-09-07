@@ -104,7 +104,7 @@ class InlineComment:
     old_line: int | None = None
     new_line: int | None = None
     is_resolved: bool = False
-    replies: tuple["InlineComment", ...] = ()
+    replies: tuple[InlineComment, ...] = ()
 
 
 @dataclass(frozen=True)

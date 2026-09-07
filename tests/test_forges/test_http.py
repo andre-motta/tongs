@@ -1,5 +1,7 @@
 """Tests for HTTP transport layer."""
 
+from __future__ import annotations
+
 import httpx
 import pytest
 
@@ -81,6 +83,16 @@ class TestMapHttpError:
         err = map_http_error(resp)
         assert isinstance(err, ForgeError)
         assert "Bad Gateway" in str(err)
+
+    @pytest.mark.parametrize(
+        "body", ['["glpat-secret123"]', '"glpat-secret123"', "null"]
+    )
+    def test_non_object_json_errors_still_redact_credentials(self, body: str) -> None:
+        err = map_http_error(_FakeResponse(502, body))
+        assert isinstance(err, ForgeError)
+        assert "glpat-secret123" not in str(err)
+        if "glpat-" in body:
+            assert "[REDACTED]" in str(err)
 
 
 def _make_async_client(handler) -> httpx.AsyncClient:

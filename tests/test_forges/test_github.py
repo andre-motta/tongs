@@ -1,5 +1,7 @@
 """Tests for GitHub client."""
 
+from __future__ import annotations
+
 import json
 
 import httpx
@@ -118,7 +120,7 @@ class TestCreateInlineComment:
                 body="Fix this",
             )
 
-        post_req = [r for r in requests_made if r.method == "POST"][0]
+        post_req = next(r for r in requests_made if r.method == "POST")
         payload = json.loads(post_req.content)
         assert payload["body"] == "Fix this"
         assert payload["path"] == "src/main.py"
@@ -152,7 +154,7 @@ class TestCreateInlineComment:
                 start_side="LEFT",
             )
 
-        post_req = [r for r in requests_made if r.method == "POST"][0]
+        post_req = next(r for r in requests_made if r.method == "POST")
         payload = json.loads(post_req.content)
         assert payload["start_line"] == 45
         assert payload["start_side"] == "LEFT"
@@ -183,7 +185,7 @@ class TestCreateInlineComment:
                 start_side=None,
             )
 
-        post_req = [r for r in requests_made if r.method == "POST"][0]
+        post_req = next(r for r in requests_made if r.method == "POST")
         payload = json.loads(post_req.content)
         assert payload["start_line"] == 45
         assert payload["start_side"] == "RIGHT"

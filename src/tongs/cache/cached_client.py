@@ -6,7 +6,6 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
-
 from tongs.cache.store import CacheStore
 from tongs.forges.base import ForgeClient
 from tongs.forges.models import (

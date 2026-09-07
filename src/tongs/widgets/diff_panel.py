@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import difflib
 from enum import Enum
+from typing import ClassVar
 
 from rich.markup import escape
 from rich.style import Style
 from rich.syntax import Syntax
 from rich.text import Text
-
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.color import Color as TextualColor
 from textual.containers import Horizontal, Vertical
-from textual import events
 from textual.message import Message
 from textual.strip import Strip
 from textual.style import Style as VisualStyle
@@ -138,7 +138,7 @@ class DiffOptionList(OptionList):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("J", "extend_down", "Sel down", show=False),
@@ -808,7 +808,7 @@ class DiffRenderer:
             highlighted = syntax.highlight(content)
             highlighted.rstrip()
             return highlighted
-        except Exception:
+        except Exception:  # noqa: BLE001 - Third-party lexer failures must leave the diff readable.
             return Text(content)
 
     def _gutter(self, dl: DiffLine) -> Text:
@@ -953,8 +953,7 @@ def _build_highlight_map(file: DiffFile) -> dict[int, Text]:
 
     all_lines: list[DiffLine] = []
     for hunk in file.hunks:
-        for dl in hunk.lines:
-            all_lines.append(dl)
+        all_lines.extend(hunk.lines)
 
     if not all_lines:
         return {}
@@ -976,7 +975,7 @@ def _build_highlight_map(file: DiffFile) -> dict[int, Text]:
             part.rstrip()
             result[id(dl)] = part
         return result
-    except Exception:
+    except Exception:  # noqa: BLE001 - Third-party lexer failures must leave the diff readable.
         return {}
 
 
@@ -1050,7 +1049,7 @@ class DiffPanel(Widget):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("n", "next_file", "Next file", show=True),
         Binding("shift+n", "prev_file", "Prev file", show=False),
         Binding("m", "preview_markdown", "Preview MD", show=False),

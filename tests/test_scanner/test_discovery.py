@@ -1,12 +1,14 @@
 """Tests for repository discovery via filesystem scanning."""
 
+from __future__ import annotations
+
 import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from tongs.scanner.discovery import discover_repos, _pick_primary_remote
+from tongs.scanner.discovery import _pick_primary_remote, discover_repos
 from tongs.scanner.repo import ForgeType, Remote, Repo
 
 

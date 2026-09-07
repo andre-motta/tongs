@@ -87,14 +87,12 @@ def _parse_git_diff_file(lines: list[str], start: int) -> tuple[DiffFile | None,
             i += 1
             continue
 
-        if line.startswith("rename from") or line.startswith("rename to"):
+        if line.startswith(("rename from", "rename to")):
             status = FileStatus.RENAMED
             i += 1
             continue
 
-        if line.startswith("similarity index") or line.startswith(
-            "dissimilarity index"
-        ):
+        if line.startswith(("similarity index", "dissimilarity index")):
             i += 1
             continue
 
@@ -256,7 +254,7 @@ def _parse_single_hunk(
     while i < len(lines):
         line = lines[i]
 
-        if line.startswith("@@ ") or line.startswith("diff --git "):
+        if line.startswith(("@@ ", "diff --git ")):
             break
 
         if (
@@ -328,7 +326,7 @@ def _parse_single_hunk(
 def _strip_prefix(path: str) -> str:
     """Strip a/ or b/ prefix from diff paths."""
     path = path.strip()
-    if path.startswith("a/") or path.startswith("b/"):
+    if path.startswith(("a/", "b/")):
         return path[2:]
     return path
 
@@ -342,5 +340,5 @@ def _detect_language(path: str) -> str:
 
         lexer = get_lexer_for_filename(path)
         return lexer.aliases[0] if lexer.aliases else lexer.name.lower()
-    except Exception:
+    except Exception:  # noqa: BLE001 - Third-party lexer failures must leave the diff readable.
         return ""

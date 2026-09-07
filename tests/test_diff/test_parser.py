@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -385,7 +386,7 @@ class TestSyntheticDiffs:
 class TestLanguageDetection:
     """Verify language detection from file extensions."""
 
-    _CASES = [
+    _CASES: ClassVar[list] = [
         (".py", "python"),
         (".js", "javascript"),
         (".ts", "typescript"),

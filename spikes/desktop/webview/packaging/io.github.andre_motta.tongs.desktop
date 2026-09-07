@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Tongs Desktop Prototype
+Comment=Review GitHub and GitLab changes from a desktop workspace
+Exec=tongs-desktop-webview-prototype
+Icon=io.github.andre_motta.tongs
+Terminal=false
+Categories=Development;RevisionControl;
+Keywords=Git;GitHub;GitLab;Code Review;
+StartupNotify=true

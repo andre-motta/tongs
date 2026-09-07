@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.andre_motta.tongs</id>
+  <name>Tongs Desktop Prototype</name>
+  <summary>Review GitHub and GitLab changes from a desktop workspace</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.andre_motta">
+    <name>Andre Motta</name>
+  </developer>
+  <launchable type="desktop-id">io.github.andre_motta.tongs.desktop</launchable>
+  <description>
+    <p>
+      An experimental Python-hosted webview for the Tongs code review client.
+      This metadata is an RPM feasibility input, not a release artifact.
+    </p>
+  </description>
+  <url type="homepage">https://tongs.tools</url>
+  <content_rating type="oars-1.1" />
+</component>

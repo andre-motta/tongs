@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tongs minimal shell fixture</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+      body { margin: 0; padding: 3rem; background: #111827; color: #e5e7eb; }
+      main { max-width: 48rem; margin: auto; }
+      .label { color: #fbbf24; font-weight: 700; text-transform: uppercase; }
+      pre { padding: 1rem; background: #030712; border: 1px solid #374151; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="label">Minimal shell fixture, not the common frontend</p>
+      <h1>Python webview host</h1>
+      <p>This page exists only to test packaging, bridge startup, and shutdown.</p>
+      <pre id="status" aria-live="polite">Waiting for native bridge...</pre>
+    </main>
+    <script>
+      function readHealth() {
+        window.tongs.invoke('health').then((result) => {
+          document.querySelector('#status').textContent = JSON.stringify(result, null, 2);
+        });
+      }
+      if (window.tongs) readHealth();
+      else window.addEventListener('tongs-ready', readHealth, {once: true});
+    </script>
+  </body>
+</html>

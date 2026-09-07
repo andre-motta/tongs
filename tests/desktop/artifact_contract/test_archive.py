@@ -38,6 +38,41 @@ def _fixture() -> tuple[bytes, bytes, bytes]:
     )
 
 
+def _release_rebound_to(document: bytes):
+    release = parse_release_manifest(_fixture()[2])
+    artifact = replace(
+        release.artifacts[0],
+        byte_count=len(document),
+        sha256=hashlib.sha256(document).hexdigest(),
+    )
+    return replace(release, artifacts=(artifact,))
+
+
+def _pax_record(key: str, value: str) -> bytes:
+    body = f"{key}={value}\n".encode()
+    length = len(body) + 2
+    while True:
+        candidate = f"{length} ".encode() + body
+        if len(candidate) == length:
+            return candidate
+        length = len(candidate)
+
+
+def _archive_with_extension(entry_type: bytes, payload: bytes) -> bytes:
+    install_document = _fixture()[1]
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as opened:
+        extension = tarfile.TarInfo("PaxHeader")
+        extension.type = entry_type
+        extension.size = len(payload)
+        opened.addfile(extension, io.BytesIO(payload))
+        install = tarfile.TarInfo("desktop-install.json")
+        install.mode = 0o644
+        install.size = len(install_document)
+        opened.addfile(install, io.BytesIO(install_document))
+    return gzip.compress(raw.getvalue(), mtime=0)
+
+
 def _raised(code: ArtifactContractErrorCode):
     return pytest.raises(
         ArtifactContractError, match=".", check=lambda e: e.code is code
@@ -127,6 +162,52 @@ def test_external_archive_name_length_digest_and_identity_are_authoritative() ->
     ):
         with _raised(ArtifactContractErrorCode.ARTIFACT_MISMATCH):
             validate_artifact_archive(document, name, release, artifact_id)
+
+
+def test_rebound_digest_does_not_hide_gzip_trailer_corruption() -> None:
+    archive = _fixture()[0]
+    for trailer_index in range(len(archive) - 8, len(archive)):
+        corrupted = bytearray(archive)
+        corrupted[trailer_index] ^= 1
+        document = bytes(corrupted)
+        release = _release_rebound_to(document)
+        with _raised(ArtifactContractErrorCode.INVALID_ARCHIVE):
+            validate_artifact_archive(
+                document,
+                ARCHIVE_NAME,
+                release,
+                "fedora-44-x86_64-user-archive",
+            )
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [b"trailing", gzip.compress(b"second member", mtime=0), b"\x1f\x8b\x08"],
+)
+def test_rebound_digest_does_not_hide_trailing_or_concatenated_data(
+    suffix: bytes,
+) -> None:
+    document = _fixture()[0] + suffix
+    release = _release_rebound_to(document)
+    with _raised(ArtifactContractErrorCode.INVALID_ARCHIVE):
+        validate_artifact_archive(
+            document,
+            ARCHIVE_NAME,
+            release,
+            "fedora-44-x86_64-user-archive",
+        )
+
+
+def test_rebound_digest_does_not_hide_truncated_gzip() -> None:
+    document = _fixture()[0][:-1]
+    release = _release_rebound_to(document)
+    with _raised(ArtifactContractErrorCode.INVALID_ARCHIVE):
+        validate_artifact_archive(
+            document,
+            ARCHIVE_NAME,
+            release,
+            "fedora-44-x86_64-user-archive",
+        )
 
 
 @pytest.mark.parametrize(
@@ -241,19 +322,60 @@ def test_inspector_enforces_entry_limit_while_reading_headers() -> None:
         inspect_archive(compressed, limits)
 
 
-def test_inspector_bounds_pax_metadata_before_tarfile_interprets_it() -> None:
-    install_document = _fixture()[1]
-    install = parse_install_manifest(install_document)
+def test_inspector_enforces_cumulative_content_before_tarfile_pass() -> None:
+    install = parse_install_manifest(_fixture()[1])
     raw = io.BytesIO()
-    with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as opened:
-        info = tarfile.TarInfo("desktop-install.json")
-        info.size = len(install_document)
-        info.pax_headers = {"comment": "x" * 2_048}
-        opened.addfile(info, io.BytesIO(install_document))
+    with tarfile.open(fileobj=raw, mode="w") as opened:
+        for name in ("one", "two"):
+            info = tarfile.TarInfo(name)
+            info.size = 600
+            opened.addfile(info, io.BytesIO(b"x" * 600))
     compressed = gzip.compress(raw.getvalue(), mtime=0)
-
+    limits = replace(
+        install.extraction_limits,
+        max_total_bytes=1_000,
+        max_file_bytes=600,
+    )
     with _raised(ArtifactContractErrorCode.LIMIT_EXCEEDED):
-        inspect_archive(compressed, install.extraction_limits)
+        inspect_archive(compressed, limits)
+
+
+def test_inspector_bounds_pax_metadata_before_tarfile_interprets_it() -> None:
+    install = parse_install_manifest(_fixture()[1])
+    for extension_type in (tarfile.XHDTYPE, tarfile.SOLARIS_XHDTYPE):
+        compressed = _archive_with_extension(
+            extension_type, _pax_record("comment", "x" * 2_048)
+        )
+        with _raised(ArtifactContractErrorCode.LIMIT_EXCEEDED):
+            inspect_archive(compressed, install.extraction_limits)
+
+
+def test_inspector_accepts_bounded_solaris_pax_metadata() -> None:
+    install = parse_install_manifest(_fixture()[1])
+    compressed = _archive_with_extension(
+        tarfile.SOLARIS_XHDTYPE, _pax_record("comment", "synthetic")
+    )
+    inspection = inspect_archive(compressed, install.extraction_limits)
+    assert inspection.install_document == _fixture()[1]
+
+
+def test_inspector_rejects_nonzero_or_excessive_tar_end_padding() -> None:
+    install = parse_install_manifest(_fixture()[1])
+    tar_document = gzip.decompress(_fixture()[0])
+    first_zero = next(
+        offset
+        for offset in range(0, len(tar_document), 512)
+        if tar_document[offset : offset + 512] == bytes(512)
+    )
+    assert first_zero > 0
+    nonzero = bytearray(tar_document)
+    nonzero[first_zero + 512] = 1
+    for document in (
+        gzip.compress(bytes(nonzero), mtime=0),
+        gzip.compress(tar_document + bytes(10_752), mtime=0),
+    ):
+        with _raised(ArtifactContractErrorCode.INVALID_ARCHIVE):
+            inspect_archive(document, install.extraction_limits)
 
 
 def test_layout_rejects_tarfile_surrogateescaped_names_safely() -> None:

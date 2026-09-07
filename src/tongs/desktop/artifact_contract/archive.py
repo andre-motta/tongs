@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import io
 import tarfile
+import zlib
 from collections.abc import Sequence
 from pathlib import PurePosixPath
 
@@ -38,6 +39,9 @@ from tongs.desktop.artifact_contract.models import (
 )
 
 INSTALL_MANIFEST_PATH = "desktop-install.json"
+_TAR_BLOCK_BYTES = 512
+_MAX_TAR_END_PADDING_BYTES = 20 * _TAR_BLOCK_BYTES
+_TAR_EXTENSION_TYPES = {b"x", b"g", b"X", b"L", b"K"}
 
 
 def select_release_artifact(
@@ -132,33 +136,45 @@ def inspect_archive(document: bytes, limits: ExtractionLimits) -> ArchiveInspect
 
 def _preflight_archive_headers(document: bytes, limits: ExtractionLimits) -> None:
     """Bound tar metadata before ``tarfile`` interprets extension headers."""
-    maximum_archive_bytes = (
-        limits.max_total_bytes
-        + limits.max_entries * (limits.max_path_bytes + 2_048)
-        + 10_240
-    )
-    if len(document) > maximum_archive_bytes:
-        _limit("Compressed archive size exceeds declared limits")
-
     physical_headers = 0
     logical_entries = 0
     extension_bytes = 0
     maximum_extension_bytes = limits.max_entries * (limits.max_path_bytes + 1_024)
+    maximum_physical_headers = limits.max_entries * 3 + 2
+    maximum_expanded_bytes = (
+        limits.max_total_bytes
+        + maximum_extension_bytes
+        + maximum_physical_headers * (_TAR_BLOCK_BYTES * 2 - 1)
+        + _MAX_TAR_END_PADDING_BYTES
+        + 2 * _TAR_BLOCK_BYTES
+    )
+    maximum_archive_bytes = maximum_expanded_bytes * 2 + 1_024
+    if len(document) > maximum_archive_bytes:
+        _limit("Compressed archive size exceeds declared limits")
+
+    member_bytes = 0
     with gzip.GzipFile(fileobj=io.BytesIO(document), mode="rb") as stream:
+        zero_blocks = 0
         while True:
-            header = _read_exact(stream, 512)
+            header = _read_exact(stream, _TAR_BLOCK_BYTES)
             if header == b"":
                 _invalid_archive("Archive is missing its end marker")
-            if header == bytes(512):
-                return
+            if header == bytes(_TAR_BLOCK_BYTES):
+                zero_blocks += 1
+                if zero_blocks == 2:
+                    _consume_end_padding(stream)
+                    break
+                continue
+            if zero_blocks:
+                _invalid_archive("Archive contains data after its end marker")
             physical_headers += 1
-            if physical_headers > limits.max_entries * 3 + 2:
+            if physical_headers > maximum_physical_headers:
                 _limit("Archive header count exceeds declared limits")
             size = _tar_number(header[124:136])
             if size < 0:
                 _invalid_archive("Archive header contains a negative size")
             entry_type = header[156:157]
-            if entry_type in {b"x", b"g", b"L", b"K"}:
+            if entry_type in _TAR_EXTENSION_TYPES:
                 extension_bytes += size
                 if (
                     size > limits.max_path_bytes + 1_024
@@ -173,7 +189,47 @@ def _preflight_archive_headers(document: bytes, limits: ExtractionLimits) -> Non
                     _invalid_archive("GNU sparse archive metadata is unsupported")
                 if size > limits.max_file_bytes:
                     _limit("Archive member size exceeds the declared limit")
-            _discard_exact(stream, size + (-size % 512))
+                member_bytes += size
+                if member_bytes > limits.max_total_bytes:
+                    _limit("Archive member content exceeds the declared total limit")
+            _discard_exact(stream, size + (-size % _TAR_BLOCK_BYTES))
+    _validate_single_gzip_stream(document, maximum_expanded_bytes)
+
+
+def _validate_single_gzip_stream(document: bytes, maximum_expanded_bytes: int) -> None:
+    decompressor = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+    expanded_bytes = 0
+    offset = 0
+    pending = b""
+    try:
+        while offset < len(document) or pending:
+            if not pending:
+                pending = document[offset : offset + 64 * 1024]
+                offset += len(pending)
+            output = decompressor.decompress(pending, 64 * 1024)
+            pending = decompressor.unconsumed_tail
+            expanded_bytes += len(output)
+            if expanded_bytes > maximum_expanded_bytes:
+                _limit("Expanded archive stream exceeds declared limits")
+            if decompressor.eof:
+                if decompressor.unused_data or pending or offset < len(document):
+                    _invalid_archive("Archive contains trailing or concatenated data")
+                break
+    except zlib.error as error:
+        raise ArtifactContractError(
+            ArtifactContractErrorCode.INVALID_ARCHIVE,
+            "Desktop artifact has an invalid gzip stream",
+        ) from error
+    if not decompressor.eof:
+        _invalid_archive("Desktop artifact has a truncated gzip stream")
+
+
+def _consume_end_padding(stream: gzip.GzipFile) -> None:
+    padding_bytes = 0
+    while chunk := stream.read(64 * 1024):
+        padding_bytes += len(chunk)
+        if padding_bytes > _MAX_TAR_END_PADDING_BYTES or any(chunk):
+            _invalid_archive("Archive contains unsupported data after its end marker")
 
 
 def _read_exact(stream: gzip.GzipFile, byte_count: int) -> bytes:

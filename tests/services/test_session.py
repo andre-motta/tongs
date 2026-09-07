@@ -353,6 +353,24 @@ class TestReferences:
 
 class TestLifecycle:
     @pytest.mark.asyncio
+    async def test_review_refreshes_close_before_registry_and_cache(self) -> None:
+        cache = FakeCache()
+        registry = FakeRegistry()
+        session = await start_session(registry, cache=cache)
+
+        async def close_mutations() -> None:
+            assert registry.close_calls == 0
+            assert cache.close_calls == 0
+
+        session.review_mutations.close = AsyncMock(side_effect=close_mutations)
+
+        await session.close()
+
+        session.review_mutations.close.assert_awaited_once()
+        assert registry.close_calls == 1
+        assert cache.close_calls == 1
+
+    @pytest.mark.asyncio
     async def test_context_manager_closes_owned_resources_once(self) -> None:
         cache = FakeCache()
         registry = FakeRegistry()

@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID, uuid4
 
-from tongs.services import ReviewRef, ReviewRevision
+from tongs.services.models import ReviewRef, ReviewRevision
 
 
 class DraftState(str, Enum):
@@ -222,6 +222,34 @@ class ReconciliationRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class SubmissionRetryAuthorization:
+    """An explicit durable retry of one definitely unconfirmed step."""
+
+    step_id: str
+    ordinal: int
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownSubmissionOutcome:
+    """A durable marker for a step whose remote outcome was ambiguous."""
+
+    step_id: str
+    ordinal: int
+    reason: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PendingSubmissionDispatch:
+    """The exact remote step durably marked before its call begins."""
+
+    step_id: str
+    operation_id: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class SubmissionAttempt:
     """A frozen draft submission and all confirmed durable outcomes."""
 
@@ -234,3 +262,6 @@ class SubmissionAttempt:
     reconciliations: tuple[ReconciliationRecord, ...]
     started_at: datetime
     updated_at: datetime
+    retry_authorizations: tuple[SubmissionRetryAuthorization, ...] = ()
+    unknown_outcomes: tuple[UnknownSubmissionOutcome, ...] = ()
+    pending_dispatch: PendingSubmissionDispatch | None = None

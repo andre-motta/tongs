@@ -560,7 +560,7 @@ async def test_migration_is_idempotent_and_rejects_newer_schema(db_path: Path) -
     await second.open()
     await second.close()
     with sqlite3.connect(db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (1,)
+        assert db.execute("PRAGMA user_version").fetchone() == (2,)
         db.execute("PRAGMA user_version=99")
 
     with pytest.raises(DraftSchemaError, match="newer"):

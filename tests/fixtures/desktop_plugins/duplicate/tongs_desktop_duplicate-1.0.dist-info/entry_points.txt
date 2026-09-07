@@ -1,0 +1,2 @@
+[tongs.desktop_plugins]
+good = fixture_desktop_good:GoodProvider

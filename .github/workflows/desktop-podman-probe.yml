@@ -1,0 +1,60 @@
+name: Desktop Podman probe
+
+on:
+  pull_request:
+    branches: [feat/desktop-app]
+    paths:
+      - "tests/containers/**"
+      - ".github/workflows/desktop-podman-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fedora-44-x86-64:
+    name: Fedora 44 x86_64 harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TONGS_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Record hosted runner and Podman versions
+        run: |
+          uname -a
+          podman version
+
+      - name: Run Fedora 44 success probe
+        run: |
+          tests/containers/run-fedora-44.sh \
+            --output-dir "$RUNNER_TEMP/tongs-fedora-44-success"
+
+      - name: Assert deliberate harness failure returns nonzero
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+          tests/containers/run-fedora-44.sh \
+            --output-dir "$RUNNER_TEMP/tongs-fedora-44-failure" \
+            --inject-failure
+          status=$?
+          set -e
+          python3 tests/containers/verify_expected_failure.py \
+            --output-dir "$RUNNER_TEMP/tongs-fedora-44-failure" \
+            --actual-status "$status"
+
+      - name: Upload Fedora 44 probe evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fedora-44-x86-64-podman-probe
+          path: |
+            ${{ runner.temp }}/tongs-fedora-44-success
+            ${{ runner.temp }}/tongs-fedora-44-failure
+          if-no-files-found: error
+          retention-days: 14

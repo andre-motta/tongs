@@ -445,6 +445,40 @@ async def test_cleanup_failure_is_bounded_and_retained(
 
 
 @pytest.mark.asyncio
+async def test_stop_after_timed_out_call_preserves_returned_caller(
+    installed_entry_point_source: Callable[[str], Sequence[EntryPoint]],
+) -> None:
+    registry = DesktopPluginRegistry(
+        {},
+        entry_point_source=only_good(installed_entry_point_source),
+        host_version="1.0",
+        call_timeout_seconds=0.005,
+    )
+    registry.discover()
+    await registry.start_all(lambda _plugin_id, _manifest: RecordingFacade())
+    caller = asyncio.current_task()
+    assert caller is not None
+    cancellations = caller.cancelling()
+
+    result = await registry.call(
+        "good",
+        "stubborn_wait",
+        {},
+        DesktopCallContext("returned-call", DesktopCancellation()),
+    )
+    assert result.error is not None
+    assert result.error.code is DesktopPluginErrorCode.CALL_TIMEOUT
+
+    await registry.stop_all()
+    await asyncio.sleep(0)
+
+    assert caller.cancelling() == cancellations
+    assert record(registry).state is DesktopPluginState.STOPPED
+    assert not registry._runtimes["good"].provider_tasks
+    assert not registry._runtimes["good"].calls
+
+
+@pytest.mark.asyncio
 async def test_cleanup_deadline_does_not_await_suppressed_task_cancellation(
     installed_entry_point_source: Callable[[str], Sequence[EntryPoint]],
 ) -> None:

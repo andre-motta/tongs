@@ -434,9 +434,15 @@ class DesktopPluginRegistry:
             runtime.cancellation.cancel()
             pending_calls = tuple(runtime.calls.values())
             active_provider_tasks = tuple(runtime.provider_tasks)
+            active_outer_tasks = {
+                pending_call.outer_task
+                for pending_call in pending_calls
+                if not pending_call.outer_complete
+            }
             for pending_call in pending_calls:
                 pending_call.cancellation.cancel()
-                pending_call.outer_task.cancel()
+                if not pending_call.outer_complete:
+                    pending_call.outer_task.cancel()
                 if pending_call.provider_task is not None:
                     pending_call.provider_task.cancel()
             for provider_task in active_provider_tasks:
@@ -445,7 +451,7 @@ class DesktopPluginRegistry:
                 stop_task = _runtime_task(runtime, runtime.provider.stop())
                 cleanup_tasks = {
                     *active_provider_tasks,
-                    *(pending_call.outer_task for pending_call in pending_calls),
+                    *active_outer_tasks,
                     cast(asyncio.Task[object], stop_task),
                 }
                 _done, pending = await asyncio.wait(

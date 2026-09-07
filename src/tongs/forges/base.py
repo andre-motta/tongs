@@ -41,8 +41,16 @@ class ForgeClient(ABC):
     @abstractmethod
     async def get_mr(self, repo_path: str, number: int) -> MRDetail: ...
 
+    async def get_mr_fresh(self, repo_path: str, number: int) -> MRDetail:
+        """Read MR detail without a response-cache result when supported."""
+        return await self.get_mr(repo_path, number)
+
     @abstractmethod
     async def get_mr_diff(self, repo_path: str, number: int) -> list[dict]: ...
+
+    async def get_mr_diff_fresh(self, repo_path: str, number: int) -> list[dict]:
+        """Read diff changes without a response-cache result when supported."""
+        return await self.get_mr_diff(repo_path, number)
 
     @abstractmethod
     async def list_mr_commits(self, repo_path: str, number: int) -> list[Commit]: ...

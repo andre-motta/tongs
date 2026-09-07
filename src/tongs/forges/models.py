@@ -90,6 +90,10 @@ class MRDetail(MRSummary):
     draft_notes_count: int | None = None
     # GitHub-specific
     status_check_rollup: str | None = None
+    # Revision metadata, appended to preserve positional compatibility.
+    head_sha: str = ""
+    base_sha: str = ""
+    start_sha: str | None = None
 
 
 @dataclass(frozen=True)

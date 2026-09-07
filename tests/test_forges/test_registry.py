@@ -1,5 +1,6 @@
 """Tests for forge registry."""
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -87,3 +88,21 @@ class TestForgeRegistry:
 
         mock_client.close.assert_awaited_once()
         assert len(registry._clients) == 0
+
+    @pytest.mark.asyncio
+    async def test_close_all_finishes_other_clients_before_propagating_cancel(self):
+        registry = ForgeRegistry()
+        cancelled_client = AsyncMock()
+        cancelled_client.close.side_effect = asyncio.CancelledError
+        other_client = AsyncMock()
+        registry._clients = {
+            "github.com": cancelled_client,
+            "gitlab.com": other_client,
+        }
+
+        with pytest.raises(asyncio.CancelledError):
+            await registry.close_all()
+
+        cancelled_client.close.assert_awaited_once()
+        other_client.close.assert_awaited_once()
+        assert registry._clients == {}

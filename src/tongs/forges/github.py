@@ -657,6 +657,8 @@ class GitHubClient(ForgeClient):
             reviewers=tuple(requested_reviewers),
             assignees=tuple(assignees),
             changes_count=data.get("changed_files", 0),
+            head_sha=data.get("head", {}).get("sha", ""),
+            base_sha=data.get("base", {}).get("sha", ""),
         )
 
     def _parse_review_comment(self, data: dict) -> InlineComment:

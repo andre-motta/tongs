@@ -43,7 +43,11 @@ def _pr_api_json(overrides: dict | None = None) -> dict:
         "labels": [],
         "user": {"login": "alice", "name": "Alice"},
         "head": {"ref": "feature-branch", "sha": "abc123def456"},
-        "base": {"ref": "main", "repo": {"full_name": "acme/repo"}},
+        "base": {
+            "ref": "main",
+            "sha": "base123def456",
+            "repo": {"full_name": "acme/repo"},
+        },
         "mergeable_state": "clean",
     }
     if overrides:
@@ -95,6 +99,15 @@ class TestGraphQLProperties:
         http = httpx.AsyncClient(transport=transport, base_url=_TEST_HOST.api_base)
         client = GitHubClient(_TEST_HOST, http)
         assert client.supports_thread_resolution is True
+
+
+class TestRevisionMetadata:
+    def test_detail_captures_head_and_base_sha(self):
+        client, _ = _make_github_client(lambda _: httpx.Response(200))
+        detail = client._parse_pr_detail(_pr_api_json(), "acme/repo")
+        assert detail.head_sha == "abc123def456"
+        assert detail.base_sha == "base123def456"
+        assert detail.start_sha is None
 
 
 class TestCreateInlineComment:

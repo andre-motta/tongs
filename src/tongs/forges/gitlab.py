@@ -565,6 +565,7 @@ class GitLabClient(ForgeClient):
 
     def _parse_mr_detail(self, data: dict, repo_path: str) -> MRDetail:
         summary = self._parse_mr_summary(data, repo_path)
+        diff_refs = data.get("diff_refs") or {}
         reviewers = [_parse_user(r) for r in data.get("reviewers", [])]
         assignees = [_parse_user(a) for a in data.get("assignees", [])]
         approvals = [_parse_user(a.get("user", a)) for a in data.get("approved_by", [])]
@@ -576,6 +577,9 @@ class GitLabClient(ForgeClient):
             reviewers=tuple(reviewers),
             assignees=tuple(assignees),
             changes_count=int(data.get("changes_count", 0) or 0),
+            head_sha=diff_refs.get("head_sha", ""),
+            base_sha=diff_refs.get("base_sha", ""),
+            start_sha=diff_refs.get("start_sha") or None,
             detailed_merge_status=data.get("detailed_merge_status"),
         )
 

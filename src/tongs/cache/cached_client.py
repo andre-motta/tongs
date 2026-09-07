@@ -11,6 +11,7 @@ from tongs.forges.base import ForgeClient
 from tongs.forges.models import (
     CIStatus,
     InlineComment,
+    MRDetail,
     MRState,
     MRSummary,
     User,
@@ -118,6 +119,14 @@ class CachedForgeClient:
         result = await self._inner.get_mr_diff(repo_path, number)
         await self._cache.put_json(key, result, self._diff_ttl)
         return result
+
+    async def get_mr_fresh(self, repo_path: str, number: int) -> MRDetail:
+        """Bypass any present or future wrapper cache for revision checks."""
+        return await self._inner.get_mr_fresh(repo_path, number)
+
+    async def get_mr_diff_fresh(self, repo_path: str, number: int) -> list[dict]:
+        """Bypass cached diff payloads for revision-bound reads."""
+        return await self._inner.get_mr_diff_fresh(repo_path, number)
 
     # -- Mutations that invalidate cache --
 

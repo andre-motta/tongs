@@ -33,6 +33,7 @@ dependencies = [
     "pyperclip>=1.8",
     "aiosqlite>=0.20",
     "packaging>=24.0",
+    "sigstore>=4.5,<5",
 ]
 
 [project.optional-dependencies]

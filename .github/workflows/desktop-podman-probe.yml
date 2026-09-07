@@ -15,10 +15,13 @@ jobs:
     name: Fedora 44 x86_64 harness
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      TONGS_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Check out source without persisted credentials
         uses: actions/checkout@v6
         with:
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Record hosted runner and Podman versions

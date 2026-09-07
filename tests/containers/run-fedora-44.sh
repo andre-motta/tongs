@@ -46,6 +46,7 @@ if find "$output_dir" -mindepth 1 -print -quit | grep -q .; then
 fi
 
 source_sha=$(git -C "$repo_root" rev-parse HEAD)
+head_sha=${TONGS_HEAD_SHA:-unknown}
 image_ref=registry.fedoraproject.org/fedora:44
 image_iid_file="$output_dir/harness-image.id"
 
@@ -62,6 +63,7 @@ printf '\n' >>"$output_dir/invocation.txt"
     printf 'ImageVersion=%s\n' "${ImageVersion:-unknown}"
     printf 'RUNNER_ARCH=%s\n' "${RUNNER_ARCH:-unknown}"
     printf 'RUNNER_ENVIRONMENT=%s\n' "${RUNNER_ENVIRONMENT:-unknown}"
+    printf 'requested_head_sha=%s\n' "$head_sha"
     printf 'source_sha=%s\n' "$source_sha"
     printf 'source_revision=%s\n' "$(git -C "$repo_root" rev-list --parents -n 1 HEAD)"
     printf 'uname=%s\n' "$(uname -a)"
@@ -89,6 +91,7 @@ podman run --rm \
     --security-opt=no-new-privileges \
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=2g \
     --userns=keep-id \
+    --env "TONGS_HEAD_SHA=$head_sha" \
     --env "TONGS_SOURCE_SHA=$source_sha" \
     --volume "$repo_root:/checkout:ro" \
     --volume "$output_dir:/output:rw" \

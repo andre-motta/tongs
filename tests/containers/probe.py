@@ -94,6 +94,7 @@ def _environment() -> dict[str, Any]:
         "os_release": os_release,
         "packages": distributions,
         "platform": platform.platform(),
+        "requested_head_sha": os.environ.get("TONGS_HEAD_SHA", "unknown"),
         "python": platform.python_version(),
         "source_sha": os.environ.get("TONGS_SOURCE_SHA", "unknown"),
     }

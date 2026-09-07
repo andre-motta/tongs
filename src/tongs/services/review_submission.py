@@ -38,6 +38,8 @@ from tongs.state.drafts.models import (
     ReplyDraftComment,
     StepReceipt,
     SubmissionAttempt,
+    SubmissionPlanRecord,
+    SubmissionPlanStepRecord,
 )
 from tongs.state.drafts.reconciliation import (
     ConfirmedSubmissionContent,
@@ -103,6 +105,7 @@ class SubmissionProgress:
     atomic: bool
     resync_required: bool = False
     failure: SubmissionFailure | None = None
+    plan_available: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,8 +148,7 @@ class ReviewSubmissionService:
             lock = self._attempt_lock(attempt.id)
             async with lock:
                 try:
-                    snapshot = await self._preflight(attempt)
-                    plan = self._plan(attempt, snapshot)
+                    attempt, plan = await self._preflight(attempt)
                 except BaseException as error:
                     await self._cancel_before_reraise(attempt.id, error)
                     raise
@@ -168,8 +170,7 @@ class ReviewSubmissionService:
                     )
                 if attempt.state == DraftState.SUBMITTED:
                     return self._progress(attempt, None, SubmissionOutcome.SUBMITTED)
-                snapshot = await self._preflight(attempt)
-                plan = self._plan(attempt, snapshot)
+                attempt, plan = await self._preflight(attempt)
                 remaining = self._remaining_steps(attempt, plan)
                 if not remaining:
                     return await self._complete(attempt, plan)
@@ -197,17 +198,21 @@ class ReviewSubmissionService:
                         "Only an outcome-unknown submission can be reconciled.",
                     )
                 if resolution == ReconciliationResolution.RETURN_EDITABLE:
+                    plan = self._stored_plan(attempt)
                     confirmed = self._confirmed_content(attempt)
                     content = editable_remainder(attempt, confirmed)
                     reconciled = await self._store.reconcile_attempt(
                         attempt_id, resolution, editable_content=content
                     )
-                    return self._progress(reconciled, None, SubmissionOutcome.EDITABLE)
+                    return self._progress(reconciled, plan, SubmissionOutcome.EDITABLE)
                 reconciled = await self._store.reconcile_attempt(attempt_id, resolution)
                 if resolution == ReconciliationResolution.MARK_SUBMITTED:
-                    return self._progress(reconciled, None, SubmissionOutcome.SUBMITTED)
-                snapshot = await self._preflight(reconciled)
-                plan = self._plan(reconciled, snapshot)
+                    return self._progress(
+                        reconciled,
+                        self._stored_plan(reconciled),
+                        SubmissionOutcome.SUBMITTED,
+                    )
+                reconciled, plan = await self._preflight(reconciled)
                 return await self._advance(reconciled, plan)
         finally:
             self._active_tasks.discard(operation)
@@ -221,14 +226,20 @@ class ReviewSubmissionService:
                 DraftState.SUBMITTED: SubmissionOutcome.SUBMITTED,
                 DraftState.UNKNOWN: SubmissionOutcome.UNKNOWN,
             }.get(attempt.state, SubmissionOutcome.PAUSED)
-            return self._progress(attempt, None, outcome)
+            return self._progress(attempt, self._stored_plan(attempt), outcome)
         finally:
             self._active_tasks.discard(operation)
 
     async def close(self) -> None:
         """Reject new work and settle all service-owned calls within a fixed bound."""
         async with self._state_lock:
-            if self._close_task is None:
+            if self._close_task is None or (
+                self._close_task.done()
+                and (
+                    self._close_task.cancelled()
+                    or self._close_task.exception() is not None
+                )
+            ):
                 self._closed = True
                 self._close_task = asyncio.create_task(self._coordinate_close())
             task = self._close_task
@@ -278,7 +289,18 @@ class ReviewSubmissionService:
             self._attempt_locks[attempt_id] = lock
         return lock
 
-    async def _preflight(self, attempt: SubmissionAttempt) -> ReviewSnapshot:
+    async def _preflight(
+        self, attempt: SubmissionAttempt
+    ) -> tuple[SubmissionAttempt, _SubmissionPlan]:
+        if attempt.plan is None and (
+            attempt.receipts
+            or attempt.unknown_outcomes
+            or attempt.pending_dispatch is not None
+        ):
+            raise ServiceError(
+                ServiceErrorCode.CONFLICT,
+                "The recovered attempt has no durable submission plan. Return it to editing before retrying.",
+            )
         snapshot = await self._get_review(attempt.snapshot.review)
         if (
             not isinstance(snapshot, ReviewSnapshot)
@@ -322,8 +344,9 @@ class ReviewSubmissionService:
                 )
         plan = self._plan(attempt, snapshot)
         for step in plan.steps:
-            self._command(attempt, step, plan)
-        return snapshot
+            await self._mutations.validate(self._command(attempt, step, plan))
+        recorded = await self._store.record_plan(attempt.id, self._plan_record(plan))
+        return recorded, plan
 
     def _plan(
         self, attempt: SubmissionAttempt, snapshot: ReviewSnapshot
@@ -377,6 +400,41 @@ class ReviewSubmissionService:
             raise self._empty_draft()
         return _SubmissionPlan(tuple(steps), False, forge)
 
+    @staticmethod
+    def _plan_record(plan: _SubmissionPlan) -> SubmissionPlanRecord:
+        return SubmissionPlanRecord(
+            plan.forge,
+            plan.atomic,
+            tuple(
+                SubmissionPlanStepRecord(
+                    step_id=step.id,
+                    kind=step.kind.value,
+                    comment_ids=step.comment_ids,
+                )
+                for step in plan.steps
+            ),
+        )
+
+    @staticmethod
+    def _stored_plan(attempt: SubmissionAttempt) -> _SubmissionPlan | None:
+        if attempt.plan is None:
+            return None
+        try:
+            return _SubmissionPlan(
+                tuple(
+                    SubmissionStep(
+                        step.step_id,
+                        SubmissionStepKind(step.kind),
+                        step.comment_ids,
+                    )
+                    for step in attempt.plan.steps
+                ),
+                attempt.plan.atomic,
+                attempt.plan.forge,
+            )
+        except ValueError as error:
+            raise DraftStoreError("stored submission plan is invalid") from error
+
     async def _advance(
         self, attempt: SubmissionAttempt, plan: _SubmissionPlan
     ) -> SubmissionProgress:
@@ -387,9 +445,7 @@ class ReviewSubmissionService:
                     attempt.id, step.id, command.operation_id
                 )
             except asyncio.CancelledError:
-                await self._mark_unknown(
-                    attempt, plan, step, "dispatch_journal_cancelled"
-                )
+                await self._mark_unknown(attempt, step, "dispatch_journal_cancelled")
                 raise
             except DraftStoreError:
                 latest = await self._store.get_attempt(attempt.id)
@@ -407,7 +463,7 @@ class ReviewSubmissionService:
             try:
                 outcome = await self._mutations.execute(command)
             except asyncio.CancelledError:
-                await self._mark_unknown(attempt, plan, step, "cancelled")
+                await self._mark_unknown(attempt, step, "cancelled")
                 raise
             except ServiceError as error:
                 try:
@@ -420,7 +476,7 @@ class ReviewSubmissionService:
                         raise asyncio.CancelledError
                 except DraftStoreError:
                     unknown = await self._mark_unknown(
-                        attempt, plan, step, "rejection_storage_failed"
+                        attempt, step, "rejection_storage_failed"
                     )
                     return self._progress(
                         unknown,
@@ -441,9 +497,7 @@ class ReviewSubmissionService:
                     failure=self._service_failure(error, step.id),
                 )
             except Exception as error:  # noqa: BLE001 - Durable ambiguity boundary.
-                unknown = await self._mark_unknown(
-                    attempt, plan, step, type(error).__name__
-                )
+                unknown = await self._mark_unknown(attempt, step, type(error).__name__)
                 return self._progress(
                     unknown,
                     plan,
@@ -526,15 +580,11 @@ class ReviewSubmissionService:
     async def _mark_unknown(
         self,
         attempt: SubmissionAttempt,
-        plan: _SubmissionPlan,
         step: SubmissionStep,
         reason: str,
-    ) -> SubmissionProgress:
-        unknown = await _finish_critical(
+    ) -> SubmissionAttempt:
+        return await _finish_critical(
             self._store.mark_attempt_unknown(attempt.id, step_id=step.id, reason=reason)
-        )
-        return self._progress(
-            unknown, plan, SubmissionOutcome.UNKNOWN, resync_required=True
         )
 
     async def _cancel_predispatch(self, attempt_id: UUID) -> None:
@@ -719,8 +769,9 @@ class ReviewSubmissionService:
             completed,
             tuple(marker.step_id for marker in attempt.unknown_outcomes),
             plan.atomic if plan is not None else False,
-            resync_required,
+            resync_required or bool(attempt.unknown_outcomes),
             failure,
+            plan is not None,
         )
 
 

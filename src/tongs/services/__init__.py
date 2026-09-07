@@ -51,6 +51,14 @@ from tongs.services.review_mutations import (
     ReviewMutationService,
     ReviewVerdict,
 )
+from tongs.services.review_submission import (
+    ReviewSubmissionService,
+    SubmissionFailure,
+    SubmissionOutcome,
+    SubmissionProgress,
+    SubmissionStep,
+    SubmissionStepKind,
+)
 from tongs.services.session import ApplicationSession
 
 __all__ = [
@@ -94,9 +102,15 @@ __all__ = [
     "ReviewRevision",
     "ReviewScope",
     "ReviewSnapshot",
+    "ReviewSubmissionService",
     "ReviewVerdict",
     "ServiceError",
     "ServiceErrorCode",
     "ServiceEvent",
     "ServiceEventKind",
+    "SubmissionFailure",
+    "SubmissionOutcome",
+    "SubmissionProgress",
+    "SubmissionStep",
+    "SubmissionStepKind",
 ]

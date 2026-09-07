@@ -400,6 +400,81 @@ async def test_header_padding_or_truncated_diff_cannot_be_manufactured_anchor() 
 
 
 @pytest.mark.asyncio
+async def test_validate_checks_anchor_without_dispatch_or_ledger_reservation() -> None:
+    client = _client()
+    service, *_ = _service(client, ledger_size=1)
+    valid = InlineComment(
+        "validate-inline",
+        REF,
+        REVISION,
+        DiffAnchor("old.py", "new.py", 11, DiffSide.RIGHT),
+        "body",
+    )
+
+    await service.validate(valid)
+
+    assert service._ledger == {}
+    client.create_inline_comment.assert_not_called()
+    await service.execute(GeneralComment("other-operation", REF, "body"))
+    client.add_comment.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_validate_rejects_invalid_anchor_without_remote_write() -> None:
+    client = _client()
+    service, *_ = _service(client)
+    invalid = InlineComment(
+        "validate-invalid",
+        REF,
+        REVISION,
+        DiffAnchor("old.py", "new.py", 999, DiffSide.RIGHT),
+        "body",
+    )
+
+    with pytest.raises(ServiceError) as raised:
+        await service.validate(invalid)
+
+    assert raised.value.code is ServiceErrorCode.INVALID_INPUT
+    assert service._ledger == {}
+    client.create_inline_comment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_close_owns_and_cancels_non_dispatch_validation() -> None:
+    entered = asyncio.Event()
+
+    async def blocked_review(_review: ReviewRef) -> ReviewSnapshot:
+        entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    service, get_review, *_ = _service(_client())
+    get_review.side_effect = blocked_review
+    validation = asyncio.create_task(
+        service.validate(
+            InlineComment(
+                "validate-close",
+                REF,
+                REVISION,
+                DiffAnchor("old.py", "new.py", 11, DiffSide.RIGHT),
+                "body",
+            )
+        )
+    )
+    await entered.wait()
+
+    await service.close()
+
+    with pytest.raises(asyncio.CancelledError):
+        await validation
+    assert service._owner_tasks == set()
+    assert service._ledger == {}
+    with pytest.raises(ServiceError) as raised:
+        await service.validate(GeneralComment("after-close", REF, "body"))
+    assert raised.value.code is ServiceErrorCode.CLOSED
+
+
+@pytest.mark.asyncio
 async def test_changed_revision_rejects_before_dispatch() -> None:
     client = _client()
     service, get_review, *_ = _service(client)

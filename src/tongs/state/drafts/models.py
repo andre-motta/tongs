@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID, uuid4
 
+from tongs.scanner.repo import ForgeType
 from tongs.services.models import ReviewRef, ReviewRevision
 
 
@@ -250,6 +251,41 @@ class PendingSubmissionDispatch:
 
 
 @dataclass(frozen=True, slots=True)
+class SubmissionPlanStepRecord:
+    """One immutable durable step in a frozen submission plan."""
+
+    step_id: str
+    kind: str
+    comment_ids: tuple[UUID, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.step_id or not self.kind:
+            raise ValueError("submission plan step identity and kind are required")
+        if len(self.comment_ids) != len(set(self.comment_ids)):
+            raise ValueError("submission plan comment IDs must be unique")
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionPlanRecord:
+    """The exact forge-specific plan validated before any remote write."""
+
+    forge: ForgeType
+    atomic: bool
+    steps: tuple[SubmissionPlanStepRecord, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.forge, ForgeType):
+            raise TypeError("forge must be a ForgeType")
+        if not isinstance(self.atomic, bool):
+            raise TypeError("atomic must be a boolean")
+        if not self.steps:
+            raise ValueError("submission plan must contain at least one step")
+        step_ids = [step.step_id for step in self.steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("submission plan step IDs must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class SubmissionAttempt:
     """A frozen draft submission and all confirmed durable outcomes."""
 
@@ -265,3 +301,4 @@ class SubmissionAttempt:
     retry_authorizations: tuple[SubmissionRetryAuthorization, ...] = ()
     unknown_outcomes: tuple[UnknownSubmissionOutcome, ...] = ()
     pending_dispatch: PendingSubmissionDispatch | None = None
+    plan: SubmissionPlanRecord | None = None

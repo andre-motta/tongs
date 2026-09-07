@@ -35,7 +35,12 @@ from tongs.services import (
     ReviewSnapshot,
 )
 from tongs.services.errors import ServiceError, ServiceErrorCode
-from tongs.services.review_mutations import ReviewMutationService
+from tongs.services.review_mutations import (
+    MutationOutcome,
+    MutationReceipt,
+    MutationStatus,
+    ReviewMutationService,
+)
 from tongs.services.review_submission import (
     ReviewSubmissionService,
     SubmissionOutcome,
@@ -391,6 +396,79 @@ async def test_gitlab_request_changes_fails_preflight_without_remote_write(
 
 
 @pytest.mark.asyncio
+async def test_whole_plan_anchor_preflight_precedes_first_remote_write(
+    tmp_path: Path,
+) -> None:
+    general = GeneralDraftComment(uuid4(), "general first")
+    invalid_anchor = InlineAnchor(
+        REVISION,
+        "old.py",
+        "new.py",
+        None,
+        999,
+        DiffSide.NEW,
+        context_fingerprint(("missing",)),
+    )
+    inline = InlineDraftComment(uuid4(), "invalid inline", invalid_anchor)
+    client = _client()
+    store, service, _, _, draft = await _services(
+        tmp_path / "drafts.db", _content(general, inline), client=client
+    )
+
+    with pytest.raises(ServiceError) as raised:
+        await service.start(draft.id, draft.version)
+
+    assert raised.value.code is ServiceErrorCode.INVALID_INPUT
+    client.add_comment.assert_not_awaited()
+    client.create_inline_comment.assert_not_awaited()
+    assert (await store.get_draft(draft.id)).state is DraftState.EDITABLE
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_get_reconstructs_durable_plan_without_network_read(
+    tmp_path: Path,
+) -> None:
+    comment = GeneralDraftComment(uuid4(), "comment")
+    store, service, _, _, draft = await _services(
+        tmp_path / "drafts.db", _content(comment)
+    )
+    submitted = await service.start(draft.id, draft.version)
+    service._get_review = AsyncMock(
+        side_effect=AssertionError("unexpected network read")
+    )
+
+    current = await service.get(submitted.attempt_id)
+
+    assert current.steps == submitted.steps
+    assert current.atomic == submitted.atomic
+    assert current.plan_available is True
+    service._get_review.assert_not_awaited()
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_get_distinguishes_recovered_attempt_without_a_plan(
+    tmp_path: Path,
+) -> None:
+    store, service, _, _, draft = await _services(
+        tmp_path / "drafts.db",
+        _content(GeneralDraftComment(uuid4(), "comment")),
+    )
+    attempt = await store.lock_submission(draft.id, draft.version)
+    service._get_review = AsyncMock(
+        side_effect=AssertionError("unexpected network read")
+    )
+
+    current = await service.get(attempt.id)
+
+    assert current.steps == ()
+    assert current.plan_available is False
+    service._get_review.assert_not_awaited()
+    await store.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "snapshot",
     [
@@ -445,6 +523,10 @@ async def test_unknown_step_requires_reconciliation_and_never_repeats_receipt(
     assert unknown.outcome is SubmissionOutcome.UNKNOWN
     assert unknown.completed_step_ids == (f"comment:{first.id.hex}",)
     assert unknown.unknown_step_ids == (f"comment:{second.id.hex}",)
+    durable = await service.get(unknown.attempt_id)
+    assert durable.steps == unknown.steps
+    assert durable.resync_required is True
+    assert durable.plan_available is True
     with pytest.raises(ServiceError) as raised:
         await service.resume(unknown.attempt_id)
     assert raised.value.code is ServiceErrorCode.CONFLICT
@@ -606,6 +688,9 @@ async def test_close_retries_cancellation_of_submission_owner(tmp_path: Path) ->
     entered = asyncio.Event()
 
     class FirstCancelResistantMutations:
+        async def validate(self, _command: object) -> None:
+            return None
+
         async def execute(self, _command: object) -> object:
             entered.set()
             try:
@@ -634,6 +719,56 @@ async def test_close_retries_cancellation_of_submission_owner(tmp_path: Path) ->
         await owner
     attempt = (await store.list_recovery_attempts())[0]
     assert attempt.unknown_outcomes[0].step_id.startswith("comment:")
+    assert service._active_tasks == set()
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_close_can_finish_after_uncooperative_owner_settles(
+    tmp_path: Path,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class ResistantMutations:
+        async def validate(self, _command: object) -> None:
+            return None
+
+        async def execute(self, command: object) -> MutationOutcome:
+            entered.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    pass
+            operation_id = command.operation_id  # type: ignore[attr-defined]
+            return MutationOutcome(
+                operation_id,
+                MutationStatus.KNOWN,
+                MutationReceipt(operation_id, "known"),
+            )
+
+    store = DraftStore(tmp_path / "drafts.db")
+    await store.open()
+    draft = await store.create_draft(
+        REF, REVISION, _content(GeneralDraftComment(uuid4(), "comment"))
+    )
+    service = ReviewSubmissionService(
+        store=store,
+        mutations=ResistantMutations(),  # type: ignore[arg-type]
+        get_review=AsyncMock(return_value=_snapshot()),
+        close_timeout=0.01,
+    )
+    owner = asyncio.create_task(service.start(draft.id, draft.version))
+    await entered.wait()
+
+    with pytest.raises(RuntimeError, match="did not stop"):
+        await service.close()
+    assert owner in service._active_tasks
+
+    release.set()
+    assert (await owner).outcome is SubmissionOutcome.SUBMITTED
+    await service.close()
     assert service._active_tasks == set()
     await store.close()
 

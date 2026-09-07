@@ -98,6 +98,7 @@ async def test_v1_database_migrates_without_losing_attempt_or_receipt(
     await first.close()
 
     with sqlite3.connect(db_path) as db:
+        db.execute("DROP TABLE submission_plans")
         db.execute("DROP TABLE submission_pending_dispatches")
         db.execute("DROP TABLE submission_unknown_outcomes")
         db.execute("DROP TABLE submission_retry_authorizations")

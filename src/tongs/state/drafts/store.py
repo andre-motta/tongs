@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import aiosqlite
 from platformdirs import user_data_dir
 
+from tongs.scanner.repo import ForgeType
 from tongs.services.models import RepositoryRef, ReviewRef, ReviewRevision
 from tongs.state.drafts._locks import AttemptLock
 from tongs.state.drafts.errors import (
@@ -47,6 +48,8 @@ from tongs.state.drafts.models import (
     ReplyDraftComment,
     StepReceipt,
     SubmissionAttempt,
+    SubmissionPlanRecord,
+    SubmissionPlanStepRecord,
     SubmissionRetryAuthorization,
     UnknownSubmissionOutcome,
 )
@@ -139,8 +142,46 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
             recorded_at TEXT NOT NULL
         )
         """,
+        """
+        CREATE TABLE submission_plans (
+            attempt_id TEXT PRIMARY KEY
+                REFERENCES submission_attempts(id) ON DELETE CASCADE,
+            forge TEXT NOT NULL,
+            atomic INTEGER NOT NULL CHECK(atomic IN (0, 1)),
+            steps_json TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        )
+        """,
     ),
 }
+
+
+def _plan_steps_to_json(steps: tuple[SubmissionPlanStepRecord, ...]) -> str:
+    return json.dumps(
+        [
+            {
+                "step_id": step.step_id,
+                "kind": step.kind,
+                "comment_ids": [str(comment_id) for comment_id in step.comment_ids],
+            }
+            for step in steps
+        ],
+        separators=(",", ":"),
+    )
+
+
+def _plan_steps_from_json(value: str) -> tuple[SubmissionPlanStepRecord, ...]:
+    data = json.loads(value)
+    if not isinstance(data, list):
+        raise TypeError("submission plan steps must be a list")
+    return tuple(
+        SubmissionPlanStepRecord(
+            step_id=cast(str, item["step_id"]),
+            kind=cast(str, item["kind"]),
+            comment_ids=tuple(UUID(cast(str, value)) for value in item["comment_ids"]),
+        )
+        for item in cast(list[dict[str, object]], data)
+    )
 
 
 def default_draft_db_path() -> Path:
@@ -488,6 +529,13 @@ class DraftStore:
                 "operation_id",
                 "recorded_at",
             },
+            "submission_plans": {
+                "attempt_id",
+                "forge",
+                "atomic",
+                "steps_json",
+                "recorded_at",
+            },
         }
         for table, expected_columns in required.items():
             rows = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
@@ -821,6 +869,57 @@ class DraftStore:
         finally:
             if ownership is not None:
                 ownership.release()
+
+    @_serialized
+    async def record_plan(
+        self, attempt_id: UUID, plan: SubmissionPlanRecord
+    ) -> SubmissionAttempt:
+        """Persist the exact validated plan once before any remote dispatch."""
+        if not isinstance(plan, SubmissionPlanRecord):
+            raise TypeError("plan must be a SubmissionPlanRecord")
+        self._require_owned(attempt_id)
+        db = self._connection()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            attempt = await self._attempt_in_transaction(db, attempt_id)
+            if attempt.state not in {DraftState.SUBMITTING, DraftState.PARTIAL}:
+                raise DraftStoreError("plan recording requires an active attempt")
+            if attempt.plan is not None:
+                if attempt.plan != plan:
+                    raise DraftStoreError(
+                        "submission plan is already bound differently"
+                    )
+                await db.execute("COMMIT")
+                return attempt
+            if attempt.pending_dispatch is not None or attempt.receipts:
+                raise DraftStoreError("submission plan must precede every remote write")
+            now = _now()
+            await db.execute(
+                """
+                INSERT INTO submission_plans
+                    (attempt_id, forge, atomic, steps_json, recorded_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(attempt_id),
+                    plan.forge.value,
+                    int(plan.atomic),
+                    _plan_steps_to_json(plan.steps),
+                    _format_time(now),
+                ),
+            )
+            result = await self._attempt_in_transaction(db, attempt_id)
+            await db.execute("COMMIT")
+            return result
+        except (DraftStoreError, DraftNotFoundError):
+            await self._rollback(db)
+            raise
+        except sqlite3.Error as error:
+            await self._rollback(db)
+            raise DraftStoreError("submission plan write failed") from error
+        except BaseException:
+            await self._rollback(db)
+            raise
 
     @_serialized
     async def begin_dispatch(
@@ -1530,6 +1629,15 @@ class DraftStore:
                     (str(attempt_id),),
                 )
             ).fetchone()
+            plan_row = await (
+                await db.execute(
+                    """
+                    SELECT forge, atomic, steps_json
+                    FROM submission_plans WHERE attempt_id = ?
+                    """,
+                    (str(attempt_id),),
+                )
+            ).fetchone()
             return SubmissionAttempt(
                 attempt_id,
                 UUID(row["draft_id"]),
@@ -1562,6 +1670,13 @@ class DraftStore:
                     pending_row[0], pending_row[1], _parse_time(pending_row[2])
                 )
                 if pending_row is not None
+                else None,
+                SubmissionPlanRecord(
+                    ForgeType(plan_row[0]),
+                    bool(plan_row[1]),
+                    _plan_steps_from_json(plan_row[2]),
+                )
+                if plan_row is not None
                 else None,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from tongs.diff.models import DiffFile, FileStatus
+from tongs.diff.models import DiffFile, DiffHunk, FileStatus, LineType
 from tongs.diff.parser import _detect_language, parse_diff
 
 
@@ -46,6 +46,7 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
         "truncated",
         "patch_truncated",
         "too_large",
+        "collapsed",
     )
     mode_only_value = _first_bool(change, "is_mode_only", "mode_only", "mode_changed")
 
@@ -68,10 +69,16 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
     # A positive aggregate count with no patch means the forge gave us file
     # metadata but withheld the body.  This is the useful, conservative
     # distinction between a truncated patch and an intentionally empty file.
-    if is_truncated_value is None:
-        is_truncated = not has_hunks and not is_binary and bool(additions or deletions)
-    else:
-        is_truncated = is_truncated_value
+    incomplete_hunk = _has_incomplete_hunk(hunks)
+    is_truncated = incomplete_hunk or (
+        is_truncated_value is True
+        or (
+            is_truncated_value is None
+            and not has_hunks
+            and not is_binary
+            and bool(additions or deletions)
+        )
+    )
 
     explicit_empty = _first_bool(change, "is_empty", "empty", "empty_diff")
     if explicit_empty is None:
@@ -198,6 +205,21 @@ def _patch_mentions_binary(patch: str) -> bool:
     return any(line.startswith("Binary files ") for line in patch.splitlines())
 
 
+def _has_incomplete_hunk(hunks: Sequence[DiffHunk]) -> bool:
+    for hunk in hunks:
+        old_lines = sum(
+            line.line_type in (LineType.CONTEXT, LineType.DELETION)
+            for line in hunk.lines
+        )
+        new_lines = sum(
+            line.line_type in (LineType.CONTEXT, LineType.ADDITION)
+            for line in hunk.lines
+        )
+        if old_lines < hunk.old_count or new_lines < hunk.new_count:
+            return True
+    return False
+
+
 def _has_explicit_empty_patch(change: Mapping[str, object]) -> bool:
     for key in ("diff", "patch"):
         if key in change and isinstance(change[key], str):
@@ -206,11 +228,14 @@ def _has_explicit_empty_patch(change: Mapping[str, object]) -> bool:
 
 
 def _first_bool(change: Mapping[str, object], *keys: str) -> bool | None:
+    saw_false = False
     for key in keys:
         value = change.get(key)
-        if isinstance(value, bool):
-            return value
-    return None
+        if value is True:
+            return True
+        if value is False:
+            saw_false = True
+    return False if saw_false else None
 
 
 def _is_true(value: object) -> bool:

@@ -129,6 +129,42 @@ def test_newline_in_metadata_path_cannot_break_the_patch() -> None:
     assert [line.content for line in file.hunks[0].lines] == ["old", "new"]
 
 
+def test_gitlab_collapsed_change_overrides_false_too_large_flag() -> None:
+    file = convert_forge_changes(
+        (
+            {
+                "old_path": "src/large.py",
+                "new_path": "src/large.py",
+                "collapsed": True,
+                "too_large": False,
+                "diff": "",
+            },
+        )
+    )[0]
+
+    assert file.is_truncated is True
+    assert file.is_empty is False
+    assert file.is_unavailable is False
+
+
+def test_incomplete_hunk_is_truncated_with_authoritative_aggregate_counts() -> None:
+    file = convert_forge_changes(
+        (
+            {
+                "filename": "src/partial.py",
+                "additions": 5,
+                "deletions": 1,
+                "patch": "@@ -1,1 +1,5 @@\n-old\n+new\n",
+            },
+        )
+    )[0]
+
+    assert file.is_truncated is True
+    assert file.additions == 5
+    assert file.deletions == 1
+    assert len(file.hunks[0].lines) == 2
+
+
 def test_malformed_optional_values_do_not_drop_file() -> None:
     files = convert_forge_changes(
         (

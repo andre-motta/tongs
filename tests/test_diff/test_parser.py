@@ -832,3 +832,26 @@ class TestEdgeCases:
             LineType.ADDITION,
         ]
         assert [line.content for line in lines] == ["-- comment", "++ comment"]
+
+    def test_incomplete_hunk_stops_before_following_file_headers(self) -> None:
+        diff = (
+            "--- a/first.py\n"
+            "+++ b/first.py\n"
+            "@@ -1,1 +1,5 @@\n"
+            "-old\n"
+            "+new\n"
+            "--- a/second.py\n"
+            "+++ b/second.py\n"
+            "@@ -1 +1 @@\n"
+            "-before\n"
+            "+after\n"
+        )
+
+        files = parse_diff(diff)
+
+        assert [file.new_path for file in files] == ["first.py", "second.py"]
+        assert [line.content for line in files[0].hunks[0].lines] == ["old", "new"]
+        assert [line.content for line in files[1].hunks[0].lines] == [
+            "before",
+            "after",
+        ]

@@ -262,12 +262,8 @@ def _parse_single_hunk(
         if not line and old_consumed >= old_count and new_consumed >= new_count:
             break
 
-        if (
-            line.startswith("--- ")
-            and i + 1 < len(lines)
-            and lines[i + 1].startswith("+++ ")
-            and old_consumed >= old_count
-            and new_consumed >= new_count
+        if _is_file_header_boundary(
+            lines, i, old_consumed, new_consumed, old_count, new_count
         ):
             break
 
@@ -332,6 +328,33 @@ def _parse_single_hunk(
         ),
         i - start,
     )
+
+
+def _is_file_header_boundary(
+    lines: list[str],
+    index: int,
+    old_consumed: int,
+    new_consumed: int,
+    old_count: int,
+    new_count: int,
+) -> bool:
+    """Recognize a following file header without swallowing source lines.
+
+    A complete hunk can use the normal count gate. For an incomplete hunk,
+    only a header pair followed immediately by another hunk header is treated
+    as a file boundary. This recovers subsequent files while retaining
+    file-header-like source lines that do not have that structure.
+    """
+
+    if not (
+        index + 1 < len(lines)
+        and lines[index].startswith("--- ")
+        and lines[index + 1].startswith("+++ ")
+    ):
+        return False
+    if old_consumed >= old_count and new_consumed >= new_count:
+        return True
+    return index + 2 < len(lines) and HUNK_HEADER_RE.match(lines[index + 2]) is not None
 
 
 def _strip_prefix(path: str) -> str:

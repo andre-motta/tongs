@@ -1,0 +1,207 @@
+{
+  "schema": "tongs-electron-gpu-proof-1",
+  "issue": 25,
+  "date": "2026-09-07",
+  "application_candidate": "19e910f3c9e40aea97cb899350151cb1c3d510c2",
+  "frontend_build_commit": "f710767cd46731cc7cd32aa15199ace5dc9f222f",
+  "environment": {
+    "os": "Fedora Linux 44 (Forty Four)",
+    "kernel": "7.1.13-200.fc44.x86_64",
+    "architecture": "x86_64",
+    "session": "wayland",
+    "desktop": "KDE",
+    "plasma": "6.7.4-2.fc44",
+    "xwayland": "24.1.13-1.fc44",
+    "selinux": "Enforcing",
+    "primary_gpu": {
+      "name": "NVIDIA GeForce RTX 5090",
+      "pci_vendor_device": "10de:2b85",
+      "driver": "NVIDIA 610.57.04",
+      "display_active": true
+    },
+    "secondary_gpu": {
+      "name": "AMD Ryzen 9 9950X3D2 integrated graphics",
+      "pci_vendor_device": "1002:13c0",
+      "driver": "Mesa RADV 26.1.8"
+    }
+  },
+  "runtime": {
+    "electron": "44.2.0",
+    "chromium": "152.0.7977.76",
+    "embedded_node": "24.20.0",
+    "build_node": "22.23.1",
+    "python": "3.14.7",
+    "tongs": "0.4.2.dev21+g19e910f3c",
+    "reference_plugin": "0.0.1",
+    "electron_prototype": "0.0.1"
+  },
+  "inputs": {
+    "electron_lock_sha256": "6d1b471fc2d5581a6bcdb4cc06cde094f42ba0f52149274121618c3252b06a64",
+    "electron_runtime_archive_sha256": "574f7d8cd2a82d77812849729a282b86639b050de120d58b138a126d16b48692",
+    "frontend_lock_sha256": "9b04bca42fa5f4bf6b9701a3d83fb52d0362a3ed4cd0ab000fdeff6d7690f840",
+    "frontend_files_sha256": {
+      "index.html": "de35e84cf9c571ef80156ab7e3d3df09068a8dfae7b1b3170f32e915cb4213df",
+      "assets/index-B8qdfcUJ.js": "9d103c13949b3adb9d788f9c3c6888edf4591ad9fada161fae44335d6719628e",
+      "assets/index-BdTcFqYC.css": "8822c4acd1cd04e95df667fee98693185e60f9466808da6966e13623066a4213",
+      "assets/tongs-icon.png": "b41ae861563eb6f302375e9a6f45419acdf8d121478e52591feffab9c2f95ac9"
+    },
+    "common_ui_probe_sha256": "3cae229084612432da57f7bc8e915bdbafdf9222b6307256b052aaa91c098c7d",
+    "large_diff_probe_sha256": "dca52b41693bc40276122cf177554011dadbef3f3c34125ff733134e61ccadc5"
+  },
+  "artifacts": {
+    "tongs_wheel": {
+      "size": 84268,
+      "sha256": "e4696aee3f1b7d7103b9a761cc5427253bc7443544f8470d37e8df7d447bdcce"
+    },
+    "reference_plugin_wheel": {
+      "size": 3310,
+      "sha256": "af24421fb15c8b1f141757e83860e221d73a3f1d985868cc5ba7c9909e4db763"
+    },
+    "electron_wheel": {
+      "size": 131995172,
+      "sha256": "c52da66d4528564ec98886f19a08bc64b1252ecb47ea3505e90f838219226f05"
+    },
+    "installed_electron_executable_sha256": "9b827d38aacff0d69933481625c4c8f13b4732cbecd0e3477b1d2bac6102522c",
+    "installed_plugin_screenshot_sha256": "28486a47cddec31aff3c9dec47c1b87d50a1f10862085d436f0ef40b443bb6e0",
+    "installed_large_diff_screenshot_sha256": "fcc5f5e2ef410d03b61aca9bc0198c2ed5bec56a8df41e33394ab1b373021a6c",
+    "installed_run_reports_sha256": [
+      "043d67601b270c5296880b98394b716702dfa99a03408fc99f6dfd0c3c9b52fd",
+      "3fe2b495b16576a16dc5c7287424ebe9bf5d073a177a9b52458a84d91ff01311",
+      "4fc51230499692613a18bd1226ec6e60edd411292caf2794f119d73325628703",
+      "1bd2cbd54221a29a06077b6fe9ad570eb64790f1b254d5bd9e5435a682b6852d",
+      "94c2198afe06eb4d29abb42ca41a4b8f0a486a7b7d9d80cfdf6172fd08cfe50a"
+    ],
+    "injected_gpu_failure_report_sha256": "a84a353c95b10819af8293fc806eaf0e83cdd7290df7cc80300851da8191bc66"
+  },
+  "diagnostic_matrix": [
+    {
+      "configuration": "native Wayland, default GPU",
+      "window_opened": true,
+      "hardware_webgl": "NVIDIA GeForce RTX 5090",
+      "gpu_process_seccomp": 0,
+      "result": "fail",
+      "reason": "Chromium reported Wayland/Vulkan incompatibility and the GPU process had no seccomp filter"
+    },
+    {
+      "configuration": "native Wayland, early GPU sandbox",
+      "window_opened": false,
+      "result": "fail",
+      "reason": "the sandbox denied EGL loading and Chromium disabled GPU access after repeated GPU process crashes"
+    },
+    {
+      "configuration": "XWayland default selected before Electron startup",
+      "window_opened": true,
+      "hardware_webgl": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5090/PCIe/SSE2, OpenGL 4.5.0)",
+      "active_gpu_pci_vendor_device": "10de:2b85",
+      "gpu_process_seccomp": 2,
+      "renderer_process_seccomp": 2,
+      "result": "pass"
+    },
+    {
+      "configuration": "XWayland with explicit --disable-gpu negative control",
+      "window_opened": false,
+      "result": "fail as required",
+      "reason": "Electron rejected GPU access and the hardware-required smoke exited with status 1 without an accepted report"
+    },
+    {
+      "configuration": "installed XWayland with GPU child killed after common UI probe and screenshot",
+      "window_opened": true,
+      "initial_gpu_acceptance": "pass",
+      "replacement_gpu_accelerated": true,
+      "retained_child_failure": {"type": "GPU", "reason": "killed", "exit_code": 9},
+      "final_gpu_acceptance": "fail",
+      "failed_check": "no_child_process_failures",
+      "exit_code": 1,
+      "result": "fail as required"
+    }
+  ],
+  "accelerated_configuration": {
+    "session": "wayland",
+    "ozone_platform": "x11",
+    "disable_gpu": false,
+    "disable_vulkan": false,
+    "no_sandbox": false,
+    "disable_gpu_sandbox": false,
+    "disable_seccomp_filter_sandbox": false,
+    "hardware_acceleration_enabled": true,
+    "features": {
+      "gpu_compositing": "enabled",
+      "rasterization": "enabled",
+      "opengl": "enabled_on",
+      "webgl": "enabled",
+      "vulkan": "disabled_off"
+    },
+    "active_gpu": {
+      "vendor_id_decimal": 4318,
+      "device_id_decimal": 11141,
+      "pci_vendor_device": "10de:2b85"
+    },
+    "webgl_vendor": "Google Inc. (NVIDIA Corporation)",
+    "webgl_renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5090/PCIe/SSE2, OpenGL 4.5.0)",
+    "gpu_process": {
+      "no_new_privs": 1,
+      "seccomp": 2,
+      "seccomp_filters": 1
+    },
+    "gpu_parent_process": {
+      "no_new_privs": 1,
+      "seccomp": 0,
+      "seccomp_filters": 0,
+      "assertion": "the GPU child gained its active seccomp filter after this direct parent"
+    },
+    "renderer_process": {
+      "no_new_privs": 1,
+      "seccomp": 2,
+      "seccomp_filters": 1,
+      "process_global": "undefined",
+      "require_global": "undefined"
+    },
+    "renderer_parent_process": {
+      "no_new_privs": 1,
+      "seccomp": 0,
+      "seccomp_filters": 0
+    },
+    "main_process": {
+      "no_new_privs": 0,
+      "seccomp": 0,
+      "seccomp_filters": 0,
+      "role": "privileged Electron browser process; recorded separately and not claimed as sandboxed"
+    }
+  },
+  "evidence_timing": {
+    "initial_snapshot_retained": true,
+    "final_snapshot_after_ui_probe": true,
+    "final_snapshot_after_screenshot": true,
+    "final_device_feature_process_and_sandbox_evidence_refreshed": true,
+    "final_acceptance_uses_complete_pre_report_child_failure_history": true,
+    "final_acceptance_immediately_precedes_synchronous_report_write": true
+  },
+  "installed_runs": [
+    {"run": 1, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 886.9, "diff_fetch_ms": 60.7, "ui_probe_ms": 286.1, "large_render_ms": 40.2, "rendered_rows": 27},
+    {"run": 2, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 883.8, "diff_fetch_ms": 58.3, "ui_probe_ms": 285.3, "large_render_ms": 39.5, "rendered_rows": 27},
+    {"run": 3, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 884.3, "diff_fetch_ms": 62.1, "ui_probe_ms": 285.8, "large_render_ms": 40.0, "rendered_rows": 27},
+    {"run": 4, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 892.2, "diff_fetch_ms": 66.4, "ui_probe_ms": 289.3, "large_render_ms": 43.2, "rendered_rows": 27},
+    {"run": 5, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 889.6, "diff_fetch_ms": 68.7, "ui_probe_ms": 289.8, "large_render_ms": 43.5, "rendered_rows": 27}
+  ],
+  "installed_run_assertions": {
+    "all_initial_gpu_checks_passed": true,
+    "all_final_refreshed_gpu_checks_passed": true,
+    "all_child_process_failure_lists_empty": true,
+    "all_large_diff_line_counts": 20000,
+    "all_reached_last_row": true,
+    "all_split_diff": true,
+    "all_plugin_mount_unmount_remount": true,
+    "all_plugin_backend_calls": true,
+    "all_bundled_help_visible": true,
+    "all_exit_codes_zero": true
+  },
+  "large_diff_capture_validation": {
+    "data_source": "generated synthetic stress fixture, not repository or forge data",
+    "visible_geometry_required": true,
+    "post_geometry_settle": "two animation frames plus 100 ms",
+    "installed_captures_visually_inspected": 3,
+    "all_captures_show_rows_19981_through_19999": true
+  },
+  "provenance": "Native installed Electron windows using synthetic review data and a separately installed local reference-plugin wheel; no live forge operations",
+  "release_gate": "spike evidence passes on this host and configuration; production artifact revalidation remains mandatory"
+}

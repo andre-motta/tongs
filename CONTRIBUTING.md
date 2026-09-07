@@ -93,6 +93,7 @@ PYTHONPATH=spikes/desktop pytest spikes/desktop/tests/test_backend.py -v
 npm ci --prefix spikes/desktop/frontend
 npm test --prefix spikes/desktop/frontend
 npm run build --prefix spikes/desktop/frontend
+pytest spikes/desktop/electron/test/test_launcher.py -v
 npm ci --prefix spikes/desktop/electron
 TONGS_DESKTOP_PYTHON="$(command -v python)" \
   npm test --prefix spikes/desktop/electron

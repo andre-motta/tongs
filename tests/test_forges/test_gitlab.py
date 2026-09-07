@@ -1,7 +1,9 @@
 """Tests for GitLab client parsing logic."""
 
+from __future__ import annotations
+
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -37,7 +39,7 @@ class TestEncodeProject:
 class TestParseDatetime:
     def test_iso_format_with_z(self):
         dt = _parse_datetime("2026-01-15T10:30:00Z")
-        assert dt == datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        assert dt == datetime(2026, 1, 15, 10, 30, 0, tzinfo=UTC)
 
     def test_iso_format_with_offset(self):
         dt = _parse_datetime("2026-01-15T10:30:00+00:00")
@@ -216,7 +218,7 @@ class TestParseMRSummary:
         assert summary.labels == ("enhancement", "review")
         assert summary.forge_host == _TEST_HOST
         assert summary.repo_path == "acme/widgets"
-        assert summary.created_at == datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+        assert summary.created_at == datetime(2026, 6, 1, 9, 0, 0, tzinfo=UTC)
 
     def test_parse_mr_summary_missing_pipeline(self):
         client = self._client()
@@ -325,10 +327,8 @@ class TestParsePipeline:
         assert pipeline.sha == "abc123def456"
         assert pipeline.source == "push"
         assert pipeline.duration_seconds == 600
-        assert pipeline.created_at == datetime(2026, 6, 1, 8, 0, 0, tzinfo=timezone.utc)
-        assert pipeline.finished_at == datetime(
-            2026, 6, 1, 8, 10, 0, tzinfo=timezone.utc
-        )
+        assert pipeline.created_at == datetime(2026, 6, 1, 8, 0, 0, tzinfo=UTC)
+        assert pipeline.finished_at == datetime(2026, 6, 1, 8, 10, 0, tzinfo=UTC)
 
 
 class TestParseJob:

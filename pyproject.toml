@@ -62,3 +62,6 @@ source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tongs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

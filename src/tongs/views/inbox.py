@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import ClassVar
 
 from textual import work
 from textual.app import ComposeResult
@@ -21,7 +22,7 @@ class InboxScreen(Screen):
     When `repo` is provided, the inbox is scoped to that single repo.
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("r", "repos_or_back", "Repos", show=True, key_display="r"),
         Binding("1", "focus_tab('reviews')", "Reviews", show=False),
         Binding("2", "focus_tab('my-mrs')", "My MRs", show=False),
@@ -170,7 +171,7 @@ class InboxScreen(Screen):
                         table.add_mr_row(mr, self.app.config.ascii_mode)
                 except NotImplementedError:
                     pass
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
                     self.notify(
                         f"[dim]Reviews {hostname}:[/] {exc}",
                         severity="warning",
@@ -197,7 +198,7 @@ class InboxScreen(Screen):
                         table.add_mr_row(mr, self.app.config.ascii_mode)
                 except NotImplementedError:
                     pass
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
                     self.notify(
                         f"[dim]My MRs {hostname}:[/] {exc}",
                         severity="warning",
@@ -235,7 +236,7 @@ class InboxScreen(Screen):
                             table.add_mr_row(mr, self.app.config.ascii_mode)
                     except NotImplementedError:
                         failed_hosts[repo.hostname] = "not supported"
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
                         failed_hosts[repo.hostname] = str(exc)
 
             await asyncio.gather(*(fetch_repo(r) for r in repos))

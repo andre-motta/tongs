@@ -135,6 +135,6 @@ def _safe_body(response: httpx.Response) -> str:
     try:
         data = response.json()
         msg = data.get("message", data.get("error", str(data)))
-    except Exception:
+    except (ValueError, AttributeError):
         msg = response.text[:200]
     return redact_credentials(str(msg))

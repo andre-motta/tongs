@@ -8,6 +8,8 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from contextlib import suppress
+from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -77,7 +79,7 @@ class CommentEditor(Widget):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("ctrl+s", "submit", "Submit", show=True, priority=True),
         Binding("ctrl+j", "submit", "Submit", show=False, priority=True),
         Binding("escape", "cancel", "Cancel", show=True, priority=True),
@@ -233,14 +235,12 @@ class CommentEditor(Widget):
 
             text_area.clear()
             text_area.insert(new_text)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.app.notify(f"Editor failed: {exc}")
         finally:
             if tmp_path:
-                try:
+                with suppress(OSError):
                     os.unlink(tmp_path)
-                except Exception:
-                    pass
 
     def _find_editor(self) -> str | None:
         for var in ("VISUAL", "EDITOR"):

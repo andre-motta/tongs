@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -29,7 +29,7 @@ from tongs.forges.models import (
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.fromisoformat(value)
 
 
 def _parse_ci_status(status: str | None, conclusion: str | None) -> CIStatus:
@@ -181,8 +181,8 @@ class GitHubClient(ForgeClient):
                     f"/repos/{owner}/{repo}/pulls/{number}",
                 )
                 results.append(self._parse_pr_summary(pr_data, repo_path))
-            except Exception:
-                pass
+            except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
+                continue
         return results
 
     def _repo_path_from_api_url(self, api_url: str) -> str:
@@ -446,8 +446,8 @@ class GitHubClient(ForgeClient):
                         "DELETE",
                         f"/repos/{owner}/{repo}/git/refs/heads/{branch}",
                     )
-            except Exception:
-                pass
+            except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
+                return
 
     async def close_mr(self, repo_path: str, number: int) -> None:
         owner, repo = _split_repo_path(repo_path)
@@ -586,10 +586,8 @@ class GitHubClient(ForgeClient):
             source_branch=head.get("ref", ""),
             target_branch=base.get("ref", ""),
             ci_status=ci_status,
-            created_at=_parse_datetime(data.get("created_at"))
-            or datetime.now(timezone.utc),
-            updated_at=_parse_datetime(data.get("updated_at"))
-            or datetime.now(timezone.utc),
+            created_at=_parse_datetime(data.get("created_at")) or datetime.now(UTC),
+            updated_at=_parse_datetime(data.get("updated_at")) or datetime.now(UTC),
             web_url=data.get("html_url", ""),
             comment_count=data.get("comments", 0) + data.get("review_comments", 0),
             has_conflicts=data.get("mergeable_state") == "dirty",
@@ -622,7 +620,7 @@ class GitHubClient(ForgeClient):
             if all(s == CIStatus.SUCCESS for s in statuses):
                 return CIStatus.SUCCESS
             return CIStatus.UNKNOWN
-        except Exception:
+        except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
             return CIStatus.UNKNOWN
 
     async def _fetch_approvals(
@@ -643,7 +641,7 @@ class GitHubClient(ForgeClient):
                 elif state in ("CHANGES_REQUESTED", "DISMISSED"):
                     approvers.pop(user.username, None)
             return tuple(approvers.values())
-        except Exception:
+        except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
             return ()
 
     def _parse_pr_detail(self, data: dict, repo_path: str) -> MRDetail:
@@ -666,8 +664,7 @@ class GitHubClient(ForgeClient):
             id=str(data.get("id", "")),
             author=_parse_user(data.get("user")),
             body=data.get("body", ""),
-            created_at=_parse_datetime(data.get("created_at"))
-            or datetime.now(timezone.utc),
+            created_at=_parse_datetime(data.get("created_at")) or datetime.now(UTC),
             file_path=data.get("path", ""),
             old_line=data.get("original_line") if data.get("side") == "LEFT" else None,
             new_line=data.get("line"),

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.binding import Binding
 from textual.widgets import DataTable
+from textual.widgets.data_table import CellDoesNotExist
 
 from tongs.forges.models import CIStatus, MRSummary
 from tongs.helpers import ci_icon, relative_time
@@ -38,7 +41,7 @@ def sort_mrs(mrs: list[MRSummary], key: str) -> list[MRSummary]:
 class MRTable(DataTable):
     """MR list table with consistent columns."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("s", "cycle_sort", "Sort", show=True, key_display="s"),
     ]
 
@@ -81,7 +84,7 @@ class MRTable(DataTable):
         try:
             row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
             return self._mr_data.get(row_key.value)
-        except Exception:
+        except CellDoesNotExist:
             return None
 
     def action_cycle_sort(self) -> None:

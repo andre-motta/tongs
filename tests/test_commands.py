@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-
 from tongs.commands import TongsCommandProvider
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_provider(screen_name: str = "UnknownScreen") -> TongsCommandProvider:
     """Instantiate TongsCommandProvider without going through Textual init."""
@@ -29,6 +28,7 @@ def _make_provider(screen_name: str = "UnknownScreen") -> TongsCommandProvider:
 # ===================================================================
 # 1. _global_commands returns expected entries
 # ===================================================================
+
 
 class TestGlobalCommands:
     def test_returns_three_entries(self):
@@ -49,6 +49,7 @@ class TestGlobalCommands:
 # 2. _get_commands includes globals for unknown screen
 # ===================================================================
 
+
 class TestGetCommandsUnknown:
     def test_includes_global_for_unknown_screen(self):
         provider = _make_provider("SomeRandomScreen")
@@ -64,6 +65,7 @@ class TestGetCommandsUnknown:
 # ===================================================================
 # 3. _inbox_commands returns expected entries
 # ===================================================================
+
 
 class TestInboxCommands:
     def test_returns_expected_entries(self):
@@ -82,6 +84,7 @@ class TestInboxCommands:
 # ===================================================================
 # 4. _mr_detail_commands returns expected entries
 # ===================================================================
+
 
 class TestMRDetailCommands:
     def test_returns_expected_entries(self):
@@ -104,6 +107,7 @@ class TestMRDetailCommands:
 # ===================================================================
 # 5. _get_commands dispatches by screen class name
 # ===================================================================
+
 
 class TestGetCommandsDispatch:
     def test_inbox_screen_includes_inbox_commands(self):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,24 +26,30 @@ from tongs.widgets.diff_panel import (
     _reconstruct_new_content,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _ctx(old: int, new: int, content: str = "") -> DiffLine:
     """Shortcut for a CONTEXT DiffLine."""
-    return DiffLine(old_lineno=old, new_lineno=new, content=content, line_type=LineType.CONTEXT)
+    return DiffLine(
+        old_lineno=old, new_lineno=new, content=content, line_type=LineType.CONTEXT
+    )
 
 
 def _add(new: int, content: str = "") -> DiffLine:
     """Shortcut for an ADDITION DiffLine."""
-    return DiffLine(old_lineno=None, new_lineno=new, content=content, line_type=LineType.ADDITION)
+    return DiffLine(
+        old_lineno=None, new_lineno=new, content=content, line_type=LineType.ADDITION
+    )
 
 
 def _del(old: int, content: str = "") -> DiffLine:
     """Shortcut for a DELETION DiffLine."""
-    return DiffLine(old_lineno=old, new_lineno=None, content=content, line_type=LineType.DELETION)
+    return DiffLine(
+        old_lineno=old, new_lineno=None, content=content, line_type=LineType.DELETION
+    )
 
 
 def _make_file(
@@ -65,6 +71,7 @@ def _make_file(
 # 1. CommentMode enum
 # ===================================================================
 
+
 class TestCommentMode:
     def test_comment_value(self):
         assert CommentMode.COMMENT.value == "comment"
@@ -79,6 +86,7 @@ class TestCommentMode:
 # ===================================================================
 # 2. CommentRequested message
 # ===================================================================
+
 
 class TestCommentRequested:
     def test_defaults(self):
@@ -112,6 +120,7 @@ class TestCommentRequested:
 # 3. DiffOptionList._in_selection_range
 # ===================================================================
 
+
 class TestInSelectionRange:
     """Test the pure-state selection range check.
 
@@ -124,6 +133,7 @@ class TestInSelectionRange:
         w = DiffOptionList()
         # Add dummy options so highlighted can be set to valid indices.
         from textual.widgets._option_list import Option
+
         for i in range(10):
             w.add_option(Option(f"line {i}"))
         return w
@@ -174,11 +184,13 @@ class TestInSelectionRange:
 # 4. DiffOptionList._get_selection_lines
 # ===================================================================
 
+
 class TestGetSelectionLines:
     @pytest.fixture()
     def widget(self):
         w = DiffOptionList()
         from textual.widgets._option_list import Option
+
         for i in range(10):
             w.add_option(Option(f"line {i}"))
         return w
@@ -239,6 +251,7 @@ class TestGetSelectionLines:
 
 # -- _fold_context -------------------------------------------------------
 
+
 class TestFoldContext:
     def test_short_run_kept(self):
         """A run of <= 6 context lines is kept entirely (CONTEXT_LINES=3)."""
@@ -296,6 +309,7 @@ class TestFoldContext:
 
 
 # -- _collect_change_block -----------------------------------------------
+
 
 class TestCollectChangeBlock:
     def test_del_then_add(self):
@@ -358,6 +372,7 @@ class TestCollectChangeBlock:
 
 # -- _gutter -------------------------------------------------------------
 
+
 class TestGutter:
     def test_both_line_numbers(self):
         renderer = DiffRenderer()
@@ -417,6 +432,7 @@ class TestGutter:
 
 # -- _is_markdown_file ---------------------------------------------------
 
+
 class TestIsMarkdownFile:
     def test_language_markdown(self):
         f = _make_file(new_path="README.txt", language="markdown")
@@ -442,11 +458,15 @@ class TestIsMarkdownFile:
 
 # -- _reconstruct_new_content -------------------------------------------
 
+
 class TestReconstructNewContent:
     def test_context_and_addition_collected(self):
         hunk = DiffHunk(
             header="@@ -1,3 +1,3 @@",
-            old_start=1, old_count=3, new_start=1, new_count=3,
+            old_start=1,
+            old_count=3,
+            new_start=1,
+            new_count=3,
             lines=(
                 _ctx(1, 1, "keep"),
                 _del(2, "old"),
@@ -461,7 +481,10 @@ class TestReconstructNewContent:
     def test_deletion_excluded(self):
         hunk = DiffHunk(
             header="@@ -1,2 +1,1 @@",
-            old_start=1, old_count=2, new_start=1, new_count=1,
+            old_start=1,
+            old_count=2,
+            new_start=1,
+            new_count=1,
             lines=(
                 _ctx(1, 1, "stay"),
                 _del(2, "gone"),
@@ -479,12 +502,18 @@ class TestReconstructNewContent:
     def test_multiple_hunks(self):
         h1 = DiffHunk(
             header="@@ -1,1 +1,1 @@",
-            old_start=1, old_count=1, new_start=1, new_count=1,
+            old_start=1,
+            old_count=1,
+            new_start=1,
+            new_count=1,
             lines=(_ctx(1, 1, "a"),),
         )
         h2 = DiffHunk(
             header="@@ -10,1 +10,2 @@",
-            old_start=10, old_count=1, new_start=10, new_count=2,
+            old_start=10,
+            old_count=1,
+            new_start=10,
+            new_count=2,
             lines=(
                 _ctx(10, 10, "b"),
                 _add(11, "c"),
@@ -497,7 +526,10 @@ class TestReconstructNewContent:
     def test_addition_only(self):
         hunk = DiffHunk(
             header="@@ -0,0 +1,2 @@",
-            old_start=0, old_count=0, new_start=1, new_count=2,
+            old_start=0,
+            old_count=0,
+            new_start=1,
+            new_count=2,
             lines=(
                 _add(1, "first"),
                 _add(2, "second"),
@@ -512,16 +544,26 @@ class TestReconstructNewContent:
 # 6. action_comment / action_suggest guard logic
 # ===================================================================
 
+
 class TestActionCommentGuards:
     @pytest.fixture()
     def widget(self):
         w = DiffOptionList()
         from textual.widgets._option_list import Option
+
         for i in range(5):
             w.add_option(Option(f"line {i}"))
         w._current_file = _make_file()
-        w._line_map = {1: _ctx(1, 1, "code"), 2: _add(2, "added"), 3: _del(3, "deleted")}
-        w._line_types = {1: LineType.CONTEXT, 2: LineType.ADDITION, 3: LineType.DELETION}
+        w._line_map = {
+            1: _ctx(1, 1, "code"),
+            2: _add(2, "added"),
+            3: _del(3, "deleted"),
+        }
+        w._line_types = {
+            1: LineType.CONTEXT,
+            2: LineType.ADDITION,
+            3: LineType.DELETION,
+        }
         return w
 
     def test_comment_highlighted_none_no_message(self, widget):
@@ -534,7 +576,9 @@ class TestActionCommentGuards:
     def test_comment_on_non_code_line_notifies(self, widget):
         widget.highlighted = 0  # index 0 not in _line_map
         mock_app = MagicMock()
-        with patch.object(type(widget), "app", new_callable=lambda: property(lambda self: mock_app)):
+        with patch.object(
+            type(widget), "app", new_callable=lambda: property(lambda self: mock_app)
+        ):
             widget.action_comment()
         mock_app.notify.assert_called_once()
         assert "code line" in mock_app.notify.call_args[0][0]
@@ -564,7 +608,9 @@ class TestActionCommentGuards:
     def test_suggest_on_deletion_blocked(self, widget):
         widget.highlighted = 3  # DELETION line
         mock_app = MagicMock()
-        with patch.object(type(widget), "app", new_callable=lambda: property(lambda self: mock_app)):
+        with patch.object(
+            type(widget), "app", new_callable=lambda: property(lambda self: mock_app)
+        ):
             widget.action_suggest()
         mock_app.notify.assert_called_once()
         assert "deletion" in mock_app.notify.call_args[0][0].lower()
@@ -582,6 +628,7 @@ class TestActionCommentGuards:
 # Discussion fixture helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_discussion(
     id: str = "d1",
     old_line: int | None = None,
@@ -597,7 +644,7 @@ def _make_discussion(
             id=f"c-{id}",
             author=User(username="testuser"),
             body="test comment",
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
             file_path=file_path,
             old_line=old_line,
             new_line=new_line,
@@ -610,6 +657,7 @@ def _make_discussion(
 # ===================================================================
 # 7. _build_discussion_index
 # ===================================================================
+
 
 class TestBuildDiscussionIndex:
     def test_inline_keyed_by_old_new(self):
@@ -638,6 +686,7 @@ class TestBuildDiscussionIndex:
 # ===================================================================
 # 8. _build_comment_lines
 # ===================================================================
+
 
 class TestBuildCommentLines:
     def test_single_unresolved_returns_false(self):
@@ -670,6 +719,7 @@ class TestBuildCommentLines:
 # ===================================================================
 # 9. _match_discussions
 # ===================================================================
+
 
 class TestMatchDiscussions:
     def test_exact_old_new_match(self):
@@ -728,22 +778,19 @@ class TestMatchDiscussions:
 # 10. New messages: ReplyRequested, ResolveRequested
 # ===================================================================
 
+
 class TestReplyRequested:
     def test_stores_all_fields(self):
         file = _make_file()
         line = _ctx(1, 1, "code")
-        msg = ReplyRequested(
-            discussion_id="d42", file=file, line=line, author="alice"
-        )
+        msg = ReplyRequested(discussion_id="d42", file=file, line=line, author="alice")
         assert msg.discussion_id == "d42"
         assert msg.file is file
         assert msg.line is line
         assert msg.author == "alice"
 
     def test_author_default(self):
-        msg = ReplyRequested(
-            discussion_id="d1", file=_make_file(), line=_ctx(1, 1)
-        )
+        msg = ReplyRequested(discussion_id="d1", file=_make_file(), line=_ctx(1, 1))
         assert msg.author == ""
 
 
@@ -762,11 +809,13 @@ class TestResolveRequested:
 # 11. DiffOptionList._get_target_discussion
 # ===================================================================
 
+
 class TestGetTargetDiscussion:
     @pytest.fixture()
     def widget(self):
         w = DiffOptionList()
         from textual.widgets._option_list import Option
+
         for i in range(5):
             w.add_option(Option(f"line {i}"))
         return w
@@ -801,11 +850,13 @@ class TestGetTargetDiscussion:
 # 12. DiffOptionList.action_toggle_discussion
 # ===================================================================
 
+
 class TestActionToggleDiscussion:
     @pytest.fixture()
     def widget(self):
         w = DiffOptionList()
         from textual.widgets._option_list import Option
+
         for i in range(5):
             w.add_option(Option(f"line {i}"))
         # Stub post_message to avoid Textual internals
@@ -843,11 +894,13 @@ class TestActionToggleDiscussion:
 # 13. Comment navigation: action_next_comment / action_prev_comment
 # ===================================================================
 
+
 class TestCommentNavigation:
     @pytest.fixture()
     def widget(self):
         w = DiffOptionList()
         from textual.widgets._option_list import Option
+
         for i in range(20):
             w.add_option(Option(f"line {i}"))
         return w
@@ -907,6 +960,7 @@ class TestCommentNavigation:
 # 14. DiffFileTree.set_files display logic
 # ===================================================================
 
+
 class TestDiffFileTreeSetFiles:
     def test_basename_used_not_full_path(self):
         """Labels show basename, not the full directory path."""
@@ -918,7 +972,11 @@ class TestDiffFileTreeSetFiles:
         # First child node label should contain the basename
         children = list(tree.root.children)
         assert len(children) == 1
-        label_text = children[0].label.plain if hasattr(children[0].label, "plain") else str(children[0].label)
+        label_text = (
+            children[0].label.plain
+            if hasattr(children[0].label, "plain")
+            else str(children[0].label)
+        )
         assert "component.py" in label_text
         # Full path should NOT appear
         assert "src/deep/nested/" not in label_text
@@ -928,12 +986,16 @@ class TestDiffFileTreeSetFiles:
 # 15. _build_highlight_map
 # ===================================================================
 
+
 class TestBuildHighlightMap:
     def test_returns_empty_for_text_language(self):
         """Language 'text' skips highlighting entirely."""
         hunk = DiffHunk(
             header="@@ -1,1 +1,1 @@",
-            old_start=1, old_count=1, new_start=1, new_count=1,
+            old_start=1,
+            old_count=1,
+            new_start=1,
+            new_count=1,
             lines=(_ctx(1, 1, "hello world"),),
         )
         f = _make_file(hunks=(hunk,), language="text")
@@ -953,7 +1015,10 @@ class TestBuildHighlightMap:
         line3 = _del(1, "    pass")
         hunk = DiffHunk(
             header="@@ -1,2 +1,2 @@",
-            old_start=1, old_count=2, new_start=1, new_count=2,
+            old_start=1,
+            old_count=2,
+            new_start=1,
+            new_count=2,
             lines=(line1, line2, line3),
         )
         f = _make_file(hunks=(hunk,), language="python")
@@ -966,6 +1031,7 @@ class TestBuildHighlightMap:
         assert id(line3) in result
         # Values are rich Text objects
         from rich.text import Text as RichText
+
         for v in result.values():
             assert isinstance(v, RichText)
 
@@ -974,7 +1040,10 @@ class TestBuildHighlightMap:
         line = _ctx(1, 1, "some code")
         hunk = DiffHunk(
             header="@@ -1,1 +1,1 @@",
-            old_start=1, old_count=1, new_start=1, new_count=1,
+            old_start=1,
+            old_count=1,
+            new_start=1,
+            new_count=1,
             lines=(line,),
         )
         f = _make_file(hunks=(hunk,), language="python")
@@ -988,7 +1057,10 @@ class TestBuildHighlightMap:
         line = _ctx(1, 1, "content")
         hunk = DiffHunk(
             header="@@ -1,1 +1,1 @@",
-            old_start=1, old_count=1, new_start=1, new_count=1,
+            old_start=1,
+            old_count=1,
+            new_start=1,
+            new_count=1,
             lines=(line,),
         )
         f = _make_file(hunks=(hunk,), language="")

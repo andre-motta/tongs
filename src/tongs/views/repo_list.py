@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
@@ -22,7 +24,7 @@ def _forge_label(forge_type: ForgeType | None) -> str:
 class RepoListScreen(Screen):
     """Searchable, filterable repo list with DataTable."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("escape", "go_back", "Back", show=True),
         Binding("q", "go_back", "Back", show=False),
         Binding("slash", "start_search", "Filter", show=True, key_display="/"),

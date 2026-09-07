@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
+from typing import ClassVar
 
 from rich.markup import escape
-
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import Screen
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
+from textual.screen import Screen
 from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
 from tongs.forges.models import (
@@ -127,7 +129,7 @@ class MROverview(Static):
 class MRDetailScreen(Screen):
     """MR detail view with tabs for Overview, Diff, Discussion, Pipeline."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("escape", "go_back", "Back", show=True),
         Binding("q", "go_back", "Back", show=False),
         Binding("1", "focus_tab('overview')", "1 Overview", show=False),
@@ -157,15 +159,13 @@ class MRDetailScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with TabbedContent(initial="overview"):
-            with TabPane("Overview", id="overview"):
-                with VerticalScroll():
-                    yield MROverview(id="mr-overview")
-                    yield Markdown(id="mr-description")
+            with TabPane("Overview", id="overview"), VerticalScroll():
+                yield MROverview(id="mr-overview")
+                yield Markdown(id="mr-description")
             with TabPane("Diff", id="diff"):
                 yield DiffPanel(id="diff-panel")
-            with TabPane("Commits", id="commits"):
-                with VerticalScroll(id="commits-scroll"):
-                    yield Static("[dim]Loading commits...[/]", id="commits-content")
+            with TabPane("Commits", id="commits"), VerticalScroll(id="commits-scroll"):
+                yield Static("[dim]Loading commits...[/]", id="commits-content")
             with TabPane("Discussion", id="discussion"):
                 yield Static("", id="disc-status-bar", classes="disc-status-bar")
                 yield DiscussionPanel(id="disc-panel")
@@ -194,7 +194,7 @@ class MRDetailScreen(Screen):
             overview.set_mr(self.mr_detail)
             description_widget = self.query_one("#mr-description", Markdown)
             description_widget.update(self.mr_detail.description or "")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(
                 f"Could not load MR details. Try Ctrl+R to refresh. ({exc})",
                 severity="warning",
@@ -204,20 +204,15 @@ class MRDetailScreen(Screen):
         try:
             panel = self.query_one("#pipeline-panel", PipelinePanel)
             return panel._view_level > 0
-        except Exception:
+        except NoMatches:
             return False
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
-        if self._pipeline_drilled_in() and action in (
-            "add_comment",
-            "approve",
-            "unapprove",
-            "merge",
-            "close_mr",
-            "yank_url",
-        ):
-            return False
-        return True
+        return not (
+            self._pipeline_drilled_in()
+            and action
+            in ("add_comment", "approve", "unapprove", "merge", "close_mr", "yank_url")
+        )
 
     def action_go_back(self) -> None:
         try:
@@ -225,7 +220,7 @@ class MRDetailScreen(Screen):
             if panel._view_level > 0:
                 panel.action_drill_out()
                 return
-        except Exception:
+        except NoMatches:
             pass
         screen_stack = self.app.screen_stack
         if len(screen_stack) >= 2:
@@ -283,7 +278,7 @@ class MRDetailScreen(Screen):
             files = self._add_truncated_files(files, changes)
             self._cached_diff_files = files
             panel.set_files(files, discussions)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             content.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
 
     async def _fetch_diff_and_discussions(self, client):
@@ -297,7 +292,7 @@ class MRDetailScreen(Screen):
         changes = await changes_task
         try:
             discussions = await discussions_task
-        except Exception:
+        except Exception:  # noqa: BLE001 - Optional thread failures must not hide the review diff.
             discussions = []
         return changes, discussions
 
@@ -379,7 +374,7 @@ class MRDetailScreen(Screen):
                 lines.append("")
 
             content.update("\n".join(lines) if lines else "[dim]No commits[/]")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             content.update(f"Could not load commits. ({exc})")
 
     @work(exclusive=True, group="mr-discussions")
@@ -402,7 +397,7 @@ class MRDetailScreen(Screen):
 
                     diff_text = self._changes_to_diff_text(changes or [])
                     self._cached_diff_files = parse_diff(diff_text)
-                except Exception:
+                except Exception:  # noqa: BLE001 - Optional diff failures must not hide discussions.
                     self._cached_diff_files = []
 
             panel = self.query_one("#disc-panel", DiscussionPanel)
@@ -412,7 +407,7 @@ class MRDetailScreen(Screen):
             status.update(
                 f"[yellow]{unresolved} unresolved[/]  [dim]{resolved} resolved[/]"
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             status.update(f"Could not load discussions. ({exc})")
 
     def on_jump_to_diff_discussion(self, event: JumpToDiffDiscussion) -> None:
@@ -443,7 +438,7 @@ class MRDetailScreen(Screen):
             if failed:
                 parts.append(f"[red]{failed} failed[/]")
             status.update("  ".join(parts))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             status.update(f"Could not load pipelines. ({exc})")
 
     def on_load_jobs_requested(self, event: LoadJobsRequested) -> None:
@@ -460,7 +455,7 @@ class MRDetailScreen(Screen):
             )
             panel = self.query_one("#pipeline-panel", PipelinePanel)
             panel.set_jobs(jobs, pipeline)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Could not load jobs: {exc}", severity="error")
 
     def on_load_job_log_requested(self, event: LoadJobLogRequested) -> None:
@@ -475,7 +470,7 @@ class MRDetailScreen(Screen):
             log_text = await client.get_job_log(self.mr_summary.repo_path, job.id)
             panel = self.query_one("#pipeline-panel", PipelinePanel)
             panel.set_job_log(log_text, job, pipeline)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Could not load job log: {exc}", severity="error")
 
     def on_cancel_pipeline_requested(self, event: CancelPipelineRequested) -> None:
@@ -491,7 +486,7 @@ class MRDetailScreen(Screen):
             self.notify("[green]Pipeline cancelled[/]")
             self._pipeline_loaded = False
             self._on_tab_switch("pipeline")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Cancel failed: {exc}", severity="error")
 
     def on_retry_pipeline_requested(self, event: RetryPipelineRequested) -> None:
@@ -507,7 +502,7 @@ class MRDetailScreen(Screen):
             self.notify("[green]Pipeline retried[/]")
             self._pipeline_loaded = False
             self._on_tab_switch("pipeline")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Retry failed: {exc}", severity="error")
 
     def on_cancel_job_requested(self, event: CancelJobRequested) -> None:
@@ -521,7 +516,7 @@ class MRDetailScreen(Screen):
             )
             await client.cancel_job(self.mr_summary.repo_path, job_id)
             self.notify("[green]Job cancelled[/]")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Cancel job failed: {exc}", severity="error")
 
     def on_retry_job_requested(self, event: RetryJobRequested) -> None:
@@ -535,7 +530,7 @@ class MRDetailScreen(Screen):
             )
             await client.retry_job(self.mr_summary.repo_path, job_id)
             self.notify("[green]Job retried[/]")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Retry job failed: {exc}", severity="error")
 
     def on_discussion_reply_requested(self, event: DiscussionReplyRequested) -> None:
@@ -571,7 +566,7 @@ class MRDetailScreen(Screen):
         try:
             pyperclip.copy(self.mr_summary.web_url)
             self.notify("URL copied to clipboard")
-        except Exception:
+        except (pyperclip.PyperclipException, OSError):
             self.notify(f"URL: {self.mr_summary.web_url}")
 
     def action_add_comment(self) -> None:
@@ -653,7 +648,7 @@ class MRDetailScreen(Screen):
             )
             self._action_taken = True
             self._load_detail()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Approve failed: {exc}", severity="error")
 
     @work(exclusive=True, group="mr-action")
@@ -672,7 +667,7 @@ class MRDetailScreen(Screen):
             )
             self._action_taken = True
             self._load_detail()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Unapprove failed: {exc}", severity="error")
 
     @work(exclusive=True, group="mr-action")
@@ -688,7 +683,7 @@ class MRDetailScreen(Screen):
             )
             self._action_taken = True
             self._load_detail()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Merge failed: {exc}", severity="error")
 
     @work(exclusive=True, group="mr-action")
@@ -704,7 +699,7 @@ class MRDetailScreen(Screen):
             )
             self._action_taken = True
             self._load_detail()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Close failed: {exc}", severity="error")
 
     def on_comment_requested(self, event: CommentRequested) -> None:
@@ -786,14 +781,12 @@ class MRDetailScreen(Screen):
             self._post_inline_comment(
                 body, position, start_line=start_line, start_side=start_side
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Suggestion failed: {exc}", severity="error")
         finally:
             if tmp_path:
-                try:
+                with suppress(OSError):
                     os.unlink(tmp_path)
-                except Exception:
-                    pass
 
     def on_comment_submitted(self, event: CommentSubmitted) -> None:
         """Handle inline comment submission from CommentEditor."""
@@ -831,7 +824,7 @@ class MRDetailScreen(Screen):
             self.notify("[green]Reply posted[/]", severity="information")
             self._diff_loaded = False
             self._discussions_loaded = False
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Failed to post reply: {exc}", severity="error")
 
     @work(exclusive=True, group="mr-comment")
@@ -850,7 +843,7 @@ class MRDetailScreen(Screen):
             self.notify(f"[green]{action} thread[/]", severity="information")
             self._diff_loaded = False
             self._discussions_loaded = False
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Failed to resolve thread: {exc}", severity="error")
 
     @work(exclusive=True, group="mr-comment")
@@ -863,7 +856,7 @@ class MRDetailScreen(Screen):
                 self.mr_summary.repo_path, self.mr_summary.number, body
             )
             self.notify("[green]Comment posted[/]", severity="information")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Failed to post comment: {exc}", severity="error")
 
     @work(exclusive=True, group="mr-comment")
@@ -893,7 +886,7 @@ class MRDetailScreen(Screen):
                 start_side=start_side,
             )
             self.notify("[green]Comment posted[/]", severity="information")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Failed to post comment: {exc}", severity="error")
 
     def action_refresh(self) -> None:

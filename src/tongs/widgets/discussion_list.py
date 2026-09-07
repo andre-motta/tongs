@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from rich.console import Console
 from rich.markdown import Markdown as RichMarkdown
 from rich.style import Style
 from rich.text import Text
-
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -155,7 +157,7 @@ class DiscussionPanel(Widget):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("j", "next_card", "Down", show=False),
         Binding("k", "prev_card", "Up", show=False),
         Binding("down", "next_card", "Down", show=False),
@@ -266,13 +268,13 @@ class DiscussionPanel(Widget):
         try:
             old_card = self.query_one(f"#disc-card-{old}", DiscussionCard)
             old_card.remove_class("focused")
-        except Exception:
+        except NoMatches:
             pass
         try:
             new_card = self.query_one(f"#disc-card-{new}", DiscussionCard)
             new_card.add_class("focused")
             new_card.scroll_visible()
-        except Exception:
+        except NoMatches:
             pass
 
     def watch__focused_index(self, old: int, new: int) -> None:

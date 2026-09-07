@@ -1,7 +1,9 @@
 """Tests for forge data models."""
 
+from __future__ import annotations
+
 from dataclasses import FrozenInstanceError
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -41,8 +43,8 @@ class TestForgeModels:
             source_branch="fix-bug",
             target_branch="main",
             ci_status=CIStatus.SUCCESS,
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 1, 2, tzinfo=UTC),
             web_url="https://gitlab.com/org/repo/-/merge_requests/42",
         )
 
@@ -88,7 +90,7 @@ class TestForgeModels:
             id="1",
             author=User(username="reviewer"),
             body="Fix this",
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
             file_path="src/main.py",
             new_line=42,
         )

@@ -56,6 +56,7 @@ def make_manifest(
             DesktopMethod("echo"),
             DesktopMethod("explode"),
             DesktopMethod("wait"),
+            DesktopMethod("stubborn_wait"),
             DesktopMethod("invalid"),
             DesktopMethod("observe_cancellation"),
         ),
@@ -99,6 +100,12 @@ class GoodProvider:
             raise RuntimeError("fixture call failure")
         if method == "wait":
             await asyncio.Event().wait()
+        if method == "stubborn_wait":
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.05)
+            return {"finished": True}
         if method == "invalid":
             return {"bad": float("nan")}
         if method == "observe_cancellation":

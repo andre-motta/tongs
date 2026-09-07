@@ -233,6 +233,15 @@ class DesktopHostFacade(Protocol):
         cancellation: DesktopCancellation,
     ) -> FrozenJsonValue: ...
 
+    async def invoke(
+        self,
+        method: str,
+        params: FrozenJsonObject,
+        context: DesktopCallContext,
+    ) -> FrozenJsonValue:
+        """Invoke an allowlisted method on this facade's bound plugin."""
+        ...
+
     async def notify(
         self,
         message: str,
@@ -253,6 +262,7 @@ class DesktopPluginContext:
     host: DesktopHostFacade
     cancellation: DesktopCancellation
     read_kinds: frozenset[DesktopReadKind] = field(default_factory=frozenset)
+    method_ids: frozenset[str] = field(default_factory=frozenset)
     event_ids: frozenset[str] = field(default_factory=frozenset)
     focus_target_ids: frozenset[str] = field(default_factory=frozenset)
 
@@ -285,6 +295,23 @@ class DesktopPluginContext:
                 )
             )
         return await self.host.read(kind, freeze_json_object(params), cancellation)
+
+    async def invoke(
+        self,
+        method: str,
+        params: JsonObject,
+        context: DesktopCallContext,
+    ) -> FrozenJsonValue:
+        """Invoke one manifest-declared method on this plugin's bound facade."""
+        if method not in self.method_ids:
+            raise DesktopPluginContractError(
+                DesktopPluginError(
+                    DesktopPluginErrorCode.UNDECLARED_METHOD,
+                    "Plugin method is not declared in its manifest",
+                    self.plugin_id,
+                )
+            )
+        return await self.host.invoke(method, freeze_json_object(params), context)
 
     async def publish_event(self, event_id: str, payload: JsonObject) -> None:
         """Publish a manifest-declared event through the scoped facade."""

@@ -10,6 +10,7 @@ from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from importlib.metadata import EntryPoint, entry_points
 from importlib.metadata import version as distribution_version
+from typing import cast
 
 from packaging.version import InvalidVersion, Version
 
@@ -55,12 +56,22 @@ _PROVIDER_CANCELLED = object()
 
 
 @dataclass(slots=True)
+class _PendingCall:
+    cancellation: DesktopCancellation
+    outer_task: asyncio.Task[object]
+    provider_task: asyncio.Task[object] | None = None
+    outer_complete: bool = False
+
+
+@dataclass(slots=True)
 class _Runtime:
     provider: DesktopPluginProvider
     manifest: DesktopPluginManifest
     assets: tuple[DesktopResolvedAsset, ...]
     cancellation: DesktopCancellation = field(default_factory=DesktopCancellation)
-    calls: dict[str, DesktopCancellation] = field(default_factory=dict)
+    calls: dict[str, _PendingCall] = field(default_factory=dict)
+    provider_tasks: set[asyncio.Task[object]] = field(default_factory=set)
+    stopping: bool = False
 
 
 def _installed_entry_points(group: str) -> Sequence[EntryPoint]:
@@ -73,8 +84,24 @@ def _consume_detached_task(task: asyncio.Task[object]) -> None:
         task.exception()
 
 
-async def _bounded_plugin_operation[OperationT](
-    operation: Coroutine[object, object, OperationT],
+def _runtime_task[OperationT](
+    runtime: _Runtime, operation: Coroutine[object, object, OperationT]
+) -> asyncio.Task[OperationT]:
+    """Create and retain a provider task until its actual completion."""
+    task = asyncio.create_task(operation)
+    retained_task = cast(asyncio.Task[object], task)
+    runtime.provider_tasks.add(retained_task)
+
+    def finished(completed: asyncio.Task[OperationT]) -> None:
+        runtime.provider_tasks.discard(cast(asyncio.Task[object], completed))
+        _consume_detached_task(cast(asyncio.Task[object], completed))
+
+    task.add_done_callback(finished)
+    return task
+
+
+async def _bounded_plugin_task[OperationT](
+    task: asyncio.Task[OperationT],
     timeout: float,
     cancellation: DesktopCancellation,
 ) -> OperationT | object:
@@ -84,18 +111,15 @@ async def _bounded_plugin_operation[OperationT](
     cancellation. A provider that suppresses it is detached after the deadline so
     registry progress and cleanup of other providers remain bounded.
     """
-    task = asyncio.create_task(operation)
     try:
         completed, _pending = await asyncio.wait((task,), timeout=timeout)
     except asyncio.CancelledError:
         cancellation.cancel()
         task.cancel()
-        task.add_done_callback(_consume_detached_task)
         raise
     if not completed:
         cancellation.cancel()
         task.cancel()
-        task.add_done_callback(_consume_detached_task)
         return _OPERATION_TIMEOUT
     if task.cancelled():
         return _PROVIDER_CANCELLED
@@ -232,13 +256,16 @@ class DesktopPluginRegistry:
                     host=facade,
                     cancellation=runtime.cancellation,
                     read_kinds=frozenset(runtime.manifest.reads),
+                    method_ids=frozenset(
+                        method.id for method in runtime.manifest.methods
+                    ),
                     event_ids=frozenset(event.id for event in runtime.manifest.events),
                     focus_target_ids=frozenset(
                         target.id for target in runtime.manifest.focus_targets
                     ),
                 )
-                outcome = await _bounded_plugin_operation(
-                    runtime.provider.start(context),
+                outcome = await _bounded_plugin_task(
+                    _runtime_task(runtime, runtime.provider.start(context)),
                     self._start_timeout,
                     runtime.cancellation,
                 )
@@ -322,10 +349,33 @@ class DesktopPluginRegistry:
                 )
             )
 
-        runtime.calls[context.invocation_id] = context.cancellation
+        outer_task = asyncio.current_task()
+        if outer_task is None:  # pragma: no cover - an async call always has a task
+            raise RuntimeError("Desktop plugin call has no owning task")
+        provider_task = _runtime_task(
+            runtime, runtime.provider.call(method, frozen_params, context)
+        )
+        pending_call = _PendingCall(
+            context.cancellation,
+            cast(asyncio.Task[object], outer_task),
+            cast(asyncio.Task[object], provider_task),
+        )
+        runtime.calls[context.invocation_id] = pending_call
+
+        def release_call(_completed: asyncio.Task[object] | None = None) -> None:
+            current = runtime.calls.get(context.invocation_id)
+            if (
+                current is pending_call
+                and pending_call.outer_complete
+                and pending_call.provider_task is not None
+                and pending_call.provider_task.done()
+            ):
+                runtime.calls.pop(context.invocation_id, None)
+
+        pending_call.provider_task.add_done_callback(release_call)
         try:
-            value = await _bounded_plugin_operation(
-                runtime.provider.call(method, frozen_params, context),
+            value = await _bounded_plugin_task(
+                provider_task,
                 self._call_timeout,
                 context.cancellation,
             )
@@ -348,6 +398,8 @@ class DesktopPluginRegistry:
                 )
             frozen = freeze_json(value)  # type: ignore[arg-type]
         except asyncio.CancelledError:
+            context.cancellation.cancel()
+            provider_task.cancel()
             raise
         except (TypeError, ValueError):
             return DesktopPluginCallResult(
@@ -366,7 +418,8 @@ class DesktopPluginRegistry:
                 )
             )
         finally:
-            runtime.calls.pop(context.invocation_id, None)
+            pending_call.outer_complete = True
+            release_call()
         return DesktopPluginCallResult(value=frozen)
 
     async def stop_all(self) -> tuple[DesktopPluginRecord, ...]:
@@ -377,30 +430,47 @@ class DesktopPluginRegistry:
             record = self._records[plugin_id]
             if record.state is DesktopPluginState.STOPPED:
                 continue
+            runtime.stopping = True
             runtime.cancellation.cancel()
-            for cancellation in tuple(runtime.calls.values()):
-                cancellation.cancel()
+            pending_calls = tuple(runtime.calls.values())
+            active_provider_tasks = tuple(runtime.provider_tasks)
+            for pending_call in pending_calls:
+                pending_call.cancellation.cancel()
+                pending_call.outer_task.cancel()
+                if pending_call.provider_task is not None:
+                    pending_call.provider_task.cancel()
+            for provider_task in active_provider_tasks:
+                provider_task.cancel()
             try:
-                outcome = await _bounded_plugin_operation(
-                    runtime.provider.stop(),
-                    self._cleanup_timeout,
-                    runtime.cancellation,
+                stop_task = _runtime_task(runtime, runtime.provider.stop())
+                cleanup_tasks = {
+                    *active_provider_tasks,
+                    *(pending_call.outer_task for pending_call in pending_calls),
+                    cast(asyncio.Task[object], stop_task),
+                }
+                _done, pending = await asyncio.wait(
+                    cleanup_tasks, timeout=self._cleanup_timeout
                 )
-                if outcome is _OPERATION_TIMEOUT:
+                if pending:
+                    for task in pending:
+                        task.cancel()
                     self._set_error(
                         plugin_id,
                         DesktopPluginErrorCode.CLEANUP_TIMEOUT,
                         "Desktop plugin cleanup exceeded its time limit",
                     )
                     continue
-                if outcome is _PROVIDER_CANCELLED:
+                if stop_task.cancelled():
                     self._set_error(
                         plugin_id,
                         DesktopPluginErrorCode.STOP_FAILED,
                         "Desktop plugin cancelled its stop operation",
                     )
                     continue
+                stop_task.result()
             except asyncio.CancelledError:
+                for task in cleanup_tasks:
+                    task.cancel()
                 raise
             except Exception:  # noqa: BLE001 - third-party plugin boundary
                 self._set_error(
@@ -581,6 +651,7 @@ class DesktopPluginRegistry:
             runtime is None
             or record is None
             or record.state is not DesktopPluginState.STARTED
+            or runtime.stopping
         ):
             return None
         return runtime

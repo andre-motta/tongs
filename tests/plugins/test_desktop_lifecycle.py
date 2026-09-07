@@ -31,6 +31,7 @@ class RecordingFacade:
         self.notifications: list[tuple[str, DesktopNotificationSeverity]] = []
         self.events: list[tuple[str, FrozenJsonObject]] = []
         self.focus_requests: list[tuple[str, FrozenJsonObject]] = []
+        self.invocations: list[tuple[str, FrozenJsonObject, DesktopCallContext]] = []
 
     async def read(
         self,
@@ -39,6 +40,15 @@ class RecordingFacade:
         cancellation: DesktopCancellation,
     ) -> FrozenJsonValue:
         return {"kind": kind.value, "cancelled": cancellation.cancelled}
+
+    async def invoke(
+        self,
+        method: str,
+        params: FrozenJsonObject,
+        context: DesktopCallContext,
+    ) -> FrozenJsonValue:
+        self.invocations.append((method, params, context))
+        return {"method": method, "plugin": "bound"}
 
     async def notify(
         self,
@@ -129,6 +139,7 @@ async def test_context_scopes_events_and_focus_to_manifest_declarations() -> Non
         facade,
         DesktopCancellation(),
         read_kinds=frozenset({DesktopReadKind.REVIEWS}),
+        method_ids=frozenset({"echo"}),
         event_ids=frozenset({"refreshed"}),
         focus_target_ids=frozenset({"editor"}),
     )
@@ -136,6 +147,8 @@ async def test_context_scopes_events_and_focus_to_manifest_declarations() -> Non
     result = await context.read(
         DesktopReadKind.REVIEWS, {"state": "open"}, DesktopCancellation()
     )
+    call_context = DesktopCallContext("local-call", DesktopCancellation())
+    invoked = await context.invoke("echo", {"value": 1}, call_context)
     await context.notify("Ready", DesktopNotificationSeverity.WARNING)
     await context.publish_event("refreshed", {"count": 1})
     await context.focus("editor", {"line": 2})
@@ -147,12 +160,16 @@ async def test_context_scopes_events_and_focus_to_manifest_declarations() -> Non
         freeze_json_object({"screen": "review"})
     )
     assert result == {"kind": "reviews", "cancelled": False}
+    assert invoked == {"method": "echo", "plugin": "bound"}
+    assert facade.invocations == [("echo", {"value": 1}, call_context)]
     with pytest.raises(DesktopPluginContractError):
         await context.read(DesktopReadKind.LOG, {}, DesktopCancellation())
     with pytest.raises(DesktopPluginContractError):
         await context.publish_event("other", {})
     with pytest.raises(DesktopPluginContractError):
         await context.focus("other", {})
+    with pytest.raises(DesktopPluginContractError):
+        await context.invoke("other.echo", {}, call_context)
 
 
 @pytest.mark.asyncio
@@ -212,6 +229,132 @@ async def test_concurrent_duplicate_invocation_id_is_rejected(
 
     assert duplicate.error.code is DesktopPluginErrorCode.INVALID_DATA  # type: ignore[union-attr]
     assert cancellation.cancelled
+
+
+@pytest.mark.asyncio
+async def test_timed_out_call_retains_id_until_provider_task_finishes(
+    installed_entry_point_source: Callable[[str], Sequence[EntryPoint]],
+) -> None:
+    registry = DesktopPluginRegistry(
+        entry_point_source=only_good(installed_entry_point_source),
+        host_version="1.0",
+        call_timeout_seconds=0.005,
+    )
+    registry.discover()
+    await registry.start_all(lambda _plugin_id, _manifest: RecordingFacade())
+
+    timed_out = await registry.call(
+        "good",
+        "stubborn_wait",
+        {},
+        DesktopCallContext("retained-id", DesktopCancellation()),
+    )
+    duplicate = await registry.call(
+        "good",
+        "echo",
+        {},
+        DesktopCallContext("retained-id", DesktopCancellation()),
+    )
+
+    assert timed_out.error.code is DesktopPluginErrorCode.CALL_TIMEOUT  # type: ignore[union-attr]
+    assert duplicate.error.code is DesktopPluginErrorCode.INVALID_DATA  # type: ignore[union-attr]
+    await asyncio.sleep(0.06)
+    recovery = await registry.call(
+        "good",
+        "echo",
+        {},
+        DesktopCallContext("retained-id", DesktopCancellation()),
+    )
+    assert recovery.ok
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_and_drains_pending_call_tasks(
+    installed_entry_point_source: Callable[[str], Sequence[EntryPoint]],
+) -> None:
+    registry = DesktopPluginRegistry(
+        entry_point_source=only_good(installed_entry_point_source),
+        host_version="1.0",
+        call_timeout_seconds=10,
+    )
+    registry.discover()
+    await registry.start_all(lambda _plugin_id, _manifest: RecordingFacade())
+    pending = asyncio.create_task(
+        registry.call(
+            "good",
+            "wait",
+            {},
+            DesktopCallContext("pending", DesktopCancellation()),
+        )
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    await registry.stop_all()
+
+    assert pending.done()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert record(registry).state is DesktopPluginState.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_noncooperative_pending_call_reports_cleanup_timeout(
+    installed_entry_point_source: Callable[[str], Sequence[EntryPoint]],
+) -> None:
+    registry = DesktopPluginRegistry(
+        entry_point_source=only_good(installed_entry_point_source),
+        host_version="1.0",
+        call_timeout_seconds=10,
+        cleanup_timeout_seconds=0.005,
+    )
+    registry.discover()
+    await registry.start_all(lambda _plugin_id, _manifest: RecordingFacade())
+    pending = asyncio.create_task(
+        registry.call(
+            "good",
+            "stubborn_wait",
+            {},
+            DesktopCallContext("stubborn", DesktopCancellation()),
+        )
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    await registry.stop_all()
+
+    assert pending.done()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert record(registry).state is DesktopPluginState.FAILED
+    assert record(registry).error.code is DesktopPluginErrorCode.CLEANUP_TIMEOUT  # type: ignore[union-attr]
+    await asyncio.sleep(0.06)
+
+
+@pytest.mark.asyncio
+async def test_stop_rejects_calls_started_after_cleanup_begins(
+    installed_entry_point_source: Callable[[str], Sequence[EntryPoint]],
+) -> None:
+    registry = DesktopPluginRegistry(
+        {"good": {"hang_stop": True}},
+        entry_point_source=only_good(installed_entry_point_source),
+        host_version="1.0",
+        cleanup_timeout_seconds=0.005,
+    )
+    registry.discover()
+    await registry.start_all(lambda _plugin_id, _manifest: RecordingFacade())
+    stopping = asyncio.create_task(registry.stop_all())
+    await asyncio.sleep(0)
+
+    call = await registry.call(
+        "good",
+        "echo",
+        {},
+        DesktopCallContext("late-call", DesktopCancellation()),
+    )
+    await stopping
+
+    assert call.error.code is DesktopPluginErrorCode.UNAVAILABLE  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -405,6 +548,7 @@ def test_facade_protocol_has_no_concrete_host_or_tui_capabilities() -> None:
 
     assert public_names == {
         "read",
+        "invoke",
         "notify",
         "publish_event",
         "current_location",

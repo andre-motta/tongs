@@ -18,6 +18,14 @@ function assertSafeOutput(output) {
   }
 }
 
+export function shouldCopyPythonAsset(source) {
+  const parts = path.normalize(source).split(path.sep);
+  return (
+    !parts.includes("__pycache__") &&
+    ![".pyc", ".pyo"].includes(path.extname(source))
+  );
+}
+
 export async function buildDistribution({ frontendDir, outputDir }) {
   const runtimeDir = path.join(electronDir, "node_modules", "electron", "dist");
   const backendDir = path.resolve(electronDir, "..", "backend");
@@ -46,6 +54,7 @@ export async function buildDistribution({ frontendDir, outputDir }) {
   await mkdir(path.join(packagedApp, "python"), { recursive: true });
   await cp(backendDir, path.join(packagedApp, "python", "backend"), {
     recursive: true,
+    filter: shouldCopyPythonAsset,
   });
   await writeFile(
     path.join(packagedApp, "package.json"),

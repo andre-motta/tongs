@@ -161,7 +161,7 @@ async function run() {
   window = new BrowserWindow({
     width: 1400,
     height: 900,
-    minWidth: 800,
+    minWidth: 960,
     minHeight: 600,
     show: false,
     backgroundColor: "#111827",

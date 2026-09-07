@@ -253,16 +253,18 @@ class ReviewMutationService:
             [ServiceEventKind, ReviewRef, ReviewRevision | None], None
         ],
         timeout: float = 30.0,
+        close_timeout: float = _REFRESH_CLOSE_TIMEOUT,
         ledger_size: int = 1024,
     ) -> None:
-        if timeout <= 0 or ledger_size <= 0:
-            raise ValueError("timeout and ledger_size must be positive")
+        if timeout <= 0 or close_timeout <= 0 or ledger_size <= 0:
+            raise ValueError("timeouts and ledger_size must be positive")
         self._get_client = get_client
         self._get_review = get_review
         self._get_diff = get_diff
         self._get_discussions = get_discussions
         self._emit_change = emit_change
         self._timeout = timeout
+        self._close_timeout = close_timeout
         self._ledger_size = ledger_size
         self._ledger: OrderedDict[str, _LedgerRecord] = OrderedDict()
         self._lock = asyncio.Lock()
@@ -557,22 +559,24 @@ class ReviewMutationService:
         """Reject admission, then cancel and drain mutation and refresh work."""
         async with self._lock:
             self._closed = True
-            owners = tuple(self._owner_tasks)
-        for task in owners:
-            task.cancel()
-        owner_pending: set[asyncio.Task[object]] = set()
-        if owners:
-            _, owner_pending = await asyncio.wait(
-                owners, timeout=_REFRESH_CLOSE_TIMEOUT
-            )
-        tasks = tuple(self._refresh_tasks)
-        for task in tasks:
-            task.cancel()
-        pending: set[asyncio.Task[bool]] = set()
-        if tasks:
-            _, pending = await asyncio.wait(tasks, timeout=_REFRESH_CLOSE_TIMEOUT)
+            owners = set(self._owner_tasks)
+        owner_pending = await self._cancel_and_drain(owners)
+        tasks: set[asyncio.Task[object]] = set(self._refresh_tasks)
+        pending = await self._cancel_and_drain(tasks)
         if owner_pending or pending:
             raise RuntimeError("review mutation tasks did not stop")
+
+    async def _cancel_and_drain(
+        self, tasks: set[asyncio.Task[object]]
+    ) -> set[asyncio.Task[object]]:
+        pending = tasks
+        for _attempt in range(2):
+            if not pending:
+                break
+            for task in pending:
+                task.cancel()
+            _done, pending = await asyncio.wait(pending, timeout=self._close_timeout)
+        return pending
 
     def _emit_known(self, command: ReviewMutationCommand, resync: bool) -> bool:
         try:

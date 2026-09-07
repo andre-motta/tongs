@@ -91,7 +91,14 @@ def _discussion() -> Discussion:
     return Discussion("thread-9", True, root, resolvable=True)
 
 
-def _service(client, *, forge=ForgeType.GITLAB, emit=None, ledger_size=10):
+def _service(
+    client,
+    *,
+    forge=ForgeType.GITLAB,
+    emit=None,
+    ledger_size=10,
+    close_timeout=1.0,
+):
     get_review = AsyncMock(return_value=_snapshot(forge))
     get_diff = AsyncMock(return_value=RawDiffSnapshot(REF, REVISION, (PATCH,)))
     get_discussions = AsyncMock(return_value=(_discussion(),))
@@ -103,6 +110,7 @@ def _service(client, *, forge=ForgeType.GITLAB, emit=None, ledger_size=10):
         get_discussions=get_discussions,
         emit_change=emitter,
         timeout=0.01,
+        close_timeout=close_timeout,
         ledger_size=ledger_size,
     )
     return service, get_review, get_diff, get_discussions, emitter
@@ -579,14 +587,12 @@ async def test_repeated_cancellation_settles_review_owner_as_unknown() -> None:
             await asyncio.Event().wait()
 
     client = _client(add_comment=AsyncMock(side_effect=resistant_comment))
-    service, *_ = _service(client)
+    service, *_ = _service(client, close_timeout=0.01)
     command = GeneralComment("repeat-review-close", REF, "body")
     owner = asyncio.create_task(service.execute(command))
     await entered.wait()
     close_task = asyncio.create_task(service.close())
     await first_cancellation.wait()
-
-    owner.cancel()
 
     outcome = await owner
     await close_task

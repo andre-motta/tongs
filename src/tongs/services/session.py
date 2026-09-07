@@ -263,7 +263,9 @@ class ApplicationSession:
 
     async def _ensure_close_task(self) -> asyncio.Task[None]:
         async with self._close_lock:
-            if self._close_task is None:
+            if self._close_task is None or (
+                self._close_task.done() and self._state is _SessionState.CLOSING
+            ):
                 self._close_requested = True
                 start_task = self._start_task
                 self._close_task = asyncio.create_task(
@@ -303,6 +305,8 @@ class ApplicationSession:
             return
         self._state = _SessionState.CLOSING
         failures: list[Exception] = []
+        mutation_cleanup_failed = False
+        terminal_close = False
         if startup_timed_out:
             failures.append(RuntimeError("application startup did not stop"))
         try:
@@ -312,16 +316,30 @@ class ApplicationSession:
                 )
             except asyncio.CancelledError:
                 failures.append(RuntimeError("CI mutation cleanup cancelled"))
+                mutation_cleanup_failed = True
             except Exception as error:  # noqa: BLE001 - Continue owned cleanup.
                 failures.append(error)
+                mutation_cleanup_failed = True
             try:
                 await asyncio.wait_for(
                     self._review_mutations.close(), timeout=self._shutdown_timeout
                 )
             except asyncio.CancelledError:
                 failures.append(RuntimeError("review mutation cleanup cancelled"))
+                mutation_cleanup_failed = True
             except Exception as error:  # noqa: BLE001 - Continue owned cleanup.
                 failures.append(error)
+                mutation_cleanup_failed = True
+            if mutation_cleanup_failed:
+                self._close_event_streams()
+                self._issued_repositories.clear()
+                self._repositories.clear()
+                self._shutdown_error = ServiceError(
+                    ServiceErrorCode.SHUTDOWN_FAILED,
+                    "One or more application resources did not close cleanly.",
+                )
+                raise self._shutdown_error
+            terminal_close = True
             if self._registry_owned and self._registry is not None:
                 try:
                     await asyncio.wait_for(
@@ -341,10 +359,11 @@ class ApplicationSession:
                 except Exception as error:  # noqa: BLE001 - Report after all cleanup.
                     failures.append(error)
         finally:
-            self._close_event_streams()
-            self._issued_repositories.clear()
-            self._repositories.clear()
-            self._state = _SessionState.CLOSED
+            if terminal_close:
+                self._close_event_streams()
+                self._issued_repositories.clear()
+                self._repositories.clear()
+                self._state = _SessionState.CLOSED
         if failures:
             self._shutdown_error = ServiceError(
                 ServiceErrorCode.SHUTDOWN_FAILED,

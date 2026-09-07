@@ -735,14 +735,12 @@ async def test_repeated_owner_cancellation_settles_close_and_unknown_receipt() -
                 await asyncio.Event().wait()
 
     client = ResistantClient()
-    service = Harness(client).service(close_timeout=0.2)
+    service = Harness(client).service(close_timeout=0.01)
     command = CancelPipelineCommand("repeat-close", PIPELINE_TARGET)
     owner = asyncio.create_task(service.execute(command))
     await client.started.wait()
     close_task = asyncio.create_task(service.close())
     await first_cancellation.wait()
-
-    owner.cancel()
 
     with pytest.raises(asyncio.CancelledError):
         await owner

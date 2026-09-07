@@ -627,30 +627,26 @@ class CIMutationService:
         async with self._operation_lock:
             self._closed = True
             owners = set(self._owner_tasks)
-        for task in owners:
-            task.cancel()
-        owner_pending = await self._drain_tasks(owners)
+        owner_pending = await self._cancel_and_drain(owners)
 
         hints: set[asyncio.Task[object]] = {
             *self._coordinator_tasks,
             *self._invalidation_tasks,
         }
-        for task in hints:
-            task.cancel()
-        hint_pending = await self._drain_tasks(hints)
-        if owner_pending:
-            for task in owner_pending:
-                task.cancel()
-            owner_pending = await self._drain_tasks(owner_pending)
+        hint_pending = await self._cancel_and_drain(hints)
         if owner_pending or hint_pending:
             raise RuntimeError("CI mutation tasks did not stop")
 
-    async def _drain_tasks(
+    async def _cancel_and_drain(
         self, tasks: set[asyncio.Task[object]]
     ) -> set[asyncio.Task[object]]:
-        if not tasks:
-            return set()
-        _done, pending = await asyncio.wait(tasks, timeout=self._close_timeout)
+        pending = tasks
+        for _attempt in range(2):
+            if not pending:
+                break
+            for task in pending:
+                task.cancel()
+            _done, pending = await asyncio.wait(pending, timeout=self._close_timeout)
         return pending
 
     def _require_open(self) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import tarfile
@@ -67,6 +68,7 @@ def inspect_archive(document: bytes, limits: ExtractionLimits) -> ArchiveInspect
     install_document: bytes | None = None
     total_bytes = 0
     try:
+        _preflight_archive_headers(document, limits)
         with tarfile.open(fileobj=io.BytesIO(document), mode="r:gz") as archive:
             for member in archive:
                 if len(entries) >= limits.max_entries:
@@ -126,6 +128,95 @@ def inspect_archive(document: bytes, limits: ExtractionLimits) -> ArchiveInspect
     if install_document is None:
         _layout_error("Archive is missing its root install manifest")
     return ArchiveInspection(tuple(entries), install_document)
+
+
+def _preflight_archive_headers(document: bytes, limits: ExtractionLimits) -> None:
+    """Bound tar metadata before ``tarfile`` interprets extension headers."""
+    maximum_archive_bytes = (
+        limits.max_total_bytes
+        + limits.max_entries * (limits.max_path_bytes + 2_048)
+        + 10_240
+    )
+    if len(document) > maximum_archive_bytes:
+        _limit("Compressed archive size exceeds declared limits")
+
+    physical_headers = 0
+    logical_entries = 0
+    extension_bytes = 0
+    maximum_extension_bytes = limits.max_entries * (limits.max_path_bytes + 1_024)
+    with gzip.GzipFile(fileobj=io.BytesIO(document), mode="rb") as stream:
+        while True:
+            header = _read_exact(stream, 512)
+            if header == b"":
+                _invalid_archive("Archive is missing its end marker")
+            if header == bytes(512):
+                return
+            physical_headers += 1
+            if physical_headers > limits.max_entries * 3 + 2:
+                _limit("Archive header count exceeds declared limits")
+            size = _tar_number(header[124:136])
+            if size < 0:
+                _invalid_archive("Archive header contains a negative size")
+            entry_type = header[156:157]
+            if entry_type in {b"x", b"g", b"L", b"K"}:
+                extension_bytes += size
+                if (
+                    size > limits.max_path_bytes + 1_024
+                    or extension_bytes > maximum_extension_bytes
+                ):
+                    _limit("Archive extension metadata exceeds declared limits")
+            else:
+                logical_entries += 1
+                if logical_entries > limits.max_entries:
+                    _limit("Archive entry count exceeds the declared limit")
+                if entry_type == b"S":
+                    _invalid_archive("GNU sparse archive metadata is unsupported")
+                if size > limits.max_file_bytes:
+                    _limit("Archive member size exceeds the declared limit")
+            _discard_exact(stream, size + (-size % 512))
+
+
+def _read_exact(stream: gzip.GzipFile, byte_count: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = byte_count
+    while remaining:
+        chunk = stream.read(min(remaining, 64 * 1024))
+        if not chunk:
+            if remaining == byte_count:
+                return b""
+            _invalid_archive("Archive ends inside a header or member")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _discard_exact(stream: gzip.GzipFile, byte_count: int) -> None:
+    remaining = byte_count
+    while remaining:
+        chunk = stream.read(min(remaining, 64 * 1024))
+        if not chunk:
+            _invalid_archive("Archive ends inside a header or member")
+        remaining -= len(chunk)
+
+
+def _tar_number(field: bytes) -> int:
+    if not field:
+        _invalid_archive("Archive contains an invalid numeric header")
+    if field[0] in (0o200, 0o377):
+        value = 0
+        for byte in field[1:]:
+            value = (value << 8) + byte
+        if field[0] == 0o377:
+            value = -(256 ** (len(field) - 1) - value)
+        return value
+    try:
+        text = field.split(b"\0", 1)[0].decode("ascii", errors="strict").strip()
+        return int(text or "0", 8)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ArtifactContractError(
+            ArtifactContractErrorCode.INVALID_ARCHIVE,
+            "Archive contains an invalid numeric header",
+        ) from error
 
 
 def validate_archive_layout(

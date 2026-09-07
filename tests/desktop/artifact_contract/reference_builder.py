@@ -6,10 +6,11 @@ Every payload file is inert placeholder text retained beside the test.
 
 from __future__ import annotations
 
-import gzip
+import binascii
 import hashlib
 import io
 import json
+import struct
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -143,13 +144,22 @@ def _build_tar_gzip(install_document: bytes, files: dict[str, bytes]) -> bytes:
                 info.type = tarfile.REGTYPE
                 info.size = len(content)
                 archive.addfile(info, io.BytesIO(content))
-    output = io.BytesIO()
-    with gzip.GzipFile(
-        fileobj=output,
-        mode="wb",
-        filename="",
-        compresslevel=9,
-        mtime=0,
-    ) as compressor:
-        compressor.write(tar_bytes.getvalue())
-    return output.getvalue()
+    return _deterministic_gzip(tar_bytes.getvalue())
+
+
+def _deterministic_gzip(document: bytes) -> bytes:
+    """Encode gzip with stored DEFLATE blocks, independent of zlib versions."""
+    output = bytearray(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff")
+    offset = 0
+    while offset < len(document):
+        chunk = document[offset : offset + 65_535]
+        offset += len(chunk)
+        output.append(1 if offset == len(document) else 0)
+        output.extend(struct.pack("<HH", len(chunk), len(chunk) ^ 0xFFFF))
+        output.extend(chunk)
+    if not document:
+        output.extend(b"\x01\x00\x00\xff\xff")
+    output.extend(
+        struct.pack("<II", binascii.crc32(document), len(document) & 0xFFFFFFFF)
+    )
+    return bytes(output)

@@ -76,7 +76,8 @@ def test_reference_archive_has_canonical_root_layout_and_metadata() -> None:
         archive, ARCHIVE_NAME, release, "fedora-44-x86_64-user-archive"
     )
     assert validated.layout.file_count == 7
-    assert archive[:10] == b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"
+    assert archive[:10] == b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff"
+    assert archive[10] == 1  # One final stored DEFLATE block for this tiny fixture.
 
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as opened:
         members = opened.getmembers()
@@ -238,6 +239,21 @@ def test_inspector_enforces_entry_limit_while_reading_headers() -> None:
     limits = replace(install.extraction_limits, max_entries=1)
     with _raised(ArtifactContractErrorCode.LIMIT_EXCEEDED):
         inspect_archive(compressed, limits)
+
+
+def test_inspector_bounds_pax_metadata_before_tarfile_interprets_it() -> None:
+    install_document = _fixture()[1]
+    install = parse_install_manifest(install_document)
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as opened:
+        info = tarfile.TarInfo("desktop-install.json")
+        info.size = len(install_document)
+        info.pax_headers = {"comment": "x" * 2_048}
+        opened.addfile(info, io.BytesIO(install_document))
+    compressed = gzip.compress(raw.getvalue(), mtime=0)
+
+    with _raised(ArtifactContractErrorCode.LIMIT_EXCEEDED):
+        inspect_archive(compressed, install.extraction_limits)
 
 
 def test_layout_rejects_tarfile_surrogateescaped_names_safely() -> None:

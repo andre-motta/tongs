@@ -6,7 +6,7 @@ import { AssetCatalog } from "./assets.js";
 import { DesktopIpcController } from "./ipc.js";
 import { parseLaunchArguments } from "./launch.js";
 import { APP_DOCUMENT, isAllowedAppUrl } from "./security.js";
-import { recoverRendererSession } from "./renderer_lifecycle.js";
+import { RendererRecoveryCoordinator } from "./renderer_lifecycle.js";
 import { SidecarTransport } from "./sidecar.js";
 
 protocol.registerSchemesAsPrivileged([
@@ -50,8 +50,7 @@ const desktopRoot = path.resolve(
 let window: BrowserWindow | null = null;
 let transport: SidecarTransport | null = null;
 let controller: DesktopIpcController | null = null;
-let assetCatalog: AssetCatalog | null = null;
-let rendererRestart: Promise<void> | null = null;
+let rendererRecovery: RendererRecoveryCoordinator | null = null;
 const childProcessFailures: object[] = [];
 
 async function run(): Promise<void> {
@@ -68,7 +67,6 @@ async function run(): Promise<void> {
   transport = new SidecarTransport(launch);
   await transport.start();
   const assets = new AssetCatalog(transport, path.join(desktopRoot, "shell"));
-  assetCatalog = assets;
   await assets.refresh();
   desktopSession.protocol.handle("tongs", (request) =>
     assets.response(request.url),
@@ -92,6 +90,24 @@ async function run(): Promise<void> {
   });
   controller = new DesktopIpcController(window, transport, assets);
   controller.register();
+  const owner = window;
+  const sidecar = transport;
+  rendererRecovery = new RendererRecoveryCoordinator({
+    resetBindings: () => controller?.reset(),
+    restartSidecar: () => sidecar.restart(),
+    refreshAssets: () => assets.refresh(),
+    loadDocument: async () => {
+      if (window === owner && !owner.isDestroyed()) {
+        await owner.loadURL(APP_DOCUMENT);
+      }
+    },
+    showFailure: async () => {
+      if (window !== owner || owner.isDestroyed()) return;
+      await owner.webContents.executeJavaScript(
+        "document.querySelector('#status').textContent = 'The local Tongs service is unavailable.'",
+      );
+    },
+  });
   window.setMenu(null);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
@@ -116,6 +132,7 @@ async function run(): Promise<void> {
   window.on("closed", () => {
     controller?.dispose();
     controller = null;
+    rendererRecovery = null;
     window = null;
   });
   await window.loadURL(APP_DOCUMENT);
@@ -182,17 +199,25 @@ async function crashRendererSession(): Promise<{
   initialSessionGeneration: number;
   finalSessionGeneration: number;
   finalRendererProbe: object;
+  injectedRendererPid: number;
+  injection: "SIGKILL";
 }> {
   if (!window || !transport) throw new Error("Desktop crash recovery started too early");
   const owner = window;
   const initialSessionGeneration = transport.sessionGeneration;
   const completed = waitForNewRendererLoad(owner, initialSessionGeneration);
-  owner.webContents.forcefullyCrashRenderer();
+  const injectedRendererPid = owner.webContents.getOSProcessId();
+  if (injectedRendererPid <= 0 || injectedRendererPid === process.pid) {
+    throw new Error("renderer crash target is invalid");
+  }
+  process.kill(injectedRendererPid, "SIGKILL");
   await completed;
   return {
     initialSessionGeneration,
     finalSessionGeneration: transport.sessionGeneration,
     finalRendererProbe: await rendererProbe(),
+    injectedRendererPid,
+    injection: "SIGKILL",
   };
 }
 
@@ -249,33 +274,8 @@ function waitForNewRendererLoad(
 }
 
 async function restartRendererSession(): Promise<void> {
-  if (rendererRestart) return rendererRestart;
-  if (!window || !transport) throw new Error("Desktop reload started too early");
-  const owner = window;
-  const sidecar = transport;
-  const assets = assetCatalog;
-  if (!assets) throw new Error("Desktop assets are unavailable");
-  rendererRestart = (async () => {
-    await recoverRendererSession({
-      resetBindings: () => controller?.reset(),
-      restartSidecar: () => sidecar.restart(),
-      refreshAssets: () => assets.refresh(),
-      loadDocument: async () => {
-        if (window === owner && !owner.isDestroyed()) await owner.loadURL(APP_DOCUMENT);
-      },
-      showFailure: async () => {
-        if (window !== owner || owner.isDestroyed()) return;
-        await owner.webContents.executeJavaScript(
-          "document.querySelector('#status').textContent = 'The local Tongs service is unavailable.'",
-        );
-      },
-    });
-  })();
-  try {
-    await rendererRestart;
-  } finally {
-    rendererRestart = null;
-  }
+  if (!rendererRecovery) throw new Error("Desktop reload started too early");
+  await rendererRecovery.request();
 }
 
 app

@@ -590,12 +590,36 @@ class GitHubClient(ForgeClient):
         self, repo_path: str, pipeline_id: int
     ) -> list[PipelineJob]:
         owner, repo = _split_repo_path(repo_path)
-        data = await request(
-            self._http,
-            "GET",
-            f"/repos/{owner}/{repo}/actions/runs/{pipeline_id}/jobs",
-        )
-        return [self._parse_job(j) for j in data.get("jobs", [])]
+        path = f"/repos/{owner}/{repo}/actions/runs/{pipeline_id}/jobs"
+        jobs: list[dict] = []
+        total_count: int | None = None
+        for page in range(1, 101):
+            data = await request(
+                self._http,
+                "GET",
+                path,
+                params={"per_page": 100, "page": page},
+            )
+            if not isinstance(data, dict):
+                raise ForgeError("GitHub returned an invalid pipeline jobs response")
+            page_total = data.get("total_count")
+            page_jobs = data.get("jobs")
+            if (
+                type(page_total) is not int
+                or page_total < 0
+                or page_total > 10_000
+                or not isinstance(page_jobs, list)
+                or len(page_jobs) > 100
+                or (total_count is not None and page_total != total_count)
+            ):
+                raise ForgeError("GitHub returned invalid pipeline jobs metadata")
+            total_count = page_total
+            jobs.extend(page_jobs)
+            if len(jobs) == total_count:
+                return [self._parse_job(job) for job in jobs]
+            if len(jobs) > total_count or not page_jobs:
+                raise ForgeError("GitHub returned incomplete pipeline jobs metadata")
+        raise ForgeError("GitHub pipeline job pagination exceeded its limit")
 
     async def get_job_log(self, repo_path: str, job_id: int) -> str:
         owner, repo = _split_repo_path(repo_path)

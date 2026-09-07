@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from tongs.errors import ForgeError
 from tongs.forges.github import GitHubClient
 from tongs.forges.models import ForgeHost, ReviewDecision
 from tongs.scanner.repo import ForgeType
@@ -70,6 +71,48 @@ def _review_comment_json(overrides: dict | None = None) -> dict:
     if overrides:
         data.update(overrides)
     return data
+
+
+def _job_json(job_id: int) -> dict:
+    return {
+        "id": job_id,
+        "name": f"job-{job_id}",
+        "workflow_name": "verify",
+        "status": "completed",
+        "conclusion": "success",
+    }
+
+
+class TestPipelineJobPagination:
+    @pytest.mark.asyncio
+    async def test_collects_all_envelope_pages(self) -> None:
+        seen_pages: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            page = request.url.params["page"]
+            seen_pages.append(page)
+            jobs = (
+                [_job_json(index) for index in range(1, 101)]
+                if page == "1"
+                else [_job_json(202)]
+            )
+            return httpx.Response(200, json={"total_count": 101, "jobs": jobs})
+
+        client, http = _make_github_client(handler)
+        async with http:
+            jobs = await client.get_pipeline_jobs("acme/repo", 77)
+
+        assert seen_pages == ["1", "2"]
+        assert [job.id for job in jobs][-2:] == [100, 202]
+
+    @pytest.mark.asyncio
+    async def test_rejects_incomplete_envelope(self) -> None:
+        client, http = _make_github_client(
+            lambda _request: httpx.Response(200, json={"total_count": 2, "jobs": []})
+        )
+        async with http:
+            with pytest.raises(ForgeError, match="incomplete"):
+                await client.get_pipeline_jobs("acme/repo", 77)
 
 
 _GHE_HOST = ForgeHost(

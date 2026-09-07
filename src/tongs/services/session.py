@@ -295,6 +295,14 @@ class ApplicationSession:
         if startup_timed_out:
             failures.append(RuntimeError("application startup did not stop"))
         try:
+            try:
+                await asyncio.wait_for(
+                    self._review_mutations.close(), timeout=self._shutdown_timeout
+                )
+            except asyncio.CancelledError:
+                failures.append(RuntimeError("review mutation cleanup cancelled"))
+            except Exception as error:  # noqa: BLE001 - Continue owned cleanup.
+                failures.append(error)
             if self._registry_owned and self._registry is not None:
                 try:
                     await asyncio.wait_for(

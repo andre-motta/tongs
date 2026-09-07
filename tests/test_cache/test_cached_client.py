@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -170,6 +171,7 @@ class TestApproveInvalidation:
         self, client, inner, cache, monkeypatch
     ):
         inner.add_comment.return_value = ForgeMutationResult("note-1", "note-1")
+        await client.list_mrs("org/repo")
         monkeypatch.setattr(
             cache,
             "invalidate_prefix",
@@ -177,9 +179,44 @@ class TestApproveInvalidation:
         )
 
         result = await client.add_comment("org/repo", 1, "body")
+        await asyncio.sleep(0)
+        await client.list_mrs("org/repo")
 
         assert result.remote_id == "note-1"
         assert result.cache_invalidated is False
+        assert inner.list_mrs.await_count == 2
+
+    async def test_close_cancels_owned_blocked_invalidation(
+        self, client, inner, cache, monkeypatch
+    ):
+        entered = asyncio.Event()
+        exited = asyncio.Event()
+        calls = 0
+
+        async def blocked(_prefix: str) -> None:
+            nonlocal calls
+            calls += 1
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                exited.set()
+
+        monkeypatch.setattr(cache, "invalidate_prefix", blocked)
+        await client.add_comment("org/repo", 1, "body")
+        await entered.wait()
+        await client.add_comment("org/repo", 1, "second")
+
+        assert len(client._invalidation_tasks) == 1
+
+        await client.close()
+
+        await exited.wait()
+        calls_after_close = calls
+        await asyncio.sleep(0)
+        inner.close.assert_awaited_once()
+        assert not client._invalidation_tasks
+        assert calls == calls_after_close
 
 
 @pytest.mark.asyncio

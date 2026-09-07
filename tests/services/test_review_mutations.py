@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from tongs.cache.cached_client import CachedForgeClient
 from tongs.errors import AuthError, NetworkError
 from tongs.forges.models import (
     CIStatus,
@@ -244,6 +245,106 @@ async def test_valid_receipt_survives_cache_and_event_failure() -> None:
     assert outcome.status == MutationStatus.KNOWN
     assert outcome.receipt and outcome.receipt.remote_id == "note-1"
     assert outcome.resync_required is True
+
+
+@pytest.mark.asyncio
+async def test_composed_cache_cleanup_cannot_hide_confirmed_receipt() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def cancellation_resistant_invalidation(_prefix: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    inner = _client()
+    cache = Mock(
+        invalidate_prefix=AsyncMock(side_effect=cancellation_resistant_invalidation)
+    )
+    wrapped = CachedForgeClient(inner, cache, REF.repository.hostname)
+    service, *_ = _service(wrapped)
+
+    outcome = await asyncio.wait_for(
+        service.execute(GeneralComment("known-cache-1", REF, "body")), timeout=0.05
+    )
+    await entered.wait()
+
+    assert outcome.status == MutationStatus.KNOWN
+    assert outcome.receipt and outcome.receipt.remote_id == "note-1"
+    assert outcome.resync_required is True
+    assert calls == 2
+    release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_unknown_is_retained_before_cancellation_resistant_refresh() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def cancellation_resistant_refresh(*_args) -> bool:
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        return True
+
+    client = _client(
+        add_comment=AsyncMock(side_effect=NetworkError("timeout")),
+        invalidate_review_reads=AsyncMock(side_effect=cancellation_resistant_refresh),
+    )
+    service, *_ = _service(client)
+    command = GeneralComment("unknown-refresh-1", REF, "body")
+
+    outcome = await asyncio.wait_for(service.execute(command), timeout=0.05)
+    repeated = await service.execute(command)
+
+    assert entered.is_set()
+    assert outcome == repeated
+    assert outcome.status == MutationStatus.UNKNOWN
+    client.add_comment.assert_awaited_once()
+    release.set()
+    await asyncio.sleep(0)
+    await service.close()
+    assert not service._refresh_tasks
+
+
+@pytest.mark.asyncio
+async def test_outer_cancellation_during_unknown_refresh_owns_cleanup() -> None:
+    entered = asyncio.Event()
+    exited = asyncio.Event()
+
+    async def blocked_refresh(*_args) -> bool:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            exited.set()
+
+    client = _client(
+        add_comment=AsyncMock(side_effect=NetworkError("timeout")),
+        invalidate_review_reads=AsyncMock(side_effect=blocked_refresh),
+    )
+    service, *_ = _service(client)
+    command = GeneralComment("unknown-cancel-refresh-1", REF, "body")
+    task = asyncio.create_task(service.execute(command))
+    await entered.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await exited.wait()
+
+    repeated = await service.execute(command)
+    assert repeated.status == MutationStatus.UNKNOWN
+    client.add_comment.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -553,8 +553,49 @@ class TestGitLabClientAsync:
         assert position["old_path"] == "old.py"
         assert position["new_path"] == "new.py"
         assert position["head_sha"] == "head"
-        assert position["line_range"]["start"]["type"] == "new"
+        assert position["old_line"] == 11
+        assert position["new_line"] == 11
+        assert position["line_range"]["start"]["type"] == "old"
+        assert position["line_range"]["start"]["old_line"] == 10
+        assert position["line_range"]["start"]["new_line"] == 10
+        assert position["line_range"]["end"]["type"] == "old"
         assert position["line_range"]["end"]["line_code"].endswith("_11_11")
+
+    @pytest.mark.asyncio
+    async def test_context_position_preserves_both_native_coordinates(self):
+        requests_made = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests_made.append(req)
+            return httpx.Response(
+                200,
+                json={"id": "thread-1", "notes": [{"id": 8, "body": "body"}]},
+            )
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            await client.create_inline_comment(
+                "acme/widgets",
+                42,
+                "new.py",
+                11,
+                "RIGHT",
+                "body",
+                old_path="old.py",
+                new_path="new.py",
+                head_sha="head",
+                base_sha="base",
+                start_sha="start",
+                old_line=10,
+                new_line=11,
+            )
+
+        position = json.loads(requests_made[0].content)["position"]
+        assert position["old_path"] == "old.py"
+        assert position["new_path"] == "new.py"
+        assert position["old_line"] == 10
+        assert position["new_line"] == 11
+        assert "line_range" not in position
 
     @pytest.mark.asyncio
     async def test_partial_explicit_revision_is_rejected_without_refetch(self):

@@ -32,6 +32,8 @@ from tongs.services.models import (
 
 _OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _MAX_BODY_BYTES = 65_536
+_MAX_REFRESH_TASKS = 64
+_REFRESH_CLOSE_TIMEOUT = 1.0
 
 
 class DiffSide(str, Enum):
@@ -264,6 +266,8 @@ class ReviewMutationService:
         self._ledger_size = ledger_size
         self._ledger: OrderedDict[str, _LedgerRecord] = OrderedDict()
         self._lock = asyncio.Lock()
+        self._refresh_tasks: set[asyncio.Task[bool]] = set()
+        self._closed = False
 
     async def capabilities(self, review: ReviewRef) -> ReviewMutationCapabilities:
         snapshot = await self._get_review(review)
@@ -497,18 +501,6 @@ class ReviewMutationService:
     async def _unknown(
         self, command: ReviewMutationCommand, client: ForgeClient, reason: str
     ) -> MutationOutcome:
-        try:
-            await client.invalidate_review_reads(
-                command.review.repository.project_path, command.review.number
-            )
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
-            pass
-        try:
-            self._emit_change(
-                ServiceEventKind.RESYNC_REQUIRED, command.review, _revision(command)
-            )
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
-            pass
         outcome = MutationOutcome(
             command.operation_id,
             MutationStatus.UNKNOWN,
@@ -517,7 +509,40 @@ class ReviewMutationService:
             resync_required=True,
         )
         await self._finish_outcome(command.operation_id, outcome)
+        try:
+            self._emit_change(
+                ServiceEventKind.RESYNC_REQUIRED, command.review, _revision(command)
+            )
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
+            pass
+        if not self._closed and len(self._refresh_tasks) < _MAX_REFRESH_TASKS:
+            refresh = asyncio.create_task(
+                client.invalidate_review_reads(
+                    command.review.repository.project_path, command.review.number
+                )
+            )
+            self._refresh_tasks.add(refresh)
+            refresh.add_done_callback(
+                lambda completed: _finish_refresh_task(self._refresh_tasks, completed)
+            )
+            try:
+                await asyncio.wait({refresh}, timeout=self._timeout)
+            finally:
+                if not refresh.done():
+                    refresh.cancel()
         return outcome
+
+    async def close(self) -> None:
+        """Cancel and drain owned post-dispatch refresh work within a fixed bound."""
+        self._closed = True
+        tasks = tuple(self._refresh_tasks)
+        for task in tasks:
+            task.cancel()
+        pending: set[asyncio.Task[bool]] = set()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=_REFRESH_CLOSE_TIMEOUT)
+        if pending:
+            raise RuntimeError("review refresh tasks did not stop")
 
     def _emit_known(self, command: ReviewMutationCommand, resync: bool) -> bool:
         try:
@@ -531,6 +556,16 @@ class ReviewMutationService:
             return True
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             return False
+
+
+def _finish_refresh_task(
+    tasks: set[asyncio.Task[bool]], task: asyncio.Task[bool]
+) -> None:
+    tasks.discard(task)
+    try:
+        task.result()
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
+        pass
 
 
 def _validate_command(

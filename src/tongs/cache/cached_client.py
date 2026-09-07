@@ -18,6 +18,22 @@ from tongs.forges.models import (
     User,
 )
 
+_MAX_BACKGROUND_INVALIDATIONS = 64
+_BACKGROUND_CLOSE_TIMEOUT = 1.0
+
+
+def _finish_background_invalidation(
+    tasks: dict[tuple[str, int], asyncio.Task[bool]],
+    key: tuple[str, int],
+    task: asyncio.Task[bool],
+) -> None:
+    if tasks.get(key) is task:
+        del tasks[key]
+    try:
+        task.result()
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
+        pass
+
 
 def _serialize_datetime(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
@@ -90,6 +106,10 @@ class CachedForgeClient:
         self._hostname = hostname
         self._mr_list_ttl = mr_list_ttl
         self._diff_ttl = diff_ttl
+        self._dirty_review_prefixes: dict[str, int] = {}
+        self._dirty_generation = 0
+        self._invalidation_tasks: dict[tuple[str, int], asyncio.Task[bool]] = {}
+        self._closed = False
 
     def _key(self, *parts: str | int) -> str:
         return f"{self._hostname}:{':'.join(str(p) for p in parts)}"
@@ -103,6 +123,8 @@ class CachedForgeClient:
         self, repo_path: str, state: str = "open", per_page: int = 100
     ) -> list[MRSummary]:
         key = self._key(repo_path, "mrs", state)
+        if any(key.startswith(prefix) for prefix in self._dirty_review_prefixes):
+            return await self._inner.list_mrs(repo_path, state, per_page)
         cached = await self._cache.get_json(key)
         if cached is not None:
             return [_dict_to_mr_summary(d) for d in cached]
@@ -114,6 +136,8 @@ class CachedForgeClient:
 
     async def get_mr_diff(self, repo_path: str, number: int) -> list[dict]:
         key = self._key(repo_path, "mr", number, "diff")
+        if any(key.startswith(prefix) for prefix in self._dirty_review_prefixes):
+            return await self._inner.get_mr_diff(repo_path, number)
         cached = await self._cache.get_json(key)
         if cached is not None:
             return cached
@@ -250,22 +274,83 @@ class CachedForgeClient:
         return await self._finish_review_mutation(repo_path, number, result)
 
     async def invalidate_review_reads(self, repo_path: str, number: int) -> bool:
-        complete = True
-        for prefix in (
-            self._key(repo_path, "mrs"),
-            self._key(repo_path, "mr", number),
-        ):
-            try:
-                await self._cache.invalidate_prefix(prefix)
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                complete = False
+        prefixes = self._review_prefixes(repo_path, number)
+        generation = self._mark_review_dirty(prefixes)
+        return await self._invalidate_marked(prefixes, generation)
+
+    async def _invalidate_marked(
+        self, prefixes: tuple[str, str], generation: int
+    ) -> bool:
+        results = await asyncio.gather(
+            *(self._cache.invalidate_prefix(prefix) for prefix in prefixes),
+            return_exceptions=True,
+        )
+        complete = not any(isinstance(result, BaseException) for result in results)
+        if complete:
+            for prefix in prefixes:
+                if self._dirty_review_prefixes.get(prefix) == generation:
+                    del self._dirty_review_prefixes[prefix]
         return complete
 
     async def _finish_review_mutation(
         self, repo_path: str, number: int, result: ForgeMutationResult
     ) -> ForgeMutationResult:
-        invalidated = await self.invalidate_review_reads(repo_path, number)
-        return result if invalidated else replace(result, cache_invalidated=False)
+        prefixes = self._review_prefixes(repo_path, number)
+        self._mark_review_dirty(prefixes)
+        self._schedule_review_invalidation(repo_path, number, prefixes)
+        return replace(result, cache_invalidated=False)
+
+    def _schedule_review_invalidation(
+        self, repo_path: str, number: int, prefixes: tuple[str, str]
+    ) -> None:
+        key = (repo_path, number)
+        active = self._invalidation_tasks.get(key)
+        if self._closed or (active is not None and not active.done()):
+            return
+        if len(self._invalidation_tasks) >= _MAX_BACKGROUND_INVALIDATIONS:
+            return
+        task = asyncio.create_task(self._drain_review_invalidation(prefixes))
+        self._invalidation_tasks[key] = task
+        task.add_done_callback(
+            lambda completed: _finish_background_invalidation(
+                self._invalidation_tasks, key, completed
+            )
+        )
+
+    async def _drain_review_invalidation(self, prefixes: tuple[str, str]) -> bool:
+        while not self._closed:
+            generations = [
+                self._dirty_review_prefixes.get(prefix) for prefix in prefixes
+            ]
+            if any(generation is None for generation in generations):
+                return True
+            generation = max(value for value in generations if value is not None)
+            if not await self._invalidate_marked(prefixes, generation):
+                return False
+            if not any(prefix in self._dirty_review_prefixes for prefix in prefixes):
+                return True
+        return False
+
+    def _mark_review_dirty(self, prefixes: tuple[str, str]) -> int:
+        self._dirty_generation += 1
+        for prefix in prefixes:
+            self._dirty_review_prefixes[prefix] = self._dirty_generation
+        return self._dirty_generation
+
+    def _review_prefixes(self, repo_path: str, number: int) -> tuple[str, str]:
+        return (
+            self._key(repo_path, "mrs"),
+            self._key(repo_path, "mr", number),
+        )
 
     async def close(self) -> None:
+        self._closed = True
+        tasks = tuple(self._invalidation_tasks.values())
+        for task in tasks:
+            task.cancel()
+        pending: set[asyncio.Task[bool]] = set()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=_BACKGROUND_CLOSE_TIMEOUT)
         await self._inner.close()
+        if pending:
+            raise RuntimeError("cache invalidation tasks did not stop")

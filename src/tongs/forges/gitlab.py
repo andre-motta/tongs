@@ -56,6 +56,14 @@ def _gitlab_range_endpoint(
     return endpoint
 
 
+def _gitlab_line_type(old_line: int | None, new_line: int | None) -> str:
+    if old_line is not None:
+        return "old"
+    if new_line is not None:
+        return "new"
+    raise ValueError("a GitLab diff position requires an old or new line")
+
+
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -342,41 +350,40 @@ class GitLabClient(ForgeClient):
             "new_path": new_path or file_path,
             "old_path": old_path or file_path,
         }
-        if side == "LEFT":
-            position["old_line"] = line
-        else:
-            position["new_line"] = line
+        resolved_old = old_line
+        resolved_new = new_line
+        if resolved_old is None and resolved_new is None:
+            if side == "LEFT":
+                resolved_old = line
+            else:
+                resolved_new = line
+        if resolved_old is not None:
+            position["old_line"] = resolved_old
+        if resolved_new is not None:
+            position["new_line"] = resolved_new
         if start_line is not None:
-            start_type = "old" if (start_side or side) == "LEFT" else "new"
-            end_type = "old" if side == "LEFT" else "new"
-            range_path = new_path or file_path
             range_start_old = (
                 start_old_line
                 if start_old_line is not None
                 else start_line
-                if start_type == "old"
+                if (start_side or side) == "LEFT"
                 else None
             )
             range_start_new = (
                 start_new_line
                 if start_new_line is not None
                 else start_line
-                if start_type == "new"
+                if (start_side or side) != "LEFT"
                 else None
             )
-            range_end_old = (
-                old_line
-                if old_line is not None
-                else line
-                if end_type == "old"
-                else None
-            )
-            range_end_new = (
-                new_line
-                if new_line is not None
-                else line
-                if end_type == "new"
-                else None
+            range_end_old = resolved_old
+            range_end_new = resolved_new
+            start_type = _gitlab_line_type(range_start_old, range_start_new)
+            end_type = _gitlab_line_type(range_end_old, range_end_new)
+            range_path = (
+                old_path or file_path
+                if start_type == "old" and range_start_new is None
+                else new_path or file_path
             )
             position["line_range"] = {
                 "start": _gitlab_range_endpoint(

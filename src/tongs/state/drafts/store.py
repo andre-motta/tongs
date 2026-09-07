@@ -635,8 +635,9 @@ class DraftStore:
                 raise DraftStateError(
                     "only editable drafts can be saved", current=current
                 )
+            result = await self._draft_in_transaction(db, draft_id)
             await db.execute("COMMIT")
-            return await self._draft_in_transaction(db, draft_id)
+            return result
         except (DraftConflictError, DraftStateError, DraftNotFoundError):
             await self._rollback(db)
             raise
@@ -744,10 +745,11 @@ class DraftStore:
                     current=await self._draft_in_transaction(db, draft_id),
                     caller_content=None,
                 )
+            result = await self._attempt_in_transaction(db, identifier)
             await db.execute("COMMIT")
             self._held_attempt_locks[identifier] = ownership
             ownership = None
-            return await self._attempt_in_transaction(db, identifier)
+            return result
         except (
             DraftAttemptOwnedError,
             DraftConflictError,
@@ -794,7 +796,7 @@ class DraftStore:
                         "submission step already has a different remote receipt"
                     )
                 await db.execute("COMMIT")
-                return await self._attempt_in_transaction(db, attempt_id)
+                return attempt
             now = _now()
             await db.execute(
                 "INSERT INTO submission_receipts VALUES (?, ?, ?, ?)",
@@ -813,8 +815,9 @@ class DraftStore:
                     str(attempt_id),
                 ),
             )
+            result = await self._attempt_in_transaction(db, attempt_id)
             await db.execute("COMMIT")
-            return await self._attempt_in_transaction(db, attempt_id)
+            return result
         except (DraftStoreError, DraftNotFoundError):
             await self._rollback(db)
             raise
@@ -870,8 +873,9 @@ class DraftStore:
                     str(attempt_id),
                 ),
             )
+            result = await self._attempt_in_transaction(db, attempt_id)
             await db.execute("COMMIT")
-            return await self._attempt_in_transaction(db, attempt_id)
+            return result
         except (DraftStoreError, DraftNotFoundError):
             await self._rollback(db)
             raise
@@ -930,8 +934,9 @@ class DraftStore:
                             str(attempt_id),
                         ),
                     )
+                    result = await self._attempt_in_transaction(db, attempt_id)
                     await db.execute("COMMIT")
-                    recovered.append(await self._attempt_in_transaction(db, attempt_id))
+                    recovered.append(result)
                 except sqlite3.Error as error:
                     await self._rollback(db)
                     raise DraftStoreError("submission recovery write failed") from error
@@ -947,6 +952,7 @@ class DraftStore:
         """Return unresolved unknown attempts requiring an explicit user decision."""
         db = self._connection()
         try:
+            await db.execute("BEGIN")
             rows = await (
                 await db.execute(
                     """
@@ -961,9 +967,14 @@ class DraftStore:
             attempts = []
             for row in rows:
                 attempts.append(await self._attempt_in_transaction(db, UUID(row[0])))
+            await db.execute("COMMIT")
             return tuple(attempts)
         except sqlite3.Error as error:
+            await self._rollback(db)
             raise DraftStoreError("submission recovery query failed") from error
+        except BaseException:
+            await self._rollback(db)
+            raise
 
     @_serialized
     async def reconcile_attempt(
@@ -986,6 +997,20 @@ class DraftStore:
             attempt = await self._attempt_in_transaction(db, attempt_id)
             if attempt.state != DraftState.UNKNOWN:
                 raise DraftStoreError("only outcome-unknown attempts can be reconciled")
+            current = await (
+                await db.execute(
+                    "SELECT state, active_attempt_id FROM drafts WHERE id = ?",
+                    (str(attempt.draft_id),),
+                )
+            ).fetchone()
+            if (
+                current is None
+                or current["state"] != DraftState.UNKNOWN.value
+                or current["active_attempt_id"] != str(attempt_id)
+            ):
+                raise DraftStoreError(
+                    "only the active unknown attempt can be reconciled"
+                )
             now = _now()
             await db.execute(
                 "INSERT INTO submission_reconciliations (attempt_id, resolution, recorded_at) VALUES (?, ?, ?)",
@@ -996,7 +1021,6 @@ class DraftStore:
                     DraftState.PARTIAL if attempt.receipts else DraftState.SUBMITTING
                 )
                 active_attempt: str | None = str(attempt_id)
-                keep_ownership = True
             elif resolution == ReconciliationResolution.MARK_SUBMITTED:
                 target = DraftState.SUBMITTED
                 active_attempt = None
@@ -1010,13 +1034,13 @@ class DraftStore:
                 "UPDATE submission_attempts SET state = ?, updated_at = ? WHERE id = ?",
                 (attempt_state.value, _format_time(now), str(attempt_id)),
             )
-            await db.execute(
+            updated = await db.execute(
                 """
                 UPDATE drafts
                 SET state = ?, active_attempt_id = ?,
                     version = version + CASE WHEN ? = ? THEN 1 ELSE 0 END,
                     updated_at = ?
-                WHERE id = ? AND active_attempt_id = ?
+                WHERE id = ? AND active_attempt_id = ? AND state = ?
                 """,
                 (
                     target.value,
@@ -1026,12 +1050,16 @@ class DraftStore:
                     _format_time(now),
                     str(attempt.draft_id),
                     str(attempt_id),
+                    DraftState.UNKNOWN.value,
                 ),
             )
-            await db.execute("COMMIT")
+            if updated.rowcount != 1:
+                raise DraftStoreError("the active unknown attempt changed")
             result = await self._attempt_in_transaction(db, attempt_id)
-            if keep_ownership:
+            await db.execute("COMMIT")
+            if resolution == ReconciliationResolution.RETRY_REMAINING:
                 self._held_attempt_locks[attempt_id] = ownership
+                keep_ownership = True
             return result
         except (DraftStoreError, DraftNotFoundError):
             await self._rollback(db)
@@ -1051,18 +1079,16 @@ class DraftStore:
         """Load a submission attempt, its frozen snapshot, receipts and decisions."""
         db = self._connection()
         try:
-            row = await (
-                await db.execute(
-                    "SELECT * FROM submission_attempts WHERE id = ?", (str(attempt_id),)
-                )
-            ).fetchone()
-            if row is None:
-                raise DraftNotFoundError("submission attempt does not exist")
-            return await self._row_to_attempt(db, row)
-        except DraftNotFoundError:
-            raise
+            await db.execute("BEGIN")
+            result = await self._attempt_in_transaction(db, attempt_id)
+            await db.execute("COMMIT")
+            return result
         except sqlite3.Error as error:
+            await self._rollback(db)
             raise DraftStoreError("submission attempt read failed") from error
+        except BaseException:
+            await self._rollback(db)
+            raise
 
     async def _draft_in_transaction(
         self, db: aiosqlite.Connection, draft_id: UUID

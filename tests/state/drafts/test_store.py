@@ -37,6 +37,7 @@ from tongs.state.drafts import (
     InlineDraftComment,
     ReconciliationResolution,
     ReplyDraftComment,
+    SubmissionAttempt,
     context_fingerprint,
     default_draft_db_path,
 )
@@ -688,3 +689,129 @@ async def test_write_failure_preserves_last_valid_snapshot(db_path: Path) -> Non
         )
     assert await store.get_draft(draft.id) == draft
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_read_keeps_one_snapshot_across_concurrent_receipt(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with DraftStore(db_path) as owner, DraftStore(db_path) as observer:
+        draft = await owner.create_draft(REVIEW, REVISION)
+        attempt = await owner.lock_submission(draft.id, draft.version)
+        original = observer._row_to_attempt
+
+        async def commit_between_reads(
+            db: aiosqlite.Connection, row: aiosqlite.Row
+        ) -> SubmissionAttempt:
+            await owner.record_receipt(attempt.id, "step", "remote")
+            return await original(db, row)
+
+        monkeypatch.setattr(observer, "_row_to_attempt", commit_between_reads)
+        observed = await observer.get_attempt(attempt.id)
+        assert observed.state == DraftState.SUBMITTING
+        assert observed.receipts == ()
+        current = await owner.get_attempt(attempt.id)
+        assert current.state == DraftState.PARTIAL
+        assert current.receipts[0].remote_id == "remote"
+
+
+@pytest.mark.asyncio
+async def test_recovery_list_keeps_one_snapshot_during_reconciliation(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with DraftStore(db_path) as owner, DraftStore(db_path) as observer:
+        draft = await owner.create_draft(REVIEW, REVISION)
+        attempt = await owner.lock_submission(draft.id, draft.version)
+        await owner.mark_attempt_unknown(attempt.id)
+        original = observer._attempt_in_transaction
+
+        async def reconcile_between_reads(
+            db: aiosqlite.Connection, attempt_id: UUID
+        ) -> SubmissionAttempt:
+            await owner.reconcile_attempt(
+                attempt_id, ReconciliationResolution.MARK_SUBMITTED
+            )
+            return await original(db, attempt_id)
+
+        monkeypatch.setattr(
+            observer, "_attempt_in_transaction", reconcile_between_reads
+        )
+        observed = await observer.list_recovery_attempts()
+        assert len(observed) == 1
+        assert observed[0].state == DraftState.UNKNOWN
+        assert observed[0].reconciliations == ()
+        assert (await owner.get_attempt(attempt.id)).state == DraftState.SUBMITTED
+
+
+@pytest.mark.asyncio
+async def test_failed_retry_reconciliation_releases_untransferred_lock(
+    db_path: Path,
+) -> None:
+    async with DraftStore(db_path) as owner, DraftStore(db_path) as successor:
+        draft = await owner.create_draft(REVIEW, REVISION)
+        attempt = await owner.lock_submission(draft.id, draft.version)
+        await owner.mark_attempt_unknown(attempt.id)
+        assert owner._db is not None
+        await owner._db.execute(
+            """
+            CREATE TRIGGER fail_retry BEFORE UPDATE ON submission_attempts
+            WHEN NEW.state = 'submitting'
+            BEGIN SELECT RAISE(FAIL, 'simulated retry write failure'); END
+            """
+        )
+        with pytest.raises(DraftStoreError, match="reconciliation write failed"):
+            await owner.reconcile_attempt(
+                attempt.id, ReconciliationResolution.RETRY_REMAINING
+            )
+        await owner._db.execute("DROP TRIGGER fail_retry")
+        resumed = await successor.reconcile_attempt(
+            attempt.id, ReconciliationResolution.RETRY_REMAINING
+        )
+        assert resumed.state == DraftState.SUBMITTING
+        assert resumed.reconciliations[-1].resolution == (
+            ReconciliationResolution.RETRY_REMAINING
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resolution", list(ReconciliationResolution))
+async def test_detached_attempt_cannot_reconcile_over_new_submission(
+    db_path: Path, resolution: ReconciliationResolution
+) -> None:
+    async with DraftStore(db_path) as store:
+        draft = await store.create_draft(REVIEW, REVISION)
+        old = await store.lock_submission(draft.id, draft.version)
+        await store.mark_attempt_unknown(old.id)
+        detached = await store.reconcile_attempt(
+            old.id, ReconciliationResolution.RETURN_EDITABLE
+        )
+        editable = await store.get_draft(draft.id)
+        current = await store.lock_submission(draft.id, editable.version)
+        with pytest.raises(DraftStoreError, match="active"):
+            await store.reconcile_attempt(old.id, resolution)
+        assert await store.get_attempt(old.id) == detached
+        assert await store.get_attempt(current.id) == current
+        assert set(store._held_attempt_locks) == {current.id}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_attempt_read_rolls_back_snapshot_transaction(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with DraftStore(db_path) as store:
+        draft = await store.create_draft(REVIEW, REVISION)
+        attempt = await store.lock_submission(draft.id, draft.version)
+        original = store._row_to_attempt
+
+        async def cancel_read(
+            db: aiosqlite.Connection, row: aiosqlite.Row
+        ) -> SubmissionAttempt:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(store, "_row_to_attempt", cancel_read)
+        with pytest.raises(asyncio.CancelledError):
+            await store.get_attempt(attempt.id)
+        assert store._db is not None
+        assert store._db.in_transaction is False
+        monkeypatch.setattr(store, "_row_to_attempt", original)
+        assert await store.get_attempt(attempt.id) == attempt

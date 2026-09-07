@@ -49,6 +49,7 @@ const desktopRoot = path.resolve(
 let window: BrowserWindow | null = null;
 let transport: SidecarTransport | null = null;
 let controller: DesktopIpcController | null = null;
+let rendererRestart: Promise<void> | null = null;
 const childProcessFailures: object[] = [];
 
 async function run(): Promise<void> {
@@ -91,7 +92,8 @@ async function run(): Promise<void> {
   window.setMenu(null);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
-    if (url !== APP_DOCUMENT) event.preventDefault();
+    event.preventDefault();
+    if (url === APP_DOCUMENT) void restartRendererSession();
   });
   window.webContents.on("will-attach-webview", (event) =>
     event.preventDefault(),
@@ -107,25 +109,6 @@ async function run(): Promise<void> {
       exitCode: details.exitCode,
       serviceName: details.serviceName,
     });
-  });
-  let firstLoadComplete = false;
-  let restartingForReload = false;
-  window.webContents.on("did-start-loading", () => {
-    if (!firstLoadComplete || restartingForReload || !window || !transport) {
-      return;
-    }
-    restartingForReload = true;
-    window.webContents.stop();
-    controller?.reset();
-    void transport
-      .restart()
-      .then(() => window?.loadURL(APP_DOCUMENT))
-      .finally(() => {
-        restartingForReload = false;
-      });
-  });
-  window.webContents.on("did-finish-load", () => {
-    firstLoadComplete = true;
   });
   window.once("ready-to-show", () => window?.show());
   window.on("closed", () => {
@@ -224,7 +207,9 @@ async function reloadRendererSession(): Promise<{
     };
     owner.webContents.on("did-finish-load", onLoad);
   });
-  owner.webContents.reload();
+  void owner.webContents.executeJavaScript("location.reload()").catch(() => {
+    // The expected document teardown can reject the initiating renderer promise.
+  });
   await completed;
   return {
     initialSessionGeneration,
@@ -232,6 +217,25 @@ async function reloadRendererSession(): Promise<{
     initialRendererProbe,
     finalRendererProbe: await rendererProbe(),
   };
+}
+
+async function restartRendererSession(): Promise<void> {
+  if (rendererRestart) return rendererRestart;
+  if (!window || !transport) throw new Error("Desktop reload started too early");
+  const owner = window;
+  const sidecar = transport;
+  rendererRestart = (async () => {
+    controller?.reset();
+    await sidecar.restart();
+    if (window === owner && !owner.isDestroyed()) {
+      await owner.loadURL(APP_DOCUMENT);
+    }
+  })();
+  try {
+    await rendererRestart;
+  } finally {
+    rendererRestart = null;
+  }
 }
 
 app

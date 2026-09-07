@@ -284,3 +284,46 @@ Independent Sol high review approved the #23 workflow, templates, CI branch
 filters and GPU gate. Strict MkDocs, local links, YAML trigger inspection and
 whitespace checks passed. GitHub issue #23 is the authoritative bootstrap
 publication checkpoint; its remote commit and CI outcome are recorded there.
+
+## Verified foundation and production design checkpoint
+
+This checkpoint supersedes the earlier pending bootstrap, lint and prototype GPU
+status above. The current verified feature head is
+`42c8bfce1db1a38eb872872d1b324e02aadc3ea6`.
+[CI run 34147002731](https://github.com/andre-motta/tongs/actions/runs/34147002731)
+passed all six displayed checks, including the required aggregate. No branch
+protection or ruleset has been configured; Astra checks the required statuses
+before integration. Main remains `c8ead224a92d33486c9d97aa27568b8136cb7cb0`.
+
+| Issue / PR | Verified feature merge | Result |
+| --- | --- | --- |
+| #24 / #26 | `f710767` | Baseline Ruff and format repairs; core tests pass |
+| #27 / #29 | `339df10f6658c643936d17328587e6e5755c48d0` | Hosted Fedora 44 rootless Podman harness, including strict expected-failure verification |
+| #25 / #30 | `db6a9171caec1f6bda779abefd417fe88d2b4f5b` | Installed prototype GPU proof, physical RTX 5090, XWayland, repeated workflows and post-workflow failure detection |
+| #28 / #31 | `42c8bfce1db1a38eb872872d1b324e02aadc3ea6` | Required CI aggregate, core/MCP, desktop fixtures and hosted Podman coverage |
+
+Each received independent Sol review and Astra integration. The deliberate CI
+failure PR #32 was closed without merge; its negative result remains evidence.
+The fixture diff contains generated stress data, not real repository code.
+Prototype graphics evidence is retained under `spikes/desktop/proof/gpu/` and
+does not replace final production application acceptance. Native Wayland remains
+unsupported; the accepted prototype used XWayland on KDE Wayland.
+
+The CTO requested continuing until the feature is ready for its main PR. The
+[production design](desktop-production.md) records the concrete service, plugin,
+draft, desktop bridge and installer contracts, final evidence requirements and
+dependency graph. [First-wave assignments](desktop-first-wave.md) make the initial
+ownership and checks reviewable. The CTO authorized continued implementation and
+selected per-user installation, a separate optional RPM README path, immediate
+quick comments with explicit Start review, and GitHub-managed artifact provenance.
+These choices establish the production baseline under #22. Independent engineering
+review and verified feature integration precede dispatch. No production slice is
+represented as implemented.
+
+After design integration, Astra publishes the issue graph, dispatches ready work,
+consumes handoffs, directs independent review/corrections, verifies CI and
+serializes integration. Reevaluate readiness after every integration. Do not leave
+finished agent handoffs idle waiting for the CTO to point out ready PRs. Persist
+current assignments, prerequisite merge SHAs, review findings and next actions.
+Issues stay open until accepted main delivery. Final main merge and publication
+retain the CTO gate.

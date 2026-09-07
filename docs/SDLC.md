@@ -144,10 +144,12 @@ stability with acceleration and sandboxing enabled. Do not relax SELinux or rend
 sandbox protections to satisfy the gate. Retest affected evidence after runtime,
 graphics, driver, launch or packaging changes and on the final release artifacts.
 
-The gate is currently unmet. It blocks acceptance of production desktop graphics
-and final delivery/release. Diagnose it early before production UI work relies on
-the graphics configuration. Missing GPU infrastructure or a headless CI pass cannot
-be presented as hardware acceleration proof.
+The production gate is currently unmet. Issue #25 established a passing installed
+prototype on Fedora 44 KDE through XWayland with the physical RTX 5090 and retained
+process/sandbox diagnostics. That result guides production implementation; it does
+not accept a different final artifact. Repeat the gate on the installed production
+build. Missing GPU infrastructure or a headless CI pass cannot be presented as
+hardware acceleration proof.
 
 ## Publication effects
 
@@ -164,5 +166,9 @@ be presented as hardware acceleration proof.
 
 See [the desktop planning record](work/desktop.md). The CTO selected Electron
 and approved this branch/PR workflow and mandatory GPU gate. Detailed production
-service/plugin/draft/installer contracts and their implementation graph still need
-their design approval; routine workflow work and bounded investigations can proceed.
+service/plugin/draft/installer contracts and their implementation graph are in the
+[production baseline](work/desktop-production.md), with
+[first-wave assignments](work/desktop-first-wave.md). The CTO's continuation
+instruction and explicit installation, draft-mode and GitHub-signing decisions
+authorize this baseline. Dispatch follows independent review, feature integration
+and verified prerequisite checks; material changes still return to the design gate.

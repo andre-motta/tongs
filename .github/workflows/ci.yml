@@ -106,6 +106,10 @@ jobs:
           npm ci --prefix spikes/desktop/electron
           TONGS_DESKTOP_PYTHON="$(command -v python)" \
             npm test --prefix spikes/desktop/electron
+      - name: Intentional disposable aggregate failure for issue 28
+        run: |
+          echo "All desktop fixture checks passed; forcing the required job to fail."
+          exit 28
 
   fedora-podman:
     name: Fedora 44 Podman

@@ -1,0 +1,14 @@
+[tongs.desktop_plugins]
+good = fixture_desktop_good:GoodProvider
+dual = fixture_desktop_good:DualProvider
+disabled = fixture_disabled_sentinel:Provider
+desktop_only = fixture_desktop_only_sentinel:Provider
+mismatch = fixture_desktop_good:MismatchProvider
+api2 = fixture_desktop_good:Api2Provider
+future = fixture_desktop_good:FutureHostProvider
+bad_manifest = fixture_desktop_good:BadManifestProvider
+broken = fixture_missing:Provider
+
+[tongs.plugins]
+dual = fixture_terminal_dual:TerminalProvider
+terminal_only = fixture_terminal_sentinel:Provider

@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import sysconfig
 import time
 import venv
 from dataclasses import asdict, dataclass
@@ -114,6 +115,24 @@ def _copy_source() -> None:
     )
 
 
+def _expose_harness_dependencies(python: Path) -> None:
+    completed = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "import sysconfig; print(sysconfig.get_path('purelib'))",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    child_site_packages = Path(completed.stdout.strip())
+    harness_site_packages = Path(sysconfig.get_path("purelib"))
+    (child_site_packages / "_tongs_harness_dependencies.pth").write_text(
+        f"{harness_site_packages}\n"
+    )
+
+
 def _installed_plugin_probe(python: Path) -> list[str]:
     script = """
 import json
@@ -214,8 +233,9 @@ def main() -> int:
     )
 
     if all(step.returncode == 0 for step in steps):
-        venv.EnvBuilder(with_pip=True, system_site_packages=True).create(ENVIRONMENT)
+        venv.EnvBuilder(with_pip=True).create(ENVIRONMENT)
         python = ENVIRONMENT / "bin/python"
+        _expose_harness_dependencies(python)
         wheels = sorted((OUTPUT / "wheels").glob("*.whl"))
         steps.append(
             _run(

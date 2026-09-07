@@ -25,6 +25,8 @@ The probe builds and installs fresh core and reference-plugin wheels, checks
 checks installed plugin discovery from both directions. The TUI registry must
 retain the legacy terminal command, while the experimental desktop backend must
 report the opt-in plugin as ready and the legacy plugin as terminal-only.
+Test and runtime dependencies are provisioned in the harness image, then exposed
+to the clean wheel-install environment without downloading during container use.
 
 `summary.json` records every command, duration, and exit status. JUnit XML files,
 stdout and stderr, Fedora and Python versions, installed dependency versions,

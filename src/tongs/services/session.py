@@ -25,6 +25,7 @@ from tongs.forges.models import (
 from tongs.forges.registry import ForgeRegistry
 from tongs.scanner.discovery import discover_repos
 from tongs.scanner.repo import ForgeType, Repo
+from tongs.services.ci_mutations import CIMutationService
 from tongs.services.errors import ServiceError, ServiceErrorCode, translate_error
 from tongs.services.models import (
     ForgeCapabilities,
@@ -150,6 +151,11 @@ class ApplicationSession:
             get_discussions=self.get_discussions,
             emit_change=self.emit_change,
         )
+        self._ci_mutations = CIMutationService(
+            get_client=self._client_for_repository,
+            get_pipeline_jobs=self.get_pipeline_jobs,
+            emit_change=self.emit_change,
+        )
 
     async def __aenter__(self) -> Self:
         return await self.start()
@@ -181,6 +187,11 @@ class ApplicationSession:
     def review_mutations(self) -> ReviewMutationService:
         """Return the session-scoped, bounded review mutation service."""
         return self._review_mutations
+
+    @property
+    def ci_mutations(self) -> CIMutationService:
+        """Return the session-scoped, bounded CI mutation service."""
+        return self._ci_mutations
 
     @property
     def issued_repositories(self) -> frozenset[RepositoryRef]:
@@ -295,6 +306,14 @@ class ApplicationSession:
         if startup_timed_out:
             failures.append(RuntimeError("application startup did not stop"))
         try:
+            try:
+                await asyncio.wait_for(
+                    self._ci_mutations.close(), timeout=self._shutdown_timeout
+                )
+            except asyncio.CancelledError:
+                failures.append(RuntimeError("CI mutation cleanup cancelled"))
+            except Exception as error:  # noqa: BLE001 - Continue owned cleanup.
+                failures.append(error)
             try:
                 await asyncio.wait_for(
                     self._review_mutations.close(), timeout=self._shutdown_timeout

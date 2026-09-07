@@ -212,10 +212,13 @@ class CIMutationService:
         self._hint_timeout = hint_timeout
         self._operations: dict[str, _OperationRecord] = {}
         self._operation_lock = asyncio.Lock()
-        self._detached_hint_tasks: set[asyncio.Task[None]] = set()
+        self._coordinator_tasks: set[asyncio.Task[CIMutationReceipt]] = set()
+        self._invalidation_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
 
     async def capabilities(self, repository: RepositoryRef) -> CIMutationCapabilities:
         """Return explicit CI mutation capabilities for an admitted repository."""
+        self._require_open()
         client = await self._resolve_client(repository, "ci_mutation_capabilities")
         try:
             retry_pipeline = self._overrides_default(
@@ -236,6 +239,7 @@ class CIMutationService:
 
     async def execute(self, command: CIMutationCommand) -> CIMutationReceipt:
         """Execute once per operation ID and retain its known or unknown result."""
+        self._require_open()
         action, pipeline, job = self._command_parts(command)
         self._validate_operation_id(command.operation_id)
         fingerprint = (action, pipeline, job)
@@ -324,6 +328,7 @@ class CIMutationService:
 
     async def receipt(self, operation_id: str) -> CIMutationReceipt | None:
         """Return a completed receipt, or ``None`` for absent/pending operations."""
+        self._require_open()
         self._validate_operation_id(operation_id)
         async with self._operation_lock:
             record = self._operations.get(operation_id)
@@ -475,7 +480,11 @@ class CIMutationService:
         *,
         suppress_cancellation: bool = False,
     ) -> CIMutationReceipt:
+        if self._closed:
+            return self._finalize_receipt_now(record, resync_required=True)
         task = asyncio.create_task(self._coordinate_hints(record, pipeline))
+        self._coordinator_tasks.add(task)
+        task.add_done_callback(self._consume_coordinator_task)
         cancelled = False
         while True:
             try:
@@ -534,19 +543,25 @@ class CIMutationService:
         if self._invalidate_pipeline is None:
             return True
         task = asyncio.create_task(self._invalidate_pipeline(pipeline))
-        done, _pending = await asyncio.wait({task}, timeout=self._hint_timeout)
-        if task in done:
-            return self._consume_hint_result(task)
+        self._invalidation_tasks.add(task)
+        task.add_done_callback(self._consume_invalidation_task)
+        try:
+            done, _pending = await asyncio.wait({task}, timeout=self._hint_timeout)
+            if task in done:
+                return self._consume_hint_result(task)
 
-        task.cancel()
-        done, _pending = await asyncio.wait({task}, timeout=self._hint_timeout)
-        if task in done:
-            self._consume_hint_result(task)
-        else:
-            self._detached_hint_tasks.add(task)
-            task.add_done_callback(self._consume_detached_hint_task)
-        log.warning("CI pipeline cache invalidation hint timed out")
-        return False
+            task.cancel()
+            done, _pending = await asyncio.wait({task}, timeout=self._hint_timeout)
+            if task in done:
+                self._consume_hint_result(task)
+            log.warning("CI pipeline cache invalidation hint timed out")
+            return False
+        except BaseException:
+            task.cancel()
+            done, _pending = await asyncio.wait({task}, timeout=self._hint_timeout)
+            if task in done:
+                self._consume_hint_result(task)
+            raise
 
     @staticmethod
     def _consume_hint_result(task: asyncio.Task[None]) -> bool:
@@ -559,14 +574,45 @@ class CIMutationService:
             return False
         return True
 
-    def _consume_detached_hint_task(self, task: asyncio.Task[None]) -> None:
-        self._detached_hint_tasks.discard(task)
+    def _consume_invalidation_task(self, task: asyncio.Task[None]) -> None:
+        self._invalidation_tasks.discard(task)
         try:
             task.result()
         except asyncio.CancelledError:
             pass
         except Exception:  # noqa: BLE001 - Consume late callback failure safely.
             log.warning("Detached CI invalidation hint failed")
+
+    def _consume_coordinator_task(self, task: asyncio.Task[CIMutationReceipt]) -> None:
+        self._coordinator_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.debug("CI hint coordinator failed", exc_info=True)
+
+    async def close(self) -> None:
+        """Cancel and boundedly drain all service-owned hint tasks."""
+        self._closed = True
+        tasks: set[asyncio.Task[object]] = {
+            *self._coordinator_tasks,
+            *self._invalidation_tasks,
+        }
+        for task in tasks:
+            task.cancel()
+        if not tasks:
+            return
+        _done, pending = await asyncio.wait(tasks, timeout=self._hint_timeout)
+        if pending:
+            raise RuntimeError("CI mutation hint tasks did not stop")
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise ServiceError(
+                ServiceErrorCode.CLOSED,
+                "The CI mutation service is closed.",
+            )
 
     @staticmethod
     def _command_parts(

@@ -215,6 +215,55 @@ async def test_actual_github_and_gitlab_capability_matrix_uses_native_flags() ->
 
 
 @pytest.mark.asyncio
+async def test_native_github_later_page_job_membership_allows_dispatch() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params.get("page")
+        seen.append((request.method, page))
+        if request.method == "POST":
+            return httpx.Response(201, json={})
+        ids = range(1, 101) if page == "1" else (202,)
+        jobs = [
+            {
+                "id": job_id,
+                "name": f"job-{job_id}",
+                "workflow_name": "verify",
+                "status": "in_progress",
+            }
+            for job_id in ids
+        ]
+        return httpx.Response(200, json={"total_count": 101, "jobs": jobs})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="https://api.github.com"
+    ) as http:
+        client = GitHubClient(
+            ForgeHost("github.com", ForgeType.GITHUB, "https://api.github.com"),
+            http,
+        )
+
+        async def get_client(_repository, _operation) -> ForgeClient:
+            return client
+
+        async def get_jobs(pipeline: PipelineRef) -> Sequence[PipelineJob]:
+            return await client.get_pipeline_jobs(
+                pipeline.repository.project_path, pipeline.pipeline_id
+            )
+
+        service = CIMutationService(
+            get_client=get_client,
+            get_pipeline_jobs=get_jobs,
+            emit_change=lambda _kind, _pipeline: None,
+        )
+        receipt = await service.execute(RetryJobCommand("later-page", JOB_TARGET))
+
+    assert receipt.outcome == CIMutationOutcome.KNOWN
+    assert seen == [("GET", "1"), ("GET", "2"), ("POST", None)]
+
+
+@pytest.mark.asyncio
 async def test_default_pipeline_retry_is_reported_unsupported() -> None:
     service = Harness(DefaultPipelineRetryClient()).service()
 
@@ -560,7 +609,7 @@ async def test_coordinator_cancellation_finalizes_receipt_without_spin() -> None
     harness = Harness()
     harness.invalidate_release = asyncio.Event()
     harness.resist_invalidate_cancellation = True
-    service = harness.service(hint_timeout=1.0)
+    service = harness.service(hint_timeout=0.01)
     command = CancelPipelineCommand("coordinator-cancel", PIPELINE_TARGET)
     owner = asyncio.create_task(service.execute(command))
     await harness.invalidate_started.wait()
@@ -574,17 +623,26 @@ async def test_coordinator_cancellation_finalizes_receipt_without_spin() -> None
     )
 
     coordinator.cancel()
-    owner.cancel()
-    await asyncio.sleep(0)
-    owner.cancel()
-    harness.invalidate_release.set()
 
     with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(owner, timeout=0.1)
+        await asyncio.wait_for(owner, timeout=0.2)
     duplicate = await asyncio.wait_for(service.execute(command), timeout=0.1)
     assert duplicate.outcome == CIMutationOutcome.KNOWN
     assert duplicate.resync_required is True
     assert harness.client.calls == [("cancel_pipeline", "acme/widgets", 101)]
+    invalidation = next(
+        task
+        for task in asyncio.all_tasks()
+        if getattr(task.get_coro(), "__qualname__", "").endswith(
+            "Harness.invalidate_pipeline"
+        )
+    )
+    assert invalidation in service._invalidation_tasks
+
+    await asyncio.wait_for(service.close(), timeout=0.2)
+
+    assert invalidation.done()
+    assert service._invalidation_tasks == set()
 
 
 @pytest.mark.asyncio

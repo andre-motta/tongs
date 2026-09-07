@@ -30,7 +30,9 @@ from tongs.forges.models import (
 from tongs.scanner.repo import ForgeType, Remote, Repo
 from tongs.services import (
     ApplicationSession,
+    CancelPipelineCommand,
     JobRef,
+    PipelineMutationTarget,
     PipelineRef,
     RepositoryRef,
     ReviewQuery,
@@ -168,6 +170,7 @@ class FakeClient:
         self.get_mr_diff_fresh_calls = 0
         self.list_mrs_calls = 0
         self.cancel_get_mr = False
+        self.mutation_calls: list[tuple[str, str, int]] = []
 
     async def get_mr_fresh(self, repo_path: str, number: int) -> MRDetail:
         self.get_mr_fresh_calls += 1
@@ -217,6 +220,18 @@ class FakeClient:
 
     async def get_job_log(self, repo_path: str, job_id: int) -> str:
         return "safe log"
+
+    async def retry_pipeline(self, repo_path: str, pipeline_id: int) -> None:
+        self.mutation_calls.append(("retry_pipeline", repo_path, pipeline_id))
+
+    async def cancel_pipeline(self, repo_path: str, pipeline_id: int) -> None:
+        self.mutation_calls.append(("cancel_pipeline", repo_path, pipeline_id))
+
+    async def retry_job(self, repo_path: str, job_id: int) -> None:
+        self.mutation_calls.append(("retry_job", repo_path, job_id))
+
+    async def cancel_job(self, repo_path: str, job_id: int) -> None:
+        self.mutation_calls.append(("cancel_job", repo_path, job_id))
 
 
 class BlockingReviewClient(FakeClient):
@@ -367,6 +382,43 @@ class TestLifecycle:
         await session.close()
 
         session.review_mutations.close.assert_awaited_once()
+        assert registry.close_calls == 1
+        assert cache.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_ci_hint_tasks_close_before_registry_and_cache(self) -> None:
+        cache = FakeCache()
+        client = FakeClient()
+        registry = FakeRegistry({"github.com": client})
+        session = await start_session(registry, cache=cache)
+        repository = await session.open_repository("github.com", "acme/widgets")
+        invalidation_started = asyncio.Event()
+        invalidation_finished = asyncio.Event()
+
+        async def invalidate(_pipeline: PipelineRef) -> None:
+            invalidation_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                assert registry.close_calls == 0
+                assert cache.close_calls == 0
+                invalidation_finished.set()
+
+        session.ci_mutations._invalidate_pipeline = invalidate
+        command = CancelPipelineCommand(
+            "close-ci-hints",
+            PipelineMutationTarget(PipelineRef(repository.ref, 11)),
+        )
+        owner = asyncio.create_task(session.ci_mutations.execute(command))
+        await invalidation_started.wait()
+
+        await session.close()
+
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+        assert invalidation_finished.is_set()
+        assert session.ci_mutations._coordinator_tasks == set()
+        assert session.ci_mutations._invalidation_tasks == set()
         assert registry.close_calls == 1
         assert cache.close_calls == 1
 

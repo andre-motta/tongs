@@ -2,6 +2,20 @@
 
 from __future__ import annotations
 
+from tongs.services.ci_mutations import (
+    CancelJobCommand,
+    CancelPipelineCommand,
+    CIMutationAction,
+    CIMutationCapabilities,
+    CIMutationCommand,
+    CIMutationOutcome,
+    CIMutationReceipt,
+    CIMutationService,
+    JobMutationTarget,
+    PipelineMutationTarget,
+    RetryJobCommand,
+    RetryPipelineCommand,
+)
 from tongs.services.errors import ServiceError, ServiceErrorCode
 from tongs.services.models import (
     ForgeCapabilities,
@@ -41,6 +55,14 @@ from tongs.services.session import ApplicationSession
 
 __all__ = [
     "ApplicationSession",
+    "CIMutationAction",
+    "CIMutationCapabilities",
+    "CIMutationCommand",
+    "CIMutationOutcome",
+    "CIMutationReceipt",
+    "CIMutationService",
+    "CancelJobCommand",
+    "CancelPipelineCommand",
     "DiffAnchor",
     "DiffSide",
     "ForgeCapabilities",
@@ -48,16 +70,20 @@ __all__ = [
     "HostFailure",
     "InlineComment",
     "InlineDraft",
+    "JobMutationTarget",
     "JobRef",
     "MutationOutcome",
     "MutationReceipt",
     "MutationStatus",
+    "PipelineMutationTarget",
     "PipelineRef",
     "RawDiffSnapshot",
     "Reply",
     "RepositoryRef",
     "RepositorySnapshot",
     "Resolve",
+    "RetryJobCommand",
+    "RetryPipelineCommand",
     "ReviewListItem",
     "ReviewMutationCapabilities",
     "ReviewMutationCommand",

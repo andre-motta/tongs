@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
+from tongs.errors import ForgeError
 from tongs.forges.github import GitHubClient
-from tongs.forges.models import ForgeHost
+from tongs.forges.models import ForgeHost, ReviewDecision
 from tongs.scanner.repo import ForgeType
 
 _TEST_HOST = ForgeHost(
@@ -69,6 +71,48 @@ def _review_comment_json(overrides: dict | None = None) -> dict:
     if overrides:
         data.update(overrides)
     return data
+
+
+def _job_json(job_id: int) -> dict:
+    return {
+        "id": job_id,
+        "name": f"job-{job_id}",
+        "workflow_name": "verify",
+        "status": "completed",
+        "conclusion": "success",
+    }
+
+
+class TestPipelineJobPagination:
+    @pytest.mark.asyncio
+    async def test_collects_all_envelope_pages(self) -> None:
+        seen_pages: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            page = request.url.params["page"]
+            seen_pages.append(page)
+            jobs = (
+                [_job_json(index) for index in range(1, 101)]
+                if page == "1"
+                else [_job_json(202)]
+            )
+            return httpx.Response(200, json={"total_count": 101, "jobs": jobs})
+
+        client, http = _make_github_client(handler)
+        async with http:
+            jobs = await client.get_pipeline_jobs("acme/repo", 77)
+
+        assert seen_pages == ["1", "2"]
+        assert [job.id for job in jobs][-2:] == [100, 202]
+
+    @pytest.mark.asyncio
+    async def test_rejects_incomplete_envelope(self) -> None:
+        client, http = _make_github_client(
+            lambda _request: httpx.Response(200, json={"total_count": 2, "jobs": []})
+        )
+        async with http:
+            with pytest.raises(ForgeError, match="incomplete"):
+                await client.get_pipeline_jobs("acme/repo", 77)
 
 
 _GHE_HOST = ForgeHost(
@@ -202,3 +246,129 @@ class TestCreateInlineComment:
         payload = json.loads(post_req.content)
         assert payload["start_line"] == 45
         assert payload["start_side"] == "RIGHT"
+
+    @pytest.mark.asyncio
+    async def test_explicit_head_never_refetches_latest_revision(self):
+        requests_made = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests_made.append(req)
+            assert req.method == "POST"
+            return httpx.Response(200, json=_review_comment_json())
+
+        client, http = _make_github_client(handler)
+        async with http:
+            await client.create_inline_comment(
+                "acme/repo",
+                10,
+                "new.py",
+                42,
+                "RIGHT",
+                "body",
+                head_sha="captured-head",
+                old_path="old.py",
+                new_path="new.py",
+            )
+        assert [request.method for request in requests_made] == ["POST"]
+        assert json.loads(requests_made[0].content)["commit_id"] == "captured-head"
+
+
+class TestReviewMutationRoutes:
+    @pytest.mark.asyncio
+    async def test_reply_includes_pull_number_and_top_level_comment(self):
+        seen = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen.append(req)
+            return httpx.Response(200, json=_review_comment_json({"id": 1001}))
+
+        client, http = _make_github_client(handler)
+        async with http:
+            result = await client.reply_to_discussion(
+                "acme/repo", 10, "thread", "reply", root_comment_id="999"
+            )
+        assert seen[0].url.path.endswith("/pulls/10/comments/999/replies")
+        assert result.comment_id == "1001"
+
+    @pytest.mark.asyncio
+    async def test_discussions_group_replies_under_their_root(self):
+        comments = [
+            _review_comment_json({"id": 999}),
+            _review_comment_json({"id": 1000, "in_reply_to_id": 999}),
+        ]
+        client, http = _make_github_client(lambda _: httpx.Response(200, json=comments))
+        async with http:
+            discussions = await client.get_mr_discussions("acme/repo", 10)
+        assert len(discussions) == 1
+        assert discussions[0].root_comment.replies[0].id == "1000"
+
+    @pytest.mark.asyncio
+    async def test_review_payload_binds_top_level_commit_id(self):
+        seen = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen.append(req)
+            return httpx.Response(200, json={"id": 77})
+
+        client, http = _make_github_client(handler)
+        async with http:
+            await client.submit_review(
+                "acme/repo",
+                10,
+                ReviewDecision.APPROVED,
+                "",
+                head_sha="captured-head",
+            )
+        assert json.loads(seen[0].content)["commit_id"] == "captured-head"
+
+    @pytest.mark.asyncio
+    async def test_thread_lookup_paginates_roots_and_reply_comments(self, monkeypatch):
+        client, http = _make_github_client(lambda _: httpx.Response(200))
+        pages = [
+            {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": True, "endCursor": "roots-2"},
+                        }
+                    }
+                }
+            },
+            {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "thread-node",
+                                    "comments": {
+                                        "nodes": [{"databaseId": 1}],
+                                        "pageInfo": {
+                                            "hasNextPage": True,
+                                            "endCursor": "comments-2",
+                                        },
+                                    },
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                }
+            },
+            {
+                "node": {
+                    "comments": {
+                        "nodes": [{"databaseId": 999}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            },
+        ]
+        graphql = AsyncMock(side_effect=pages)
+        monkeypatch.setattr(client, "_graphql", graphql)
+        assert (
+            await client._find_thread_node_id("acme", "repo", 10, 999) == "thread-node"
+        )
+        assert graphql.await_count == 3
+        await http.aclose()

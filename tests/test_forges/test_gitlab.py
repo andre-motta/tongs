@@ -441,7 +441,9 @@ class TestGitLabClientAsync:
 
         def handler(req: httpx.Request) -> httpx.Response:
             requests_made.append(req)
-            return httpx.Response(200, json={})
+            if "/notes" in str(req.url):
+                return httpx.Response(200, json={"id": 91})
+            return httpx.Response(200, json={"id": 42})
 
         client, http = _make_gitlab_client(handler)
         async with http:
@@ -474,7 +476,9 @@ class TestGitLabClientAsync:
 
         def handler(req: httpx.Request) -> httpx.Response:
             requests_made.append(req)
-            return httpx.Response(200, json={})
+            return httpx.Response(
+                200, json={"id": 91 if "/notes" in str(req.url) else 42}
+            )
 
         client, http = _make_gitlab_client(handler)
         async with http:
@@ -510,3 +514,116 @@ class TestGitLabClientAsync:
         # Only the approve request, no comment because body is empty
         assert len(requests_made) == 1
         assert "/approve" in str(requests_made[0].url)
+
+    @pytest.mark.asyncio
+    async def test_explicit_revision_and_rename_range_never_refetch_latest(self):
+        requests_made = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests_made.append(req)
+            assert req.method == "POST"
+            return httpx.Response(
+                200,
+                json={"id": "thread-1", "notes": [{"id": 8, "body": "body"}]},
+            )
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            await client.create_inline_comment(
+                "acme/widgets",
+                42,
+                "new.py",
+                11,
+                "RIGHT",
+                "body",
+                10,
+                "RIGHT",
+                old_path="old.py",
+                new_path="new.py",
+                head_sha="head",
+                base_sha="base",
+                start_sha="start",
+                old_line=11,
+                new_line=11,
+                start_old_line=10,
+                start_new_line=10,
+            )
+        assert [request.method for request in requests_made] == ["POST"]
+        position = json.loads(requests_made[0].content)["position"]
+        assert position["old_path"] == "old.py"
+        assert position["new_path"] == "new.py"
+        assert position["head_sha"] == "head"
+        assert position["old_line"] == 11
+        assert position["new_line"] == 11
+        assert position["line_range"]["start"]["type"] == "old"
+        assert position["line_range"]["start"]["old_line"] == 10
+        assert position["line_range"]["start"]["new_line"] == 10
+        assert position["line_range"]["end"]["type"] == "old"
+        assert position["line_range"]["end"]["line_code"].endswith("_11_11")
+
+    @pytest.mark.asyncio
+    async def test_context_position_preserves_both_native_coordinates(self):
+        requests_made = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests_made.append(req)
+            return httpx.Response(
+                200,
+                json={"id": "thread-1", "notes": [{"id": 8, "body": "body"}]},
+            )
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            await client.create_inline_comment(
+                "acme/widgets",
+                42,
+                "new.py",
+                11,
+                "RIGHT",
+                "body",
+                old_path="old.py",
+                new_path="new.py",
+                head_sha="head",
+                base_sha="base",
+                start_sha="start",
+                old_line=10,
+                new_line=11,
+            )
+
+        position = json.loads(requests_made[0].content)["position"]
+        assert position["old_path"] == "old.py"
+        assert position["new_path"] == "new.py"
+        assert position["old_line"] == 10
+        assert position["new_line"] == 11
+        assert "line_range" not in position
+
+    @pytest.mark.asyncio
+    async def test_partial_explicit_revision_is_rejected_without_refetch(self):
+        def handler(_req: httpx.Request) -> httpx.Response:
+            raise AssertionError("explicit revision must never trigger a GET")
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            with pytest.raises(ValueError, match="required together"):
+                await client.create_inline_comment(
+                    "acme/widgets",
+                    42,
+                    "new.py",
+                    11,
+                    "RIGHT",
+                    "body",
+                    head_sha="captured-head",
+                )
+
+    @pytest.mark.asyncio
+    async def test_approval_passes_sha_precondition(self):
+        requests_made = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests_made.append(req)
+            return httpx.Response(200, json={"id": 42})
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            await client.approve_mr("acme/widgets", 42, head_sha="captured-head")
+        assert json.loads(requests_made[0].content) == {"sha": "captured-head"}

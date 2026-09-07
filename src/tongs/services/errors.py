@@ -25,6 +25,7 @@ class ServiceErrorCode(str, Enum):
     RESOURCE_NOT_ISSUED = "resource_not_issued"
     REVISION_UNAVAILABLE = "revision_unavailable"
     REVISION_CHANGED = "revision_changed"
+    UNSUPPORTED = "unsupported"
     INVALID_RESPONSE = "invalid_response"
     AUTHENTICATION_FAILED = "authentication_failed"
     PERMISSION_DENIED = "permission_denied"

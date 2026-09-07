@@ -44,6 +44,91 @@ Fedora's current packaging-guideline pages returned an access-denied response
 during research. Official-repository compliance is not claimed here and will need
 a complete guideline/license/dependency review if that later target is pursued.
 
+The CTO wants the eventual RPM attached to GitHub Releases. The later installer
+proposal below supersedes the original `tongs[desktop]` distribution goal for
+planning: use an explicit GitHub Release download command as the primary path.
+Its production contract still requires the next design approval.
+
+[PyPI documents](https://docs.pypi.org/project-management/storage-limits/) a
+100.0 MB default per-file limit and a request process requiring a project URL,
+artifact size, target index and justification after a smaller release exists.
+An exception is possible, not guaranteed. The
+[support guidance](https://github.com/pypi/support#guidelines-for-upload-limit-requests)
+lists bundling another language runtime among reasons requests are generally
+denied. Electron's embedded Node runtime makes this a material distribution risk,
+even if the requested increase is modest. Do not assume a project-specific
+exception or split artifacts merely to evade policy. No support request or
+package/release publication has been authorized or performed in this milestone.
+
+### Proposed explicit desktop installer
+
+The CTO proposed replacing the desktop extra with `tongs --install-desktop`,
+downloading from GitHub Releases. Treat this as the proposed primary distribution
+flow for the next design gate. It is independent of the shell choice and makes
+the PyPI runtime-wheel limit avoidable without hiding downloads in normal launch.
+The completed wheel experiments remain useful installation-boundary evidence.
+
+- `tongs --install-desktop` explicitly installs a compatible, versioned release
+  asset for the detected supported host. `tongs desktop` launches it; ordinary
+  terminal startup performs no desktop download. Exact CLI syntax and status,
+  update and uninstall operations are part of the final contract.
+- Select assets from the fixed official release repository through a versioned
+  manifest bound to the installed core and desktop/plugin protocol. Do not use an
+  unconstrained latest executable with an older Python backend.
+- The CTO requires automatic selection of the correct installer when multiple
+  operating systems are supported. Manifest entries identify OS, normalized CPU
+  architecture, distribution/ABI constraints where needed, package kind, version,
+  asset name/ID, size, digest, and core/protocol compatibility. Initially publish
+  only the supported Fedora target. Unknown or unsupported combinations stop
+  with a clear message before download; never guess an arbitrary matching file.
+  Additional OS installers extend the manifest and tested installer handlers.
+- Validate HTTPS redirects, release provenance, hashes and expected artifact
+  size before extraction. A checksum from the same channel detects corruption;
+  signed manifests or verified attestations provide the additional release
+  provenance check. Define the release-signing workflow at the production gate,
+  including trust bootstrap, authorized repository/workflow identity, key or
+  identity rotation, revocation, replay prevention, and explicit downgrade policy.
+  This is an unresolved release-security decision, not a completed property of
+  the prototypes.
+- Extract safely into staging under the user's application data directory,
+  reject path escapes/unsafe links, lock concurrent installers, and atomically
+  activate a complete version. Interrupted or failed upgrades keep the last
+  usable installation. Record installed version, provenance and ownership.
+- Launch the shared Python backend with the current Tongs interpreter, preserving
+  entry point/plugin discovery in that environment. An independent desktop
+  download must not silently create a second incompatible plugin environment.
+  This does not require the GUI to share that interpreter or process. The current
+  Python-webview wheel needs Qt bindings in its GUI environment; its installed
+  proof does not establish a standalone download for arbitrary pipx/uv/system
+  environments. A packaged GUI runtime with a separate same-interpreter backend
+  over IPC is a candidate that preserves plugin discovery without mutating the
+  caller's Python environment. Finalize this boundary, dependency ownership and
+  interpreter lifetime before implementing the installer. Do not assume a
+  transient uv environment is a persistent desktop installation location.
+  Proposed desktop-menu registration records an absolute launcher and interpreter
+  from a persistent Tongs environment. At each launch, validate that environment
+  and negotiate backend/core/plugin compatibility again. If it was removed or
+  upgraded incompatibly, show repair instructions instead of using an unrelated
+  `python` from PATH. Transient `uvx` sessions require a persistent installation
+  before registering a durable menu entry. Core upgrades and explicit downgrades
+  must pass the same launch-time compatibility check.
+- Preserve RPM ownership: package-managed desktop files are updated by the package
+  manager, not overwritten by a user installer. A user-owned release installation
+  needs an explicit selection policy when both forms exist. Proposed default:
+  the command installs a per-user archive without elevation; the RPM is a
+  separately selectable GitHub Release asset installed through the package
+  manager. Record which installation the launcher selects and expose that in
+  status. Never switch between user-owned and RPM-owned files implicitly.
+- Release assets must account for remaining native dependencies. A downloaded
+  archive is not automatically self-contained; installer UX must report unmet
+  requirements accurately. The RPM remains a GitHub Release asset as requested.
+
+The [GitHub release-asset API](https://docs.github.com/en/rest/releases/assets)
+supports public unauthenticated asset access, download URLs/redirects and SHA-256
+digest metadata. This is a feasible transport, not a substitute for the installer
+and update integrity design. Production installer implementation is not dispatched
+as part of the bounded shell comparison.
+
 ## Production design work after comparison
 
 The proposed boundaries below organize the next design, not dispatched production
@@ -94,7 +179,8 @@ publication. Existing issues should be reused where they match the outcome.
 | Desktop CI | Desktop shell, Services | Pipelines, jobs, logs and existing action parity |
 | Plugin authoring | Plugin capabilities, Desktop shell | Independent example, packaging guide, migration and in-app help |
 | Release validation | All interface and plugin items | Real application parity, compatibility, failure recovery and platform evidence |
-| Python distribution | Desktop shell; final verification after Release validation | Optional extra, built assets, clean install and upgrade proof |
+| Python distribution | Services; final verification after Release validation | Small terminal/core package with installer CLI; built asset and clean environment proof |
+| Explicit installer | Desktop shell, approved manifest/update contract | GitHub Release download, verification, atomic install/recovery, same-interpreter plugins and RPM ownership |
 | Fedora RPM/COPR | Python distribution, approved RPM release plan | Split packages, source inputs, clean build/install/upgrade and publication evidence |
 
 Parallelism depends on disjoint file ownership as well as this graph. Initial

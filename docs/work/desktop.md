@@ -6,8 +6,10 @@ Workflow baseline: Agent SDLC 0.1.0, source commit
 
 ## Agreed outcomes
 
-- Terminal use remains first class. `pip install "tongs[desktop]"` adds an optional
-  desktop application without requiring GUI dependencies for ordinary TUI use.
+- Terminal use remains first class, without GUI dependencies for ordinary TUI
+  use. The original desktop-extra proposal is being replaced in the design by
+  an explicit `tongs --install-desktop` GitHub Releases installer, with automatic
+  platform selection. Final release/installer contracts remain at the design gate.
 - Use a web UI. Compare Electron against a Python-hosted webview before choosing
   the production shell; no shell winner has been approved.
 - Compare the same React/TypeScript screen and fixtures for clean pip installation,
@@ -94,9 +96,9 @@ remain to be designed after the shell comparison.
 | --- | --- | --- | --- |
 | [#18 Shared harness and plugin](https://github.com/andre-motta/tongs/issues/18) | Astra, independent Sol review | None | Locally integrated |
 | [#19 Common frontend](https://github.com/andre-motta/tongs/issues/19) | Luna xhigh, Sol review | #18 | Locally integrated |
-| [#20 Python webview](https://github.com/andre-motta/tongs/issues/20) | Sol high, independent Sol review | #18 | Assigned |
-| [#21 Electron](https://github.com/andre-motta/tongs/issues/21) | Sol high, independent Sol review | #18 | Assigned |
-| [#22 Comparison and architecture](https://github.com/andre-motta/tongs/issues/22) | Astra with Sol assessment | #19, #20, #21 | Planned |
+| [#20 Python webview](https://github.com/andre-motta/tongs/issues/20) | Sol high, independent Sol review | #18 | Locally integrated |
+| [#21 Electron](https://github.com/andre-motta/tongs/issues/21) | Sol high, independent Sol review | #18 | Locally integrated |
+| [#22 Comparison and architecture](https://github.com/andre-motta/tongs/issues/22) | Astra with Sol assessment | #19, #20, #21 | Assigned |
 
 The experimental contract and code live under `spikes/desktop/`, outside production
 packaging. The shared fixture backend, frontend interface, plugin bundle format,
@@ -177,3 +179,33 @@ The website-icon delta received independent Sol approval and is integrated at
 independently reviewed and now fails if keyboard focus cannot be acquired.
 Native DOM unmount/remount and unit-tested cleanup-callback execution are distinct
 pieces of evidence.
+
+Distribution update: the CTO wants the eventual RPM attached to GitHub Releases
+in addition to any COPR repository. The subsequent explicit installer proposal
+supersedes the earlier desktop-extra distribution goal for planning. PyPI size
+exceptions are possible but uncertain for an embedded Electron/Node runtime. Release publication and external support requests remain
+outside this comparison milestone.
+
+The CTO proposed an explicit `tongs --install-desktop` GitHub Releases download
+as the replacement for the desktop extra. This is the proposed primary
+distribution flow for the next architecture gate, independent of shell selection.
+It must preserve same-interpreter plugin discovery, compatible versions, verified
+artifacts, safe atomic installation/recovery, and RPM ownership. Ordinary TUI
+startup and desktop launch must not silently download a runtime.
+
+Installer selection must automatically match OS and CPU architecture, plus
+distribution/ABI or package format when needed, using a versioned release manifest.
+Only the current Fedora target is supported initially; unknown combinations fail
+clearly before download. Future OS support adds tested manifest entries and
+installer handlers.
+
+Webview candidate `1d5474d` received independent Sol approval and was integrated
+at `46328ff`. Root correction `708ab1b` aligns the minimum width to the common
+frontend and kills/reaps timed-out capture sessions. A separate Sol re-review
+approved this delta, with 14 tests and Ruff checks passing.
+
+Electron candidate `1539bd3` and correction `82ab348` received separate Sol
+approval and were integrated at `bfce520` and `2baa331`. Ten tests passed,
+including the real sidecar. The correction aligns minimum width and excludes
+generated Python bytecode from packaged assets. Final combined artifact builds
+and native runs follow these exact integration commits.

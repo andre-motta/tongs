@@ -2,7 +2,8 @@
 
 This directory is the disposable Electron half of the desktop shell comparison.
 It implements the `prototype-1` contract and does not change Tongs production
-packaging. The milestone target is Fedora 44 KDE on x86_64 using native Wayland.
+packaging. The milestone target is Fedora 44 KDE on x86_64. The session uses
+Wayland, while the verified hardware-accelerated Electron path uses XWayland.
 Other Linux distributions, desktops, display systems, architectures, and
 operating systems are deferred by the current prototype scope.
 
@@ -55,19 +56,34 @@ probe with:
 npm run smoke -- \
   --frontend ../frontend/dist \
   --python /path/to/python-with-tongs-and-plugin \
-  --ozone-platform wayland \
   --ui-probe ../tests/common_ui_probe.js \
+  --require-hardware-gpu \
   --report evidence/common-ui-smoke.json \
   --screenshot evidence/common-ui-native-window.png
 ```
 
-The helper always passes `--ozone-platform=wayland` by default and records the
-actual Chromium switch. It currently also passes `--disable-gpu`. On the tested
-host surface, Electron reported that Wayland was incompatible with Vulkan and
-closed the renderer with either its default settings or `--disable-vulkan`.
-Software rendering allowed a native Wayland window while the Chromium sandbox
-remained enabled. This graphics workaround and its performance impact need
-revalidation outside the prototype environment.
+The helper passes `--ozone-platform=x11` by default and never disables the GPU
+unless `--disable-gpu` is explicitly requested for a negative control. The
+installed Python launcher makes the same choice when it detects a Wayland
+session and the user did not supply an Ozone override. Applying the switch in
+the launcher is necessary because Chromium initializes Ozone before Electron's
+main module can safely replace its environment-selected backend.
+
+Pass `--require-hardware-gpu` to reject software rendering, disabled hardware
+features, sandbox-disabling flags, missing GPU and renderer processes, inactive
+seccomp filters, or child-process crashes. The JSON report records Chromium's
+feature status and active PCI IDs, the unmasked WebGL renderer, GPU and renderer
+process security state from `/proc`, and the exact graphics switches. A passing
+flag or the mere presence of a GPU process is deliberately insufficient.
+
+Native Wayland can still be selected explicitly with
+`--ozone-platform wayland` for diagnosis. On the tested host it emits Chromium's
+Wayland/Vulkan incompatibility, leaves the GPU process without a seccomp filter,
+and fails the hardware verifier. Adding `--gpu-sandbox-start-early` makes EGL
+loading fail inside the stricter sandbox and Chromium disables GPU access after
+repeated process crashes. XWayland is therefore the bounded compatibility
+choice for Electron 44.2.0 on this host. This remains a spike result and must be
+revalidated on the eventual production artifact.
 
 The optional probe is evaluated inside the native renderer after the direct
 bridge checks and has a 12 second timeout. Its result is written under
@@ -100,7 +116,7 @@ Node, a virtual environment, a source checkout, or any first-launch download:
 npm run build:distribution -- --frontend ../frontend/dist
 TONGS_DESKTOP_PYTHON=/usr/bin/python3 \
   dist/tongs-electron-linux-x64/tongs-electron \
-  --ozone-platform=wayland --disable-gpu
+  --ozone-platform=x11
 ```
 
 The experimental Python wheel embeds that complete distribution and uses the
@@ -121,7 +137,7 @@ python3 -m venv /tmp/tongs-electron-install
   dist/tongs_electron_prototype-0.0.1-py3-none-linux_x86_64.whl
 cd /tmp
 /tmp/tongs-electron-install/bin/tongs-electron-prototype \
-  --ozone-platform=wayland --disable-gpu
+  --smoke-report /tmp/installed-smoke.json
 ```
 
 Local proof used non-editable wheels built from foundation commit `a33d8d3`:
@@ -203,7 +219,7 @@ and avoids an untracked runtime download on first launch.
 
 ## Observed Fedora 44 result
 
-The native common-UI run used KDE Wayland on x86_64 with Electron 44.2.0,
+The original native common-UI comparison used KDE Wayland on x86_64 with Electron 44.2.0,
 Chromium 152.0.7977.76, embedded Node 24.20.0, and Python 3.14.7. Startup to the
 completed direct bridge proof was 868.6 ms for the final installed wheel.
 Fetching the 20,000-line fixture over NDJSON took 61.4 ms. The native UI probe
@@ -222,10 +238,12 @@ measurement.
 
 The completed screenshot and JSON files live in the ignored `evidence/`
 directory so local machine paths and transient metrics are not committed.
-Fedora 44 KDE x86_64 native Wayland is the only validated environment for this
-milestone.
+Issue #25 subsequently validated the XWayland backend on the same Fedora 44 KDE
+x86_64 session as the accelerated compatibility path. Native Wayland remains a
+diagnostic failure for the hardware and GPU-process sandbox gate.
 
 References: [Electron manual application packaging](https://www.electronjs.org/docs/latest/tutorial/application-distribution),
 [Electron release support policy](https://www.electronjs.org/docs/latest/tutorial/electron-timelines),
 [Electron security guidance](https://www.electronjs.org/docs/latest/tutorial/security),
+[Electron Wayland GPU process issue](https://github.com/electron/electron/issues/50462),
 and [PyPI storage limits](https://docs.pypi.org/project-management/storage-limits/).

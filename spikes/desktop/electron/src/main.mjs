@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { evaluateGpuEvidence } from "./gpu.mjs";
 import { Sidecar } from "./sidecar.mjs";
 import {
   CONTENT_SECURITY_POLICY,
@@ -17,7 +18,9 @@ const appDir = path.dirname(sourceDir);
 
 function argumentValue(name) {
   const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : null;
+  if (index >= 0) return process.argv[index + 1];
+  const inline = process.argv.find((argument) => argument.startsWith(`${name}=`));
+  return inline ? inline.slice(name.length + 1) : null;
 }
 
 function firstExisting(candidates) {
@@ -72,6 +75,41 @@ function installSessionPolicy(assetOrigin) {
   return desktopSession;
 }
 
+async function readLinuxSandboxStatus(pid) {
+  if (process.platform !== "linux" || !pid) return null;
+  const fields = new Set([
+    "Name",
+    "Pid",
+    "PPid",
+    "TracerPid",
+    "NoNewPrivs",
+    "Seccomp",
+    "Seccomp_filters",
+  ]);
+  const [status, commandLine] = await Promise.all([
+    readFile(`/proc/${pid}/status`, "utf8"),
+    readFile(`/proc/${pid}/cmdline`, "utf8"),
+  ]);
+  const result = Object.fromEntries(
+    status
+      .split("\n")
+      .map((line) => line.split(":", 2).map((value) => value.trim()))
+      .filter(([name]) => fields.has(name)),
+  );
+  result.switches = commandLine
+    .split("\0")
+    .filter((value) =>
+      [
+        "--type=",
+        "--ozone-platform=",
+        "--no-sandbox",
+        "--disable-gpu-sandbox",
+        "--disable-seccomp-filter-sandbox",
+      ].some((prefix) => value.startsWith(prefix)),
+    );
+  return result;
+}
+
 async function collectSmokeEvidence(window, sidecar, startupMs) {
   const call = async (method, params) => {
     const started = performance.now();
@@ -85,6 +123,49 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
   const reviews = await call("list_reviews");
   const large = await call("get_diff", { id: "large" });
   const plugins = await call("list_plugins");
+  const webgl = await window.webContents.executeJavaScript(
+    `(() => {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("webgl2") || canvas.getContext("webgl");
+      if (!context) return { available: false, renderer: null, vendor: null };
+      const extension = context.getExtension("WEBGL_debug_renderer_info");
+      const result = {
+        available: true,
+        renderer: extension
+          ? context.getParameter(extension.UNMASKED_RENDERER_WEBGL)
+          : context.getParameter(context.RENDERER),
+        vendor: extension
+          ? context.getParameter(extension.UNMASKED_VENDOR_WEBGL)
+          : context.getParameter(context.VENDOR),
+        version: context.getParameter(context.VERSION),
+      };
+      context.getExtension("WEBGL_lose_context")?.loseContext();
+      return result;
+    })()`,
+    true,
+  );
+  const gpuInfo = await app.getGPUInfo("complete");
+  const processMetrics = app.getAppMetrics().map(({ pid, type, serviceName, name }) => ({
+    pid,
+    type,
+    service_name: serviceName ?? null,
+    name: name ?? null,
+  }));
+  const gpuProcess = processMetrics.find(({ type }) => type === "GPU") ?? null;
+  const rendererPid = window.webContents.getOSProcessId();
+  const [gpuSandbox, rendererSandbox] = await Promise.all([
+    readLinuxSandboxStatus(gpuProcess?.pid),
+    readLinuxSandboxStatus(rendererPid),
+  ]);
+  const rendererSecurity = await window.webContents.executeJavaScript(
+    `({
+      process_global: typeof process,
+      require_global: typeof require,
+      tongs_bridge: typeof window.tongs?.invoke,
+      cross_origin_isolated: window.crossOriginIsolated,
+    })`,
+    true,
+  );
   const readyPlugin = plugins.result.find((plugin) => plugin.status === "ready");
   let plugin = null;
   let help = null;
@@ -99,7 +180,7 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
       module: readyPlugin.modules[0].id,
     });
   }
-  return {
+  const report = {
     native_window: true,
     fixture: health.result.fixture === true,
     shell: "electron",
@@ -109,6 +190,16 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
     desktop: process.env.XDG_CURRENT_DESKTOP ?? null,
     ozone_platform: app.commandLine.getSwitchValue("ozone-platform") || null,
     disable_gpu: app.commandLine.hasSwitch("disable-gpu"),
+    disable_vulkan: app.commandLine.hasSwitch("disable-vulkan"),
+    no_sandbox: app.commandLine.hasSwitch("no-sandbox"),
+    disable_gpu_sandbox: app.commandLine.hasSwitch("disable-gpu-sandbox"),
+    disable_seccomp_filter_sandbox: app.commandLine.hasSwitch(
+      "disable-seccomp-filter-sandbox",
+    ),
+    enable_gpu_sandbox: app.commandLine.hasSwitch("enable-gpu-sandbox"),
+    gpu_sandbox_start_early: app.commandLine.hasSwitch("gpu-sandbox-start-early"),
+    use_angle: app.commandLine.getSwitchValue("use-angle") || null,
+    use_gl: app.commandLine.getSwitchValue("use-gl") || null,
     electron: process.versions.electron,
     chromium: process.versions.chrome,
     embedded_node: process.versions.node,
@@ -125,6 +216,21 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
     plugin_help: help
       ? { elapsed_ms: help.elapsed_ms, bundled_documentation: help.result.includes("bundled") }
       : null,
+    gpu: {
+      hardware_acceleration_enabled: app.isHardwareAccelerationEnabled(),
+      feature_status: app.getGPUFeatureStatus(),
+      info: gpuInfo,
+      webgl,
+      process: gpuProcess,
+      process_sandbox: gpuSandbox,
+    },
+    renderer_process: {
+      pid: rendererPid,
+      sandbox: rendererSandbox,
+      security: rendererSecurity,
+    },
+    process_metrics: processMetrics,
+    child_process_failures: childProcessFailures,
     web_preferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -132,11 +238,24 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
       webviewTag: false,
     },
   };
+  report.gpu.acceptance = evaluateGpuEvidence(report);
+  return report;
 }
 
 let sidecar;
 let window;
 let quitting = false;
+const childProcessFailures = [];
+
+app.on("child-process-gone", (_event, details) => {
+  childProcessFailures.push({
+    type: details.type,
+    reason: details.reason,
+    exit_code: details.exitCode,
+    service_name: details.serviceName ?? null,
+    name: details.name ?? null,
+  });
+});
 
 async function shutdown() {
   if (quitting) return;

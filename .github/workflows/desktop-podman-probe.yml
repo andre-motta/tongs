@@ -44,11 +44,9 @@ jobs:
             --inject-failure
           status=$?
           set -e
-          if [[ $status -eq 0 ]]; then
-            echo "Deliberate failure probe unexpectedly returned success" >&2
-            exit 1
-          fi
-          echo "Deliberate failure propagated with status $status as expected"
+          python3 tests/containers/verify_expected_failure.py \
+            --output-dir "$RUNNER_TEMP/tongs-fedora-44-failure" \
+            --actual-status "$status"
 
       - name: Upload Fedora 44 probe evidence
         if: ${{ always() }}

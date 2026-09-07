@@ -44,8 +44,10 @@ tests/containers/run-fedora-44.sh \
 
 That mode performs the normal checks, adds one clearly labelled failing pytest
 assertion, writes `deliberate-failure.junit.xml`, and must return nonzero. The
-probe workflow treats that nonzero result as the expected assertion. It does not
-use `continue-on-error`.
+probe workflow accepts the nonzero result only when `summary.json`, the required
+JUnit reports, and plugin discovery evidence prove all required steps passed and
+only the named deliberate assertion failed. Missing, malformed, skipped, or
+unexpected results fail the workflow. It does not use `continue-on-error`.
 
 Remove the output directories and the local image after inspection:
 

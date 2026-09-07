@@ -12,7 +12,7 @@ import sys
 import sysconfig
 import time
 import venv
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,14 @@ CHECKOUT = Path("/checkout")
 OUTPUT = Path("/output")
 SOURCE = Path("/tmp/tongs-source")
 ENVIRONMENT = Path("/tmp/tongs-installed")
+EXPECTED_PLUGIN_EVIDENCE = {
+    "desktop_backend_statuses": {
+        "sample-desktop": "ready",
+        "sample-terminal": "terminal_only",
+    },
+    "terminal_discovery": ["sample-desktop", "sample-terminal"],
+    "terminal_only_command": "Sample terminal action",
+}
 
 
 @dataclass(frozen=True)
@@ -114,6 +122,19 @@ def _copy_source() -> None:
             "node_modules",
         ),
     )
+
+
+def validate_plugin_evidence(raw: str) -> dict[str, object]:
+    """Parse and validate the installed plugin probe output."""
+    try:
+        evidence = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("plugin probe returned invalid JSON") from error
+    if not isinstance(evidence, dict):
+        raise TypeError("plugin probe must return a JSON object")
+    if evidence != EXPECTED_PLUGIN_EVIDENCE:
+        raise ValueError("plugin probe returned unexpected compatibility evidence")
+    return evidence
 
 
 def _expose_harness_dependencies(python: Path) -> None:
@@ -297,12 +318,16 @@ def main() -> int:
         plugin_result = steps[-1]
         if plugin_result.returncode == 0:
             try:
-                plugin_evidence = json.loads(
+                plugin_evidence = validate_plugin_evidence(
                     (OUTPUT / plugin_result.stdout).read_text()
                 )
-            except json.JSONDecodeError:
-                plugin_evidence = {"error": "plugin probe returned invalid JSON"}
-            _write_json(OUTPUT / "plugin-discovery.json", plugin_evidence)
+            except (OSError, TypeError, ValueError) as error:
+                stderr_path = OUTPUT / plugin_result.stderr
+                with stderr_path.open("a") as stderr:
+                    print(f"Plugin evidence validation failed: {error}", file=stderr)
+                steps[-1] = replace(plugin_result, returncode=1)
+            else:
+                _write_json(OUTPUT / "plugin-discovery.json", plugin_evidence)
         if inject_failure:
             steps.append(
                 _run(

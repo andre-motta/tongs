@@ -28,6 +28,7 @@
   require(largeCard, 'Large fixture review missing');
   largeCard.focus();
   const keyboardFocusable = document.activeElement === largeCard;
+  require(keyboardFocusable, 'Review control cannot receive keyboard focus');
   const started = performance.now();
   largeCard.click();
   await until(() => document.querySelector('.diff-stat')?.textContent.includes('20,000') && document.querySelector('.diff-canvas'), '20,000-line rendered diff');
@@ -81,6 +82,7 @@
   await until(() => document.querySelector('.help-drawer pre')?.textContent.includes('bundled'), 'bundled help in UI');
   require(!document.querySelector('.module-error'), 'Plugin module error visible');
   return {
+    ok: true,
     provenance: 'Automated DOM interactions inside actual native renderer; synthetic Python backend and independently installed sample plugin',
     bridge: 'native', large_render_ms: Math.round(largeRenderMs * 10) / 10,
     large_lines: 20000, rendered_rows_at_end: renderedRows, canvas_height: canvasHeight,

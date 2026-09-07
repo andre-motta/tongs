@@ -93,7 +93,7 @@ remain to be designed after the shell comparison.
 | Issue | Owner | Depends on | Current state |
 | --- | --- | --- | --- |
 | [#18 Shared harness and plugin](https://github.com/andre-motta/tongs/issues/18) | Astra, independent Sol review | None | Locally integrated |
-| [#19 Common frontend](https://github.com/andre-motta/tongs/issues/19) | Luna xhigh, Sol review | #18 | Assigned |
+| [#19 Common frontend](https://github.com/andre-motta/tongs/issues/19) | Luna xhigh, Sol review | #18 | Locally integrated |
 | [#20 Python webview](https://github.com/andre-motta/tongs/issues/20) | Sol high, independent Sol review | #18 | Assigned |
 | [#21 Electron](https://github.com/andre-motta/tongs/issues/21) | Sol high, independent Sol review | #18 | Assigned |
 | [#22 Comparison and architecture](https://github.com/andre-motta/tongs/issues/22) | Astra with Sol assessment | #19, #20, #21 | Planned |
@@ -162,3 +162,18 @@ NEEDS CHANGES: plugin load status must reflect errors, and keyboard hints must
 match implemented navigation. Luna owns corrections before integration. The
 first-module-only plugin UI is a documented comparison limitation. Eight frontend
 checks and the build passed; combined native proof remains pending.
+
+Frontend corrections at `2989b48` received independent Sol approval; integrated
+locally through `efb3a51` after `2303a71`. All ten frontend tests and the production
+build pass in the integration worktree. npm audit reports zero vulnerabilities.
+The shared build is now the input for both installed native shell evaluations.
+
+Branding: the CTO requested the existing website icon for desktop. Reuse
+`docs/assets/icon.png`, already configured as the MkDocs logo/favicon, in built
+frontend and native packages. Keep it local to the distribution.
+
+The website-icon delta received independent Sol approval and is integrated at
+`883e0ad`. Source and built PNG hashes match. The shared native probe was also
+independently reviewed and now fails if keyboard focus cannot be acquired.
+Native DOM unmount/remount and unit-tested cleanup-callback execution are distinct
+pieces of evidence.

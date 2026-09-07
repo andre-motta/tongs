@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tongs-electron-prototype"
+version = "0.0.1"
+description = "Disposable Linux x86_64 Electron shell for the Tongs desktop comparison"
+requires-python = ">=3.12"
+dependencies = ["tongs"]
+
+[project.scripts]
+tongs-electron-prototype = "tongs_electron_prototype:main"

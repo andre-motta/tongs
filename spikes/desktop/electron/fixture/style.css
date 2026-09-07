@@ -1,0 +1,18 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0b1020; color: #e5e7eb; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header { height: 64px; display: flex; align-items: center; gap: 24px; padding: 0 24px; border-bottom: 1px solid #334155; background: #111827; }
+header strong { color: #a7f3d0; font-size: 24px; }
+main { min-height: calc(100vh - 64px); display: grid; grid-template-columns: 260px 1fr; }
+aside { padding: 24px; border-right: 1px solid #334155; background: #111827; }
+button { display: block; width: 100%; margin: 12px 0; padding: 10px; color: inherit; background: #1e293b; border: 1px solid #475569; border-radius: 6px; text-align: left; }
+section { padding: 36px; overflow: auto; }
+#status { margin: 24px 0; padding: 16px; border-left: 4px solid #34d399; background: #132a2a; }
+pre { max-height: 560px; overflow: auto; padding: 20px; border-radius: 8px; background: #020617; white-space: pre-wrap; }
+@media (prefers-color-scheme: light) {
+  :root { background: #f8fafc; color: #0f172a; }
+  header, aside { background: #f1f5f9; border-color: #cbd5e1; }
+  button { color: inherit; background: white; border-color: #94a3b8; }
+  #status { background: #ecfdf5; }
+  pre { color: #e5e7eb; }
+}

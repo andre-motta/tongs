@@ -11,7 +11,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
+import tongs
 from tongs.services import RepositoryRef, ReviewRef, ReviewRevision
+from tongs.services import review_submission as review_submission_module
 from tongs.state.drafts import (
     DiffSide,
     DraftContent,
@@ -26,6 +28,7 @@ from tongs.state.drafts import (
     ReplyDraftComment,
     context_fingerprint,
 )
+from tongs.state.drafts import store as store_module
 from tongs.state.drafts.reconciliation import (
     ConfirmedSubmissionContent,
     editable_remainder,
@@ -201,8 +204,14 @@ async def test_child_death_after_dispatch_journal_preserves_exact_unknown(
     try:
         assert await asyncio.to_thread(ready.wait, 10)
         sources = await asyncio.to_thread(parent_source.recv)
-        expected_root = str(Path(__file__).resolve().parents[3] / "src" / "tongs")
-        assert all(str(path).startswith(expected_root) for path in sources)
+        expected_sources = (
+            tongs.__file__,
+            store_module.__file__,
+            review_submission_module.__file__,
+        )
+        assert tuple(Path(path).resolve() for path in sources) == tuple(
+            Path(path).resolve() for path in expected_sources
+        )
         observer = DraftStore(db_path)
         await observer.open()
         assert await observer.recover_incomplete_attempts() == ()

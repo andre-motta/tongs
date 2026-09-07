@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from copy import deepcopy
 
 import jsonschema
@@ -11,6 +12,7 @@ import pytest
 from tongs.desktop.artifact_contract import (
     ArtifactContractError,
     install_schema_bytes,
+    parse_install_manifest,
     parse_release_manifest,
     release_schema_bytes,
 )
@@ -75,20 +77,36 @@ def test_each_packaged_schema_validates_its_fixture_standalone() -> None:
         validator_type(schema).validate(fixture)
 
 
-def test_semver_schema_and_parser_both_reject_numeric_leading_zero() -> None:
-    release = json.loads(
-        (FIXTURE_ROOT / "desktop-manifest-v1.synthetic.json").read_bytes()
-    )
-    invalid = deepcopy(release)
-    invalid["release_version"] = "1.2.3-01"
-
-    validator_type = jsonschema.validators.validator_for(
-        json.loads(release_schema_bytes())
-    )
+@pytest.mark.parametrize("invalid_version", ["1.2.3-01", "1٢.2.3", "1.2٢.3", "1.2.3٣"])
+@pytest.mark.parametrize(
+    ("document_name", "schema_bytes", "parser"),
+    [
+        (
+            "desktop-manifest-v1.synthetic.json",
+            release_schema_bytes,
+            parse_release_manifest,
+        ),
+        (
+            "desktop-install.synthetic.json",
+            install_schema_bytes,
+            parse_install_manifest,
+        ),
+    ],
+)
+def test_semver_schema_and_parser_both_reject_invalid_numeric_components(
+    invalid_version: str,
+    document_name: str,
+    schema_bytes: Callable[[], bytes],
+    parser: Callable[[bytes], object],
+) -> None:
+    invalid = json.loads((FIXTURE_ROOT / document_name).read_bytes())
+    invalid["release_version"] = invalid_version
+    schema = json.loads(schema_bytes())
+    validator_type = jsonschema.validators.validator_for(schema)
     with pytest.raises(jsonschema.ValidationError):
-        validator_type(json.loads(release_schema_bytes())).validate(invalid)
+        validator_type(schema).validate(invalid)
     with pytest.raises(ArtifactContractError):
-        parse_release_manifest(canonical_json(invalid))
+        parser(canonical_json(invalid))
 
 
 def test_release_schema_matches_package_kind_ownership_and_name_rules() -> None:

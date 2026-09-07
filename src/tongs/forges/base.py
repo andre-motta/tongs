@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from tongs.forges.models import (
     Commit,
     Discussion,
-    InlineComment,
+    ForgeMutationResult,
     MRDetail,
     MRSummary,
     Pipeline,
@@ -71,7 +71,17 @@ class ForgeClient(ABC):
         body: str,
         start_line: int | None = None,
         start_side: str | None = None,
-    ) -> InlineComment: ...
+        *,
+        old_path: str | None = None,
+        new_path: str | None = None,
+        head_sha: str | None = None,
+        base_sha: str | None = None,
+        start_sha: str | None = None,
+        old_line: int | None = None,
+        new_line: int | None = None,
+        start_old_line: int | None = None,
+        start_new_line: int | None = None,
+    ) -> ForgeMutationResult: ...
 
     @abstractmethod
     async def reply_to_discussion(
@@ -80,7 +90,9 @@ class ForgeClient(ABC):
         number: int,
         discussion_id: str,
         body: str,
-    ) -> InlineComment: ...
+        *,
+        root_comment_id: str | None = None,
+    ) -> ForgeMutationResult: ...
 
     @abstractmethod
     async def resolve_discussion(
@@ -89,7 +101,7 @@ class ForgeClient(ABC):
         number: int,
         discussion_id: str,
         resolved: bool,
-    ) -> None: ...
+    ) -> ForgeMutationResult: ...
 
     @abstractmethod
     async def submit_review(
@@ -99,10 +111,14 @@ class ForgeClient(ABC):
         verdict: ReviewDecision,
         body: str,
         inline_comments: list[dict] | None = None,
-    ) -> None: ...
+        *,
+        head_sha: str | None = None,
+    ) -> ForgeMutationResult: ...
 
     @abstractmethod
-    async def approve_mr(self, repo_path: str, number: int) -> None: ...
+    async def approve_mr(
+        self, repo_path: str, number: int, *, head_sha: str | None = None
+    ) -> ForgeMutationResult: ...
 
     async def unapprove_mr(self, repo_path: str, number: int) -> None:
         raise NotImplementedError("This forge does not support unapprove")
@@ -123,7 +139,13 @@ class ForgeClient(ABC):
     async def reopen_mr(self, repo_path: str, number: int) -> None: ...
 
     @abstractmethod
-    async def add_comment(self, repo_path: str, number: int, body: str) -> None: ...
+    async def add_comment(
+        self, repo_path: str, number: int, body: str
+    ) -> ForgeMutationResult: ...
+
+    async def invalidate_review_reads(self, repo_path: str, number: int) -> bool:
+        """Invalidate cached review reads when this client owns a cache."""
+        return True
 
     @abstractmethod
     async def list_pipelines(

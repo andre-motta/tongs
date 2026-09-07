@@ -33,6 +33,25 @@ class ReviewDecision(Enum):
     NONE = "none"
 
 
+@dataclass(frozen=True, slots=True)
+class ForgeMutationResult:
+    """Stable remote identity returned after one confirmed forge write."""
+
+    remote_id: str
+    comment_id: str | None = None
+    discussion_id: str | None = None
+    cache_invalidated: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.remote_id, str) or not self.remote_id:
+            raise ValueError("remote_id is required")
+        if any(
+            value is not None and (not isinstance(value, str) or not value)
+            for value in (self.comment_id, self.discussion_id)
+        ):
+            raise ValueError("remote identities must be non-empty strings")
+
+
 @dataclass(frozen=True)
 class ForgeHost:
     """Identifies a forge instance."""

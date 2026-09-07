@@ -361,16 +361,6 @@ class CIMutationService:
                 return
             record.receipt = receipt
 
-    async def _finalize_receipt(
-        self, record: _OperationRecord, *, resync_required: bool
-    ) -> CIMutationReceipt:
-        async with self._operation_lock:
-            if record.receipt is None:
-                raise RuntimeError("operation outcome was not retained")
-            record.receipt = replace(record.receipt, resync_required=resync_required)
-            record.done.set()
-            return record.receipt
-
     async def _complete_error(
         self, record: _OperationRecord, error: ServiceError
     ) -> None:
@@ -493,6 +483,14 @@ class CIMutationService:
                 break
             except asyncio.CancelledError:
                 cancelled = True
+                if task.done():
+                    if task.cancelled():
+                        receipt = self._finalize_receipt_now(
+                            record, resync_required=True
+                        )
+                    else:
+                        receipt = task.result()
+                    break
         if cancelled and not suppress_cancellation:
             raise asyncio.CancelledError()
         return receipt
@@ -503,9 +501,20 @@ class CIMutationService:
         try:
             hints_succeeded = await self._run_hints(pipeline)
         except BaseException:
-            await self._finalize_receipt(record, resync_required=True)
+            self._finalize_receipt_now(record, resync_required=True)
             raise
-        return await self._finalize_receipt(record, resync_required=not hints_succeeded)
+        return self._finalize_receipt_now(record, resync_required=not hints_succeeded)
+
+    @staticmethod
+    def _finalize_receipt_now(
+        record: _OperationRecord, *, resync_required: bool
+    ) -> CIMutationReceipt:
+        if record.receipt is None:
+            raise RuntimeError("operation outcome was not retained")
+        if not record.done.is_set():
+            record.receipt = replace(record.receipt, resync_required=resync_required)
+            record.done.set()
+        return record.receipt
 
     async def _run_hints(self, pipeline: PipelineRef) -> bool:
         failed = not await self._run_invalidation_hint(pipeline)

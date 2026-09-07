@@ -556,6 +556,38 @@ async def test_repeated_cancellation_cannot_strand_operation_finalization() -> N
 
 
 @pytest.mark.asyncio
+async def test_coordinator_cancellation_finalizes_receipt_without_spin() -> None:
+    harness = Harness()
+    harness.invalidate_release = asyncio.Event()
+    harness.resist_invalidate_cancellation = True
+    service = harness.service(hint_timeout=1.0)
+    command = CancelPipelineCommand("coordinator-cancel", PIPELINE_TARGET)
+    owner = asyncio.create_task(service.execute(command))
+    await harness.invalidate_started.wait()
+    coordinator = next(
+        task
+        for task in asyncio.all_tasks()
+        if task is not owner
+        and getattr(task.get_coro(), "__qualname__", "").endswith(
+            "CIMutationService._coordinate_hints"
+        )
+    )
+
+    coordinator.cancel()
+    owner.cancel()
+    await asyncio.sleep(0)
+    owner.cancel()
+    harness.invalidate_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(owner, timeout=0.1)
+    duplicate = await asyncio.wait_for(service.execute(command), timeout=0.1)
+    assert duplicate.outcome == CIMutationOutcome.KNOWN
+    assert duplicate.resync_required is True
+    assert harness.client.calls == [("cancel_pipeline", "acme/widgets", 101)]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation_id", ["", " space", "a" * 129, "bad/slash"])
 async def test_invalid_operation_id_is_safe_predispatch_rejection(
     operation_id: str,

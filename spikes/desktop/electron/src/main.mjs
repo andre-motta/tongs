@@ -1,9 +1,15 @@
 import { app, BrowserWindow, ipcMain, session } from "electron";
+import { once } from "node:events";
+import { writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { evaluateGpuEvidence } from "./gpu.mjs";
+import {
+  assertRequiredHardwareGpu,
+  evaluateGpuEvidence,
+  finalizeGpuEvidence,
+} from "./gpu.mjs";
 import { Sidecar } from "./sidecar.mjs";
 import {
   CONTENT_SECURITY_POLICY,
@@ -21,6 +27,10 @@ function argumentValue(name) {
   if (index >= 0) return process.argv[index + 1];
   const inline = process.argv.find((argument) => argument.startsWith(`${name}=`));
   return inline ? inline.slice(name.length + 1) : null;
+}
+
+function hasArgument(name) {
+  return process.argv.includes(name);
 }
 
 function firstExisting(candidates) {
@@ -110,19 +120,7 @@ async function readLinuxSandboxStatus(pid) {
   return result;
 }
 
-async function collectSmokeEvidence(window, sidecar, startupMs) {
-  const call = async (method, params) => {
-    const started = performance.now();
-    const result = await window.webContents.executeJavaScript(
-      `window.tongs.invoke(${JSON.stringify(method)}, ${JSON.stringify(params ?? {})})`,
-      true,
-    );
-    return { elapsed_ms: Math.round((performance.now() - started) * 10) / 10, result };
-  };
-  const health = await call("health");
-  const reviews = await call("list_reviews");
-  const large = await call("get_diff", { id: "large" });
-  const plugins = await call("list_plugins");
+async function collectGraphicsEvidence(window) {
   const webgl = await window.webContents.executeJavaScript(
     `(() => {
       const canvas = document.createElement("canvas");
@@ -153,7 +151,8 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
   }));
   const gpuProcess = processMetrics.find(({ type }) => type === "GPU") ?? null;
   const rendererPid = window.webContents.getOSProcessId();
-  const [gpuSandbox, rendererSandbox] = await Promise.all([
+  const [mainSandbox, gpuSandbox, rendererSandbox] = await Promise.all([
+    readLinuxSandboxStatus(process.pid),
     readLinuxSandboxStatus(gpuProcess?.pid),
     readLinuxSandboxStatus(rendererPid),
   ]);
@@ -166,6 +165,39 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
     })`,
     true,
   );
+  return {
+    gpu: {
+      hardware_acceleration_enabled: app.isHardwareAccelerationEnabled(),
+      feature_status: app.getGPUFeatureStatus(),
+      info: gpuInfo,
+      webgl,
+      process: gpuProcess,
+      process_sandbox: gpuSandbox,
+    },
+    renderer_process: {
+      pid: rendererPid,
+      sandbox: rendererSandbox,
+      security: rendererSecurity,
+    },
+    main_process: { pid: process.pid, sandbox: mainSandbox },
+    process_metrics: processMetrics,
+  };
+}
+
+async function collectSmokeEvidence(window, sidecar, startupMs) {
+  const call = async (method, params) => {
+    const started = performance.now();
+    const result = await window.webContents.executeJavaScript(
+      `window.tongs.invoke(${JSON.stringify(method)}, ${JSON.stringify(params ?? {})})`,
+      true,
+    );
+    return { elapsed_ms: Math.round((performance.now() - started) * 10) / 10, result };
+  };
+  const health = await call("health");
+  const reviews = await call("list_reviews");
+  const large = await call("get_diff", { id: "large" });
+  const plugins = await call("list_plugins");
+  const graphicsInitial = await collectGraphicsEvidence(window);
   const readyPlugin = plugins.result.find((plugin) => plugin.status === "ready");
   let plugin = null;
   let help = null;
@@ -216,21 +248,10 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
     plugin_help: help
       ? { elapsed_ms: help.elapsed_ms, bundled_documentation: help.result.includes("bundled") }
       : null,
-    gpu: {
-      hardware_acceleration_enabled: app.isHardwareAccelerationEnabled(),
-      feature_status: app.getGPUFeatureStatus(),
-      info: gpuInfo,
-      webgl,
-      process: gpuProcess,
-      process_sandbox: gpuSandbox,
+    graphics_initial: {
+      ...graphicsInitial,
+      child_process_failures: childProcessFailures.map((failure) => ({ ...failure })),
     },
-    renderer_process: {
-      pid: rendererPid,
-      sandbox: rendererSandbox,
-      security: rendererSecurity,
-    },
-    process_metrics: processMetrics,
-    child_process_failures: childProcessFailures,
     web_preferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -238,7 +259,12 @@ async function collectSmokeEvidence(window, sidecar, startupMs) {
       webviewTag: false,
     },
   };
-  report.gpu.acceptance = evaluateGpuEvidence(report);
+  report.graphics_initial.gpu.acceptance = evaluateGpuEvidence({
+    ...report,
+    gpu: report.graphics_initial.gpu,
+    renderer_process: report.graphics_initial.renderer_process,
+    child_process_failures: report.graphics_initial.child_process_failures,
+  });
   return report;
 }
 
@@ -256,6 +282,20 @@ app.on("child-process-gone", (_event, details) => {
     name: details.name ?? null,
   });
 });
+
+async function injectGpuFailureForTest() {
+  if (process.env.TONGS_DESKTOP_TEST_KILL_GPU_AFTER_PROBE !== "1") return;
+  const gpuProcess = app.getAppMetrics().find(({ type }) => type === "GPU");
+  if (!gpuProcess) throw new Error("GPU failure injection found no GPU process");
+  const failureObserved = once(app, "child-process-gone");
+  process.kill(gpuProcess.pid, "SIGKILL");
+  await Promise.race([
+    failureObserved,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("GPU failure injection was not observed")), 5_000),
+    ),
+  ]);
+}
 
 async function shutdown() {
   if (quitting) return;
@@ -351,8 +391,12 @@ async function run() {
       await writeFile(path.resolve(screenshot), image.toPNG());
       report.screenshot = path.resolve(screenshot);
     }
+    await injectGpuFailureForTest();
     await mkdir(path.dirname(path.resolve(smokeReport)), { recursive: true });
-    await writeFile(path.resolve(smokeReport), `${JSON.stringify(report, null, 2)}\n`);
+    const graphicsFinal = await collectGraphicsEvidence(window);
+    finalizeGpuEvidence(report, graphicsFinal, childProcessFailures);
+    writeFileSync(path.resolve(smokeReport), `${JSON.stringify(report, null, 2)}\n`);
+    assertRequiredHardwareGpu(report, hasArgument("--require-hardware-gpu"));
     await shutdown();
     app.quit();
   }

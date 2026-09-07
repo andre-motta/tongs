@@ -32,10 +32,13 @@ export function evaluateGpuEvidence(report) {
   checks.separate_gpu_process =
     gpu.process?.type === "GPU" && gpu.process.pid !== report.electron_pid;
   checks.gpu_process_sandbox =
-    gpu.process_sandbox?.NoNewPrivs === "1" && gpu.process_sandbox?.Seccomp === "2";
+    gpu.process_sandbox?.NoNewPrivs === "1" &&
+    gpu.process_sandbox?.Seccomp === "2" &&
+    Number(gpu.process_sandbox?.Seccomp_filters) >= 1;
   checks.renderer_process_sandbox =
     report.renderer_process?.sandbox?.NoNewPrivs === "1" &&
     report.renderer_process?.sandbox?.Seccomp === "2" &&
+    Number(report.renderer_process?.sandbox?.Seccomp_filters) >= 1 &&
     report.renderer_process?.security?.process_global === "undefined" &&
     report.renderer_process?.security?.require_global === "undefined";
   checks.no_child_process_failures = report.child_process_failures?.length === 0;
@@ -44,4 +47,22 @@ export function evaluateGpuEvidence(report) {
     .filter(([, passed]) => !passed)
     .map(([name]) => name);
   return { passed: failed.length === 0, checks, failed };
+}
+
+export function finalizeGpuEvidence(report, graphics, childProcessFailures) {
+  report.gpu = graphics.gpu;
+  report.renderer_process = graphics.renderer_process;
+  report.main_process = graphics.main_process;
+  report.process_metrics = graphics.process_metrics;
+  report.child_process_failures = childProcessFailures.map((failure) => ({ ...failure }));
+  report.gpu.acceptance = evaluateGpuEvidence(report);
+  return report;
+}
+
+export function assertRequiredHardwareGpu(report, required) {
+  if (required && !report.gpu?.acceptance?.passed) {
+    throw new Error(
+      `Hardware GPU evidence failed: ${report.gpu?.acceptance?.failed?.join(", ")}`,
+    );
+  }
 }

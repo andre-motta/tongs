@@ -46,6 +46,7 @@ if (useAngle) args.unshift(`--use-angle=${useAngle}`);
 const useGl = option("--use-gl");
 if (useGl) args.unshift(`--use-gl=${useGl}`);
 if (uiProbe) args.push("--ui-probe", path.resolve(uiProbe));
+if (hasFlag("--require-hardware-gpu")) args.push("--require-hardware-gpu");
 
 const child = spawn(executable, args, {
   env: { ...process.env, TONGS_DESKTOP_PYTHON: python },
@@ -61,11 +62,16 @@ const code = await new Promise((resolve, reject) => {
   child.once("exit", resolve);
 });
 clearTimeout(timeout);
+let evidence = null;
+try {
+  evidence = JSON.parse(await readFile(report, "utf8"));
+  evidence.launch = { exit_code: code, timed_out: timedOut };
+  await writeFile(report, `${JSON.stringify(evidence, null, 2)}\n`);
+} catch (error) {
+  if (code === 0) throw error;
+}
 if (code !== 0) throw new Error(`Electron smoke exited with status ${code}`);
 await Promise.all([access(report), access(screenshot)]);
-const evidence = JSON.parse(await readFile(report, "utf8"));
-evidence.launch = { exit_code: code, timed_out: timedOut };
-await writeFile(report, `${JSON.stringify(evidence, null, 2)}\n`);
 if (hasFlag("--require-hardware-gpu")) {
   if (!evidence.gpu?.acceptance?.passed) {
     throw new Error(

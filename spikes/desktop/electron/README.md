@@ -73,8 +73,20 @@ Pass `--require-hardware-gpu` to reject software rendering, disabled hardware
 features, sandbox-disabling flags, missing GPU and renderer processes, inactive
 seccomp filters, or child-process crashes. The JSON report records Chromium's
 feature status and active PCI IDs, the unmasked WebGL renderer, GPU and renderer
-process security state from `/proc`, and the exact graphics switches. A passing
-flag or the mere presence of a GPU process is deliberately insufficient.
+process security state from `/proc`, and the exact graphics switches. The
+initial graphics snapshot is retained for diagnosis. Hardware, device, process,
+sandbox, and failure evidence is collected again after the UI probe and
+screenshot, then the final verdict is computed immediately before the report
+is written. A passing flag or the mere presence of a GPU process is deliberately
+insufficient.
+
+The report also records the privileged Electron main process separately from
+the sandboxed GPU and renderer children. The hardware gate requires the GPU and
+renderer sandbox state; it does not misrepresent the main process as sandboxed.
+The regression-only `TONGS_DESKTOP_TEST_KILL_GPU_AFTER_PROBE=1` environment
+setting kills the app's own GPU child after capture. With
+`--require-hardware-gpu`, that launch must retain the failure in its report and
+exit nonzero even when Chromium starts a new accelerated GPU process.
 
 Native Wayland can still be selected explicitly with
 `--ozone-platform wayland` for diagnosis. On the tested host it emits Chromium's

@@ -91,7 +91,14 @@ def _discussion() -> Discussion:
     return Discussion("thread-9", True, root, resolvable=True)
 
 
-def _service(client, *, forge=ForgeType.GITLAB, emit=None, ledger_size=10):
+def _service(
+    client,
+    *,
+    forge=ForgeType.GITLAB,
+    emit=None,
+    ledger_size=10,
+    close_timeout=1.0,
+):
     get_review = AsyncMock(return_value=_snapshot(forge))
     get_diff = AsyncMock(return_value=RawDiffSnapshot(REF, REVISION, (PATCH,)))
     get_discussions = AsyncMock(return_value=(_discussion(),))
@@ -103,6 +110,7 @@ def _service(client, *, forge=ForgeType.GITLAB, emit=None, ledger_size=10):
         get_discussions=get_discussions,
         emit_change=emitter,
         timeout=0.01,
+        close_timeout=close_timeout,
         ledger_size=ledger_size,
     )
     return service, get_review, get_diff, get_discussions, emitter
@@ -521,3 +529,74 @@ async def test_pre_dispatch_cancellation_releases_reservation_for_safe_retry() -
 
     assert outcome.status == MutationStatus.KNOWN
     client.create_inline_comment.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_blocked_dispatch_and_retains_unknown() -> None:
+    entered = asyncio.Event()
+
+    async def blocked_comment(*_args):
+        entered.set()
+        await asyncio.Event().wait()
+
+    client = _client(add_comment=AsyncMock(side_effect=blocked_comment))
+    service, *_ = _service(client)
+    command = GeneralComment("close-review-owner", REF, "body")
+    owner = asyncio.create_task(service.execute(command))
+    await entered.wait()
+
+    await service.close()
+
+    outcome = await owner
+    assert outcome.status is MutationStatus.UNKNOWN
+    assert service._ledger[command.operation_id].outcome is outcome
+    assert service._owner_tasks == set()
+    client.add_comment.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_close_atomically_blocks_new_review_admission() -> None:
+    client = _client()
+    service, *_ = _service(client)
+    await service._lock.acquire()
+    close_task = asyncio.create_task(service.close())
+    await asyncio.sleep(0)
+    execute_task = asyncio.create_task(
+        service.execute(GeneralComment("closed-review", REF, "body"))
+    )
+    service._lock.release()
+
+    await close_task
+    with pytest.raises(ServiceError) as raised:
+        await execute_task
+    assert raised.value.code is ServiceErrorCode.CLOSED
+    client.add_comment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_settles_review_owner_as_unknown() -> None:
+    entered = asyncio.Event()
+    first_cancellation = asyncio.Event()
+
+    async def resistant_comment(*_args):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            first_cancellation.set()
+            await asyncio.Event().wait()
+
+    client = _client(add_comment=AsyncMock(side_effect=resistant_comment))
+    service, *_ = _service(client, close_timeout=0.01)
+    command = GeneralComment("repeat-review-close", REF, "body")
+    owner = asyncio.create_task(service.execute(command))
+    await entered.wait()
+    close_task = asyncio.create_task(service.close())
+    await first_cancellation.wait()
+
+    outcome = await owner
+    await close_task
+    assert outcome.status is MutationStatus.UNKNOWN
+    assert service._ledger[command.operation_id].outcome is outcome
+    assert service._owner_tasks == set()
+    client.add_comment.assert_awaited_once()

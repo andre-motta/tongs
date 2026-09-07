@@ -284,7 +284,15 @@ async def test_valid_signature_semantics_for_wrong_subject_are_rejected() -> Non
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("malformation", ["extra_dependency", "invalid_invocation"])
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "extra_dependency",
+        "invalid_invocation",
+        "wrong_repository_id",
+        "wrong_repository_owner_id",
+    ],
+)
 async def test_valid_signature_with_noncanonical_github_predicate_is_rejected(
     malformation: str,
 ) -> None:
@@ -304,10 +312,18 @@ async def test_valid_signature_with_noncanonical_github_predicate_is_rejected(
                 "digest": {"gitCommit": "0" * 40},
             }
         )
-    else:
+    elif malformation == "invalid_invocation":
         payload["predicate"]["runDetails"]["metadata"]["invocationId"] = (
             "https://example.test/actions/runs/1/attempts/1"
         )
+    elif malformation == "wrong_repository_id":
+        payload["predicate"]["buildDefinition"]["internalParameters"]["github"][
+            "repository_id"
+        ] = "1305350435"
+    else:
+        payload["predicate"]["buildDefinition"]["internalParameters"]["github"][
+            "repository_owner_id"
+        ] = "30708956"
     verifier = MockSemanticVerifier(json.dumps(payload).encode())
 
     def handler(request: httpx.Request) -> httpx.Response:

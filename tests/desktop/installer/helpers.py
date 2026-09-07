@@ -13,6 +13,8 @@ from tongs.desktop.installer.metadata import (
     GITHUB_WORKFLOW_BUILD_TYPE,
     INTOTO_STATEMENT_TYPE,
     OFFICIAL_REPOSITORY,
+    OFFICIAL_REPOSITORY_ID,
+    OFFICIAL_REPOSITORY_OWNER_ID,
     OFFICIAL_REPOSITORY_URL,
     OFFICIAL_WORKFLOW_PATH,
     RELEASE_BUNDLE_NAME,
@@ -123,8 +125,8 @@ def statement(subjects: dict[str, str]) -> bytes:
                     "internalParameters": {
                         "github": {
                             "event_name": "push",
-                            "repository_id": "12345",
-                            "repository_owner_id": "67890",
+                            "repository_id": OFFICIAL_REPOSITORY_ID,
+                            "repository_owner_id": OFFICIAL_REPOSITORY_OWNER_ID,
                             "runner_environment": "github-hosted",
                         }
                     },

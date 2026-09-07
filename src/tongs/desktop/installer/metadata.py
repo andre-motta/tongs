@@ -24,6 +24,8 @@ from sigstore.verify.policy import (
     OIDCIssuerV2,
     OIDCRunnerEnvironment,
     OIDCSourceRepositoryDigest,
+    OIDCSourceRepositoryIdentifier,
+    OIDCSourceRepositoryOwnerIdentifier,
     OIDCSourceRepositoryRef,
     OIDCSourceRepositoryURI,
 )
@@ -57,6 +59,8 @@ from tongs.desktop.installer.models import (
 
 OFFICIAL_REPOSITORY = "andre-motta/tongs"
 OFFICIAL_REPOSITORY_URL = f"https://github.com/{OFFICIAL_REPOSITORY}"
+OFFICIAL_REPOSITORY_ID = "1305350434"
+OFFICIAL_REPOSITORY_OWNER_ID = "30708955"
 OFFICIAL_WORKFLOW_PATH = ".github/workflows/release-desktop.yml"
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 RELEASE_TAG_PREFIX = "desktop-v"
@@ -375,6 +379,8 @@ def production_verification_policy(identity: BuildIdentity) -> AllOf:
             OIDCIssuerV2(identity.issuer),
             OIDCRunnerEnvironment("github-hosted"),
             OIDCSourceRepositoryURI(OFFICIAL_REPOSITORY_URL),
+            OIDCSourceRepositoryIdentifier(OFFICIAL_REPOSITORY_ID),
+            OIDCSourceRepositoryOwnerIdentifier(OFFICIAL_REPOSITORY_OWNER_ID),
             OIDCSourceRepositoryDigest(identity.source_commit),
             OIDCSourceRepositoryRef(identity.ref),
             OIDCBuildSignerURI(identity.builder_id),
@@ -455,14 +461,11 @@ def _validate_statement(
         _provenance_error("Desktop release build event is invalid.")
     if github.get("runner_environment") != "github-hosted":
         _provenance_error("Desktop release runner environment is invalid.")
-    for identifier in (github.get("repository_id"), github.get("repository_owner_id")):
-        if (
-            not isinstance(identifier, str)
-            or not identifier.isascii()
-            or not identifier.isdigit()
-            or identifier.startswith("0")
-        ):
-            _provenance_error("Desktop release repository identity is invalid.")
+    if (
+        github.get("repository_id") != OFFICIAL_REPOSITORY_ID
+        or github.get("repository_owner_id") != OFFICIAL_REPOSITORY_OWNER_ID
+    ):
+        _provenance_error("Desktop release repository identity is invalid.")
     dependencies = definition.get("resolvedDependencies")
     if not isinstance(dependencies, list) or len(dependencies) != 1:
         _provenance_error("Desktop release source dependencies are invalid.")
@@ -704,6 +707,8 @@ __all__ = [
     "INTOTO_PAYLOAD_TYPE",
     "INTOTO_STATEMENT_TYPE",
     "OFFICIAL_REPOSITORY",
+    "OFFICIAL_REPOSITORY_ID",
+    "OFFICIAL_REPOSITORY_OWNER_ID",
     "OFFICIAL_REPOSITORY_URL",
     "OFFICIAL_WORKFLOW_PATH",
     "RELEASE_BUNDLE_NAME",

@@ -442,6 +442,17 @@ class CIMutationService:
                 ServiceErrorCode.INVALID_RESPONSE,
                 "The forge returned an invalid pipeline job list.",
             )
+        job_ids = [item.id for item in jobs]
+        if any(type(item_id) is not int or item_id <= 0 for item_id in job_ids):
+            raise ServiceError(
+                ServiceErrorCode.INVALID_RESPONSE,
+                "The forge returned an invalid pipeline job identity.",
+            )
+        if len(set(job_ids)) != len(job_ids):
+            raise ServiceError(
+                ServiceErrorCode.INVALID_RESPONSE,
+                "The forge returned duplicate pipeline job identities.",
+            )
         if job is not None and not any(item.id == job.job_id for item in jobs):
             raise ServiceError(
                 ServiceErrorCode.RESOURCE_NOT_ISSUED,
@@ -474,19 +485,27 @@ class CIMutationService:
         *,
         suppress_cancellation: bool = False,
     ) -> CIMutationReceipt:
-        task = asyncio.create_task(self._run_hints(pipeline))
+        task = asyncio.create_task(self._coordinate_hints(record, pipeline))
         cancelled = False
-        try:
-            hints_succeeded = await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled = True
-            hints_succeeded = await task
-        receipt = await self._finalize_receipt(
-            record, resync_required=not hints_succeeded
-        )
+        while True:
+            try:
+                receipt = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
         if cancelled and not suppress_cancellation:
             raise asyncio.CancelledError()
         return receipt
+
+    async def _coordinate_hints(
+        self, record: _OperationRecord, pipeline: PipelineRef
+    ) -> CIMutationReceipt:
+        try:
+            hints_succeeded = await self._run_hints(pipeline)
+        except BaseException:
+            await self._finalize_receipt(record, resync_required=True)
+            raise
+        return await self._finalize_receipt(record, resync_required=not hints_succeeded)
 
     async def _run_hints(self, pipeline: PipelineRef) -> bool:
         failed = not await self._run_invalidation_hint(pipeline)

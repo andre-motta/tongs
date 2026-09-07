@@ -320,6 +320,22 @@ async def test_job_requires_fresh_membership_immediately_before_dispatch() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_id", [True, 1.0, 0, -1])
+async def test_malformed_native_job_identity_never_matches_target(
+    invalid_id: object,
+) -> None:
+    target = JobMutationTarget(PIPELINE, JobRef(REPOSITORY, 1))
+    malformed = PipelineJob(cast(int, invalid_id), "test", "verify", CIStatus.RUNNING)
+    harness = Harness(jobs=[malformed])
+
+    with pytest.raises(ServiceError) as raised:
+        await harness.service().execute(RetryJobCommand("malformed-job", target))
+
+    assert raised.value.code == ServiceErrorCode.INVALID_RESPONSE
+    assert harness.client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_unsupported_job_cancel_stops_before_target_read() -> None:
     harness = Harness(FakeClient(supports_job_cancel=False))
 
@@ -514,6 +530,29 @@ async def test_cancellation_resistant_invalidation_cleanup_is_bounded() -> None:
     ]
     harness.invalidate_release.set()
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_cannot_strand_operation_finalization() -> None:
+    harness = Harness()
+    harness.invalidate_release = asyncio.Event()
+    harness.resist_invalidate_cancellation = True
+    service = harness.service(hint_timeout=0.1)
+    command = CancelPipelineCommand("repeated-cancel", PIPELINE_TARGET)
+    owner = asyncio.create_task(service.execute(command))
+    await harness.invalidate_started.wait()
+
+    owner.cancel()
+    await asyncio.sleep(0)
+    owner.cancel()
+    harness.invalidate_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await owner
+    duplicate = await asyncio.wait_for(service.execute(command), timeout=0.1)
+    assert duplicate.outcome == CIMutationOutcome.KNOWN
+    assert duplicate.resync_required is False
+    assert harness.client.calls == [("cancel_pipeline", "acme/widgets", 101)]
 
 
 @pytest.mark.asyncio

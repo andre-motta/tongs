@@ -87,6 +87,7 @@ export class SidecarTransport extends EventEmitter {
   private stopping: Promise<void> | null = null;
   private expectedExit = false;
   private failureReported = false;
+  private closeRequested = false;
 
   constructor(
     launch: DesktopLaunchConfig,
@@ -111,6 +112,9 @@ export class SidecarTransport extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    if (this.closeRequested) {
+      throw new SidecarError("shutting_down", "The desktop service is stopping.");
+    }
     if (this.stopping) {
       await this.stopping;
       return this.start();
@@ -140,11 +144,22 @@ export class SidecarTransport extends EventEmitter {
   }
 
   async restart(): Promise<void> {
-    await this.stop();
+    if (this.closeRequested) {
+      throw new SidecarError("shutting_down", "The desktop service is stopping.");
+    }
+    await this.stopSession();
+    if (this.closeRequested) {
+      throw new SidecarError("shutting_down", "The desktop service is stopping.");
+    }
     await this.start();
   }
 
   async stop(): Promise<void> {
+    this.closeRequested = true;
+    await this.stopSession();
+  }
+
+  private async stopSession(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.stopping = this.stopOnce();
     try {
@@ -406,7 +421,7 @@ function validateHandshake(value: JsonValue, coreVersion: string): asserts value
     value.core_version !== coreVersion ||
     typeof value.session_id !== "string" ||
     value.session_id.length < 16 ||
-    JSON.stringify(capabilities) !== JSON.stringify(required) ||
+      !required.every((capability) => capabilities.includes(capability)) ||
     JSON.stringify(accepted) !== JSON.stringify(required) ||
     !REQUIRED_METHODS.every((method) => methods.includes(method)) ||
     !isRecord(value.limits) ||

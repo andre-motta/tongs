@@ -6,6 +6,7 @@ import { AssetCatalog } from "./assets.js";
 import { DesktopIpcController } from "./ipc.js";
 import { parseLaunchArguments } from "./launch.js";
 import { APP_DOCUMENT, isAllowedAppUrl } from "./security.js";
+import { recoverRendererSession } from "./renderer_lifecycle.js";
 import { SidecarTransport } from "./sidecar.js";
 
 protocol.registerSchemesAsPrivileged([
@@ -49,6 +50,7 @@ const desktopRoot = path.resolve(
 let window: BrowserWindow | null = null;
 let transport: SidecarTransport | null = null;
 let controller: DesktopIpcController | null = null;
+let assetCatalog: AssetCatalog | null = null;
 let rendererRestart: Promise<void> | null = null;
 const childProcessFailures: object[] = [];
 
@@ -66,6 +68,7 @@ async function run(): Promise<void> {
   transport = new SidecarTransport(launch);
   await transport.start();
   const assets = new AssetCatalog(transport, path.join(desktopRoot, "shell"));
+  assetCatalog = assets;
   await assets.refresh();
   desktopSession.protocol.handle("tongs", (request) =>
     assets.response(request.url),
@@ -99,8 +102,7 @@ async function run(): Promise<void> {
     event.preventDefault(),
   );
   window.webContents.on("render-process-gone", () => {
-    controller?.reset();
-    void transport?.restart();
+    void restartRendererSession();
   });
   app.on("child-process-gone", (_event, details) => {
     childProcessFailures.push({
@@ -123,7 +125,8 @@ async function run(): Promise<void> {
 async function captureSmokeReport(outputPath: string): Promise<void> {
   if (!window || !transport) throw new Error("Desktop smoke started too early");
   const reload = await reloadRendererSession();
-  const rendererProbe = reload.finalRendererProbe;
+  const rendererCrashRecovery = await crashRendererSession();
+  const rendererProbe = rendererCrashRecovery.finalRendererProbe;
   const gpu = await app.getGPUInfo("complete");
   const metrics = await Promise.all(
     app.getAppMetrics().map(async (item) => ({
@@ -153,6 +156,7 @@ async function captureSmokeReport(outputPath: string): Promise<void> {
     sidecarLinuxSandbox,
     sessionGeneration: transport.sessionGeneration,
     reload,
+    rendererCrashRecovery,
     rendererProbe,
     gpu,
     gpuFeatureStatus: app.getGPUFeatureStatus(),
@@ -174,6 +178,24 @@ async function captureSmokeReport(outputPath: string): Promise<void> {
   setTimeout(() => app.quit(), 500);
 }
 
+async function crashRendererSession(): Promise<{
+  initialSessionGeneration: number;
+  finalSessionGeneration: number;
+  finalRendererProbe: object;
+}> {
+  if (!window || !transport) throw new Error("Desktop crash recovery started too early");
+  const owner = window;
+  const initialSessionGeneration = transport.sessionGeneration;
+  const completed = waitForNewRendererLoad(owner, initialSessionGeneration);
+  owner.webContents.forcefullyCrashRenderer();
+  await completed;
+  return {
+    initialSessionGeneration,
+    finalSessionGeneration: transport.sessionGeneration,
+    finalRendererProbe: await rendererProbe(),
+  };
+}
+
 async function rendererProbe(): Promise<object> {
   if (!window) throw new Error("Desktop renderer is unavailable");
   return (await window.webContents.executeJavaScript(
@@ -192,7 +214,24 @@ async function reloadRendererSession(): Promise<{
   const owner = window;
   const initialSessionGeneration = transport.sessionGeneration;
   const initialRendererProbe = await rendererProbe();
-  const completed = new Promise<void>((resolve, reject) => {
+  const completed = waitForNewRendererLoad(owner, initialSessionGeneration);
+  void owner.webContents.executeJavaScript("location.reload()").catch(() => {
+    // The expected document teardown can reject the initiating renderer promise.
+  });
+  await completed;
+  return {
+    initialSessionGeneration,
+    finalSessionGeneration: transport.sessionGeneration,
+    initialRendererProbe,
+    finalRendererProbe: await rendererProbe(),
+  };
+}
+
+function waitForNewRendererLoad(
+  owner: BrowserWindow,
+  initialSessionGeneration: number,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       owner.webContents.off("did-finish-load", onLoad);
       reject(new Error("renderer reload timeout"));
@@ -207,16 +246,6 @@ async function reloadRendererSession(): Promise<{
     };
     owner.webContents.on("did-finish-load", onLoad);
   });
-  void owner.webContents.executeJavaScript("location.reload()").catch(() => {
-    // The expected document teardown can reject the initiating renderer promise.
-  });
-  await completed;
-  return {
-    initialSessionGeneration,
-    finalSessionGeneration: transport.sessionGeneration,
-    initialRendererProbe,
-    finalRendererProbe: await rendererProbe(),
-  };
 }
 
 async function restartRendererSession(): Promise<void> {
@@ -224,12 +253,23 @@ async function restartRendererSession(): Promise<void> {
   if (!window || !transport) throw new Error("Desktop reload started too early");
   const owner = window;
   const sidecar = transport;
+  const assets = assetCatalog;
+  if (!assets) throw new Error("Desktop assets are unavailable");
   rendererRestart = (async () => {
-    controller?.reset();
-    await sidecar.restart();
-    if (window === owner && !owner.isDestroyed()) {
-      await owner.loadURL(APP_DOCUMENT);
-    }
+    await recoverRendererSession({
+      resetBindings: () => controller?.reset(),
+      restartSidecar: () => sidecar.restart(),
+      refreshAssets: () => assets.refresh(),
+      loadDocument: async () => {
+        if (window === owner && !owner.isDestroyed()) await owner.loadURL(APP_DOCUMENT);
+      },
+      showFailure: async () => {
+        if (window !== owner || owner.isDestroyed()) return;
+        await owner.webContents.executeJavaScript(
+          "document.querySelector('#status').textContent = 'The local Tongs service is unavailable.'",
+        );
+      },
+    });
   })();
   try {
     await rendererRestart;

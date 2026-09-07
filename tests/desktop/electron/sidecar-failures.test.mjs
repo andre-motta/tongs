@@ -42,6 +42,7 @@ function harness({
   autoHandshake = true,
   delayedKill = false,
   delayedShutdown = false,
+  extraCapabilities = [],
 } = {}) {
   const children = [];
   const respond = (child, frame) => {
@@ -49,7 +50,7 @@ function harness({
       protocol_major: 1,
       core_version: "1.0",
       session_id: "1234567890abcdef",
-      capabilities: caps,
+      capabilities: [...caps, ...extraCapabilities],
       accepted_capabilities: caps,
       methods,
       limits: {
@@ -221,20 +222,40 @@ test("restart stops the prior session before a new handshake", async () => {
   await transport.stop();
 });
 
-test("start waits for an in-progress stop before replacing session", async () => {
+test("terminal stop rejects a concurrent start without replacement", async () => {
   const fake = harness({ delayedKill: true, delayedShutdown: true });
   const transport = transportFor(fake, 20);
   await transport.start();
   const old = fake.children[0];
   const stopping = transport.stop();
-  const starting = transport.start();
+  const starting = assert.rejects(transport.start(), { code: "shutting_down" });
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(fake.children.length, 1);
   old.finish(0, null);
-  await Promise.all([stopping, starting]);
-  assert.equal(fake.children.length, 2);
-  assert.equal(transport.processId, fake.children[1].pid);
-  const finalStop = transport.stop();
-  fake.children[1].finish(0, null);
-  await finalStop;
+  await stopping;
+  await starting;
+  assert.equal(fake.children.length, 1);
+  assert.equal(transport.processId, undefined);
+});
+
+test("terminal stop prevents an in-progress restart from resurrecting", async () => {
+  const fake = harness({ delayedKill: true, delayedShutdown: true });
+  const transport = transportFor(fake, 20);
+  await transport.start();
+  const old = fake.children[0];
+  const restarting = transport.restart();
+  const stopping = transport.stop();
+  old.finish(0, null);
+  await stopping;
+  await assert.rejects(restarting, { code: "shutting_down" });
+  assert.equal(fake.children.length, 1);
+  assert.equal(transport.processId, undefined);
+});
+
+test("handshake accepts server capability supersets", async () => {
+  const fake = harness({ extraCapabilities: ["split_diffs"] });
+  const transport = transportFor(fake);
+  await transport.start();
+  assert.equal(transport.sessionGeneration, 1);
+  await transport.stop();
 });

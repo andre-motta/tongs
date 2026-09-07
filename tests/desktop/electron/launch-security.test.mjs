@@ -30,6 +30,24 @@ test("runtime result boundary validates operation-specific DTOs", () => {
   assert.throws(() => assertResult("repositories.discover", { repositories: [{ handle: "r", display_name: "repo", forge_type: "github", filesystem_path: "/secret" }] }));
   assert.throws(() => assertResult("jobs.list", { jobs: [{ handle: "j", value: { id: 1, name: "test" } }] }));
   assert.throws(() => assertResult("host.set_location", { accepted: false }));
+  assert.throws(() => assertResult("plugins.list", {
+    plugins: [{ plugin_id: "sample", state: "started", has_terminal_entry_point: false, has_desktop_entry_point: true, error: null, manifest: {} }],
+  }));
+  assertResult("plugins.list", {
+    plugins: [{
+      plugin_id: "sample", state: "started", has_terminal_entry_point: false,
+      has_desktop_entry_point: true, error: null,
+      manifest: {
+        title: "Sample", version: "1.0", api_major: 1,
+        modules: [{ id: "main", title: "Main", entry_asset: "asset", stylesheets: ["style"] }],
+        navigation: [{ id: "home", title: "Home", module_id: "main" }],
+        commands: [{ id: "open", title: "Open", navigation_id: "home", help_text: "" }],
+        methods: ["refresh"], events: ["changed"],
+        focus_targets: [{ id: "item", title: "Item", module_id: "main" }],
+        help_asset: null, reads: ["reviews"], assets_available: true,
+      },
+    }],
+  });
 });
 
 test("navigation and external URL policy is scheme exact", () => {

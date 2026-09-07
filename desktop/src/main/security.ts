@@ -160,7 +160,53 @@ function assertComment(value: unknown, depth = 0): void { if (depth > 16) throw 
 function assertCommit(value: unknown): void { assertKeys(value, ["sha", "short_sha", "title", "message", "author", "created_at", "web_url"]); for (const key of ["sha", "short_sha", "title", "message", "web_url"] as const) text(value[key], MAX_IPC_BYTES); assertUser(value.author); nullableText(value.created_at); }
 function assertPipeline(value: unknown): void { assertKeys(value, ["id", "status", "ref", "sha", "web_url", "source", "created_at", "finished_at", "duration_seconds"]); integer(value.id); for (const key of ["status", "ref", "sha", "web_url", "source"] as const) text(value[key]); nullableText(value.created_at); nullableText(value.finished_at); numberOrNull(value.duration_seconds); }
 function assertJob(value: unknown): void { assertKeys(value, ["id", "name", "stage", "status", "web_url", "started_at", "finished_at", "duration_seconds", "allow_failure"]); integer(value.id); for (const key of ["name", "stage", "status", "web_url"] as const) text(value[key]); nullableText(value.started_at); nullableText(value.finished_at); numberOrNull(value.duration_seconds); bool(value.allow_failure); }
-function assertPlugin(value: unknown): void { assertKeys(value, ["plugin_id", "state", "has_terminal_entry_point", "has_desktop_entry_point", "error", "manifest"]); text(value.plugin_id); text(value.state); bool(value.has_terminal_entry_point); bool(value.has_desktop_entry_point); if (value.error !== null) assertServiceError(value.error); if (value.manifest !== null) { if (!isRecord(value.manifest)) throw new Error("Invalid plugin manifest"); assertJson(value.manifest); } }
+function assertPlugin(value: unknown): void {
+  assertKeys(value, ["plugin_id", "state", "has_terminal_entry_point", "has_desktop_entry_point", "error", "manifest"]);
+  text(value.plugin_id);
+  text(value.state);
+  bool(value.has_terminal_entry_point);
+  bool(value.has_desktop_entry_point);
+  if (value.error !== null) assertServiceError(value.error);
+  if (value.manifest !== null) assertPluginManifest(value.manifest);
+}
+
+function assertPluginManifest(value: unknown): void {
+  assertKeys(value, ["title", "version", "api_major", "modules", "navigation", "commands", "methods", "events", "focus_targets", "help_asset", "reads", "assets_available"]);
+  text(value.title);
+  text(value.version);
+  integer(value.api_major, 1);
+  assertArray(value.modules, (item) => {
+    assertKeys(item, ["id", "title", "entry_asset", "stylesheets"]);
+    text(item.id);
+    text(item.title);
+    nullableText(item.entry_asset);
+    assertArray(item.stylesheets, nullableText, 64);
+  }, 128);
+  assertArray(value.navigation, (item) => {
+    assertKeys(item, ["id", "title", "module_id"]);
+    text(item.id);
+    text(item.title);
+    text(item.module_id);
+  }, 128);
+  assertArray(value.commands, (item) => {
+    assertKeys(item, ["id", "title", "navigation_id", "help_text"]);
+    text(item.id);
+    text(item.title);
+    text(item.navigation_id);
+    if (typeof item.help_text !== "string" || item.help_text.length > MAX_TEXT) throw new Error("Invalid plugin command help");
+  }, 128);
+  assertArray(value.methods, text, 256);
+  assertArray(value.events, text, 256);
+  assertArray(value.focus_targets, (item) => {
+    assertKeys(item, ["id", "title", "module_id"]);
+    text(item.id);
+    text(item.title);
+    text(item.module_id);
+  }, 128);
+  nullableText(value.help_asset);
+  assertArray(value.reads, text, 64);
+  bool(value.assets_available);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

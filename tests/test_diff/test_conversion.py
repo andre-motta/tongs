@@ -165,6 +165,46 @@ def test_incomplete_hunk_is_truncated_with_authoritative_aggregate_counts() -> N
     assert len(file.hunks[0].lines) == 2
 
 
+def test_omitted_complete_hunks_are_truncated_by_aggregate_count_shortfall() -> None:
+    file = convert_forge_changes(
+        (
+            {
+                "filename": "src/partial.py",
+                "additions": 5,
+                "deletions": 4,
+                "patch": "@@ -1 +1 @@\n-old\n+new\n",
+            },
+        )
+    )[0]
+
+    assert file.is_truncated is True
+    assert file.additions == 5
+    assert file.deletions == 4
+    assert len(file.hunks) == 1
+    assert [line.line_type for line in file.hunks[0].lines] == [
+        LineType.DELETION,
+        LineType.ADDITION,
+    ]
+
+
+def test_binary_aggregate_counts_do_not_imply_text_patch_truncation() -> None:
+    file = convert_forge_changes(
+        (
+            {
+                "filename": "image.png",
+                "is_binary": True,
+                "additions": 8,
+                "deletions": 4,
+            },
+        )
+    )[0]
+
+    assert file.is_binary is True
+    assert file.is_truncated is False
+    assert file.additions == 8
+    assert file.deletions == 4
+
+
 def test_malformed_optional_values_do_not_drop_file() -> None:
     files = convert_forge_changes(
         (

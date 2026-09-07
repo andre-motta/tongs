@@ -855,3 +855,25 @@ class TestEdgeCases:
             "before",
             "after",
         ]
+
+    def test_header_looking_source_pair_completes_hunk_before_next_hunk(self) -> None:
+        diff = (
+            "--- a/comments.txt\n"
+            "+++ b/comments.txt\n"
+            "@@ -1 +1 @@\n"
+            "--- comment\n"
+            "+++ comment\n"
+            "@@ -10 +10 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+
+        files = parse_diff(diff)
+
+        assert len(files) == 1
+        assert len(files[0].hunks) == 2
+        assert [line.content for line in files[0].hunks[0].lines] == [
+            "-- comment",
+            "++ comment",
+        ]
+        assert [line.content for line in files[0].hunks[1].lines] == ["old", "new"]

@@ -50,11 +50,15 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
     )
     mode_only_value = _first_bool(change, "is_mode_only", "mode_only", "mode_changed")
 
-    additions = _count(
-        change.get("additions"), parsed_file.additions if parsed_file else 0
+    parsed_additions = parsed_file.additions if parsed_file else 0
+    parsed_deletions = parsed_file.deletions if parsed_file else 0
+    reported_additions = _json_count(change.get("additions"))
+    reported_deletions = _json_count(change.get("deletions"))
+    additions = (
+        reported_additions if reported_additions is not None else parsed_additions
     )
-    deletions = _count(
-        change.get("deletions"), parsed_file.deletions if parsed_file else 0
+    deletions = (
+        reported_deletions if reported_deletions is not None else parsed_deletions
     )
     has_hunks = bool(hunks)
     is_mode_only = (
@@ -70,13 +74,27 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
     # metadata but withheld the body.  This is the useful, conservative
     # distinction between a truncated patch and an intentionally empty file.
     incomplete_hunk = _has_incomplete_hunk(hunks)
-    is_truncated = incomplete_hunk or (
-        is_truncated_value is True
+    aggregate_shortfall = (
+        has_hunks
+        and not is_binary
+        and (
+            (reported_additions is not None and parsed_additions < reported_additions)
+            or (
+                reported_deletions is not None and parsed_deletions < reported_deletions
+            )
+        )
+    )
+    is_truncated = (
+        incomplete_hunk
+        or aggregate_shortfall
         or (
-            is_truncated_value is None
-            and not has_hunks
-            and not is_binary
-            and bool(additions or deletions)
+            is_truncated_value is True
+            or (
+                is_truncated_value is None
+                and not has_hunks
+                and not is_binary
+                and bool(additions or deletions)
+            )
         )
     )
 
@@ -187,12 +205,12 @@ def _parse_patch(patch: str) -> list[DiffFile]:
     return parse_diff(text)
 
 
-def _count(value: object, fallback: int) -> int:
-    """Return a non-negative JSON integer, or parser-derived counts."""
+def _json_count(value: object) -> int | None:
+    """Return a non-negative JSON integer when one was reported."""
 
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         return value
-    return fallback
+    return None
 
 
 def _modes_differ(change: Mapping[str, object]) -> bool:

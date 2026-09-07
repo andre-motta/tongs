@@ -354,6 +354,13 @@ def _is_file_header_boundary(
         return False
     if old_consumed >= old_count and new_consumed >= new_count:
         return True
+    # These two lines are also the valid unified-diff encoding of a deletion
+    # whose source starts with ``--`` followed by an addition starting with
+    # ``++``. Preserve them whenever both sides still fit the current hunk.
+    # A truncated plain diff can be ambiguous here; declared hunk counts take
+    # priority over speculative recovery of a following plain file.
+    if old_consumed < old_count and new_consumed < new_count:
+        return False
     return index + 2 < len(lines) and HUNK_HEADER_RE.match(lines[index + 2]) is not None
 
 

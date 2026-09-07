@@ -5,6 +5,8 @@ desktop shell comparison. It builds into `dist/`, which is the only directory
 the Python asset server needs at runtime. Node and npm are build-time tools;
 the eventual pip/RPM package must ship the generated assets and must not depend
 on a user having Node, npm, a source checkout, or a virtual environment.
+The bundled `public/assets/tongs-icon.png` is copied byte-for-byte from
+`docs/assets/icon.png`, the existing Tongs website logo and favicon source.
 
 ## Development
 

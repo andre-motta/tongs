@@ -142,7 +142,7 @@ export function App(): JSX.Element {
     <div className="app-shell" data-theme={theme}>
       <header className="topbar">
         <div className="brand-lockup" aria-label="tongs desktop fixture">
-          <div className="brand-mark">t</div>
+          <div className="brand-mark"><img src="/assets/tongs-icon.png" alt="tongs logo" /></div>
           <div>
             <div className="brand-name">tongs <span>desktop</span></div>
             <div className="eyebrow">review workspace</div>

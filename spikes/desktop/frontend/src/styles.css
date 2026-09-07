@@ -56,6 +56,7 @@ button:focus-visible, [tabindex="0"]:focus-visible { outline: 2px solid var(--bl
 .brand-lockup, .topbar-context, .topbar-actions, .section-heading, .connection-row, .review-card-top, .review-card-meta, .review-card-bottom, .detail-subline, .diff-toolbar, .diff-toolbar-right, .file-breadcrumb, .diff-info, .module-runtime-note, .plugin-heading { display: flex; align-items: center; }
 .brand-lockup { gap: 10px; }
 .brand-mark { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; background: linear-gradient(140deg, #738ff6, #9366df); border-radius: 9px; font-size: 20px; font-weight: 800; box-shadow: 0 5px 14px rgba(105, 113, 225, .35); }
+.brand-mark img { width: 100%; height: 100%; display: block; border-radius: inherit; object-fit: contain; }
 .brand-name { color: var(--text); font-weight: 750; font-size: 15px; letter-spacing: -.02em; }
 .brand-name span { color: var(--muted); font-weight: 500; }
 .eyebrow, .section-label, .panel-label { color: var(--muted); text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: .105em; }

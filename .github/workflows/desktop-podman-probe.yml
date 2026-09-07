@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source without persisted credentials
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
 
@@ -49,7 +49,7 @@ jobs:
 
       - name: Upload Fedora 44 probe evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fedora-44-x86-64-podman-probe
           path: |

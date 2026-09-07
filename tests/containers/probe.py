@@ -177,6 +177,7 @@ def main() -> int:
     _copy_source()
 
     build_env = os.environ.copy()
+    build_env["SETUPTOOLS_SCM_PRETEND_VERSION"] = "0.0.0+podman"
     build_env["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS"] = "0.0.0+podman"
     steps: list[StepResult] = []
 

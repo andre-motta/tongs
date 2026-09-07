@@ -249,6 +249,8 @@ def _parse_single_hunk(
     diff_lines: list[DiffLine] = []
     old_line = old_start
     new_line = new_start
+    old_consumed = 0
+    new_consumed = 0
     i = start + 1
 
     while i < len(lines):
@@ -257,10 +259,15 @@ def _parse_single_hunk(
         if line.startswith(("@@ ", "diff --git ")):
             break
 
+        if not line and old_consumed >= old_count and new_consumed >= new_count:
+            break
+
         if (
             line.startswith("--- ")
             and i + 1 < len(lines)
             and lines[i + 1].startswith("+++ ")
+            and old_consumed >= old_count
+            and new_consumed >= new_count
         ):
             break
 
@@ -274,6 +281,7 @@ def _parse_single_hunk(
                 )
             )
             new_line += 1
+            new_consumed += 1
         elif line.startswith("-"):
             diff_lines.append(
                 DiffLine(
@@ -284,6 +292,7 @@ def _parse_single_hunk(
                 )
             )
             old_line += 1
+            old_consumed += 1
         elif line.startswith(" ") or not line:
             diff_lines.append(
                 DiffLine(
@@ -295,6 +304,8 @@ def _parse_single_hunk(
             )
             old_line += 1
             new_line += 1
+            old_consumed += 1
+            new_consumed += 1
         elif line.startswith("\\"):
             diff_lines.append(
                 DiffLine(

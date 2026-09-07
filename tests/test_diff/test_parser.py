@@ -813,3 +813,22 @@ class TestEdgeCases:
         del_lines = [ln for ln in lines if ln.line_type == LineType.DELETION]
         assert len(del_lines) == 1
         assert del_lines[0].content == "-- This is a SQL comment"
+
+    def test_hunk_source_lines_resembling_file_headers_are_not_boundaries(self) -> None:
+        diff = (
+            "--- a/comments.txt\n"
+            "+++ b/comments.txt\n"
+            "@@ -1 +1 @@\n"
+            "--- comment\n"
+            "+++ comment\n"
+        )
+
+        files = parse_diff(diff)
+
+        assert len(files) == 1
+        lines = files[0].hunks[0].lines
+        assert [line.line_type for line in lines] == [
+            LineType.DELETION,
+            LineType.ADDITION,
+        ]
+        assert [line.content for line in lines] == ["-- comment", "++ comment"]

@@ -2,7 +2,7 @@
   "schema": "tongs-electron-gpu-proof-1",
   "issue": 25,
   "date": "2026-09-07",
-  "application_candidate": "84871802543426d093522bd543ce9718941bb684",
+  "application_candidate": "1e29b22ad836cac0600316e325720fcf6c2739cc",
   "frontend_build_commit": "f710767cd46731cc7cd32aa15199ace5dc9f222f",
   "environment": {
     "os": "Fedora Linux 44 (Forty Four)",
@@ -31,7 +31,7 @@
     "embedded_node": "24.20.0",
     "build_node": "22.23.1",
     "python": "3.14.7",
-    "tongs": "0.4.2.dev17+g848718025",
+    "tongs": "0.4.2.dev19+g1e29b22ad",
     "reference_plugin": "0.0.1",
     "electron_prototype": "0.0.1"
   },
@@ -50,20 +50,28 @@
   },
   "artifacts": {
     "tongs_wheel": {
-      "size": 84269,
-      "sha256": "000315eed07a179158533ba69851bd7e73e7536067f694ca489b579651c6fe90"
+      "size": 84267,
+      "sha256": "107e70cababdb054eefcf13bff951d242b28a43adc4c2e72e5e0e7ea35d24730"
     },
     "reference_plugin_wheel": {
       "size": 3310,
       "sha256": "af24421fb15c8b1f141757e83860e221d73a3f1d985868cc5ba7c9909e4db763"
     },
     "electron_wheel": {
-      "size": 131994497,
-      "sha256": "7a630a2c83c26aabe45e26c49f8ce8e7d62fbfdb51cefb60da04855dd693f179"
+      "size": 131995102,
+      "sha256": "063fd1fe27015cdefcbd278aae6be1c20a29ad7fc6218751e225c588ea8abfdb"
     },
     "installed_electron_executable_sha256": "9b827d38aacff0d69933481625c4c8f13b4732cbecd0e3477b1d2bac6102522c",
     "installed_plugin_screenshot_sha256": "28486a47cddec31aff3c9dec47c1b87d50a1f10862085d436f0ef40b443bb6e0",
-    "installed_large_diff_screenshot_sha256": "fcc5f5e2ef410d03b61aca9bc0198c2ed5bec56a8df41e33394ab1b373021a6c"
+    "installed_large_diff_screenshot_sha256": "fcc5f5e2ef410d03b61aca9bc0198c2ed5bec56a8df41e33394ab1b373021a6c",
+    "installed_run_reports_sha256": [
+      "1f6c174c3ba82dd4cb4560af881948a29814fb0c4dfff690fde5dedb09d96872",
+      "1e71d7145fddbb823ae8560db876b22df6d4ba7c0683f2904542b61aac544a13",
+      "bf8af90fa1d9ac6e8a0b28c91d05ffb6d0d6f6eebca6cd36f244452aeb68ebe9",
+      "d54c9cf19ea020bee7de2c3f90b3ac60530c04fff50f86c5bd33f302a42f7648",
+      "e5532814e6cd36ef52827be7cffbb5d64c0b06d01f21312f9c1d25ea2367e3c7"
+    ],
+    "injected_gpu_failure_report_sha256": "301b26e439f15e66ce406198f3da897bc9bd275c7704d0505df883e4ce530115"
   },
   "diagnostic_matrix": [
     {
@@ -94,6 +102,17 @@
       "window_opened": false,
       "result": "fail as required",
       "reason": "Electron rejected GPU access and the hardware-required smoke exited with status 1 without an accepted report"
+    },
+    {
+      "configuration": "installed XWayland with GPU child killed after common UI probe and screenshot",
+      "window_opened": true,
+      "initial_gpu_acceptance": "pass",
+      "replacement_gpu_accelerated": true,
+      "retained_child_failure": {"type": "GPU", "reason": "killed", "exit_code": 9},
+      "final_gpu_acceptance": "fail",
+      "failed_check": "no_child_process_failures",
+      "exit_code": 1,
+      "result": "fail as required"
     }
   ],
   "accelerated_configuration": {
@@ -130,17 +149,32 @@
       "seccomp_filters": 1,
       "process_global": "undefined",
       "require_global": "undefined"
+    },
+    "main_process": {
+      "no_new_privs": 0,
+      "seccomp": 0,
+      "seccomp_filters": 0,
+      "role": "privileged Electron browser process; recorded separately and not claimed as sandboxed"
     }
   },
+  "evidence_timing": {
+    "initial_snapshot_retained": true,
+    "final_snapshot_after_ui_probe": true,
+    "final_snapshot_after_screenshot": true,
+    "final_device_feature_process_and_sandbox_evidence_refreshed": true,
+    "final_acceptance_uses_complete_pre_report_child_failure_history": true,
+    "final_acceptance_immediately_precedes_synchronous_report_write": true
+  },
   "installed_runs": [
-    {"run": 1, "exit_code": 0, "startup_ms": 886.4, "diff_fetch_ms": 61.1, "ui_probe_ms": 288.1, "large_render_ms": 42.3, "rendered_rows": 27},
-    {"run": 2, "exit_code": 0, "startup_ms": 891.8, "diff_fetch_ms": 63.0, "ui_probe_ms": 288.2, "large_render_ms": 42.2, "rendered_rows": 27},
-    {"run": 3, "exit_code": 0, "startup_ms": 888.9, "diff_fetch_ms": 59.0, "ui_probe_ms": 287.3, "large_render_ms": 41.1, "rendered_rows": 27},
-    {"run": 4, "exit_code": 0, "startup_ms": 880.5, "diff_fetch_ms": 59.0, "ui_probe_ms": 285.1, "large_render_ms": 39.6, "rendered_rows": 27},
-    {"run": 5, "exit_code": 0, "startup_ms": 889.3, "diff_fetch_ms": 65.5, "ui_probe_ms": 288.2, "large_render_ms": 41.9, "rendered_rows": 27}
+    {"run": 1, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 888.0, "diff_fetch_ms": 63.9, "ui_probe_ms": 288.3, "large_render_ms": 42.4, "rendered_rows": 27},
+    {"run": 2, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 890.6, "diff_fetch_ms": 69.0, "ui_probe_ms": 291.2, "large_render_ms": 44.6, "rendered_rows": 27},
+    {"run": 3, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 879.5, "diff_fetch_ms": 65.8, "ui_probe_ms": 287.1, "large_render_ms": 41.1, "rendered_rows": 27},
+    {"run": 4, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 890.9, "diff_fetch_ms": 65.2, "ui_probe_ms": 287.9, "large_render_ms": 41.6, "rendered_rows": 27},
+    {"run": 5, "exit_code": 0, "initial_gpu_passed": true, "final_gpu_passed": true, "startup_ms": 883.7, "diff_fetch_ms": 66.0, "ui_probe_ms": 289.2, "large_render_ms": 42.9, "rendered_rows": 27}
   ],
   "installed_run_assertions": {
-    "all_gpu_checks_passed": true,
+    "all_initial_gpu_checks_passed": true,
+    "all_final_refreshed_gpu_checks_passed": true,
     "all_child_process_failure_lists_empty": true,
     "all_large_diff_line_counts": 20000,
     "all_reached_last_row": true,

@@ -1,6 +1,7 @@
 # Desktop shell decision worksheet
 
-Status: comparison in progress. This document does not select a production shell.
+Status: comparison complete locally; CTO acceptance and shell selection pending.
+This document recommends a direction without selecting an approved production shell.
 The CTO approved the bounded comparison; the measured result returns to the design
 gate before production implementation. Fixture bridge and module interfaces are
 experimental and must not become a public SDK by accident.
@@ -188,8 +189,47 @@ service extraction and draft-storage work may still need serialized edits to
 shared models. A dependency is ready only after integration and verification,
 not merely because its API proposal exists.
 
-## Evidence and unresolved checks
+## Comparison result and recommendation
 
-Evidence is still being collected. No native shell or production release pass is
-claimed by this worksheet. Existing baseline lint and dependency issues must be
-reported alongside candidate results and cannot be silently treated as passing.
+Both candidates passed the same installed native application probe on Fedora 44
+KDE x86_64, using the same frontend, fixture backend and independently installed
+plugin. See the [acceptance evidence](proof/README.md), including screenshots,
+exact tested commit, hashes, checks, measurements and unresolved limitations.
+Both shells are technically viable for the bounded fixture experience.
+
+Astra recommends **Electron as the basis for the next production design**, with
+an explicit graphics compatibility gate on the supported host. This is an
+architectural judgment, not CTO approval or a production-readiness claim.
+
+The changed distribution goal matters: a separately downloaded GUI with a Python
+backend in the existing Tongs environment maps directly to Electron's proven
+sidecar arrangement. The prototype also already enforces renderer isolation,
+main-frame/origin validation, navigation denial and CSP. Its larger runtime can
+be a GitHub Release asset rather than a PyPI wheel. Tongs would own the bundled
+runtime's security updates, license inventory and release cadence.
+
+The webview candidate is the stronger observed fit for default graphics on this
+Fedora host and can reuse distribution-owned Qt in an RPM. It is a credible
+alternative if those are prioritized. Its small wheel omits Qt, however, and the
+current in-process GUI/backend proof does not establish the proposed standalone
+GUI download with same-Tongs-interpreter plugin discovery. That path needs a
+separate backend boundary plus a packaged GUI environment. Navigation, origin
+and content policy also remain production blockers.
+
+Electron's tested Wayland configuration required `--disable-gpu`, while the Qt
+candidate ran without a GPU override. Before broad production dispatch, a bounded
+follow-up should determine whether a normal sandboxed Electron configuration
+works on this host or whether a documented software-rendering mode is acceptable.
+The 20,000-line fixture remained responsive in that mode, but this does not prove
+video, full accessibility, real forge performance or release-wide graphics quality.
+If this gate fails, revisit the shell choice before implementing dependent UI.
+
+The current measurements do not justify a startup-speed winner or a general
+memory-efficiency ranking. They use different capture milestones and RSS sampling,
+with different viewports. Neither framework removes the need for production
+security, lifecycle, installer compatibility and recovery work.
+
+The next CTO design decision covers the selected shell, shared service boundaries,
+additive plugin contract, draft/diff model, the explicit installer and release
+trust model. Existing core lint/format checks remain unmet and the MCP dependency
+compatibility issue remains recorded. No production release pass is claimed.

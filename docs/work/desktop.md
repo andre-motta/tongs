@@ -1,6 +1,7 @@
 # Optional desktop interface: planning record
 
-Status: **prototype milestone in progress**. The CTO authorized starting the agreed shell comparison; production architecture remains gated.
+Status: **prototype comparison complete locally; CTO acceptance pending**.
+Production architecture and upstream publication remain gated.
 Workflow baseline: Agent SDLC 0.1.0, source commit
 `4e851d1b8a903aa8bebceea078860a21152ee8e8`; see the project profile.
 
@@ -98,7 +99,7 @@ remain to be designed after the shell comparison.
 | [#19 Common frontend](https://github.com/andre-motta/tongs/issues/19) | Luna xhigh, Sol review | #18 | Locally integrated |
 | [#20 Python webview](https://github.com/andre-motta/tongs/issues/20) | Sol high, independent Sol review | #18 | Locally integrated |
 | [#21 Electron](https://github.com/andre-motta/tongs/issues/21) | Sol high, independent Sol review | #18 | Locally integrated |
-| [#22 Comparison and architecture](https://github.com/andre-motta/tongs/issues/22) | Astra with Sol assessment | #19, #20, #21 | Assigned |
+| [#22 Comparison and architecture](https://github.com/andre-motta/tongs/issues/22) | Astra with Sol assessment | #19, #20, #21 | Review |
 
 The experimental contract and code live under `spikes/desktop/`, outside production
 packaging. The shared fixture backend, frontend interface, plugin bundle format,
@@ -209,3 +210,32 @@ approval and were integrated at `bfce520` and `2baa331`. Ten tests passed,
 including the real sidecar. The correction aligns minimum width and excludes
 generated Python bytecode from packaged assets. Final combined artifact builds
 and native runs follow these exact integration commits.
+
+## Combined comparison checkpoint
+
+The exact application candidate is
+`02ad69685f8511bcd7945a26650f3e2de2e6c908`. Both freshly built host wheels launched
+outside the checkout with installed core and reference-plugin wheels. The shared
+native probe passed on Wayland in both applications. All 659 automated tests
+passed: 618 core, 7 backend, 10 frontend, 10 Electron, and 14 webview. New-code
+lint/format and the strict documentation build passed. Baseline core lint/format
+remains unmet and is not waived.
+
+The retained acceptance package is `spikes/desktop/proof/README.md`; the shell
+comparison and proposed production design are in `spikes/desktop/DECISION.md`.
+Evidence includes actual application captures, versioned input/output hashes,
+installed-plugin interaction, limitations and recovery. These repository-root
+paths are not public site links until the accepted branch is published.
+
+Astra recommends Electron for the next production design because its separate
+GUI/runtime and same-interpreter Python sidecar fit the proposed explicit download
+flow. Graphics compatibility remains a mandatory follow-up on the supported host;
+Qt remains a viable alternative with better observed default graphics and system
+RPM dependency reuse. No shell or production work graph is approved by this
+recommendation. Local main promotion remains pending because its checkout is dirty;
+no Tongs code was pushed and all upstream issues remain open.
+
+Final independent Sol assessment approved the comparison and acceptance record.
+Its only clarity note, explicitly naming the passing terminal-only plugin hook
+sentinels, is incorporated in the retained evidence. #18 through #21 are locally
+integrated; #22 is in review pending CTO acceptance and production design choices.

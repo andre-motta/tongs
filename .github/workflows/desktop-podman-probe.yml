@@ -1,11 +1,12 @@
 name: Desktop Podman probe
 
 on:
-  pull_request:
-    branches: [feat/desktop-app]
-    paths:
-      - "tests/containers/**"
-      - ".github/workflows/desktop-podman-probe.yml"
+  workflow_call:
+    inputs:
+      head_sha:
+        description: Exact source revision recorded in the probe evidence
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -16,24 +17,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      TONGS_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      TONGS_HEAD_SHA: ${{ inputs.head_sha }}
     steps:
       - name: Check out source without persisted credentials
         uses: actions/checkout@v6
         with:
           fetch-depth: 2
           persist-credentials: false
-
       - name: Record hosted runner and Podman versions
         run: |
           uname -a
           podman version
-
       - name: Run Fedora 44 success probe
         run: |
           tests/containers/run-fedora-44.sh \
             --output-dir "$RUNNER_TEMP/tongs-fedora-44-success"
-
       - name: Assert deliberate harness failure returns nonzero
         if: ${{ always() }}
         shell: bash
@@ -47,7 +45,6 @@ jobs:
           python3 tests/containers/verify_expected_failure.py \
             --output-dir "$RUNNER_TEMP/tongs-fedora-44-failure" \
             --actual-status "$status"
-
       - name: Upload Fedora 44 probe evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

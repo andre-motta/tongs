@@ -6,39 +6,129 @@ on:
   pull_request:
     branches: [main, feat/desktop-app]
 
+permissions:
+  contents: read
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  lint-and-format:
+    name: Lint and format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install Ruff
+        run: python -m pip install ruff
+      - name: Lint source and tests
+        run: ruff check src/ tests/
+      - name: Check source and test formatting
+        run: ruff format --check src/ tests/
+
+  core:
+    name: Core and MCP (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install core, development, and MCP dependencies
+        run: python -m pip install -e ".[dev,mcp]"
+      - name: Run core tests
+        run: pytest tests/ --ignore=tests/test_mcp -v
+      - name: Run MCP tests with a machine-readable report
+        run: >-
+          pytest tests/test_mcp -v
+          --junitxml="$RUNNER_TEMP/mcp-${{ matrix.python-version }}.junit.xml"
+      - name: Verify MCP tests ran without skips
+        run: >-
+          python tests/ci/verify_desktop_ci.py mcp-report
+          --path "$RUNNER_TEMP/mcp-${{ matrix.python-version }}.junit.xml"
+      - name: Upload MCP test report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcp-python-${{ matrix.python-version }}-junit
+          path: ${{ runner.temp }}/mcp-${{ matrix.python-version }}.junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-  lint:
-    runs-on: ubuntu-latest
+  desktop-fixtures:
+    name: Desktop fixture checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Install core and desktop fixture dependencies
+        run: |
+          python -m pip install -e ".[dev,mcp]"
+          python -m pip install ./spikes/desktop/reference-plugin
+      - name: Run backend fixture tests
+        env:
+          PYTHONPATH: spikes/desktop
+        run: pytest spikes/desktop/tests/test_backend.py -v
+      - name: Install and test frontend dependencies
+        run: |
+          npm ci --prefix spikes/desktop/frontend
+          npm test --prefix spikes/desktop/frontend
+          npm run build --prefix spikes/desktop/frontend
+      - name: Install and test Electron fixture dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          npm ci --prefix spikes/desktop/electron
+          TONGS_DESKTOP_PYTHON="$(command -v python)" \
+            npm test --prefix spikes/desktop/electron
 
-      - name: Install ruff
-        run: pip install ruff
+  fedora-podman:
+    name: Fedora 44 Podman
+    uses: ./.github/workflows/desktop-podman-probe.yml
+    with:
+      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Lint
-        run: ruff check src/
-
-      - name: Format check
-        run: ruff format --check src/
+  desktop-pr-gate:
+    name: Desktop pre-merge aggregate
+    if: ${{ always() }}
+    needs:
+      - lint-and-format
+      - core
+      - desktop-fixtures
+      - fedora-podman
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      DESKTOP_GATE_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Require every desktop pre-merge job to succeed
+        run: python3 tests/ci/verify_desktop_ci.py aggregate

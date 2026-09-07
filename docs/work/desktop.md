@@ -13,8 +13,12 @@ Workflow baseline: Agent SDLC 0.1.0, source commit
 - Compare the same React/TypeScript screen and fixtures for clean pip installation,
   Linux compatibility, startup, memory, diff responsiveness, and test automation.
   Users should receive built frontend assets rather than need Node/npm locally.
-- Required Linux targets: x86_64 Fedora KDE and Ubuntu GNOME, Wayland and X11.
-  ARM and other operating systems are later work.
+- Initial supported target: the existing Fedora 44 KDE x86_64 system. The CTO
+  narrowed validation to this host; other distributions, desktop environments,
+  native Xorg, ARM and other operating systems are deferred expansion. Record the
+  actual native Wayland or XWayland backend. Broader platform checks are not
+  required for this milestone. Do not set up other OSes/desktops or test VMs on
+  the user's PC.
 - Target current core review/CI parity plus side-by-side diffs and draft reviews.
   New review capabilities must also ship in the TUI.
 - Drafts persist locally across restarts and can be resumed in either interface,
@@ -152,3 +156,9 @@ and independent reviews follow implementation. Root owns comparison and tracking
 Baseline rerun: 618 passed with Python 3.14.7, MCP 1.29.1, Textual 8.2.8,
 pytest 9.1.1, pytest-asyncio 1.4.0, aiosqlite 0.22.1. Strict MkDocs build passed.
 Ruff 0.16.6 found the baseline lint/format issues recorded above.
+
+Frontend candidate `08c44f4ae92c7af45ef9da399f11a28eccdf94be` received Sol
+NEEDS CHANGES: plugin load status must reflect errors, and keyboard hints must
+match implemented navigation. Luna owns corrections before integration. The
+first-module-only plugin UI is a documented comparison limitation. Eight frontend
+checks and the build passed; combined native proof remains pending.

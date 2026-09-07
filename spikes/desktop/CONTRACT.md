@@ -89,6 +89,10 @@ identify work needed for a future offline RPM build from prepared sources.
 
 Deliver commands, versions, startup/process-tree memory observations, large-diff
 behavior, plugin backend-call/help evidence, and screenshots from the actual
-native window. Label browser-only checks separately. Use Fedora KDE Wayland
-locally; report Ubuntu/X11 as unverified unless actually exercised. Record
-limitations rather than equating the spike with a production release.
+native window. Label browser-only checks separately. The CTO narrowed initial
+support and acceptance to the existing Fedora 44 KDE x86_64 system. Record the
+actual Qt/Ozone backend, distinguishing native Wayland from XWayland. Other
+distributions, desktops, native Xorg, architectures and operating systems are
+deferred expansion, not unmet gates for this milestone. Do not install another
+OS or desktop, or set up test VMs on the user's PC. Record limitations rather than
+equating the spike with a production release.

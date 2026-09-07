@@ -197,6 +197,7 @@ class CIMutationService:
         invalidate_pipeline: InvalidatePipeline | None = None,
         max_operations: int = 256,
         hint_timeout: float = 5.0,
+        close_timeout: float = 1.0,
     ) -> None:
         if not isinstance(max_operations, int) or isinstance(max_operations, bool):
             raise TypeError("max_operations must be an integer")
@@ -204,16 +205,20 @@ class CIMutationService:
             raise ValueError("max_operations must be positive")
         if hint_timeout <= 0:
             raise ValueError("hint_timeout must be positive")
+        if close_timeout <= 0:
+            raise ValueError("close_timeout must be positive")
         self._get_client = get_client
         self._get_pipeline_jobs = get_pipeline_jobs
         self._emit_change = emit_change
         self._invalidate_pipeline = invalidate_pipeline
         self._max_operations = max_operations
         self._hint_timeout = hint_timeout
+        self._close_timeout = close_timeout
         self._operations: dict[str, _OperationRecord] = {}
         self._operation_lock = asyncio.Lock()
         self._coordinator_tasks: set[asyncio.Task[CIMutationReceipt]] = set()
         self._invalidation_tasks: set[asyncio.Task[None]] = set()
+        self._owner_tasks: set[asyncio.Task[object]] = set()
         self._closed = False
 
     async def capabilities(self, repository: RepositoryRef) -> CIMutationCapabilities:
@@ -239,7 +244,6 @@ class CIMutationService:
 
     async def execute(self, command: CIMutationCommand) -> CIMutationReceipt:
         """Execute once per operation ID and retain its known or unknown result."""
-        self._require_open()
         action, pipeline, job = self._command_parts(command)
         self._validate_operation_id(command.operation_id)
         fingerprint = (action, pipeline, job)
@@ -247,6 +251,23 @@ class CIMutationService:
         if not owner:
             await record.done.wait()
             return self._record_result(record)
+
+        owner_task = asyncio.current_task()
+        if owner_task is None:
+            raise RuntimeError("CI mutation execution requires an asyncio task")
+        try:
+            return await self._execute_owner(command, record, action, pipeline, job)
+        finally:
+            self._owner_tasks.discard(owner_task)
+
+    async def _execute_owner(
+        self,
+        command: CIMutationCommand,
+        record: _OperationRecord,
+        action: CIMutationAction,
+        pipeline: PipelineRef,
+        job: JobRef | None,
+    ) -> CIMutationReceipt:
 
         dispatch_started = False
         try:
@@ -270,10 +291,11 @@ class CIMutationService:
                 receipt = self._unknown_receipt(
                     command.operation_id, action, pipeline, job
                 )
-                await self._retain_receipt(record, receipt)
+                self._retain_receipt_now(record, receipt)
+                self._release_current_owner()
                 await self._finish_hints(record, pipeline, suppress_cancellation=True)
             else:
-                await self._complete_error(
+                self._complete_error_now(
                     record,
                     ServiceError(
                         ServiceErrorCode.INTERNAL,
@@ -288,12 +310,13 @@ class CIMutationService:
                     receipt = self._unknown_receipt(
                         command.operation_id, action, pipeline, job
                     )
-                    await self._retain_receipt(record, receipt)
+                    self._retain_receipt_now(record, receipt)
+                    self._release_current_owner()
                     await self._finish_hints(
                         record, pipeline, suppress_cancellation=True
                     )
                 else:
-                    await self._complete_error(
+                    self._complete_error_now(
                         record,
                         ServiceError(
                             ServiceErrorCode.INTERNAL,
@@ -303,7 +326,7 @@ class CIMutationService:
                 raise
             if not dispatch_started or self._is_known_rejection(error):
                 safe = self._safe_error(error, action, pipeline.repository)
-                await self._complete_error(record, safe)
+                self._complete_error_now(record, safe)
                 raise safe from None
 
             receipt = self._unknown_receipt(
@@ -313,7 +336,8 @@ class CIMutationService:
                 job,
                 self._safe_error(error, action, pipeline.repository),
             )
-            await self._retain_receipt(record, receipt)
+            self._retain_receipt_now(record, receipt)
+            self._release_current_owner()
             return await self._finish_hints(record, pipeline)
 
         receipt = CIMutationReceipt(
@@ -323,7 +347,8 @@ class CIMutationService:
             job=job,
             outcome=CIMutationOutcome.KNOWN,
         )
-        await self._retain_receipt(record, receipt)
+        self._retain_receipt_now(record, receipt)
+        self._release_current_owner()
         return await self._finish_hints(record, pipeline)
 
     async def receipt(self, operation_id: str) -> CIMutationReceipt | None:
@@ -340,6 +365,11 @@ class CIMutationService:
         fingerprint: tuple[CIMutationAction, PipelineRef, JobRef | None],
     ) -> tuple[_OperationRecord, bool]:
         async with self._operation_lock:
+            if self._closed:
+                raise ServiceError(
+                    ServiceErrorCode.CLOSED,
+                    "The CI mutation service is closed.",
+                )
             existing = self._operations.get(operation_id)
             if existing is not None:
                 if existing.fingerprint != fingerprint:
@@ -356,22 +386,22 @@ class CIMutationService:
                 )
             record = _OperationRecord(fingerprint, asyncio.Event())
             self._operations[operation_id] = record
+            owner_task = asyncio.current_task()
+            if owner_task is None:
+                raise RuntimeError("CI mutation execution requires an asyncio task")
+            self._owner_tasks.add(owner_task)
             return record, True
 
-    async def _retain_receipt(
-        self, record: _OperationRecord, receipt: CIMutationReceipt
+    @staticmethod
+    def _retain_receipt_now(
+        record: _OperationRecord, receipt: CIMutationReceipt
     ) -> None:
-        async with self._operation_lock:
-            if record.done.is_set():
-                return
+        if not record.done.is_set():
             record.receipt = receipt
 
-    async def _complete_error(
-        self, record: _OperationRecord, error: ServiceError
-    ) -> None:
-        async with self._operation_lock:
-            if record.done.is_set():
-                return
+    @staticmethod
+    def _complete_error_now(record: _OperationRecord, error: ServiceError) -> None:
+        if not record.done.is_set():
             record.error = error
             record.done.set()
 
@@ -593,19 +623,35 @@ class CIMutationService:
             log.debug("CI hint coordinator failed", exc_info=True)
 
     async def close(self) -> None:
-        """Cancel and boundedly drain all service-owned hint tasks."""
-        self._closed = True
-        tasks: set[asyncio.Task[object]] = {
+        """Reject admission, then cancel and boundedly drain owned work."""
+        async with self._operation_lock:
+            self._closed = True
+            owners = set(self._owner_tasks)
+        for task in owners:
+            task.cancel()
+        owner_pending = await self._drain_tasks(owners)
+
+        hints: set[asyncio.Task[object]] = {
             *self._coordinator_tasks,
             *self._invalidation_tasks,
         }
-        for task in tasks:
+        for task in hints:
             task.cancel()
+        hint_pending = await self._drain_tasks(hints)
+        if owner_pending:
+            for task in owner_pending:
+                task.cancel()
+            owner_pending = await self._drain_tasks(owner_pending)
+        if owner_pending or hint_pending:
+            raise RuntimeError("CI mutation tasks did not stop")
+
+    async def _drain_tasks(
+        self, tasks: set[asyncio.Task[object]]
+    ) -> set[asyncio.Task[object]]:
         if not tasks:
-            return
-        _done, pending = await asyncio.wait(tasks, timeout=self._hint_timeout)
-        if pending:
-            raise RuntimeError("CI mutation hint tasks did not stop")
+            return set()
+        _done, pending = await asyncio.wait(tasks, timeout=self._close_timeout)
+        return pending
 
     def _require_open(self) -> None:
         if self._closed:
@@ -613,6 +659,11 @@ class CIMutationService:
                 ServiceErrorCode.CLOSED,
                 "The CI mutation service is closed.",
             )
+
+    def _release_current_owner(self) -> None:
+        current = asyncio.current_task()
+        if current is not None:
+            self._owner_tasks.discard(current)
 
     @staticmethod
     def _command_parts(

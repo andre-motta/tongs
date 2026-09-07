@@ -138,7 +138,11 @@ class Harness:
             raise self.emit_error
 
     def service(
-        self, *, max_operations: int = 256, hint_timeout: float = 5.0
+        self,
+        *,
+        max_operations: int = 256,
+        hint_timeout: float = 5.0,
+        close_timeout: float = 1.0,
     ) -> CIMutationService:
         return CIMutationService(
             get_client=self.get_client,
@@ -147,6 +151,7 @@ class Harness:
             emit_change=self.emit_change,
             max_operations=max_operations,
             hint_timeout=hint_timeout,
+            close_timeout=close_timeout,
         )
 
 
@@ -671,3 +676,79 @@ async def test_runtime_malformed_target_is_safe_predispatch_rejection() -> None:
 
     assert raised.value.code == ServiceErrorCode.INVALID_INPUT
     assert harness.get_client_calls == []
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_blocked_dispatch_and_retains_unknown() -> None:
+    client = FakeClient()
+    client.release = asyncio.Event()
+    harness = Harness(client)
+    service = harness.service(close_timeout=0.1)
+    command = CancelPipelineCommand("close-dispatch", PIPELINE_TARGET)
+    owner = asyncio.create_task(service.execute(command))
+    await client.started.wait()
+
+    await service.close()
+
+    with pytest.raises(asyncio.CancelledError):
+        await owner
+    record = service._operations[command.operation_id]
+    assert record.done.is_set()
+    assert record.receipt is not None
+    assert record.receipt.outcome is CIMutationOutcome.UNKNOWN
+    assert service._owner_tasks == set()
+    assert client.calls == [("cancel_pipeline", "acme/widgets", 101)]
+
+
+@pytest.mark.asyncio
+async def test_close_wins_atomic_admission_race_without_dispatch() -> None:
+    harness = Harness()
+    service = harness.service(close_timeout=0.1)
+    await service._operation_lock.acquire()
+    close_task = asyncio.create_task(service.close())
+    await asyncio.sleep(0)
+    execute_task = asyncio.create_task(
+        service.execute(CancelPipelineCommand("close-race", PIPELINE_TARGET))
+    )
+    service._operation_lock.release()
+
+    await close_task
+    with pytest.raises(ServiceError) as raised:
+        await execute_task
+    assert raised.value.code is ServiceErrorCode.CLOSED
+    assert harness.get_client_calls == []
+    assert service._owner_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_repeated_owner_cancellation_settles_close_and_unknown_receipt() -> None:
+    first_cancellation = asyncio.Event()
+
+    class ResistantClient(FakeClient):
+        async def cancel_pipeline(self, project: str, pipeline_id: int) -> None:
+            self.calls.append(("cancel_pipeline", project, pipeline_id))
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                first_cancellation.set()
+                await asyncio.Event().wait()
+
+    client = ResistantClient()
+    service = Harness(client).service(close_timeout=0.2)
+    command = CancelPipelineCommand("repeat-close", PIPELINE_TARGET)
+    owner = asyncio.create_task(service.execute(command))
+    await client.started.wait()
+    close_task = asyncio.create_task(service.close())
+    await first_cancellation.wait()
+
+    owner.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await owner
+    await close_task
+    record = service._operations[command.operation_id]
+    assert record.done.is_set()
+    assert record.receipt is not None
+    assert record.receipt.outcome is CIMutationOutcome.UNKNOWN
+    assert service._owner_tasks == set()

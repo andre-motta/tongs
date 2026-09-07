@@ -2,6 +2,21 @@
 
 Terminal-native multi-forge MR/CI management TUI. Scans local git repos, detects GitHub/GitLab forges from remotes, and provides a unified interface for merge request review, inline commenting, and CI/CD pipeline management. Python 3.12+, Textual framework, async httpx transport.
 
+## Agent Workflow (including Codex)
+
+For substantial initiatives, use the installed `agent-sdlc` skill and read the
+[project SDLC profile](docs/SDLC.md). Astra orchestrates; Sol at `high` handles
+senior implementation and independent review; Luna at `xhigh` handles bounded
+work. Use actual runtime model selection. Keep small fixes proportional.
+
+This file is the shared repository guide for coding agents. Codex reads `AGENTS.md` when working in this repository. Read `README.md` for product context and the relevant subsystem guides below before changing code. The `.agents/*/README.md` files are reference documentation to read explicitly.
+
+- Run commands from the current checkout or worktree root. Use its local `.venv`, including when a subsystem guide shows a machine-specific path.
+- Inspect `git status` before editing and preserve unrelated user changes.
+- When asked to work on another branch and then return, use a git worktree to keep the current checkout undisturbed.
+- Shell activation does not persist between tool calls. Activate the environment in each shell invocation that runs Python tools, or use `.venv/bin/python`, `.venv/bin/pytest`, and `.venv/bin/ruff` directly.
+- For code changes, run the relevant tests during development and the full suite plus lint and format checks before handing off. For documentation-only changes, check the diff, links, and command examples. Report checks that could not run and why.
+
 ## Tech Stack
 
 - **Framework:** Textual (TUI), Rich (syntax highlighting)
@@ -16,19 +31,30 @@ Terminal-native multi-forge MR/CI management TUI. Scans local git repos, detects
 ## Critical Rules
 
 ```bash
-# Always activate venv first
-source /home/alustosa/git/tongs/.venv/bin/activate
+# First-time setup from the checkout root, using Python 3.12+
+# Create the environment only if .venv is missing
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]" ruff
+
+# For MCP development, also install the optional server dependency
+python -m pip install -e ".[dev,mcp]"
+
+# In later shell invocations, activate the existing environment first
+source .venv/bin/activate
 
 # Run tests (no network access needed, all mocked)
 pytest
 
-# Lint before committing
+# Lint and check formatting
 ruff check src/ tests/
-ruff format src/ tests/
+ruff format --check src/ tests/
 
-# Install editable with dev deps
-pip install -e ".[dev]"
+# Apply formatting to changed Python files when needed
+# ruff format path/to/changed_file.py
 ```
+
+If using `uv`, create the environment with `uv venv --python 3.12`, activate it, and use `uv pip install` in place of `python -m pip install`. Dependency installation may need network access; the mocked tests do not. Ruff is installed explicitly because it is not currently included in the `dev` extra. The `mcp` extra is needed to run MCP tests instead of skipping them.
 
 - `from __future__ import annotations` at the top of every module
 - Module-level imports unless function-level is necessary to avoid circular deps
@@ -36,6 +62,13 @@ pip install -e ".[dev]"
 - Type hints on all parameters and return values
 - No em-dashes in text or commits
 - Use `-s` flag on `git commit` for sign-off (DCO)
+
+## Git Commits
+
+- For approved SDLC initiatives, contributors may create coherent signed-off local commits in their assigned worktrees without per-commit approval. Astra owns local integration; upstream pushes require CTO acceptance of the tested candidate. For other work, preserve the existing requirement to approve the full commit message before committing.
+- Include a one-line description body after the title, separated by a blank line, before any trailers.
+- Use `git commit -s` to add the sign-off automatically; do not write `Signed-off-by` manually.
+- When adding a Codex co-author trailer, use `Co-Authored-By: Codex <model> <noreply@openai.com>` with the actual model name and no context-window annotation.
 
 ## Module Map
 

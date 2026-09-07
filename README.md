@@ -25,10 +25,10 @@ Your team uses GitHub. Another uses GitLab. You live in the terminal. tongs give
 ## Install
 
 ```bash
-# Recommended: install with pipx or uvx for isolation
+# Recommended: install with pipx for isolation
 pipx install tongs
-# or
-uvx install tongs
+# Or run directly in an isolated environment with uvx
+uvx tongs
 
 # Or plain pip
 pip install tongs
@@ -41,9 +41,12 @@ Requires **Python 3.12+**. No other system dependencies.
 ```bash
 git clone https://github.com/andre-motta/tongs.git
 cd tongs
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]" ruff
 ```
+
+Use Python 3.12 or newer. If you prefer `uv`, use `uv venv --python 3.12` to create the environment and `uv pip install -e ".[dev]" ruff` after activation.
 
 ## Quick start
 
@@ -344,7 +347,7 @@ tongs ships an optional [Model Context Protocol](https://modelcontextprotocol.io
 ### Install
 
 ```bash
-pip install tongs[mcp]
+pip install "tongs[mcp]"
 ```
 
 ### Start
@@ -353,7 +356,35 @@ pip install tongs[mcp]
 tongs-mcp
 ```
 
-The server communicates over stdio, so you can wire it into any MCP-compatible client (Claude Code, Claude Desktop, etc.). It reuses the same forge configuration and auth tokens as the TUI, so no extra setup is needed. The MCP plugin also adds a "Start MCP Server" command to the command palette.
+The server communicates over stdio, so you can wire it into any MCP-compatible client, including Codex, Claude Code, and Claude Desktop. It reuses the same forge configuration and auth tokens as the TUI. The MCP plugin also adds a "Start MCP Server" command to the command palette.
+
+### Connect to Codex
+
+After installing `tongs[mcp]` and completing the forge login above, register the server with the Codex CLI:
+
+```bash
+codex mcp add tongs -- tongs-mcp
+codex mcp list
+```
+
+Codex launches the stdio server itself. The `tongs-mcp` executable and any authentication CLI (`gh` or `glab`) must be available in the environment where Codex runs.
+
+For a source checkout, install the MCP extra in the activated virtual environment and register the executable by absolute path:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[dev,mcp]"
+codex mcp add tongs -- "$PWD/.venv/bin/tongs-mcp"
+```
+
+Alternatively, add this to `~/.codex/config.toml`, replacing the path with your checkout's absolute path:
+
+```toml
+[mcp_servers.tongs]
+command = "/absolute/path/to/tongs/.venv/bin/tongs-mcp"
+```
+
+See the [official Codex MCP configuration guide](https://developers.openai.com/codex/mcp) for configuration options. Example request: "Use tongs to list open PRs for `github.com/acme/app`."
 
 ### Tools
 
@@ -408,6 +439,12 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add forge backends. 618 tests and growing.
+
+### Working on tongs with Codex
+
+Open this checkout in Codex, or run `codex` from the repository root after the [source setup](#from-source). Codex reads [AGENTS.md](AGENTS.md) for the development workflow, validation commands, commit rules, and links to subsystem guides. See [OpenAI's AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md) for instruction discovery details.
+
+The MCP connection above is optional for contributing to tongs. It exposes forge operations to Codex; repository development uses the local source tree and tests.
 
 tongs is early enough that contributions shape the architecture. The [plugin system](#plugin-system) makes it easy to add new commands, screens, and lifecycle hooks without touching core code. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 

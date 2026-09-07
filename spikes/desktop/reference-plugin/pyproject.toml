@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tongs-desktop-sample"
+version = "0.0.1"
+description = "Fixture plugin for the Tongs desktop shell comparison"
+requires-python = ">=3.12"
+dependencies = ["tongs"]
+
+[project.entry-points."tongs.plugins"]
+sample-desktop = "tongs_desktop_sample:DesktopPlugin"
+sample-terminal = "tongs_desktop_sample:TerminalPlugin"
+
+[tool.setuptools.package-data]
+tongs_desktop_sample = ["assets/*"]

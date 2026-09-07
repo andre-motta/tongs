@@ -34,6 +34,12 @@ ruff format --check src/ tests/
 
 ## How the review process works
 
+Substantial initiatives follow the [project SDLC profile](docs/SDLC.md), using
+the reusable Agent SDLC guide and skill. It defines model roles, dependent work
+items, isolated worktrees, independent review, local integration, and CTO design
+and upstream gates. Small fixes use the relevant checks without requiring an
+epic or agent team.
+
 Every feature goes through a gate review covering four areas:
 
 1. **Architecture** -- does this fit the existing abstractions? Does it extend them cleanly?

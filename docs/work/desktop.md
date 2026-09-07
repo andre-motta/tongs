@@ -1,7 +1,8 @@
 # Optional desktop interface: planning record
 
-Status: **prototype comparison complete locally; CTO acceptance pending**.
-Production architecture and upstream publication remain gated.
+Status: **Electron selected; feature-branch PR workflow approved**.
+Hardware GPU acceleration is a mandatory production/release gate and remains
+unmet. Detailed production contracts and final main acceptance remain gated.
 Workflow baseline: Agent SDLC 0.1.0, source commit
 `4e851d1b8a903aa8bebceea078860a21152ee8e8`; see the project profile.
 
@@ -11,8 +12,9 @@ Workflow baseline: Agent SDLC 0.1.0, source commit
   use. The original desktop-extra proposal is being replaced in the design by
   an explicit `tongs --install-desktop` GitHub Releases installer, with automatic
   platform selection. Final release/installer contracts remain at the design gate.
-- Use a web UI. Compare Electron against a Python-hosted webview before choosing
-  the production shell; no shell winner has been approved.
+- Use Electron with the shared web UI. The CTO selected it after the common
+  native comparison. Hardware GPU acceleration is required for production and
+  release; the software-rendered prototype is not sufficient.
 - Compare the same React/TypeScript screen and fixtures for clean pip installation,
   Linux compatibility, startup, memory, diff responsiveness, and test automation.
   Users should receive built frontend assets rather than need Node/npm locally.
@@ -239,3 +241,46 @@ Final independent Sol assessment approved the comparison and acceptance record.
 Its only clarity note, explicitly naming the passing terminal-only plugin hook
 sentinels, is incorporated in the retained evidence. #18 through #21 are locally
 integrated; #22 is in review pending CTO acceptance and production design choices.
+
+## Approved project workflow and next work, 2026-09-07
+
+The CTO selected Electron and made hardware GPU acceleration a mandatory production
+and release gate. The existing --disable-gpu evidence remains a historical fixture
+result. GPU investigation is tracked in [#25](https://github.com/andre-motta/tongs/issues/25).
+
+The CTO authorized Astra-owned GitHub branch `feat/desktop-app`, bootstrapped from
+reviewed comparison/evidence `58cf120` plus the independently reviewed workflow
+update. Agents use issue-scoped `feat/<work-item>` branches in isolated worktrees,
+may sign off and push their commits, and open PRs into `feat/desktop-app`. Independent
+Sol review remains required; Astra alone gives the final engineering disposition,
+resolves integration conflicts, verifies affected checks and merges. After feature
+completion Astra opens the complete evidence-backed PR into `main` for Andre's
+review. Main merge, release/tag and deployment are not pre-authorized.
+
+This project override is [#23](https://github.com/andre-motta/tongs/issues/23) and
+is defined in [the SDLC profile](../SDLC.md). It supersedes earlier local-only
+publication and codex-branch checkpoints in this chronological record. The original
+comparison branch remains retained, and the dirty main checkout is preserved.
+
+Every change and gate decision must be issue-tracked. Work is split into small,
+independently verifiable tasks with explicit native dependencies, owned files and
+stable interfaces. Astra dispatches only ready items whose prerequisite merge
+commits exist in the feature branch and have been verified, respecting actual
+concurrency and shared-file ownership. Use the project work-item and PR templates.
+
+| Issue | Work | Prerequisites | State / next action |
+| --- | --- | --- | --- |
+| #23 | Project SDLC, branch bootstrap, PR templates and CI routing | Reviewed comparison 58cf120 | In review; verify then publish bootstrap |
+| #24 | Passing feature-branch CI and MCP/lint baseline | #23 verified bootstrap | Planned; inspect and split identified fixes before dispatch |
+| #25 | Actual hardware-accelerated Electron evidence | #23 verified bootstrap; #21 code already verified at 02ad696 | Planned; assign Sol investigation after bootstrap |
+
+#24 and #25 can be investigated concurrently with disjoint ownership. Their PRs
+cannot bypass required failing checks. Production contract/design work in #22
+continues before its dependent implementation graph is approved and dispatched.
+The final main PR must include exact tested commits/artifacts, CI, native GPU and
+application proof, plugin/TUI compatibility, reviews/resolutions and recovery.
+
+Independent Sol high review approved the #23 workflow, templates, CI branch
+filters and GPU gate. Strict MkDocs, local links, YAML trigger inspection and
+whitespace checks passed. GitHub issue #23 is the authoritative bootstrap
+publication checkpoint; its remote commit and CI outcome are recorded there.

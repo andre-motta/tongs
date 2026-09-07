@@ -1,9 +1,8 @@
 # Desktop shell decision worksheet
 
-Status: comparison complete locally; CTO acceptance and shell selection pending.
-This document recommends a direction without selecting an approved production shell.
-The CTO approved the bounded comparison; the measured result returns to the design
-gate before production implementation. Fixture bridge and module interfaces are
+Status: CTO selected Electron on 2026-09-07, with hardware GPU acceleration a
+mandatory production and release gate. The comparison is retained as historical
+evidence; detailed production contracts still return to the design gate. Fixture bridge and module interfaces are
 experimental and must not become a public SDK by accident.
 
 ## Decision criteria
@@ -175,11 +174,11 @@ publication. Existing issues should be reused where they match the outcome.
 | Plugin capabilities | Services | Additive surface capabilities, desktop lifecycle and versioned contribution contract |
 | TUI drafts | Services, Draft storage; related #16 | Persistent drafts and safe submission in the primary interface |
 | TUI split diff | Diff alignment; related #3 | First-class terminal side-by-side rendering |
-| Desktop shell | Services, Plugin capabilities, selected shell | Production bridge, trusted asset loading and lifecycle |
+| Desktop shell | Services, Plugin capabilities, verified GPU design | Production bridge, trusted asset loading and lifecycle |
 | Desktop review | Desktop shell, Draft storage, Diff alignment | Inbox, detail, discussions, review mutations and persistent drafts |
 | Desktop CI | Desktop shell, Services | Pipelines, jobs, logs and existing action parity |
 | Plugin authoring | Plugin capabilities, Desktop shell | Independent example, packaging guide, migration and in-app help |
-| Release validation | All interface and plugin items | Real application parity, compatibility, failure recovery and platform evidence |
+| Release validation | All interface and plugin items, hardware GPU gate | Real application parity, compatibility, failure recovery, actual accelerated release artifacts and platform evidence |
 | Python distribution | Services; final verification after Release validation | Small terminal/core package with installer CLI; built asset and clean environment proof |
 | Explicit installer | Desktop shell, approved manifest/update contract | GitHub Release download, verification, atomic install/recovery, same-interpreter plugins and RPM ownership |
 | Fedora RPM/COPR | Python distribution, approved RPM release plan | Split packages, source inputs, clean build/install/upgrade and publication evidence |
@@ -189,7 +188,7 @@ service extraction and draft-storage work may still need serialized edits to
 shared models. A dependency is ready only after integration and verification,
 not merely because its API proposal exists.
 
-## Comparison result and recommendation
+## Comparison result and selected direction
 
 Both candidates passed the same installed native application probe on Fedora 44
 KDE x86_64, using the same frontend, fixture backend and independently installed
@@ -197,9 +196,10 @@ plugin. See the [acceptance evidence](proof/README.md), including screenshots,
 exact tested commit, hashes, checks, measurements and unresolved limitations.
 Both shells are technically viable for the bounded fixture experience.
 
-Astra recommends **Electron as the basis for the next production design**, with
-an explicit graphics compatibility gate on the supported host. This is an
-architectural judgment, not CTO approval or a production-readiness claim.
+The CTO accepted **Electron as the production shell**. This approves shell
+selection, not an assertion that the prototype is production-ready. Hardware GPU
+acceleration is required; see [the project gate](../../docs/SDLC.md#hardware-gpu-production-and-release-gate)
+and [GPU investigation #25](https://github.com/andre-motta/tongs/issues/25).
 
 The changed distribution goal matters: a separately downloaded GUI with a Python
 backend in the existing Tongs environment maps directly to Electron's proven
@@ -218,18 +218,20 @@ and content policy also remain production blockers.
 
 Electron's tested Wayland configuration required `--disable-gpu`, while the Qt
 candidate ran without a GPU override. Before broad production dispatch, a bounded
-follow-up should determine whether a normal sandboxed Electron configuration
-works on this host or whether a documented software-rendering mode is acceptable.
+follow-up must establish working hardware acceleration with sandboxing enabled
+on this host. Software fallback cannot satisfy the accelerated production path.
 The 20,000-line fixture remained responsive in that mode, but this does not prove
 video, full accessibility, real forge performance or release-wide graphics quality.
-If this gate fails, revisit the shell choice before implementing dependent UI.
+If this gate fails, retain it as unmet and bring the evidence to the CTO before
+production graphics acceptance. Do not silently replace the requirement with
+software rendering or select another shell without a new design decision.
 
 The current measurements do not justify a startup-speed winner or a general
 memory-efficiency ranking. They use different capture milestones and RSS sampling,
 with different viewports. Neither framework removes the need for production
 security, lifecycle, installer compatibility and recovery work.
 
-The next CTO design decision covers the selected shell, shared service boundaries,
+The remaining CTO design decisions cover shared service boundaries,
 additive plugin contract, draft/diff model, the explicit installer and release
 trust model. Existing core lint/format checks remain unmet and the MCP dependency
 compatibility issue remains recorded. No production release pass is claimed.

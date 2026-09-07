@@ -5,7 +5,7 @@ Tongs adopts Agent SDLC **0.1.0**, maintained in the private
 Source commit: `4e851d1b8a903aa8bebceea078860a21152ee8e8`.
 Read the installed `agent-sdlc` skill's `references/workflow.md` with this profile.
 Contributors without access to the private package can still follow the project
-review process in [CONTRIBUTING.md](https://github.com/andre-motta/tongs/blob/main/CONTRIBUTING.md); the private skill is an
+review process in [CONTRIBUTING.md](https://github.com/andre-motta/tongs/blob/feat/desktop-app/CONTRIBUTING.md); the private skill is an
 orchestration aid, not a prerequisite for ordinary contributions.
 
 ## Project settings
@@ -13,8 +13,8 @@ orchestration aid, not a prerequisite for ordinary contributions.
 | Setting | Value |
 | --- | --- |
 | Repository / tracker | `andre-motta/tongs`, GitHub Issues; reuse existing issues and native sub-issue/blocking links where available |
-| Local integration target | `main`; Astra verifies on a candidate integration branch before promotion |
-| Worktrees | Sibling checkouts under `../tongs-worktrees/`, one `codex/<initiative>/<item>` branch per assignment |
+| Integration target | Desktop: `feat/desktop-app`, owned by Astra. Final PR targets `main` for CTO review |
+| Worktrees | Isolated worktree per item; desktop contributors use `feat/desktop-<issue>-<slug>`. Existing comparison `codex/` branches remain historical |
 | Runtime | Python 3.12+; current CI tests 3.12 and 3.13 |
 | Setup | Create checkout-local `.venv`; activate per shell call; install editable `.[dev]` plus Ruff; add `mcp` extra for MCP tests |
 | Focused checks | Tests for changed subsystems, plus relevant lint/format checks |
@@ -22,7 +22,7 @@ orchestration aid, not a prerequisite for ordinary contributions.
 | Documentation checks | Local links, command examples, `git diff --check`; `mkdocs build --strict` for site inputs/navigation |
 | Functional proof | Exercise affected TUI/desktop workflows and attach observable evidence; distinguish mocked APIs from live forge calls |
 | Commit format | Title, blank line, one-line body; use `git commit -s`; Codex co-author uses `noreply@openai.com` |
-| Upstream path | CTO-approved branch push and PR; merge/tag/release/deployment need authorization covering those actions |
+| Upstream path | Desktop agent PRs into `feat/desktop-app`, Astra integrates; final feature PR into `main`, CTO gates final acceptance and merge. Tags/releases/deployments need separate authority |
 | Initiative records | `docs/work/<initiative>.md`; keep public-safe summaries and use access-appropriate locations for sensitive artifacts |
 
 Use `python -m pip install -e ".[dev,mcp]" ruff` in the activated environment for
@@ -41,22 +41,128 @@ integration without per-commit approval. Preserve unrelated changes and dirty
 or occupied default-branch checkouts; leave promotion pending when necessary.
 Use the existing four review areas: architecture, security, UX, and QE.
 
-CTO gates apply to design and upstream publication. After approval of an
-initiative's design and issue breakdown, Astra may publish and maintain those
-issues and dependency links within the approved scope. Do not close issues for
-local-only work. Tongs code/documentation pushes are not authorized by the
-separate request to publish the private SDLC repository.
+## Desktop project override, approved 2026-09-07
+
+This Tongs-specific policy implements the CTO's explicit authorization in
+[issue #23](https://github.com/andre-motta/tongs/issues/23). It overrides the base
+workflow's `codex/` branch convention, contributor push prohibition, local-main
+promotion and per-push CTO gate for this initiative only. It does not change the
+reusable private SDLC package or other projects. Architecture scope approval and
+independent review still apply.
+
+Astra owns `feat/desktop-app` on GitHub as the shared integration branch and final
+engineering review gate. Initialize it from the independently reviewed comparison
+and evidence at `58cf120`, plus this reviewed policy update. This one-time bootstrap
+is explicitly recorded; subsequent contributor changes enter through PRs. Main's
+dirty checkout is preserved. No contributor may push directly to the integration
+branch or main, merge PRs, create releases, or change shared tracking independently.
+
+Contributors create `feat/<work-item>` branches from the latest verified integration
+commit in separate worktrees, commit with `git commit -s`, push their assigned
+branches and open PRs with base `feat/desktop-app`. No repeated CTO approval is
+needed for those scoped pushes or PRs. Use the actual assigned model, a title and
+one-line commit body, and the OpenAI co-author address. After review, agents push
+corrections to their own branches. Keep published history intact; prefer merging
+updated integration history rather than force-pushing shared or reviewed commits.
+
+Independent Sol high review is required, including for Luna work and another Sol's
+implementation. Astra reviews the resulting PR, directs corrections, checks that
+required checks and relevant functional evidence apply to the exact current head,
+and serializes integration. Only Astra merges to `feat/desktop-app`. Prefer merge
+commits to preserve signed-off contributor commits and dependency history. Astra
+may resolve conflicts locally in an isolated worktree; resolutions invalidate
+affected checks/reviews and must be verified before the resolved result is pushed.
+Record the resolution and reviewer decision in the linked issue/PR. A changed PR
+head requires renewed affected review and checks; never merge an unreviewed head.
+
+These model roles are an agent workflow, not separate GitHub identities. Record
+Sol's independent findings and Astra's disposition in the PR even when tool calls
+share the owner's GitHub account. Do not claim GitHub-enforced branch protection
+unless it has actually been configured and verified.
+
+When the feature is complete, Astra opens a PR from `feat/desktop-app` into `main`
+for Andre's final review. Creating that PR is authorized; merging it, pushing main,
+tagging, releasing or deploying is not. The final PR must retain or link durable
+acceptance artifacts: acceptance criteria and observed results; exact tested
+commits and artifact hashes; environment and commands; CI and native application
+proof; GPU evidence; plugin/TUI compatibility; independent findings and resolutions;
+limitations, skipped/failed checks, upgrade/recovery implications and proposed
+publication actions. Distinguish synthetic demonstrations from real operations.
+
+## Issue-driven decomposition and scheduling
+
+Every change must be traceable to an issue, including code, tests, documentation,
+workflow/CI changes, design decisions, review corrections and conflict resolutions.
+Use an existing scoped issue when appropriate; create a separate child when a change
+has its own acceptance, ownership or dependency boundary. Do not create a new issue
+for each incidental line edit. Each PR and substantive commit references its issue.
+Astra updates issue progress at assignment, handoff, review/correction, integration,
+gate changes and interruption, including exact commits and next actions.
+
+Break initiatives into small, independently verifiable items to maximize useful
+parallel work. Each item uses the [work-item template](work/templates/desktop-item.md)
+and records scope/exclusions, owner/model, files/interfaces, prerequisites,
+acceptance criteria, checks, artifacts, branch/PR and Git authority. Publish native
+GitHub parent/child and blocking links, with readable dependency lists. Keep the
+graph acyclic. Split compatible tests, fixtures, documentation and implementation
+when they have independently stable interfaces; serialize overlapping ownership.
+
+An item is ready only when its required design is approved, interfaces and ownership
+are clear, and every prerequisite merge commit is present in `feat/desktop-app`
+and verified. Open/closed issue status alone is not a readiness signal. Independent
+investigations may proceed together when their inputs are stable, while their PRs
+still must satisfy required integration checks. Astra schedules ready items within
+available concurrency, queues excess work, and reschedules after every integration
+or newly discovered dependency. A blocker is recorded separately from progress.
+
+For this initiative, track:
+`planned -> ready -> assigned -> review -> feature integrated -> CTO accepted -> main delivered`.
+Record local candidate integration and the actual remote merge SHA separately.
+A merge to the feature branch is not delivery to main. Keep implementation issues
+open until the final accepted change lands in main; use `Refs #...` in intermediate
+PRs rather than premature closing language. Preserve rejected/interrupted worktrees,
+review findings, assignments, evidence and next actions for safe resumption.
+
+Use the [desktop PR template](https://github.com/andre-motta/tongs/blob/feat/desktop-app/.github/PULL_REQUEST_TEMPLATE/desktop.md)
+for intermediate work. Baseline CI/lint/dependency failures remain unmet; branch
+creation does not waive them. CI readiness and hardware GPU work are separate,
+issue-tracked items that can be investigated independently after bootstrap.
+
+## Hardware GPU production and release gate
+
+Electron is selected. Hardware GPU acceleration must work in the installed
+production application on the supported Fedora 44 KDE x86_64 host. The current
+comparison's `--disable-gpu` run does not satisfy this gate. Software-rendering
+fallback may be offered explicitly, but cannot replace the required accelerated path.
+
+Evidence must identify GPU, driver, display backend, Electron/Chromium versions,
+launch configuration and exact packaged artifact/commit. Capture feature status
+and renderer/device diagnostics showing physical GPU acceleration, not just an
+enabled flag or a GPU process. Software renderers do not count as a pass. Exercise
+actual native review/diff/plugin workflows, repeated startup/shutdown and renderer
+stability with acceleration and sandboxing enabled. Do not relax SELinux or renderer
+sandbox protections to satisfy the gate. Retest affected evidence after runtime,
+graphics, driver, launch or packaging changes and on the final release artifacts.
+
+The gate is currently unmet. It blocks acceptance of production desktop graphics
+and final delivery/release. Diagnose it early before production UI work relies on
+the graphics configuration. Missing GPU infrastructure or a headless CI pass cannot
+be presented as hardware acceleration proof.
 
 ## Publication effects
 
-- Pushes/PRs targeting `main` trigger CI.
+- Pushes to `main` or `feat/desktop-app`, and PRs targeting either, trigger CI.
+  Hosted core CI does not replace the native Fedora GPU/application evidence.
 - Pushes to `main` trigger the MkDocs GitHub Pages deployment; documentation
   under `docs/` is site input even when absent from navigation. Keep it public-safe.
 - `v*` tag pushes trigger the PyPI publication workflow using the `pypi` environment.
-- A PR push is not permission to merge, tag a release, or trigger deployment.
+- Contributor PR pushes permit Astra integration into `feat/desktop-app` under
+  this override. The final main PR still requires CTO acceptance; release and
+  deployment authority remains separate.
 
 ## Desktop initiative
 
-See [the desktop planning record](work/desktop.md). Its product and prototype
-decisions are retained, but its production design and issue graph are not yet
-approved. SDLC adoption does not authorize desktop implementation.
+See [the desktop planning record](work/desktop.md). The CTO selected Electron
+and approved this branch/PR workflow and mandatory GPU gate. Detailed production
+service/plugin/draft/installer contracts and their implementation graph still need
+their design approval; routine workflow work and bounded investigations can proceed.

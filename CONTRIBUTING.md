@@ -40,6 +40,14 @@ items, isolated worktrees, independent review, local integration, and CTO design
 and upstream gates. Small fixes use the relevant checks without requiring an
 epic or agent team.
 
+Desktop work uses issue-linked `feat/<work-item>` branches in isolated worktrees.
+Open PRs against `feat/desktop-app`; include dependencies, exact tested commits,
+checks and functional evidence. Independent Sol review precedes Astra
+integration. Astra owns the feature branch and resolves integration conflicts.
+The complete feature is presented as one evidence-backed PR into `main` for CTO
+review. Hardware-accelerated Electron on the supported Fedora host is a required
+production/release gate. See the profile for the full project-specific rules.
+
 Every feature goes through a gate review covering four areas:
 
 1. **Architecture** -- does this fit the existing abstractions? Does it extend them cleanly?

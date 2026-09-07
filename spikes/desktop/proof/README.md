@@ -2,6 +2,10 @@
 
 Tested application commit: `02ad69685f8511bcd7945a26650f3e2de2e6c908`.
 Date: 2026-09-07. This is a fixture-only comparison, not a production release.
+Subsequent CTO decision: Electron selected, with mandatory hardware acceleration.
+The software-rendered evidence below does not satisfy that production/release gate.
+See [the current project profile](../../../docs/SDLC.md) for the approved feature-branch
+PR workflow, which supersedes this report's historical local-only publication status.
 The later evidence/documentation commit does not change application code.
 
 ## Functional results

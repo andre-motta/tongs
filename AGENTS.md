@@ -9,6 +9,12 @@ For substantial initiatives, use the installed `agent-sdlc` skill and read the
 senior implementation and independent review; Luna at `xhigh` handles bounded
 work. Use actual runtime model selection. Keep small fixes proportional.
 
+For the desktop initiative, Astra owns `feat/desktop-app`. Agents use isolated
+`feat/<work-item>` branches and PRs into that branch, with independent Sol review
+and Astra integration. Every change is issue-tracked with explicit dependencies.
+Only the final feature PR goes to `main` for CTO review. Hardware GPU acceleration
+is a mandatory production/release gate; see the profile for evidence requirements.
+
 This file is the shared repository guide for coding agents. Codex reads `AGENTS.md` when working in this repository. Read `README.md` for product context and the relevant subsystem guides below before changing code. The `.agents/*/README.md` files are reference documentation to read explicitly.
 
 - Run commands from the current checkout or worktree root. Use its local `.venv`, including when a subsystem guide shows a machine-specific path.
@@ -65,7 +71,7 @@ If using `uv`, create the environment with `uv venv --python 3.12`, activate it,
 
 ## Git Commits
 
-- For approved SDLC initiatives, contributors may create coherent signed-off local commits in their assigned worktrees without per-commit approval. Astra owns local integration; upstream pushes require CTO acceptance of the tested candidate. For other work, preserve the existing requirement to approve the full commit message before committing.
+- For approved SDLC initiatives, contributors may create coherent signed-off local commits in their assigned worktrees without per-commit approval. For desktop work, assigned contributor branch pushes and PRs into `feat/desktop-app` are authorized; Astra alone integrates. The final PR into `main` requires CTO acceptance before merge. Other initiatives retain their existing upstream gates. For other work, preserve the existing requirement to approve the full commit message before committing.
 - Include a one-line description body after the title, separated by a blank line, before any trailers.
 - Use `git commit -s` to add the sign-off automatically; do not write `Signed-off-by` manually.
 - When adding a Codex co-author trailer, use `Co-Authored-By: Codex <model> <noreply@openai.com>` with the actual model name and no context-window annotation.

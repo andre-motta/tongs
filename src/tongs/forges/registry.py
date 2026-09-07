@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from tongs.forges.auth import resolve_token
 from tongs.forges.base import ForgeClient
 from tongs.forges.http import create_client
@@ -112,9 +114,21 @@ class ForgeRegistry:
 
     async def close_all(self) -> None:
         """Close all cached clients."""
-        for client in self._clients.values():
-            await client.close()
+        clients = list(self._clients.values())
         self._clients.clear()
+        if not clients:
+            return
+        results = await asyncio.gather(
+            *(client.close() for client in clients), return_exceptions=True
+        )
+        cancellations = [
+            result for result in results if isinstance(result, asyncio.CancelledError)
+        ]
+        if cancellations:
+            raise cancellations[0]
+        failures = [result for result in results if isinstance(result, Exception)]
+        if failures:
+            raise ExceptionGroup("Failed to close forge clients", failures)
 
     def _detect_type(self, hostname: str) -> ForgeType | None:
         """Detect forge type from hostname."""

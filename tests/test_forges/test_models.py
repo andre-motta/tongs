@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from datetime import UTC, datetime
 
 import pytest
@@ -20,6 +20,11 @@ from tongs.forges.models import (
     User,
 )
 from tongs.scanner.repo import ForgeType
+
+
+def test_mr_detail_revision_fields_are_appended_for_positional_compatibility():
+    names = [field.name for field in fields(MRDetail)]
+    assert names[-3:] == ["head_sha", "base_sha", "start_sha"]
 
 
 class TestForgeModels:

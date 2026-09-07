@@ -243,6 +243,9 @@ class TestParseMRDetail:
         # Detail-specific fields
         assert detail.description == "Adds the new widget framework.\n\nCloses #123."
         assert detail.merge_status == "can_be_merged"
+        assert detail.head_sha == "ccc333"
+        assert detail.base_sha == "aaa111"
+        assert detail.start_sha == "bbb222"
         assert detail.changes_count == 5
         assert detail.detailed_merge_status == "mergeable"
         assert len(detail.reviewers) == 1

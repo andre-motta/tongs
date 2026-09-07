@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tongs.tools/schemas/desktop-install-manifest-v1.schema.json",
+  "title": "Tongs desktop install manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_version",
+    "package_kind",
+    "ownership",
+    "platform",
+    "compatibility",
+    "electron_version",
+    "launcher_path",
+    "extraction_limits",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "release_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "package_kind": {
+      "enum": [
+        "user-archive",
+        "rpm"
+      ]
+    },
+    "ownership": {
+      "enum": [
+        "per-user",
+        "system"
+      ]
+    },
+    "platform": {
+      "$ref": "#/$defs/platform"
+    },
+    "compatibility": {
+      "$ref": "#/$defs/compatibility"
+    },
+    "electron_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "launcher_path": {
+      "const": "runtime/tongs-desktop"
+    },
+    "extraction_limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16384,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "byte_count",
+          "sha256",
+          "executable"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^runtime/(?!\\.\\.?(?:/|$))(?!.*\\/\\.\\.?(?:/|$))[^/\\\\\\u0000-\\u001f]+(?:/[^/\\\\\\u0000-\\u001f]+)*$"
+          },
+          "byte_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483648
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "executable": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operating_system",
+        "architecture",
+        "distribution",
+        "distribution_version",
+        "abi"
+      ],
+      "properties": {
+        "operating_system": {
+          "enum": [
+            "linux",
+            "macos",
+            "windows"
+          ]
+        },
+        "architecture": {
+          "enum": [
+            "x86_64",
+            "aarch64"
+          ]
+        },
+        "distribution": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        },
+        "distribution_version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        },
+        "abi": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core_minimum",
+        "core_maximum_exclusive",
+        "rpc_api_major",
+        "plugin_api_major"
+      ],
+      "properties": {
+        "core_minimum": {
+          "$ref": "#/$defs/semver"
+        },
+        "core_maximum_exclusive": {
+          "$ref": "#/$defs/semver"
+        },
+        "rpc_api_major": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
+        },
+        "plugin_api_major": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_entries",
+        "max_total_bytes",
+        "max_file_bytes",
+        "max_path_bytes"
+      ],
+      "properties": {
+        "max_entries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "max_total_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8589934592
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483648
+        },
+        "max_path_bytes": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 1024
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "package_kind": {
+            "const": "user-archive"
+          }
+        },
+        "required": [
+          "package_kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ownership": {
+            "const": "per-user"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_kind": {
+            "const": "rpm"
+          }
+        },
+        "required": [
+          "package_kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ownership": {
+            "const": "system"
+          }
+        }
+      }
+    }
+  ]
+}

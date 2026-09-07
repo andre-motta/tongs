@@ -427,6 +427,7 @@ raise SystemExit(sidecar.main())
 """
     completed = subprocess.run(
         [sys.executable, "-E", "-P", "-c", script],
+        input=b"",
         capture_output=True,
         cwd="/tmp",
         timeout=10,

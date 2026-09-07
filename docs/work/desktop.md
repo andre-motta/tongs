@@ -89,9 +89,9 @@ remain to be designed after the shell comparison.
 | Issue | Owner | Depends on | Current state |
 | --- | --- | --- | --- |
 | [#18 Shared harness and plugin](https://github.com/andre-motta/tongs/issues/18) | Astra, independent Sol review | None | Locally integrated |
-| [#19 Common frontend](https://github.com/andre-motta/tongs/issues/19) | Luna xhigh, Sol review | #18 | Planned |
-| [#20 Python webview](https://github.com/andre-motta/tongs/issues/20) | Sol high, independent Sol review | #18 | Planned |
-| [#21 Electron](https://github.com/andre-motta/tongs/issues/21) | Sol high, independent Sol review | #18 | Planned |
+| [#19 Common frontend](https://github.com/andre-motta/tongs/issues/19) | Luna xhigh, Sol review | #18 | Assigned |
+| [#20 Python webview](https://github.com/andre-motta/tongs/issues/20) | Sol high, independent Sol review | #18 | Assigned |
+| [#21 Electron](https://github.com/andre-motta/tongs/issues/21) | Sol high, independent Sol review | #18 | Assigned |
 | [#22 Comparison and architecture](https://github.com/andre-motta/tongs/issues/22) | Astra with Sol assessment | #19, #20, #21 | Planned |
 
 The experimental contract and code live under `spikes/desktop/`, outside production
@@ -134,5 +134,21 @@ Independent Sol high review: APPROVED WITH NOTES; all notes resolved in a second
 review. Seven tests cover installed plugin compatibility, assets, sidecar protocol,
 error recovery, and shutdown. New Python files pass Ruff lint and format checks.
 No production source files changed. The unchanged baseline currently has 157 Ruff
-findings and four files needing formatting; those checks remain unmet. The full
-baseline test run is under investigation because it has not produced output.
+findings and four files needing formatting; those checks remain unmet. The sandboxed test run stalled in a cache test; the same test and full suite
+completed outside the sandbox. The initial unconstrained MCP 2.1.1 install caused
+five misleading "mcp not installed" skips because FastMCP was removed. This is a
+pre-existing optional dependency compatibility problem. Validation uses MCP v1 in
+the temporary environment, without modifying production dependency declarations.
+
+## Active assignment checkpoint
+
+Foundation: `a33d8d3eb4274f072aaf2d50b0092ed4249a00d1`, independently reviewed by
+Sol high, seven fixture/sidecar tests passed. #19 uses `codex/desktop-frontend`
+(Luna xhigh, owns frontend only); #20 uses `codex/desktop-webview` (Sol high, owns
+webview only); #21 uses `codex/desktop-electron` (separate Sol high, owns Electron
+only). All depend on this exact foundation revision. Native combined verification
+and independent reviews follow implementation. Root owns comparison and tracking.
+
+Baseline rerun: 618 passed with Python 3.14.7, MCP 1.29.1, Textual 8.2.8,
+pytest 9.1.1, pytest-asyncio 1.4.0, aiosqlite 0.22.1. Strict MkDocs build passed.
+Ruff 0.16.6 found the baseline lint/format issues recorded above.

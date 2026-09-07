@@ -1,0 +1,1 @@
+"""Verified desktop installer tests."""

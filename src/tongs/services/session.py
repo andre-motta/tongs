@@ -25,6 +25,7 @@ from tongs.forges.models import (
 from tongs.forges.registry import ForgeRegistry
 from tongs.scanner.discovery import discover_repos
 from tongs.scanner.repo import ForgeType, Repo
+from tongs.services.ci_mutations import CIMutationService
 from tongs.services.errors import ServiceError, ServiceErrorCode, translate_error
 from tongs.services.models import (
     ForgeCapabilities,
@@ -150,6 +151,11 @@ class ApplicationSession:
             get_discussions=self.get_discussions,
             emit_change=self.emit_change,
         )
+        self._ci_mutations = CIMutationService(
+            get_client=self._client_for_repository,
+            get_pipeline_jobs=self.get_pipeline_jobs,
+            emit_change=self.emit_change,
+        )
 
     async def __aenter__(self) -> Self:
         return await self.start()
@@ -181,6 +187,11 @@ class ApplicationSession:
     def review_mutations(self) -> ReviewMutationService:
         """Return the session-scoped, bounded review mutation service."""
         return self._review_mutations
+
+    @property
+    def ci_mutations(self) -> CIMutationService:
+        """Return the session-scoped, bounded CI mutation service."""
+        return self._ci_mutations
 
     @property
     def issued_repositories(self) -> frozenset[RepositoryRef]:
@@ -252,7 +263,9 @@ class ApplicationSession:
 
     async def _ensure_close_task(self) -> asyncio.Task[None]:
         async with self._close_lock:
-            if self._close_task is None:
+            if self._close_task is None or (
+                self._close_task.done() and self._state is _SessionState.CLOSING
+            ):
                 self._close_requested = True
                 start_task = self._start_task
                 self._close_task = asyncio.create_task(
@@ -292,17 +305,41 @@ class ApplicationSession:
             return
         self._state = _SessionState.CLOSING
         failures: list[Exception] = []
+        mutation_cleanup_failed = False
+        terminal_close = False
         if startup_timed_out:
             failures.append(RuntimeError("application startup did not stop"))
         try:
+            try:
+                await asyncio.wait_for(
+                    self._ci_mutations.close(), timeout=self._shutdown_timeout
+                )
+            except asyncio.CancelledError:
+                failures.append(RuntimeError("CI mutation cleanup cancelled"))
+                mutation_cleanup_failed = True
+            except Exception as error:  # noqa: BLE001 - Continue owned cleanup.
+                failures.append(error)
+                mutation_cleanup_failed = True
             try:
                 await asyncio.wait_for(
                     self._review_mutations.close(), timeout=self._shutdown_timeout
                 )
             except asyncio.CancelledError:
                 failures.append(RuntimeError("review mutation cleanup cancelled"))
+                mutation_cleanup_failed = True
             except Exception as error:  # noqa: BLE001 - Continue owned cleanup.
                 failures.append(error)
+                mutation_cleanup_failed = True
+            if mutation_cleanup_failed:
+                self._close_event_streams()
+                self._issued_repositories.clear()
+                self._repositories.clear()
+                self._shutdown_error = ServiceError(
+                    ServiceErrorCode.SHUTDOWN_FAILED,
+                    "One or more application resources did not close cleanly.",
+                )
+                raise self._shutdown_error
+            terminal_close = True
             if self._registry_owned and self._registry is not None:
                 try:
                     await asyncio.wait_for(
@@ -322,10 +359,11 @@ class ApplicationSession:
                 except Exception as error:  # noqa: BLE001 - Report after all cleanup.
                     failures.append(error)
         finally:
-            self._close_event_streams()
-            self._issued_repositories.clear()
-            self._repositories.clear()
-            self._state = _SessionState.CLOSED
+            if terminal_close:
+                self._close_event_streams()
+                self._issued_repositories.clear()
+                self._repositories.clear()
+                self._state = _SessionState.CLOSED
         if failures:
             self._shutdown_error = ServiceError(
                 ServiceErrorCode.SHUTDOWN_FAILED,

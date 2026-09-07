@@ -98,6 +98,41 @@ async def test_discovers_only_exact_immutable_desktop_release() -> None:
 
 
 @pytest.mark.asyncio
+async def test_newer_prerelease_and_draft_do_not_hide_latest_stable_release() -> None:
+    prerelease = _release_json()
+    prerelease.update(
+        {
+            "id": 9001,
+            "tag_name": "desktop-v9.0.0",
+            "prerelease": True,
+        }
+    )
+    draft = _release_json()
+    draft.update(
+        {
+            "id": 9002,
+            "tag_name": "desktop-v8.0.0",
+            "draft": True,
+        }
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200, json=[prerelease, draft, _release_json()]
+            )
+        )
+    ) as client:
+        selected = await discover_release(
+            client,
+            InstallRequest(),
+            limits=InstallerLimits(releases_per_page=100),
+            clock=lambda: NOW,
+        )
+
+    assert selected.version == "1.2.3"
+
+
+@pytest.mark.asyncio
 async def test_mutable_desktop_release_is_rejected() -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(

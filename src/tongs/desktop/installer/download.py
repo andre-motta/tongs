@@ -86,7 +86,12 @@ async def download_bytes(
         )
         response: httpx.Response | None = None
         try:
-            response = await client.send(request, stream=True, auth=None)
+            response = await client.send(
+                request,
+                stream=True,
+                auth=None,
+                follow_redirects=False,
+            )
             if response.status_code in {301, 302, 303, 307, 308}:
                 if redirect_count >= limits.max_redirects:
                     _download_error(

@@ -55,14 +55,19 @@ async def test_streams_exact_body_without_forwarding_client_auth() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_redirect_to_untrusted_origin_before_request() -> None:
+@pytest.mark.parametrize("follow_redirects", [False, True])
+async def test_rejects_redirect_to_untrusted_origin_before_request(
+    follow_redirects: bool,
+) -> None:
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(str(request.url))
         return httpx.Response(302, headers={"location": "https://evil.test/archive"})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=follow_redirects
+    ) as client:
         with pytest.raises(InstallerError) as raised:
             await download_bytes(
                 client,
@@ -73,6 +78,35 @@ async def test_rejects_redirect_to_untrusted_origin_before_request() -> None:
 
     assert raised.value.code is InstallerErrorCode.DOWNLOAD_FAILED
     assert seen == ["https://api.github.com/release"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("follow_redirects", [False, True])
+async def test_redirects_are_manually_bounded_regardless_of_client_default(
+    follow_redirects: bool,
+) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(302, headers={"location": "/next"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=follow_redirects
+    ) as client:
+        with pytest.raises(InstallerError) as raised:
+            await download_bytes(
+                client,
+                "https://api.github.com/release",
+                limits=InstallerLimits(max_redirects=1),
+                maximum_bytes=100,
+            )
+
+    assert raised.value.code is InstallerErrorCode.DOWNLOAD_FAILED
+    assert seen == [
+        "https://api.github.com/release",
+        "https://api.github.com/next",
+    ]
 
 
 @pytest.mark.asyncio

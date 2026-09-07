@@ -123,6 +123,11 @@ async def discover_release(
             tag = raw_release.get("tag_name")
             if not isinstance(tag, str) or not tag.startswith(RELEASE_TAG_PREFIX):
                 continue
+            if (
+                raw_release.get("draft") is True
+                or raw_release.get("prerelease") is True
+            ):
+                continue
             release = _parse_release(raw_release, now)
             if release.version in seen_versions:
                 _metadata_error("Desktop release versions are ambiguous.")

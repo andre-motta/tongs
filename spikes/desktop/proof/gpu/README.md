@@ -2,7 +2,7 @@
 
 Issue [#25](https://github.com/andre-motta/tongs/issues/25) investigates the
 mandatory hardware GPU gate for Electron 44.2.0 on Fedora 44 KDE x86_64. The
-exact application candidate is `1e29b22ad836cac0600316e325720fcf6c2739cc`.
+exact application candidate is `19e910f3c9e40aea97cb899350151cb1c3d510c2`.
 This report contains native installed-application evidence, not a browser mock.
 
 ## Result
@@ -33,7 +33,11 @@ Physical acceleration is established by combined evidence:
 - Electron exposed a separate GPU process. `/proc` reported `NoNewPrivs: 1`,
   `Seccomp: 2`, and one seccomp filter for both that process and the renderer.
   The privileged Electron main process was recorded separately with
-  `NoNewPrivs: 0`, `Seccomp: 0`, and no seccomp filter.
+  `NoNewPrivs: 0`, `Seccomp: 0`, and no seccomp filter. The GPU's direct parent
+  had `NoNewPrivs: 1`, `Seccomp: 0`, and no filter, while the GPU child had
+  `NoNewPrivs: 1`, `Seccomp: 2`, and one filter in all five final snapshots.
+  This parent-to-child transition proves the active filter was installed for
+  the GPU child rather than inherited from its direct parent.
 - The renderer page had no `process` or `require` global and retained only the
   allowlisted Tongs bridge.
 
@@ -69,12 +73,13 @@ The unit-level regression proves the same initial-pass/final-fail transition.
 
 Electron's complete GPU object also reported `inProcessGpu: true` and
 `sandboxed: false`, even while `app.getAppMetrics()` identified a separate GPU
-PID and `/proc` showed its active seccomp filter. The recorded main process was
-unsandboxed, while the GPU and renderer children had active filters. Because the
-auxiliary fields do not distinguish that process architecture, the verifier
-does not use them as GPU-child proof. It requires the separate process, Linux
-security state, physical PCI device, hardware feature statuses, WebGL renderer,
-and complete failure history together.
+PID and `/proc` showed its active seccomp filter. The recorded main process and
+GPU direct parent had no seccomp filter, while the GPU child had one. Because
+the auxiliary fields conflict with that measured parent-to-child transition,
+the verifier does not use them as GPU-child proof. It requires the separate
+process, direct-parent and child Linux security states, physical PCI device,
+hardware feature statuses, WebGL renderer, and complete failure history
+together.
 
 This is consistent with Electron's tracked
 [Wayland GPU process issue](https://github.com/electron/electron/issues/50462),
@@ -86,12 +91,12 @@ Native Wayland remains unsupported by this spike result.
 The candidate Tongs wheel, reference-plugin wheel, and Electron host wheel were
 built locally, then installed into a fresh environment outside the checkout.
 Python user-site discovery was disabled for every launch. Installed metadata
-reported Tongs `0.4.2.dev19+g1e29b22ad`, reference plugin `0.0.1`, and Electron
+reported Tongs `0.4.2.dev21+g19e910f3c`, reference plugin `0.0.1`, and Electron
 prototype `0.0.1`. Entry-point discovery returned `mcp`, `sample-desktop`, and
 `sample-terminal`; only `sample-desktop` exposed a desktop module, as expected.
 
 The Electron wheel SHA-256 is
-`063fd1fe27015cdefcbd278aae6be1c20a29ad7fc6218751e225c588ea8abfdb`.
+`c52da66d4528564ec98886f19a08bc64b1252ecb47ea3505e90f838219226f05`.
 The installed Electron executable SHA-256 is
 `9b827d38aacff0d69933481625c4c8f13b4732cbecd0e3477b1d2bac6102522c`.
 The complete artifact set is recorded in [results.json](results.json).

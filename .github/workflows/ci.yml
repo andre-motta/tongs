@@ -108,6 +108,14 @@ jobs:
           npm ci --prefix spikes/desktop/electron
           TONGS_DESKTOP_PYTHON="$(command -v python)" \
             npm test --prefix spikes/desktop/electron
+      - name: Install production Electron shell dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci --prefix desktop
+      - name: Build and test production Electron shell
+        run: >-
+          TONGS_TEST_PYTHON="$(command -v python)"
+          npm test --prefix desktop
 
   fedora-podman:
     name: Fedora 44 Podman

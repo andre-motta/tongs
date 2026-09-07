@@ -21,6 +21,25 @@ import { DIFF_ROW_HEIGHT, getDiffWindow } from "./virtualDiff";
 
 type View = "inbox" | "plugins";
 type DiffMode = "unified" | "split";
+type PluginModuleExports = { mount?: PluginMount };
+export type PluginLoader = (entryUrl: string) => Promise<PluginModuleExports>;
+
+export const loadPluginEntry: PluginLoader = async (entryUrl) => (
+  await import(/* @vite-ignore */ entryUrl)
+) as PluginModuleExports;
+
+export async function mountPluginModule(
+  entryUrl: string,
+  container: HTMLElement,
+  api: PluginApi,
+  loader: PluginLoader = loadPluginEntry,
+): Promise<void | (() => void)> {
+  const loaded = await loader(entryUrl);
+  if (typeof loaded.mount !== "function") {
+    throw new Error("Plugin module does not export mount(container, api)");
+  }
+  return loaded.mount(container, api);
+}
 
 export function App(): JSX.Element {
   const [bridge, setBridge] = useState<Bridge | undefined>(() => getAvailableBridge());
@@ -225,7 +244,7 @@ function InboxView({
           {reviews.map((review) => <ReviewCard key={review.id} review={review} selected={review.id === selected?.id} onClick={() => onSelect(review)} />)}
           {!reviews.length && <div className="empty-state">No reviews in this repository scope.</div>}
         </div>
-        <div className="inbox-hint"><span className="keycap">↑</span><span className="keycap">↓</span> navigate <span className="keycap">↵</span> open review</div>
+        <div className="inbox-hint"><span className="keycap">Tab</span> focus review <span className="keycap">↵</span> open review</div>
       </section>
       <section className="detail-panel" aria-label="Review detail">
         {selected ? <ReviewDetail review={selected} diff={diff} diffLoading={diffLoading} /> : <div className="empty-detail">Select a review to start</div>}
@@ -341,24 +360,31 @@ function PluginCard({ plugin, selected, onClick }: { plugin: PluginRecord; selec
 
 function PluginModuleView({ bridge, plugin, module }: { bridge?: Bridge; plugin: PluginRecord; module: PluginModule }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(true);
+  const [mountStatus, setMountStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string>();
   const [help, setHelp] = useState<string>();
   useEffect(() => {
     let active = true;
     let cleanup: void | (() => void);
     const mount = async () => {
-      setLoading(true);
+      setMountStatus("loading");
       setError(undefined);
       try {
-        const loaded = (await import(/* @vite-ignore */ module.entry_url)) as { mount?: PluginMount };
-        if (!active || !containerRef.current || typeof loaded.mount !== "function") return;
+        const container = containerRef.current;
+        if (!container) throw new Error("Plugin module container is unavailable");
         const api: PluginApi = { invoke: (method, params = {}) => invoke("plugin_invoke", { plugin: plugin.id, method, params }, bridge) };
-        cleanup = loaded.mount(containerRef.current, api);
+        const mountedCleanup = await mountPluginModule(module.entry_url, container, api);
+        if (!active) {
+          mountedCleanup?.();
+          return;
+        }
+        cleanup = mountedCleanup;
+        setMountStatus("ready");
       } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : "Unable to mount plugin module");
-      } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setMountStatus("error");
+          setError(reason instanceof Error ? reason.message : "Unable to mount plugin module");
+        }
       }
     };
     void mount();
@@ -376,5 +402,6 @@ function PluginModuleView({ bridge, plugin, module }: { bridge?: Bridge; plugin:
       setHelp(reason instanceof Error ? reason.message : "Help unavailable");
     }
   };
-  return <div className="module-workspace"><div className="module-heading"><div><div className="eyebrow">Desktop module</div><h2>{module.title}</h2><p>{plugin.title} <span className="title-slash">/</span> {module.id}</p></div><button className="secondary-button" onClick={() => void loadHelp()}>? Help</button></div><div className="module-runtime-note"><span className="green-text">● ready</span><span>Loaded dynamically from installed assets</span><span className="info-divider" /><span>Scoped API bridge</span></div><div className="module-surface">{loading && <div className="module-loading"><span className="spinner" /> Loading module...</div>}<div ref={containerRef} className="plugin-mount" />{error && <div className="module-error" role="alert">{error}</div>}</div>{help && <div className="help-drawer"><div className="help-title"><strong>Module help</strong><button onClick={() => setHelp(undefined)} aria-label="Close module help">×</button></div><pre>{help}</pre></div>}</div>;
+  const statusMessage = mountStatus === "ready" ? "Loaded dynamically from installed assets" : mountStatus === "loading" ? "Loading installed module" : "Module failed to mount";
+  return <div className="module-workspace"><div className="module-heading"><div><div className="eyebrow">Desktop module</div><h2>{module.title}</h2><p>{plugin.title} <span className="title-slash">/</span> {module.id}</p></div><button className="secondary-button" onClick={() => void loadHelp()}>? Help</button></div><div className="module-runtime-note"><span className={`module-state ${mountStatus}`}>● {mountStatus}</span><span>{statusMessage}</span><span className="info-divider" /><span>Scoped API bridge</span></div><div className="module-surface">{mountStatus === "loading" && <div className="module-loading"><span className="spinner" /> Loading module...</div>}<div ref={containerRef} className="plugin-mount" />{error && <div className="module-error" role="alert">{error}</div>}</div>{help && <div className="help-drawer"><div className="help-title"><strong>Module help</strong><button onClick={() => setHelp(undefined)} aria-label="Close module help">×</button></div><pre>{help}</pre></div>}</div>;
 }

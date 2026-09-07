@@ -27,7 +27,8 @@ To exercise the backend asset server after building, run the shell-specific
 launcher from `spikes/desktop`. The server serves `dist/` and declared plugin
 assets on loopback. Plugin modules are discovered from `list_plugins` and
 loaded with a runtime `import(entry_url)`, so core does not import or name any
-installed plugin package.
+installed plugin package. The prototype mounts the first declared module for a
+selected plugin; navigating between multiple modules is later scope.
 
 ## What the checks cover
 

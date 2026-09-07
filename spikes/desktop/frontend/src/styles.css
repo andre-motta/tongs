@@ -238,6 +238,10 @@ h3 { font-size: 14px; }
 .module-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .module-heading p { padding-top: 7px; color: var(--muted); font-size: 11px; }
 .module-runtime-note { gap: 9px; padding: 17px 0 13px; color: var(--faint); font-size: 10px; }
+.module-state { font-weight: 750; text-transform: lowercase; }
+.module-state.ready { color: var(--green); }
+.module-state.loading { color: var(--orange); }
+.module-state.error { color: var(--red); }
 .module-surface { min-height: 235px; position: relative; padding: 23px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
 .plugin-mount { min-height: 170px; }
 .plugin-mount h2 { color: var(--text); font-size: 15px; }

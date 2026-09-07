@@ -13,8 +13,8 @@ cd tongs
 uv venv
 source .venv/bin/activate
 
-# Install in editable mode with dev dependencies
-pip install -e ".[dev]"
+# Install in editable mode with development and MCP dependencies
+pip install -e ".[dev,mcp]"
 
 # Run tests
 pytest
@@ -71,6 +71,51 @@ pytest -v
 
 # Tests run without network access -- all forge interactions are mocked
 ```
+
+Pull requests to `main` and `feat/desktop-app` run the complete CI workflow for
+every change. The stable required check is `Desktop pre-merge aggregate`. It
+accepts a revision only when lint and formatting, Python 3.12 and 3.13 core and
+MCP tests, desktop fixture tests, and the hosted Fedora 44 Podman probe all
+succeed. A skipped, cancelled, missing, or failed required job makes the
+aggregate fail. A new commit supersedes earlier results, so review evidence must
+refer to the exact pull request head revision.
+
+Run the equivalent local checks with:
+
+```bash
+ruff check src/ tests/
+ruff format --check src/ tests/
+pytest tests/ --ignore=tests/test_mcp -v
+pytest tests/test_mcp -v --junitxml=/tmp/tongs-mcp.junit.xml
+python tests/ci/verify_desktop_ci.py mcp-report \
+  --path /tmp/tongs-mcp.junit.xml
+PYTHONPATH=spikes/desktop pytest spikes/desktop/tests/test_backend.py -v
+npm ci --prefix spikes/desktop/frontend
+npm test --prefix spikes/desktop/frontend
+npm run build --prefix spikes/desktop/frontend
+pytest spikes/desktop/electron/test/test_launcher.py -v
+npm ci --prefix spikes/desktop/electron
+TONGS_DESKTOP_PYTHON="$(command -v python)" \
+  npm test --prefix spikes/desktop/electron
+```
+
+Install the reference desktop plugin before the backend and Electron fixture
+checks with `python -m pip install ./spikes/desktop/reference-plugin`. The MCP
+extra is constrained below MCP 2 because tongs currently uses the MCP 1.x
+`mcp.server.fastmcp` interface. CI verifies that MCP tests actually run and
+rejects an import-error skip.
+
+The Podman job runs only on a disposable GitHub-hosted runner. Its public harness
+interface remains:
+
+```bash
+tests/containers/run-fedora-44.sh --output-dir <empty-directory-outside-checkout>
+```
+
+The current desktop gate excludes the historical WebView experiment because it
+was not selected as the desktop shell. The Electron lane runs fixture checks; it
+does not claim native Fedora installation, KDE integration, or GPU acceptance.
+Those require the separate hardware-hosted desktop evidence gate.
 
 ## How to add a plugin
 

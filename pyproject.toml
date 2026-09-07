@@ -36,7 +36,7 @@ dependencies = [
 
 [project.optional-dependencies]
 keyring = ["keyring>=25.0"]
-mcp = ["mcp[cli]>=1.0"]
+mcp = ["mcp[cli]>=1.0,<2"]
 fleet = ["claude-fleet-monitor>=0.1"]
 dev = [
     "pytest>=8.0",

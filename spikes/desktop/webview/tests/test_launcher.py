@@ -130,6 +130,7 @@ def test_window_configuration_and_clean_shutdown(tmp_path: Path) -> None:
     _, options = webview.created
     assert options["url"].startswith("http://127.0.0.1:")
     assert options["resizable"] is True
+    assert options["min_size"] == (960, 600)
     assert options["confirm_close"] is False
     assert set(vars(options["js_api"])) == {"_backend"}
     assert webview.started == {

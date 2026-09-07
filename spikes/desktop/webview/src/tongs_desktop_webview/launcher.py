@@ -401,7 +401,7 @@ def run_application(
                 js_api=Bridge(backend),
                 width=config.width,
                 height=config.height,
-                min_size=(800, 600),
+                min_size=(960, 600),
                 resizable=True,
                 text_select=True,
                 zoomable=True,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -67,6 +68,26 @@ def _read_report(path: Path) -> dict[str, object] | None:
         return None
 
 
+def _communicate(process: subprocess.Popen[str], timeout: float) -> tuple[str, str]:
+    """Reap a timed-out capture session, including its renderer processes."""
+    try:
+        return process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        raise
+
+
 def run_capture(
     executable: Path,
     screenshot: Path,
@@ -105,6 +126,7 @@ def run_capture(
             stderr=subprocess.PIPE,
             text=True,
             env=environment,
+            start_new_session=True,
         )
         peak = _snapshot(process.pid)
         ready: dict[str, object] | None = None
@@ -119,11 +141,11 @@ def run_capture(
             time.sleep(0.1)
         if ready is None or ready.get("phase") != "ready":
             process.terminate()
-            stdout, stderr = process.communicate(timeout=5)
+            stdout, stderr = _communicate(process, timeout=5)
             raise RuntimeError(f"native smoke never became ready: {stdout}{stderr}")
 
         steady = _snapshot(process.pid)
-        stdout, stderr = process.communicate(timeout=hold + 10)
+        stdout, stderr = _communicate(process, timeout=hold + 10)
         final = _read_report(report)
         result = {
             "command": command,

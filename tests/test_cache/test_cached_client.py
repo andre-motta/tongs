@@ -13,6 +13,7 @@ from tongs.cache.store import CacheStore
 from tongs.forges.models import (
     CIStatus,
     ForgeHost,
+    ForgeMutationResult,
     MRState,
     MRSummary,
     User,
@@ -58,7 +59,8 @@ def inner():
     mock = AsyncMock()
     mock.list_mrs = AsyncMock(return_value=[_make_mr()])
     mock.get_mr_diff = AsyncMock(return_value=[{"old_path": "a.py", "diff": "@@"}])
-    mock.approve_mr = AsyncMock()
+    mock.approve_mr = AsyncMock(return_value=ForgeMutationResult("approval-1"))
+    mock.add_comment = AsyncMock(return_value=ForgeMutationResult("note-1", "note-1"))
     mock.merge_mr = AsyncMock()
     mock.close_mr = AsyncMock()
     mock.close = AsyncMock()
@@ -150,6 +152,34 @@ class TestApproveInvalidation:
         # After invalidation, list_mrs should call inner again
         await client.list_mrs("org/repo")
         assert inner.list_mrs.await_count == 2
+
+    async def test_review_mutation_invalidates_list_and_diff(self, client, inner):
+        inner.add_comment.return_value = ForgeMutationResult("note-1", "note-1")
+        await client.list_mrs("org/repo")
+        await client.get_mr_diff("org/repo", 1)
+
+        result = await client.add_comment("org/repo", 1, "body")
+        await client.list_mrs("org/repo")
+        await client.get_mr_diff("org/repo", 1)
+
+        assert result.comment_id == "note-1"
+        assert inner.list_mrs.await_count == 2
+        assert inner.get_mr_diff.await_count == 2
+
+    async def test_confirmed_receipt_survives_invalidation_failure(
+        self, client, inner, cache, monkeypatch
+    ):
+        inner.add_comment.return_value = ForgeMutationResult("note-1", "note-1")
+        monkeypatch.setattr(
+            cache,
+            "invalidate_prefix",
+            AsyncMock(side_effect=RuntimeError("disk failure")),
+        )
+
+        result = await client.add_comment("org/repo", 1, "body")
+
+        assert result.remote_id == "note-1"
+        assert result.cache_invalidated is False
 
 
 @pytest.mark.asyncio

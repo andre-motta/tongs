@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+import asyncio
+from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Any
 
@@ -10,7 +11,7 @@ from tongs.cache.store import CacheStore
 from tongs.forges.base import ForgeClient
 from tongs.forges.models import (
     CIStatus,
-    InlineComment,
+    ForgeMutationResult,
     MRDetail,
     MRState,
     MRSummary,
@@ -130,9 +131,14 @@ class CachedForgeClient:
 
     # -- Mutations that invalidate cache --
 
-    async def approve_mr(self, repo_path: str, number: int) -> None:
-        await self._inner.approve_mr(repo_path, number)
-        await self._cache.invalidate_prefix(self._key(repo_path, "mrs"))
+    async def approve_mr(
+        self, repo_path: str, number: int, *, head_sha: str | None = None
+    ) -> ForgeMutationResult:
+        if head_sha is None:
+            result = await self._inner.approve_mr(repo_path, number)
+        else:
+            result = await self._inner.approve_mr(repo_path, number, head_sha=head_sha)
+        return await self._finish_review_mutation(repo_path, number, result)
 
     async def unapprove_mr(self, repo_path: str, number: int) -> None:
         await self._inner.unapprove_mr(repo_path, number)
@@ -156,8 +162,11 @@ class CachedForgeClient:
         await self._inner.reopen_mr(repo_path, number)
         await self._cache.invalidate_prefix(self._key(repo_path, "mrs"))
 
-    async def add_comment(self, repo_path: str, number: int, body: str) -> None:
-        await self._inner.add_comment(repo_path, number, body)
+    async def add_comment(
+        self, repo_path: str, number: int, body: str
+    ) -> ForgeMutationResult:
+        result = await self._inner.add_comment(repo_path, number, body)
+        return await self._finish_review_mutation(repo_path, number, result)
 
     async def create_inline_comment(
         self,
@@ -169,16 +178,94 @@ class CachedForgeClient:
         body: str,
         start_line: int | None = None,
         start_side: str | None = None,
-    ) -> InlineComment:
+        **revision: Any,
+    ) -> ForgeMutationResult:
         result = await self._inner.create_inline_comment(
-            repo_path, number, file_path, line, side, body, start_line, start_side
+            repo_path,
+            number,
+            file_path,
+            line,
+            side,
+            body,
+            start_line,
+            start_side,
+            **revision,
         )
-        return result
+        return await self._finish_review_mutation(repo_path, number, result)
+
+    async def reply_to_discussion(
+        self,
+        repo_path: str,
+        number: int,
+        discussion_id: str,
+        body: str,
+        *,
+        root_comment_id: str | None = None,
+    ) -> ForgeMutationResult:
+        if root_comment_id is None:
+            result = await self._inner.reply_to_discussion(
+                repo_path, number, discussion_id, body
+            )
+        else:
+            result = await self._inner.reply_to_discussion(
+                repo_path,
+                number,
+                discussion_id,
+                body,
+                root_comment_id=root_comment_id,
+            )
+        return await self._finish_review_mutation(repo_path, number, result)
 
     async def resolve_discussion(
         self, repo_path: str, number: int, discussion_id: str, resolved: bool
-    ) -> None:
-        await self._inner.resolve_discussion(repo_path, number, discussion_id, resolved)
+    ) -> ForgeMutationResult:
+        result = await self._inner.resolve_discussion(
+            repo_path, number, discussion_id, resolved
+        )
+        return await self._finish_review_mutation(repo_path, number, result)
+
+    async def submit_review(
+        self,
+        repo_path: str,
+        number: int,
+        verdict: Any,
+        body: str,
+        inline_comments: list[dict] | None = None,
+        *,
+        head_sha: str | None = None,
+    ) -> ForgeMutationResult:
+        if head_sha is None:
+            result = await self._inner.submit_review(
+                repo_path, number, verdict, body, inline_comments
+            )
+        else:
+            result = await self._inner.submit_review(
+                repo_path,
+                number,
+                verdict,
+                body,
+                inline_comments,
+                head_sha=head_sha,
+            )
+        return await self._finish_review_mutation(repo_path, number, result)
+
+    async def invalidate_review_reads(self, repo_path: str, number: int) -> bool:
+        complete = True
+        for prefix in (
+            self._key(repo_path, "mrs"),
+            self._key(repo_path, "mr", number),
+        ):
+            try:
+                await self._cache.invalidate_prefix(prefix)
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                complete = False
+        return complete
+
+    async def _finish_review_mutation(
+        self, repo_path: str, number: int, result: ForgeMutationResult
+    ) -> ForgeMutationResult:
+        invalidated = await self.invalidate_review_reads(repo_path, number)
+        return result if invalidated else replace(result, cache_invalidated=False)
 
     async def close(self) -> None:
         await self._inner.close()

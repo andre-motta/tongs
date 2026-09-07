@@ -47,6 +47,7 @@ from tongs.services.models import (
     ServiceEventKind,
     validate_hostname,
 )
+from tongs.services.review_mutations import ReviewMutationService
 
 
 class CacheResource(Protocol):
@@ -142,6 +143,13 @@ class ApplicationSession:
         self._registry_close_attempted = False
         self._registry_close_failure: BaseException | None = None
         self._shutdown_error: ServiceError | None = None
+        self._review_mutations = ReviewMutationService(
+            get_client=self._client_for_review,
+            get_review=self.get_review,
+            get_diff=self.get_raw_diff,
+            get_discussions=self.get_discussions,
+            emit_change=self.emit_change,
+        )
 
     async def __aenter__(self) -> Self:
         return await self.start()
@@ -168,6 +176,11 @@ class ApplicationSession:
     def shutdown_error(self) -> ServiceError | None:
         """Return a safe cleanup failure retained when another error took priority."""
         return self._shutdown_error
+
+    @property
+    def review_mutations(self) -> ReviewMutationService:
+        """Return the session-scoped, bounded review mutation service."""
+        return self._review_mutations
 
     @property
     def issued_repositories(self) -> frozenset[RepositoryRef]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import fields
 from datetime import UTC, datetime
 from urllib.parse import quote as urlquote
@@ -16,6 +17,7 @@ from tongs.forges.models import (
     Commit,
     Discussion,
     ForgeHost,
+    ForgeMutationResult,
     InlineComment,
     MRDetail,
     MRState,
@@ -30,6 +32,28 @@ from tongs.forges.models import (
 def _encode_project(repo_path: str) -> str:
     """URL-encode a GitLab project path (e.g. 'group/repo' -> 'group%2Frepo')."""
     return urlquote(repo_path, safe="")
+
+
+def _gitlab_line_code(path: str, old_line: int | None, new_line: int | None) -> str:
+    digest = hashlib.sha1(path.encode(), usedforsecurity=False).hexdigest()
+    return f"{digest}_{old_line or 0}_{new_line or 0}"
+
+
+def _gitlab_range_endpoint(
+    path: str,
+    line_type: str,
+    old_line: int | None,
+    new_line: int | None,
+) -> dict[str, str | int]:
+    endpoint: dict[str, str | int] = {
+        "line_code": _gitlab_line_code(path, old_line, new_line),
+        "type": line_type,
+    }
+    if old_line is not None:
+        endpoint["old_line"] = old_line
+    if new_line is not None:
+        endpoint["new_line"] = new_line
+    return endpoint
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -286,27 +310,82 @@ class GitLabClient(ForgeClient):
         body: str,
         start_line: int | None = None,
         start_side: str | None = None,
-    ) -> InlineComment:
+        *,
+        old_path: str | None = None,
+        new_path: str | None = None,
+        head_sha: str | None = None,
+        base_sha: str | None = None,
+        start_sha: str | None = None,
+        old_line: int | None = None,
+        new_line: int | None = None,
+        start_old_line: int | None = None,
+        start_new_line: int | None = None,
+    ) -> ForgeMutationResult:
         project = _encode_project(repo_path)
-        mr_data = await request(
-            self._http,
-            "GET",
-            f"/projects/{project}/merge_requests/{number}",
-        )
-        diff_refs = mr_data.get("diff_refs", {})
+        revisions = (head_sha, base_sha, start_sha)
+        if all(value is None for value in revisions):
+            mr_data = await request(
+                self._http, "GET", f"/projects/{project}/merge_requests/{number}"
+            )
+            diff_refs = mr_data.get("diff_refs", {})
+            head_sha = diff_refs.get("head_sha", "")
+            base_sha = diff_refs.get("base_sha", "")
+            start_sha = diff_refs.get("start_sha", "")
+        elif any(value is None for value in revisions):
+            raise ValueError("all GitLab revision fields are required together")
 
         position = {
             "position_type": "text",
-            "base_sha": diff_refs.get("base_sha", ""),
-            "start_sha": diff_refs.get("start_sha", ""),
-            "head_sha": diff_refs.get("head_sha", ""),
-            "new_path": file_path,
-            "old_path": file_path,
+            "base_sha": base_sha,
+            "start_sha": start_sha,
+            "head_sha": head_sha,
+            "new_path": new_path or file_path,
+            "old_path": old_path or file_path,
         }
         if side == "LEFT":
             position["old_line"] = line
         else:
             position["new_line"] = line
+        if start_line is not None:
+            start_type = "old" if (start_side or side) == "LEFT" else "new"
+            end_type = "old" if side == "LEFT" else "new"
+            range_path = new_path or file_path
+            range_start_old = (
+                start_old_line
+                if start_old_line is not None
+                else start_line
+                if start_type == "old"
+                else None
+            )
+            range_start_new = (
+                start_new_line
+                if start_new_line is not None
+                else start_line
+                if start_type == "new"
+                else None
+            )
+            range_end_old = (
+                old_line
+                if old_line is not None
+                else line
+                if end_type == "old"
+                else None
+            )
+            range_end_new = (
+                new_line
+                if new_line is not None
+                else line
+                if end_type == "new"
+                else None
+            )
+            position["line_range"] = {
+                "start": _gitlab_range_endpoint(
+                    range_path, start_type, range_start_old, range_start_new
+                ),
+                "end": _gitlab_range_endpoint(
+                    range_path, end_type, range_end_old, range_end_new
+                ),
+            }
 
         data = await request(
             self._http,
@@ -315,7 +394,12 @@ class GitLabClient(ForgeClient):
             json={"body": body, "position": position},
         )
         notes = data.get("notes", [data])
-        return self._parse_note(notes[0])
+        comment = self._parse_note(notes[0])
+        return ForgeMutationResult(
+            str(data.get("id", comment.id)),
+            comment_id=comment.id,
+            discussion_id=str(data.get("id", "")) or None,
+        )
 
     async def reply_to_discussion(
         self,
@@ -323,7 +407,9 @@ class GitLabClient(ForgeClient):
         number: int,
         discussion_id: str,
         body: str,
-    ) -> InlineComment:
+        *,
+        root_comment_id: str | None = None,
+    ) -> ForgeMutationResult:
         project = _encode_project(repo_path)
         data = await request(
             self._http,
@@ -331,7 +417,10 @@ class GitLabClient(ForgeClient):
             f"/projects/{project}/merge_requests/{number}/discussions/{discussion_id}/notes",
             json={"body": body},
         )
-        return self._parse_note(data)
+        comment = self._parse_note(data)
+        return ForgeMutationResult(
+            comment.id, comment_id=comment.id, discussion_id=discussion_id
+        )
 
     async def resolve_discussion(
         self,
@@ -339,13 +428,16 @@ class GitLabClient(ForgeClient):
         number: int,
         discussion_id: str,
         resolved: bool,
-    ) -> None:
+    ) -> ForgeMutationResult:
         project = _encode_project(repo_path)
-        await request(
+        data = await request(
             self._http,
             "PUT",
             f"/projects/{project}/merge_requests/{number}/discussions/{discussion_id}",
             json={"resolved": resolved},
+        )
+        return ForgeMutationResult(
+            str(data.get("id", discussion_id)), discussion_id=discussion_id
         )
 
     async def submit_review(
@@ -355,10 +447,13 @@ class GitLabClient(ForgeClient):
         verdict: ReviewDecision,
         body: str,
         inline_comments: list[dict] | None = None,
-    ) -> None:
+        *,
+        head_sha: str | None = None,
+    ) -> ForgeMutationResult:
+        result: ForgeMutationResult | None = None
         if inline_comments:
             for comment in inline_comments:
-                await self.create_inline_comment(
+                result = await self.create_inline_comment(
                     repo_path,
                     number,
                     file_path=comment["path"],
@@ -367,27 +462,24 @@ class GitLabClient(ForgeClient):
                     body=comment["body"],
                 )
         if verdict == ReviewDecision.APPROVED:
-            await self.approve_mr(repo_path, number)
+            result = await self.approve_mr(repo_path, number, head_sha=head_sha)
         if body:
-            await self.add_comment(repo_path, number, body)
+            result = await self.add_comment(repo_path, number, body)
+        if result is None:
+            raise ValueError("review contains no mutation")
+        return result
 
-    async def approve_mr(self, repo_path: str, number: int) -> None:
-        from tongs.errors import AuthError, ForgeError
-
+    async def approve_mr(
+        self, repo_path: str, number: int, *, head_sha: str | None = None
+    ) -> ForgeMutationResult:
         project = _encode_project(repo_path)
-        try:
-            await request(
-                self._http,
-                "POST",
-                f"/projects/{project}/merge_requests/{number}/approve",
-            )
-        except AuthError:
-            raise ForgeError(
-                "Cannot approve: you may not have permission or this project "
-                "does not allow self-approval"
-            )
-        except ForgeError:
-            raise
+        data = await request(
+            self._http,
+            "POST",
+            f"/projects/{project}/merge_requests/{number}/approve",
+            json={"sha": head_sha} if head_sha is not None else None,
+        )
+        return ForgeMutationResult(str(data.get("id", number)))
 
     async def unapprove_mr(self, repo_path: str, number: int) -> None:
         project = _encode_project(repo_path)
@@ -437,14 +529,17 @@ class GitLabClient(ForgeClient):
             json={"state_event": "reopen"},
         )
 
-    async def add_comment(self, repo_path: str, number: int, body: str) -> None:
+    async def add_comment(
+        self, repo_path: str, number: int, body: str
+    ) -> ForgeMutationResult:
         project = _encode_project(repo_path)
-        await request(
+        data = await request(
             self._http,
             "POST",
             f"/projects/{project}/merge_requests/{number}/notes",
             json={"body": body},
         )
+        return ForgeMutationResult(str(data["id"]), comment_id=str(data["id"]))
 
     async def list_pipelines(
         self,

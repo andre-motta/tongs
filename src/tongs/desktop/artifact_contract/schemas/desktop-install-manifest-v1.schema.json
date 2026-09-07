@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tongs.tools/schemas/desktop-install-manifest-v1.schema.json",
+  "title": "Tongs desktop install manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release_version", "package_kind", "ownership", "platform", "compatibility", "electron_version", "launcher_path", "extraction_limits", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "release_version": {"$ref": "desktop-release-manifest-v1.schema.json#/$defs/semver"},
+    "package_kind": {"enum": ["user-archive", "rpm"]},
+    "ownership": {"enum": ["per-user", "system"]},
+    "platform": {"$ref": "desktop-release-manifest-v1.schema.json#/$defs/platform"},
+    "compatibility": {"$ref": "desktop-release-manifest-v1.schema.json#/$defs/compatibility"},
+    "electron_version": {"$ref": "desktop-release-manifest-v1.schema.json#/$defs/semver"},
+    "launcher_path": {"const": "runtime/tongs-desktop"},
+    "extraction_limits": {"$ref": "desktop-release-manifest-v1.schema.json#/$defs/limits"},
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16384,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "byte_count", "sha256", "executable"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "byte_count": {"type": "integer", "minimum": 0, "maximum": 2147483648},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "executable": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

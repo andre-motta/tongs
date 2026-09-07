@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from typing import cast
 
@@ -65,7 +66,10 @@ class _PipeWriter:
 async def run_stdio() -> None:
     """Bind one sidecar server to process stdin and the original stdout pipe."""
     loop = asyncio.get_running_loop()
-    protocol_stdout = sys.stdout.buffer
+    protocol_fd = os.dup(sys.stdout.fileno())
+    os.set_inheritable(protocol_fd, False)
+    protocol_stdout = os.fdopen(protocol_fd, "wb", buffering=0)
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno(), inheritable=True)
     sys.stdout = sys.stderr
 
     reader = asyncio.StreamReader(limit=MAX_REQUEST_FRAME_BYTES + 1)

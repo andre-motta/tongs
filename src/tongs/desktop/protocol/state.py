@@ -167,7 +167,10 @@ class SnapshotStore:
     ) -> str:
         self.prune()
         encoded_revision = _encode_object(revision)
-        if len(entries) > self._max_retained_rows:
+        if (
+            len(encoded_revision) > self._max_retained_bytes
+            or len(entries) > self._max_retained_rows
+        ):
             raise ProtocolError(
                 ProtocolErrorCode.RESPONSE_TOO_LARGE,
                 "The snapshot exceeds the session retention limit.",

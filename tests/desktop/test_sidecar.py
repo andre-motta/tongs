@@ -27,6 +27,7 @@ from tongs.plugins.desktop import (
     DesktopMethod,
     DesktopPluginCallResult,
     DesktopPluginManifest,
+    DesktopReadKind,
     freeze_json_object,
 )
 from tongs.plugins.desktop_registry import DesktopPluginRegistry
@@ -82,6 +83,7 @@ class _FakeSession:
         self.started = False
         self.closed = False
         self.read_started = asyncio.Event()
+        self.read_cancelled = asyncio.Event()
         self.release_read = asyncio.Event()
         self.log = ""
 
@@ -98,7 +100,11 @@ class _FakeSession:
 
     async def discover_repositories(self) -> tuple[RepositorySnapshot, ...]:
         self.read_started.set()
-        await self.release_read.wait()
+        try:
+            await self.release_read.wait()
+        except asyncio.CancelledError:
+            self.read_cancelled.set()
+            raise
         return (
             RepositorySnapshot(
                 RepositoryRef("git.example.com", "team/project"),
@@ -336,6 +342,58 @@ async def test_plugin_facade_invoke_cannot_redirect_plugin() -> None:
     assert registry.calls[0][0:2] == ("alpha", "run")
 
 
+class _TrackingCancellation(DesktopCancellation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.wait_started = asyncio.Event()
+        self.wait_finished = asyncio.Event()
+
+    async def wait(self) -> None:
+        self.wait_started.set()
+        try:
+            await super().wait()
+        finally:
+            self.wait_finished.set()
+
+
+@pytest.mark.asyncio
+async def test_plugin_read_outer_cancellation_drains_service_and_waiter_tasks() -> None:
+    session = _FakeSession()
+    server = DesktopSidecarServer(
+        session=cast(object, session),
+        plugin_registry=_registry(),
+        shutdown_timeout=0.2,
+    )
+    manifest = DesktopPluginManifest(
+        "alpha",
+        "Alpha",
+        "1.0",
+        DesktopCompatibility(1),
+        (),
+        (),
+        reads=(DesktopReadKind.REPOSITORIES,),
+    )
+    facade = server._facade_for_plugin("alpha", manifest)
+    cancellation = _TrackingCancellation()
+    read = asyncio.create_task(
+        facade.read(
+            DesktopReadKind.REPOSITORIES,
+            freeze_json_object({}),
+            cancellation,
+        )
+    )
+    await session.read_started.wait()
+    await cancellation.wait_started.wait()
+
+    read.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await read
+
+    assert cancellation.cancelled
+    assert session.read_cancelled.is_set()
+    assert cancellation.wait_finished.is_set()
+
+
 def test_actual_sidecar_exits_cleanly_on_eof() -> None:
     completed = subprocess.run(
         [sys.executable, "-E", "-P", "-m", "tongs.desktop.sidecar"],
@@ -349,6 +407,41 @@ def test_actual_sidecar_exits_cleanly_on_eof() -> None:
     assert completed.returncode == 0
     assert completed.stdout == b""
     assert completed.stderr == b""
+
+
+def test_actual_sidecar_redirects_python_and_native_stdout_from_protocol() -> None:
+    script = """
+import os
+from tongs.desktop import sidecar
+from tongs.desktop.protocol.messages import encode_response
+
+class FixtureServer:
+    async def run(self, _reader, writer):
+        os.write(1, b'native-contamination\\n')
+        print('python-contamination')
+        writer.write(encode_response('probe', result={'ok': True}))
+        await writer.drain()
+
+sidecar.DesktopSidecarServer = FixtureServer
+raise SystemExit(sidecar.main())
+"""
+    completed = subprocess.run(
+        [sys.executable, "-E", "-P", "-c", script],
+        capture_output=True,
+        cwd="/tmp",
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {
+        "v": 1,
+        "type": "response",
+        "id": "probe",
+        "result": {"ok": True},
+    }
+    assert b"native-contamination" in completed.stderr
+    assert b"python-contamination" in completed.stderr
 
 
 @pytest.mark.asyncio

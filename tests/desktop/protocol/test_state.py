@@ -61,3 +61,12 @@ def test_snapshot_rejects_single_value_over_retention_limit() -> None:
         store.create("one", {}, [{"text": "x" * 100}])
 
     assert caught.value.code is ProtocolErrorCode.RESPONSE_TOO_LARGE
+
+
+def test_snapshot_rejects_revision_over_retention_limit_without_entries() -> None:
+    store = SnapshotStore(max_retained_bytes=32, max_retained_rows=10)
+
+    with pytest.raises(ProtocolError) as caught:
+        store.create("one", {"revision": "x" * 100}, [])
+
+    assert caught.value.code is ProtocolErrorCode.RESPONSE_TOO_LARGE

@@ -927,18 +927,25 @@ class DesktopSidecarServer:
             operation.handler(cast(JsonObject, _thaw_json(params)), context)
         )
         cancellation_task = asyncio.create_task(cancellation.wait())
-        done, _pending = await asyncio.wait(
-            (task, cancellation_task), return_when=asyncio.FIRST_COMPLETED
-        )
-        if cancellation_task in done:
+        completed = False
+        try:
+            done, _pending = await asyncio.wait(
+                (task, cancellation_task), return_when=asyncio.FIRST_COMPLETED
+            )
+            if cancellation_task in done:
+                raise asyncio.CancelledError
+            result = freeze_json(cast(PluginJsonObject, to_json_value(task.result())))
+            completed = True
+            return result
+        finally:
+            if not completed:
+                cancellation.cancel()
             task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-            raise asyncio.CancelledError
-        cancellation_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await cancellation_task
-        return freeze_json(cast(PluginJsonObject, to_json_value(task.result())))
+            cancellation_task.cancel()
+            await _bounded_tasks_cleanup(
+                (cast(asyncio.Task[object], task), cancellation_task),
+                self._shutdown_timeout,
+            )
 
     async def _publish_plugin_event(
         self, plugin_id: str, event_id: str, payload: FrozenJsonObject
@@ -1517,6 +1524,17 @@ async def _bounded_task_cleanup(task: asyncio.Task[object], timeout: float) -> N
         return
     with suppress(BaseException):
         task.result()
+
+
+async def _bounded_tasks_cleanup(
+    tasks: tuple[asyncio.Task[object], ...], timeout: float
+) -> None:
+    done, pending = await asyncio.wait(tasks, timeout=timeout)
+    for task in pending:
+        task.cancel()
+        task.add_done_callback(_consume_task)
+    for task in done:
+        _consume_task(task)
 
 
 def _consume_task(task: asyncio.Task[object]) -> None:

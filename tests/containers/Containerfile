@@ -3,6 +3,8 @@ FROM registry.fedoraproject.org/fedora:44
 LABEL org.opencontainers.image.title="Tongs Fedora 44 validation harness"
 LABEL org.opencontainers.image.description="Disposable headless test environment for issue 27"
 
+COPY installer-verifier.lock /opt/tongs-harness/installer-verifier.lock
+
 RUN dnf install --assumeyes --setopt=install_weak_deps=False \
         git-core \
         python3 \
@@ -22,7 +24,8 @@ RUN dnf install --assumeyes --setopt=install_weak_deps=False \
         pytest\>=8.0 \
         setuptools\>=68 \
         textual\>=1.0 \
-        wheel
+        wheel \
+        -r /opt/tongs-harness/installer-verifier.lock
 
 COPY probe.py /opt/tongs-harness/probe.py
 

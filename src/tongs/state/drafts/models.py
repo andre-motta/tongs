@@ -10,7 +10,8 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID, uuid4
 
-from tongs.services import ReviewRef, ReviewRevision
+from tongs.scanner.repo import ForgeType
+from tongs.services.models import ReviewRef, ReviewRevision
 
 
 class DraftState(str, Enum):
@@ -211,6 +212,7 @@ class StepReceipt:
     step_id: str
     remote_id: str
     recorded_at: datetime
+    resync_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +221,69 @@ class ReconciliationRecord:
 
     resolution: ReconciliationResolution
     recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionRetryAuthorization:
+    """An explicit durable retry of one definitely unconfirmed step."""
+
+    step_id: str
+    ordinal: int
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownSubmissionOutcome:
+    """A durable marker for a step whose remote outcome was ambiguous."""
+
+    step_id: str
+    ordinal: int
+    reason: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PendingSubmissionDispatch:
+    """The exact remote step durably marked before its call begins."""
+
+    step_id: str
+    operation_id: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionPlanStepRecord:
+    """One immutable durable step in a frozen submission plan."""
+
+    step_id: str
+    kind: str
+    comment_ids: tuple[UUID, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.step_id or not self.kind:
+            raise ValueError("submission plan step identity and kind are required")
+        if len(self.comment_ids) != len(set(self.comment_ids)):
+            raise ValueError("submission plan comment IDs must be unique")
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionPlanRecord:
+    """The exact forge-specific plan validated before any remote write."""
+
+    forge: ForgeType
+    atomic: bool
+    steps: tuple[SubmissionPlanStepRecord, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.forge, ForgeType):
+            raise TypeError("forge must be a ForgeType")
+        if not isinstance(self.atomic, bool):
+            raise TypeError("atomic must be a boolean")
+        if not self.steps:
+            raise ValueError("submission plan must contain at least one step")
+        step_ids = [step.step_id for step in self.steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("submission plan step IDs must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,3 +299,7 @@ class SubmissionAttempt:
     reconciliations: tuple[ReconciliationRecord, ...]
     started_at: datetime
     updated_at: datetime
+    retry_authorizations: tuple[SubmissionRetryAuthorization, ...] = ()
+    unknown_outcomes: tuple[UnknownSubmissionOutcome, ...] = ()
+    pending_dispatch: PendingSubmissionDispatch | None = None
+    plan: SubmissionPlanRecord | None = None

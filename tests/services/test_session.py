@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -40,10 +41,17 @@ from tongs.services import (
     RepositoryRef,
     ReviewQuery,
     ReviewRef,
+    ReviewRevision,
     ReviewScope,
     ServiceError,
     ServiceErrorCode,
     ServiceEventKind,
+)
+from tongs.state.drafts import (
+    DraftContent,
+    DraftState,
+    DraftStore,
+    GeneralDraftComment,
 )
 
 NOW = datetime(2026, 9, 7, tzinfo=UTC)
@@ -110,6 +118,43 @@ class FakeCache:
 
     async def close(self) -> None:
         self.close_calls += 1
+
+
+class FakeDraftStore:
+    def __init__(self) -> None:
+        self.open_calls = 0
+        self.recover_calls = 0
+        self.close_calls = 0
+
+    async def open(self) -> None:
+        self.open_calls += 1
+
+    async def recover_incomplete_attempts(self) -> tuple[object, ...]:
+        self.recover_calls += 1
+        return ()
+
+    async def close(self) -> None:
+        self.close_calls += 1
+
+
+class BlockingDraftStore(FakeDraftStore):
+    def __init__(self, phase: str) -> None:
+        super().__init__()
+        self.phase = phase
+        self.started = asyncio.Event()
+
+    async def open(self) -> None:
+        self.open_calls += 1
+        if self.phase == "open":
+            self.started.set()
+            await asyncio.Event().wait()
+
+    async def recover_incomplete_attempts(self) -> tuple[object, ...]:
+        self.recover_calls += 1
+        if self.phase == "recover":
+            self.started.set()
+            await asyncio.Event().wait()
+        return ()
 
 
 class BlockingCache(FakeCache):
@@ -254,6 +299,9 @@ class FakeClient:
             await self.review_mutation_release.wait()
         return ForgeMutationResult("note-1", comment_id="note-1")
 
+    async def invalidate_review_reads(self, repo_path: str, number: int) -> bool:
+        return True
+
 
 class FirstCancelResistantReviewClient(FakeClient):
     def __init__(self) -> None:
@@ -393,6 +441,7 @@ async def start_session(
     session = ApplicationSession(
         config=Config(max_parallel=2),
         cache=cache or FakeCache(),
+        draft_store=FakeDraftStore(),  # type: ignore[arg-type]
         forge_registry=registry,
         event_queue_size=event_queue_size,
         **kwargs,
@@ -423,6 +472,186 @@ class TestReferences:
 
 
 class TestLifecycle:
+    def test_draft_store_and_path_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            ApplicationSession(
+                draft_db_path=tmp_path / "drafts.db",
+                draft_store=cast(DraftStore, FakeDraftStore()),
+            )
+
+    @pytest.mark.asyncio
+    async def test_session_opens_recovers_and_exposes_one_draft_store(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "drafts.db"
+        setup = DraftStore(path)
+        await setup.open()
+        revision = ReviewRevision("head-1", "base-1")
+        draft = await setup.create_draft(
+            ReviewRef(RepositoryRef("github.com", "acme/widgets"), 7),
+            revision,
+            DraftContent(comments=(GeneralDraftComment(uuid4(), "comment"),)),
+        )
+        attempt = await setup.lock_submission(draft.id, draft.version)
+        await setup.close()
+        store = DraftStore(path)
+        session = await ApplicationSession(
+            config=Config(),
+            cache=FakeCache(),
+            draft_store=store,
+            forge_registry=FakeRegistry(),
+        ).start()
+
+        assert session.drafts is store
+        assert session.review_submissions is session.review_submissions
+        assert (await store.get_attempt(attempt.id)).state is DraftState.UNKNOWN
+
+        await session.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("phase", ["open", "recover"])
+    async def test_close_cancels_draft_startup_before_shared_resources(
+        self, phase: str
+    ) -> None:
+        cache = FakeCache()
+        drafts = BlockingDraftStore(phase)
+        registry = FakeRegistry()
+        session = ApplicationSession(
+            config=Config(),
+            cache=cache,
+            draft_store=cast(DraftStore, drafts),
+            forge_registry=registry,
+        )
+        start = asyncio.create_task(session.start())
+        await drafts.started.wait()
+
+        await session.close()
+
+        with pytest.raises(asyncio.CancelledError):
+            await start
+        assert drafts.close_calls == 1
+        assert cache.close_calls == 1
+        assert registry.close_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_submission_closes_before_mutations_store_and_shared_resources(
+        self,
+    ) -> None:
+        order: list[str] = []
+
+        class OrderedDraftStore(FakeDraftStore):
+            async def close(self) -> None:
+                order.append("drafts")
+                await super().close()
+
+        class OrderedCache(FakeCache):
+            async def close(self) -> None:
+                order.append("cache")
+                await super().close()
+
+        class OrderedRegistry(FakeRegistry):
+            async def close_all(self) -> None:
+                order.append("registry")
+                await super().close_all()
+
+        drafts = OrderedDraftStore()
+        session = await ApplicationSession(
+            config=Config(),
+            cache=OrderedCache(),
+            draft_store=cast(DraftStore, drafts),
+            forge_registry=OrderedRegistry(),
+        ).start()
+        session.review_submissions.close = AsyncMock(
+            side_effect=lambda: order.append("submissions")
+        )
+        session.ci_mutations.close = AsyncMock(
+            side_effect=lambda: order.append("ci_mutations")
+        )
+        session.review_mutations.close = AsyncMock(
+            side_effect=lambda: order.append("review_mutations")
+        )
+
+        await session.close()
+
+        assert order == [
+            "submissions",
+            "ci_mutations",
+            "review_mutations",
+            "drafts",
+            "registry",
+            "cache",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_submission_close_failure_preserves_dependencies_for_retry(
+        self,
+    ) -> None:
+        cache = FakeCache()
+        drafts = FakeDraftStore()
+        registry = FakeRegistry()
+        session = await ApplicationSession(
+            config=Config(),
+            cache=cache,
+            draft_store=cast(DraftStore, drafts),
+            forge_registry=registry,
+        ).start()
+        submission_close = AsyncMock(
+            side_effect=[RuntimeError("owner still active"), None]
+        )
+        session.review_submissions.close = submission_close
+
+        with pytest.raises(ServiceError) as raised:
+            await session.close()
+
+        assert raised.value.code is ServiceErrorCode.SHUTDOWN_FAILED
+        assert drafts.close_calls == 0
+        assert registry.close_calls == 0
+        assert cache.close_calls == 0
+        assert session.ci_mutations._closed is False
+        assert session.review_mutations._closed is False
+
+        await session.close()
+
+        assert submission_close.await_count == 2
+        assert drafts.close_calls == 1
+        assert registry.close_calls == 1
+        assert cache.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_active_submission_settles_before_store_and_forge_close(
+        self, tmp_path: Path
+    ) -> None:
+        cache = FakeCache()
+        client = FakeClient()
+        client.review_mutation_release = asyncio.Event()
+        registry = FakeRegistry({"github.com": client})
+        session = await ApplicationSession(
+            config=Config(),
+            cache=cache,
+            draft_db_path=tmp_path / "drafts.db",
+            forge_registry=registry,
+        ).start()
+        repository = await session.open_repository("github.com", "acme/widgets")
+        review = ReviewRef(repository.ref, 7)
+        snapshot = await session.get_review(review)
+        assert snapshot.revision is not None
+        draft = await session.drafts.create_draft(
+            review,
+            snapshot.revision,
+            DraftContent(comments=(GeneralDraftComment(uuid4(), "comment"),)),
+        )
+        owner = asyncio.create_task(
+            session.review_submissions.start(draft.id, draft.version)
+        )
+        await client.review_mutation_started.wait()
+
+        await session.close()
+        progress = await owner
+
+        assert progress.outcome.value == "unknown"
+        assert registry.close_calls == 1
+        assert cache.close_calls == 1
+
     @pytest.mark.asyncio
     async def test_review_refreshes_close_before_registry_and_cache(self) -> None:
         cache = FakeCache()
@@ -592,7 +821,10 @@ class TestLifecycle:
         cache = FakeCache()
         registry = FakeRegistry()
         async with ApplicationSession(
-            config=Config(), cache=cache, forge_registry=registry
+            config=Config(),
+            cache=cache,
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
+            forge_registry=registry,
         ) as session:
             assert session.config.scan_depth == 5
         await session.close()
@@ -606,7 +838,11 @@ class TestLifecycle:
     @pytest.mark.asyncio
     async def test_start_failure_closes_partially_opened_cache(self) -> None:
         cache = FakeCache(open_error=RuntimeError("ghp_secret"))
-        session = ApplicationSession(config=Config(), cache=cache)
+        session = ApplicationSession(
+            config=Config(),
+            cache=cache,
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
+        )
         with pytest.raises(ServiceError) as caught:
             await session.start()
         assert caught.value.code == ServiceErrorCode.INTERNAL
@@ -619,7 +855,11 @@ class TestLifecycle:
         self,
     ) -> None:
         cache = FatalOpenCache()
-        session = ApplicationSession(config=Config(), cache=cache)
+        session = ApplicationSession(
+            config=Config(),
+            cache=cache,
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
+        )
 
         with pytest.raises(FatalStartup, match="process-control exit"):
             await session.start()
@@ -630,7 +870,11 @@ class TestLifecycle:
     @pytest.mark.asyncio
     async def test_cancelled_start_still_closes_partial_cache(self) -> None:
         cache = BlockingCache()
-        session = ApplicationSession(config=Config(), cache=cache)
+        session = ApplicationSession(
+            config=Config(),
+            cache=cache,
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
+        )
         task = asyncio.create_task(session.start())
         await cache.started.wait()
         task.cancel()
@@ -645,7 +889,10 @@ class TestLifecycle:
         cache = BlockingCache()
         registry = FakeRegistry()
         session = ApplicationSession(
-            config=Config(), cache=cache, forge_registry=registry
+            config=Config(),
+            cache=cache,
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
+            forge_registry=registry,
         )
         start_task = asyncio.create_task(session.start())
         await cache.started.wait()
@@ -667,6 +914,7 @@ class TestLifecycle:
         session = ApplicationSession(
             config=Config(),
             cache=cache,
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
             forge_registry=FakeRegistry(),
             shutdown_timeout=0.01,
         )
@@ -722,6 +970,7 @@ class TestLifecycle:
         session = await ApplicationSession(
             config=Config(),
             cache=cache,
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
             forge_registry=FakeRegistry(),
             shutdown_timeout=0.01,
         ).start()
@@ -899,6 +1148,7 @@ class TestReviewReads:
         session = await ApplicationSession(
             config=Config(max_parallel=1),
             cache=FakeCache(),
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
             forge_registry=registry,
         ).start()
         read_task = asyncio.create_task(

@@ -17,7 +17,8 @@ from uuid import UUID, uuid4
 import aiosqlite
 from platformdirs import user_data_dir
 
-from tongs.services import RepositoryRef, ReviewRef, ReviewRevision
+from tongs.scanner.repo import ForgeType
+from tongs.services.models import RepositoryRef, ReviewRef, ReviewRevision
 from tongs.state.drafts._locks import AttemptLock
 from tongs.state.drafts.errors import (
     DraftAttemptOwnedError,
@@ -41,14 +42,19 @@ from tongs.state.drafts.models import (
     GeneralDraftComment,
     InlineAnchor,
     InlineDraftComment,
+    PendingSubmissionDispatch,
     ReconciliationRecord,
     ReconciliationResolution,
     ReplyDraftComment,
     StepReceipt,
     SubmissionAttempt,
+    SubmissionPlanRecord,
+    SubmissionPlanStepRecord,
+    SubmissionRetryAuthorization,
+    UnknownSubmissionOutcome,
 )
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
         """
@@ -104,8 +110,89 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
             recorded_at TEXT NOT NULL
         )
         """,
-    )
+    ),
+    2: (
+        """
+        CREATE TABLE submission_retry_authorizations (
+            attempt_id TEXT NOT NULL
+                REFERENCES submission_attempts(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+            step_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            PRIMARY KEY(attempt_id, ordinal)
+        )
+        """,
+        """
+        CREATE TABLE submission_unknown_outcomes (
+            attempt_id TEXT NOT NULL
+                REFERENCES submission_attempts(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+            step_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            PRIMARY KEY(attempt_id, ordinal)
+        )
+        """,
+        """
+        CREATE TABLE submission_pending_dispatches (
+            attempt_id TEXT PRIMARY KEY
+                REFERENCES submission_attempts(id) ON DELETE CASCADE,
+            step_id TEXT NOT NULL,
+            operation_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE submission_plans (
+            attempt_id TEXT PRIMARY KEY
+                REFERENCES submission_attempts(id) ON DELETE CASCADE,
+            forge TEXT NOT NULL,
+            atomic INTEGER NOT NULL CHECK(atomic IN (0, 1)),
+            steps_json TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE submission_receipt_resync (
+            attempt_id TEXT NOT NULL,
+            step_id TEXT NOT NULL,
+            resync_required INTEGER NOT NULL CHECK(resync_required IN (0, 1)),
+            PRIMARY KEY(attempt_id, step_id),
+            FOREIGN KEY(attempt_id, step_id)
+                REFERENCES submission_receipts(attempt_id, step_id)
+                ON DELETE CASCADE
+        )
+        """,
+    ),
 }
+
+
+def _plan_steps_to_json(steps: tuple[SubmissionPlanStepRecord, ...]) -> str:
+    return json.dumps(
+        [
+            {
+                "step_id": step.step_id,
+                "kind": step.kind,
+                "comment_ids": [str(comment_id) for comment_id in step.comment_ids],
+            }
+            for step in steps
+        ],
+        separators=(",", ":"),
+    )
+
+
+def _plan_steps_from_json(value: str) -> tuple[SubmissionPlanStepRecord, ...]:
+    data = json.loads(value)
+    if not isinstance(data, list):
+        raise TypeError("submission plan steps must be a list")
+    return tuple(
+        SubmissionPlanStepRecord(
+            step_id=cast(str, item["step_id"]),
+            kind=cast(str, item["kind"]),
+            comment_ids=tuple(UUID(cast(str, value)) for value in item["comment_ids"]),
+        )
+        for item in cast(list[dict[str, object]], data)
+    )
 
 
 def default_draft_db_path() -> Path:
@@ -433,6 +520,37 @@ class DraftStore:
                 "attempt_id",
                 "resolution",
                 "recorded_at",
+            },
+            "submission_retry_authorizations": {
+                "attempt_id",
+                "ordinal",
+                "step_id",
+                "recorded_at",
+            },
+            "submission_unknown_outcomes": {
+                "attempt_id",
+                "ordinal",
+                "step_id",
+                "reason",
+                "recorded_at",
+            },
+            "submission_pending_dispatches": {
+                "attempt_id",
+                "step_id",
+                "operation_id",
+                "recorded_at",
+            },
+            "submission_plans": {
+                "attempt_id",
+                "forge",
+                "atomic",
+                "steps_json",
+                "recorded_at",
+            },
+            "submission_receipt_resync": {
+                "attempt_id",
+                "step_id",
+                "resync_required",
             },
         }
         for table, expected_columns in required.items():
@@ -769,12 +887,151 @@ class DraftStore:
                 ownership.release()
 
     @_serialized
+    async def record_plan(
+        self, attempt_id: UUID, plan: SubmissionPlanRecord
+    ) -> SubmissionAttempt:
+        """Persist the exact validated plan once before any remote dispatch."""
+        if not isinstance(plan, SubmissionPlanRecord):
+            raise TypeError("plan must be a SubmissionPlanRecord")
+        self._require_owned(attempt_id)
+        db = self._connection()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            attempt = await self._attempt_in_transaction(db, attempt_id)
+            if attempt.state not in {DraftState.SUBMITTING, DraftState.PARTIAL}:
+                raise DraftStoreError("plan recording requires an active attempt")
+            if attempt.plan is not None:
+                if attempt.plan != plan:
+                    raise DraftStoreError(
+                        "submission plan is already bound differently"
+                    )
+                await db.execute("COMMIT")
+                return attempt
+            if attempt.pending_dispatch is not None or attempt.receipts:
+                raise DraftStoreError("submission plan must precede every remote write")
+            now = _now()
+            await db.execute(
+                """
+                INSERT INTO submission_plans
+                    (attempt_id, forge, atomic, steps_json, recorded_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(attempt_id),
+                    plan.forge.value,
+                    int(plan.atomic),
+                    _plan_steps_to_json(plan.steps),
+                    _format_time(now),
+                ),
+            )
+            result = await self._attempt_in_transaction(db, attempt_id)
+            await db.execute("COMMIT")
+            return result
+        except (DraftStoreError, DraftNotFoundError):
+            await self._rollback(db)
+            raise
+        except sqlite3.Error as error:
+            await self._rollback(db)
+            raise DraftStoreError("submission plan write failed") from error
+        except BaseException:
+            await self._rollback(db)
+            raise
+
+    @_serialized
+    async def begin_dispatch(
+        self, attempt_id: UUID, step_id: str, operation_id: str
+    ) -> SubmissionAttempt:
+        """Durably mark the only remote step that may now be dispatched."""
+        if not step_id or not operation_id:
+            raise ValueError("step_id and operation_id are required")
+        self._require_owned(attempt_id)
+        db = self._connection()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            attempt = await self._attempt_in_transaction(db, attempt_id)
+            if attempt.state not in {DraftState.SUBMITTING, DraftState.PARTIAL}:
+                raise DraftStoreError("dispatch requires an active submission attempt")
+            if any(receipt.step_id == step_id for receipt in attempt.receipts):
+                raise DraftStoreError("confirmed submission steps cannot be dispatched")
+            if attempt.pending_dispatch is not None:
+                if (
+                    attempt.pending_dispatch.step_id == step_id
+                    and attempt.pending_dispatch.operation_id == operation_id
+                ):
+                    await db.execute("COMMIT")
+                    return attempt
+                raise DraftStoreError("another submission step may already be remote")
+            now = _now()
+            await db.execute(
+                """
+                INSERT INTO submission_pending_dispatches
+                    (attempt_id, step_id, operation_id, recorded_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(attempt_id), step_id, operation_id, _format_time(now)),
+            )
+            result = await self._attempt_in_transaction(db, attempt_id)
+            await db.execute("COMMIT")
+            return result
+        except (DraftStoreError, DraftNotFoundError):
+            await self._rollback(db)
+            raise
+        except sqlite3.Error as error:
+            await self._rollback(db)
+            raise DraftStoreError("submission dispatch journal failed") from error
+        except BaseException:
+            await self._rollback(db)
+            raise
+
+    @_serialized
+    async def reject_dispatch(
+        self, attempt_id: UUID, step_id: str, operation_id: str
+    ) -> SubmissionAttempt:
+        """Clear a pending step after the forge definitely rejected it."""
+        self._require_owned(attempt_id)
+        db = self._connection()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            attempt = await self._attempt_in_transaction(db, attempt_id)
+            pending = attempt.pending_dispatch
+            if (
+                pending is None
+                or pending.step_id != step_id
+                or pending.operation_id != operation_id
+            ):
+                raise DraftStoreError("submission dispatch journal changed")
+            await db.execute(
+                "DELETE FROM submission_pending_dispatches WHERE attempt_id = ?",
+                (str(attempt_id),),
+            )
+            result = await self._attempt_in_transaction(db, attempt_id)
+            await db.execute("COMMIT")
+            return result
+        except (DraftStoreError, DraftNotFoundError):
+            await self._rollback(db)
+            raise
+        except sqlite3.Error as error:
+            await self._rollback(db)
+            raise DraftStoreError("submission dispatch rejection failed") from error
+        except BaseException:
+            await self._rollback(db)
+            raise
+
+    @_serialized
     async def record_receipt(
-        self, attempt_id: UUID, step_id: str, remote_id: str
+        self,
+        attempt_id: UUID,
+        step_id: str,
+        remote_id: str,
+        *,
+        operation_id: str | None = None,
+        resync_required: bool = False,
     ) -> SubmissionAttempt:
         """Persist a confirmed remote step once under the live attempt lock."""
-        if not step_id or not remote_id:
+        if not step_id or not remote_id or operation_id == "":
             raise ValueError("step_id and remote_id are required")
+        if not isinstance(resync_required, bool):
+            raise TypeError("resync_required must be a boolean")
         self._require_owned(attempt_id)
         db = self._connection()
         try:
@@ -795,13 +1052,47 @@ class DraftStore:
                     raise DraftReceiptConflictError(
                         "submission step already has a different remote receipt"
                     )
+                if resync_required:
+                    await db.execute(
+                        """
+                        INSERT INTO submission_receipt_resync
+                            (attempt_id, step_id, resync_required) VALUES (?, ?, 1)
+                        ON CONFLICT(attempt_id, step_id) DO UPDATE SET
+                            resync_required = MAX(resync_required, 1)
+                        """,
+                        (str(attempt_id), step_id),
+                    )
+                    attempt = await self._attempt_in_transaction(db, attempt_id)
                 await db.execute("COMMIT")
                 return attempt
+            pending = attempt.pending_dispatch
+            if operation_id is not None and (
+                pending is None
+                or pending.step_id != step_id
+                or pending.operation_id != operation_id
+            ):
+                raise DraftStoreError("submission receipt has no matching dispatch")
             now = _now()
             await db.execute(
                 "INSERT INTO submission_receipts VALUES (?, ?, ?, ?)",
                 (str(attempt_id), step_id, remote_id, _format_time(now)),
             )
+            if resync_required:
+                receipt_resync = 1
+            else:
+                receipt_resync = 0
+            await db.execute(
+                """
+                INSERT INTO submission_receipt_resync
+                    (attempt_id, step_id, resync_required) VALUES (?, ?, ?)
+                """,
+                (str(attempt_id), step_id, receipt_resync),
+            )
+            if operation_id is not None:
+                await db.execute(
+                    "DELETE FROM submission_pending_dispatches WHERE attempt_id = ?",
+                    (str(attempt_id),),
+                )
             await db.execute(
                 "UPDATE submission_attempts SET state = ?, updated_at = ? WHERE id = ?",
                 (DraftState.PARTIAL.value, _format_time(now), str(attempt_id)),
@@ -829,25 +1120,148 @@ class DraftStore:
             raise
 
     @_serialized
+    async def authorize_retry(
+        self, attempt_id: UUID, step_id: str
+    ) -> SubmissionAttempt:
+        """Durably authorize one explicit retry of an unconfirmed active step."""
+        if not step_id:
+            raise ValueError("step_id is required")
+        self._require_owned(attempt_id)
+        db = self._connection()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            attempt = await self._attempt_in_transaction(db, attempt_id)
+            if attempt.state not in {DraftState.SUBMITTING, DraftState.PARTIAL}:
+                raise DraftStoreError("retry authorization requires an active attempt")
+            if attempt.pending_dispatch is not None:
+                raise DraftStoreError("a pending remote step must be reconciled first")
+            if any(receipt.step_id == step_id for receipt in attempt.receipts):
+                raise DraftStoreError("confirmed submission steps cannot be retried")
+            ordinal = (
+                max(
+                    (
+                        authorization.ordinal
+                        for authorization in attempt.retry_authorizations
+                    ),
+                    default=0,
+                )
+                + 1
+            )
+            now = _now()
+            await db.execute(
+                """
+                INSERT INTO submission_retry_authorizations
+                    (attempt_id, ordinal, step_id, recorded_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(attempt_id), ordinal, step_id, _format_time(now)),
+            )
+            result = await self._attempt_in_transaction(db, attempt_id)
+            await db.execute("COMMIT")
+            return result
+        except (DraftStoreError, DraftNotFoundError):
+            await self._rollback(db)
+            raise
+        except sqlite3.Error as error:
+            await self._rollback(db)
+            raise DraftStoreError("submission retry authorization failed") from error
+        except BaseException:
+            await self._rollback(db)
+            raise
+
+    @_serialized
+    async def cancel_submission(self, attempt_id: UUID) -> DraftSnapshot:
+        """Restore a service-proven never-dispatched attempt to editable state."""
+        self._require_owned(attempt_id)
+        db = self._connection()
+        completed = False
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            attempt = await self._attempt_in_transaction(db, attempt_id)
+            if (
+                attempt.state != DraftState.SUBMITTING
+                or attempt.receipts
+                or attempt.pending_dispatch is not None
+            ):
+                raise DraftStoreError(
+                    "only a never-dispatched submission attempt can be cancelled"
+                )
+            now = _now()
+            updated = await db.execute(
+                """
+                UPDATE drafts
+                SET state = ?, active_attempt_id = NULL, version = version + 1,
+                    updated_at = ?
+                WHERE id = ? AND active_attempt_id = ? AND state = ?
+                """,
+                (
+                    DraftState.EDITABLE.value,
+                    _format_time(now),
+                    str(attempt.draft_id),
+                    str(attempt_id),
+                    DraftState.SUBMITTING.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise DraftStoreError("the active submission attempt changed")
+            await db.execute(
+                "DELETE FROM submission_attempts WHERE id = ?", (str(attempt_id),)
+            )
+            result = await self._draft_in_transaction(db, attempt.draft_id)
+            await db.execute("COMMIT")
+            completed = True
+            return result
+        except (DraftStoreError, DraftNotFoundError):
+            await self._rollback(db)
+            raise
+        except sqlite3.Error as error:
+            await self._rollback(db)
+            raise DraftStoreError("submission cancellation failed") from error
+        except BaseException:
+            await self._rollback(db)
+            raise
+        finally:
+            if completed:
+                self._release_owned(attempt_id)
+
+    @_serialized
     async def complete_submission(self, attempt_id: UUID) -> SubmissionAttempt:
         """Mark an owned attempt and its draft submitted, then release ownership."""
         self._require_owned(attempt_id)
+        completed = False
         try:
-            return await self._transition_owned(attempt_id, DraftState.SUBMITTED)
+            result = await self._transition_owned(attempt_id, DraftState.SUBMITTED)
+            completed = True
+            return result
         finally:
-            self._release_owned(attempt_id)
+            if completed:
+                self._release_owned(attempt_id)
 
     @_serialized
-    async def mark_attempt_unknown(self, attempt_id: UUID) -> SubmissionAttempt:
+    async def mark_attempt_unknown(
+        self, attempt_id: UUID, *, step_id: str | None = None, reason: str = "unknown"
+    ) -> SubmissionAttempt:
         """Durably record an ambiguous owned outcome before releasing ownership."""
+        if step_id is not None and (not step_id or not reason):
+            raise ValueError("unknown step_id and reason must be non-empty")
         self._require_owned(attempt_id)
         try:
-            return await self._transition_owned(attempt_id, DraftState.UNKNOWN)
+            return await self._transition_owned(
+                attempt_id,
+                DraftState.UNKNOWN,
+                unknown_step_id=step_id,
+                unknown_reason=reason,
+            )
         finally:
             self._release_owned(attempt_id)
 
     async def _transition_owned(
-        self, attempt_id: UUID, target: DraftState
+        self,
+        attempt_id: UUID,
+        target: DraftState,
+        *,
+        unknown_step_id: str | None = None,
+        unknown_reason: str = "unknown",
     ) -> SubmissionAttempt:
         db = self._connection()
         try:
@@ -856,6 +1270,32 @@ class DraftStore:
             if attempt.state not in {DraftState.SUBMITTING, DraftState.PARTIAL}:
                 raise DraftStoreError("submission attempt is not active")
             now = _now()
+            pending = attempt.pending_dispatch
+            if pending is not None:
+                if unknown_step_id is not None and unknown_step_id != pending.step_id:
+                    raise DraftStoreError("unknown outcome does not match pending step")
+                unknown_step_id = pending.step_id
+            if unknown_step_id is not None:
+                ordinal = len(attempt.unknown_outcomes) + 1
+                await db.execute(
+                    """
+                    INSERT INTO submission_unknown_outcomes
+                        (attempt_id, ordinal, step_id, reason, recorded_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(attempt_id),
+                        ordinal,
+                        unknown_step_id,
+                        unknown_reason,
+                        _format_time(now),
+                    ),
+                )
+            if pending is not None:
+                await db.execute(
+                    "DELETE FROM submission_pending_dispatches WHERE attempt_id = ?",
+                    (str(attempt_id),),
+                )
             await db.execute(
                 "UPDATE submission_attempts SET state = ?, updated_at = ? WHERE id = ?",
                 (target.value, _format_time(now), str(attempt_id)),
@@ -918,6 +1358,25 @@ class DraftStore:
                         await db.execute("COMMIT")
                         continue
                     now = _now()
+                    if attempt.pending_dispatch is not None:
+                        await db.execute(
+                            """
+                            INSERT INTO submission_unknown_outcomes
+                                (attempt_id, ordinal, step_id, reason, recorded_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (
+                                str(attempt_id),
+                                len(attempt.unknown_outcomes) + 1,
+                                attempt.pending_dispatch.step_id,
+                                "process_interrupted",
+                                _format_time(now),
+                            ),
+                        )
+                        await db.execute(
+                            "DELETE FROM submission_pending_dispatches WHERE attempt_id = ?",
+                            (str(attempt_id),),
+                        )
                     await db.execute(
                         "UPDATE submission_attempts SET state = ?, updated_at = ? WHERE id = ?",
                         (DraftState.UNKNOWN.value, _format_time(now), str(attempt_id)),
@@ -978,7 +1437,11 @@ class DraftStore:
 
     @_serialized
     async def reconcile_attempt(
-        self, attempt_id: UUID, resolution: ReconciliationResolution
+        self,
+        attempt_id: UUID,
+        resolution: ReconciliationResolution,
+        *,
+        editable_content: DraftContent | None = None,
     ) -> SubmissionAttempt:
         """Persist an explicit decision for an outcome-unknown attempt."""
         if not isinstance(resolution, ReconciliationResolution):
@@ -1011,6 +1474,22 @@ class DraftStore:
                 raise DraftStoreError(
                     "only the active unknown attempt can be reconciled"
                 )
+            if resolution == ReconciliationResolution.RETURN_EDITABLE:
+                if editable_content is None:
+                    if attempt.receipts:
+                        raise DraftStoreError(
+                            "confirmed receipts require explicit remaining content"
+                        )
+                    editable_content = attempt.snapshot.content
+                elif not isinstance(editable_content, DraftContent):
+                    raise TypeError("editable_content must be DraftContent")
+                self._validate_content_revision(
+                    editable_content, attempt.snapshot.revision
+                )
+            elif editable_content is not None:
+                raise ValueError(
+                    "editable_content is only valid when returning a draft to editing"
+                )
             now = _now()
             await db.execute(
                 "INSERT INTO submission_reconciliations (attempt_id, resolution, recorded_at) VALUES (?, ?, ?)",
@@ -1037,7 +1516,8 @@ class DraftStore:
             updated = await db.execute(
                 """
                 UPDATE drafts
-                SET state = ?, active_attempt_id = ?,
+                SET state = ?, active_attempt_id = ?, body = ?, verdict = ?,
+                    comments_json = ?,
                     version = version + CASE WHEN ? = ? THEN 1 ELSE 0 END,
                     updated_at = ?
                 WHERE id = ? AND active_attempt_id = ? AND state = ?
@@ -1045,6 +1525,21 @@ class DraftStore:
                 (
                     target.value,
                     active_attempt,
+                    editable_content.body
+                    if editable_content is not None
+                    else attempt.snapshot.body,
+                    (
+                        editable_content.verdict.value
+                        if editable_content is not None and editable_content.verdict
+                        else attempt.snapshot.verdict.value
+                        if attempt.snapshot.verdict
+                        else None
+                    ),
+                    _comments_to_json(
+                        editable_content.comments
+                        if editable_content is not None
+                        else attempt.snapshot.comments
+                    ),
                     target.value,
                     DraftState.EDITABLE.value,
                     _format_time(now),
@@ -1140,7 +1635,16 @@ class DraftStore:
             attempt_id = UUID(row["id"])
             receipt_rows = await (
                 await db.execute(
-                    "SELECT step_id, remote_id, recorded_at FROM submission_receipts WHERE attempt_id = ? ORDER BY rowid",
+                    """
+                    SELECT receipt.step_id, receipt.remote_id, receipt.recorded_at,
+                           CASE WHEN resync.step_id IS NULL THEN 1
+                                ELSE resync.resync_required END
+                    FROM submission_receipts AS receipt
+                    LEFT JOIN submission_receipt_resync AS resync
+                      ON resync.attempt_id = receipt.attempt_id
+                     AND resync.step_id = receipt.step_id
+                    WHERE receipt.attempt_id = ? ORDER BY receipt.rowid
+                    """,
                     (str(attempt_id),),
                 )
             ).fetchall()
@@ -1150,6 +1654,44 @@ class DraftStore:
                     (str(attempt_id),),
                 )
             ).fetchall()
+            retry_rows = await (
+                await db.execute(
+                    """
+                    SELECT step_id, ordinal, recorded_at
+                    FROM submission_retry_authorizations
+                    WHERE attempt_id = ? ORDER BY ordinal
+                    """,
+                    (str(attempt_id),),
+                )
+            ).fetchall()
+            unknown_rows = await (
+                await db.execute(
+                    """
+                    SELECT step_id, ordinal, reason, recorded_at
+                    FROM submission_unknown_outcomes
+                    WHERE attempt_id = ? ORDER BY ordinal
+                    """,
+                    (str(attempt_id),),
+                )
+            ).fetchall()
+            pending_row = await (
+                await db.execute(
+                    """
+                    SELECT step_id, operation_id, recorded_at
+                    FROM submission_pending_dispatches WHERE attempt_id = ?
+                    """,
+                    (str(attempt_id),),
+                )
+            ).fetchone()
+            plan_row = await (
+                await db.execute(
+                    """
+                    SELECT forge, atomic, steps_json
+                    FROM submission_plans WHERE attempt_id = ?
+                    """,
+                    (str(attempt_id),),
+                )
+            ).fetchone()
             return SubmissionAttempt(
                 attempt_id,
                 UUID(row["draft_id"]),
@@ -1157,7 +1699,7 @@ class DraftStore:
                 _snapshot_from_json(row["snapshot_json"]),
                 DraftState(row["state"]),
                 tuple(
-                    StepReceipt(item[0], item[1], _parse_time(item[2]))
+                    StepReceipt(item[0], item[1], _parse_time(item[2]), bool(item[3]))
                     for item in receipt_rows
                 ),
                 tuple(
@@ -1168,6 +1710,28 @@ class DraftStore:
                 ),
                 _parse_time(row["started_at"]),
                 _parse_time(row["updated_at"]),
+                tuple(
+                    SubmissionRetryAuthorization(item[0], item[1], _parse_time(item[2]))
+                    for item in retry_rows
+                ),
+                tuple(
+                    UnknownSubmissionOutcome(
+                        item[0], item[1], item[2], _parse_time(item[3])
+                    )
+                    for item in unknown_rows
+                ),
+                PendingSubmissionDispatch(
+                    pending_row[0], pending_row[1], _parse_time(pending_row[2])
+                )
+                if pending_row is not None
+                else None,
+                SubmissionPlanRecord(
+                    ForgeType(plan_row[0]),
+                    bool(plan_row[1]),
+                    _plan_steps_from_json(plan_row[2]),
+                )
+                if plan_row is not None
+                else None,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise DraftCorruptionError(

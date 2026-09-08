@@ -31,6 +31,16 @@ command -v podman >/dev/null || { printf 'podman is required\n' >&2; exit 2; }
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
+build_context=$(mktemp -d "${TMPDIR:-/tmp}/tongs-fedora-build.XXXXXX")
+cleanup_build_context() {
+    rm -rf -- "$build_context"
+}
+trap cleanup_build_context EXIT
+install -m 0644 "$script_dir/Containerfile" "$build_context/Containerfile"
+install -m 0644 "$script_dir/probe.py" "$build_context/probe.py"
+install -m 0644 \
+    "$repo_root/requirements/installer-verifier.lock" \
+    "$build_context/installer-verifier.lock"
 mkdir -p -- "$output_dir"
 output_dir=$(cd -- "$output_dir" && pwd)
 
@@ -78,8 +88,8 @@ podman build \
     --label "org.opencontainers.image.revision=$source_sha" \
     --pull=never \
     --tag localhost/tongs-fedora44-probe:issue-27 \
-    --file "$script_dir/Containerfile" \
-    "$script_dir" 2>&1 | tee "$output_dir/harness-image.build.log"
+    --file "$build_context/Containerfile" \
+    "$build_context" 2>&1 | tee "$output_dir/harness-image.build.log"
 
 image_id=$(<"$image_iid_file")
 podman image inspect "$image_id" >"$output_dir/harness-image.inspect.json"

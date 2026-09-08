@@ -16,17 +16,16 @@ desktop provider or its assets.
 
 ## Install
 
-Install Tongs and this package into the same environment:
+From a Tongs checkout containing the desktop SDK, install Tongs and this example
+into the same Python environment. Run these commands from the repository root:
 
 ```bash
-python -m pip install tongs-example-dashboard
-```
-
-For a checkout-local install:
-
-```bash
+python -m pip install -e .
 python -m pip install ./examples/desktop-plugin
 ```
+
+The example is distributed in this repository; these instructions do not require
+a separately published PyPI package.
 
 No Node build is needed. The ESM module is prebuilt and shipped as package data.
 

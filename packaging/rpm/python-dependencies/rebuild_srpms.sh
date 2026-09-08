@@ -28,21 +28,23 @@ done
 mapfile -t source_rpms < <(find "$srpm_dir" -maxdepth 1 -type f \
     -name '*.src.rpm' -print | sort)
 [[ ${#source_rpms[@]} -gt 0 ]] || { printf 'no source RPMs found\n' >&2; exit 1; }
-container_srpms=()
+metadata_path="$output_dir/srpm-package-metadata.txt"
+: >"$metadata_path"
 for source_rpm in "${source_rpms[@]}"; do
-    container_srpms+=("/srpms/$(basename -- "$source_rpm")")
+    rpm_name=$(basename -- "$source_rpm")
+    podman run --rm --network=none --cap-drop=all \
+        --security-opt=no-new-privileges \
+        --volume "$srpm_dir:/srpms:ro" \
+        --entrypoint rpm \
+        "$base_image" \
+        -qp --queryformat '%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}' \
+        "/srpms/$rpm_name" >>"$metadata_path"
+    printf '|%s\n' "$rpm_name" >>"$metadata_path"
 done
-podman run --rm --network=none --cap-drop=all \
-    --security-opt=no-new-privileges \
-    --volume "$srpm_dir:/srpms:ro" \
-    --entrypoint rpm \
-    "$base_image" \
-    -qp --queryformat '%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
-    "${container_srpms[@]}" >"$output_dir/srpm-package-metadata.txt"
 
 python3 "$checkout/packaging/rpm/python-dependencies/resolve_srpms.py" \
     --build-order "$srpm_dir/build-order.txt" \
-    --metadata "$output_dir/srpm-package-metadata.txt" \
+    --metadata "$metadata_path" \
     --srpm-dir "$srpm_dir" >"$output_dir/resolved-srpms.txt"
 
 while IFS='|' read -r distribution source_rpm; do

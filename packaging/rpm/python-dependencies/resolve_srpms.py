@@ -11,10 +11,12 @@ def resolve_srpms(
     by_name: dict[str, Path] = {}
     for line in metadata.splitlines():
         fields = line.split("|")
-        if len(fields) != 4:
+        if len(fields) != 5:
             raise RuntimeError(f"unexpected SRPM metadata: {line!r}")
-        name, version, release, arch = fields
-        path = srpm_dir / f"{name}-{version}-{release}.{arch}.rpm"
+        name, _version, _release, _header_arch, filename = fields
+        if Path(filename).name != filename or not filename.endswith(".src.rpm"):
+            raise RuntimeError(f"unsafe SRPM filename in metadata: {filename!r}")
+        path = srpm_dir / filename
         if not path.is_file():
             raise RuntimeError(f"SRPM metadata has no matching file: {path.name}")
         if name in by_name:

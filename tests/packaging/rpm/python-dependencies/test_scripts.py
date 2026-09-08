@@ -151,9 +151,12 @@ def test_resolve_srpms_uses_exact_names_with_prefix_overlap(tmp_path: Path) -> N
     for filename in filenames:
         (tmp_path / filename).touch()
     metadata = (
-        "python-sigstore|4.5.0|1.fc44|src\n"
-        "python-sigstore-models|0.0.6|1.fc44|src\n"
-        "python-sigstore-rekor-types|0.0.18|1.fc44|src"
+        "python-sigstore|4.5.0|1.fc44|noarch|"
+        "python-sigstore-4.5.0-1.fc44.src.rpm\n"
+        "python-sigstore-models|0.0.6|1.fc44|noarch|"
+        "python-sigstore-models-0.0.6-1.fc44.src.rpm\n"
+        "python-sigstore-rekor-types|0.0.18|1.fc44|noarch|"
+        "python-sigstore-rekor-types-0.0.18-1.fc44.src.rpm"
     )
 
     resolved = resolve_srpms.resolve_srpms(
@@ -163,3 +166,28 @@ def test_resolve_srpms_uses_exact_names_with_prefix_overlap(tmp_path: Path) -> N
     )
 
     assert [path.name for _, path in resolved] == filenames
+
+
+def test_resolve_srpm_uses_queried_filename_with_binary_header_arch(
+    tmp_path: Path,
+) -> None:
+    filename = "python-rfc3161-client-1.0.8-1.fc44.src.rpm"
+    (tmp_path / filename).touch()
+
+    resolved = resolve_srpms.resolve_srpms(
+        ["rfc3161-client"],
+        "python-rfc3161-client|1.0.8|1.fc44|x86_64|"
+        "python-rfc3161-client-1.0.8-1.fc44.src.rpm",
+        tmp_path,
+    )
+
+    assert resolved == [("rfc3161-client", tmp_path / filename)]
+
+
+def test_resolve_srpm_rejects_filename_traversal(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="unsafe SRPM filename"):
+        resolve_srpms.resolve_srpms(
+            ["sigstore"],
+            "python-sigstore|4.5.0|1.fc44|noarch|../source.src.rpm",
+            tmp_path,
+        )

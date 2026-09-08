@@ -65,6 +65,11 @@ under the configured scan root, normally `~/git`. Its repository navigation and
 default All reviews view stay within that discovered set, including after a
 discovery refresh. An empty workspace explains local cloning/configuration and
 offers discovery refresh; it does not offer online repository opening.
+The current unreleased repository projection includes the discovered forge
+hostname for local Host sorting. During protocol-major-1 development the desktop
+also accepts the earlier exact three-field repository projection with no hostname;
+it treats that metadata as unknown and keeps it last instead of deriving a host
+from another display field. Both shapes reject unknown keys.
 
 Keep the existing backend capability to accept configured-forge inbox results
 and explicitly open another validated configured-host project. This capability

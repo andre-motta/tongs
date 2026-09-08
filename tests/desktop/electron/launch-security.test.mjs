@@ -31,6 +31,8 @@ test("runtime parameter boundary rejects unknown, malformed, and oversized value
 
 test("runtime result boundary validates operation-specific DTOs", () => {
   assertResult("repositories.discover", { repositories: [{ handle: "r", display_name: "repo", forge_type: "github" }] });
+  assertResult("repositories.discover", { repositories: [{ handle: "r", display_name: "repo", forge_type: "github", hostname: "github.example" }] });
+  assert.throws(() => assertResult("repositories.discover", { repositories: [{ handle: "r", display_name: "repo", forge_type: "github", hostname: "" }] }));
   assert.throws(() => assertResult("repositories.discover", { repositories: [{ handle: "r", display_name: "repo", forge_type: "github", filesystem_path: "/secret" }] }));
   assert.throws(() => assertResult("jobs.list", { jobs: [{ handle: "j", value: { id: 1, name: "test" } }] }));
   assert.throws(() => assertResult("host.set_location", { accepted: false }));

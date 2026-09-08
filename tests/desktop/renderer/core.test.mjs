@@ -271,6 +271,7 @@ test("All reviews queries only current locally discovered handles", async () => 
   const read = listDiscoveredReviews(
     bridge,
     [{ handle: "local-a" }, { handle: "local-b" }],
+    "all_open",
     "open",
   );
   await read.result;

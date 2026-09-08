@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { access } from "node:fs/promises";
 import path from "node:path";
 
 const sourceRoot = path.resolve(
@@ -40,3 +41,4 @@ if (result.code !== 0) {
     `Native review proof exited unsuccessfully: ${result.code}/${result.signal}`,
   );
 }
+await access(path.join(evidenceRoot, "native-review-proof.json"));

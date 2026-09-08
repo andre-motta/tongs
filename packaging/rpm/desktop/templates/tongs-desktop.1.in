@@ -1,0 +1,8 @@
+.TH TONGS-DESKTOP 1 "September 2026" "Tongs @DESKTOP_VERSION@" "User Commands"
+.SH NAME
+tongs-desktop \- launch the Tongs desktop application
+.SH SYNOPSIS
+.B tongs-desktop
+.SH DESCRIPTION
+Launches the packaged Tongs Electron application with Fedora system Python and
+the matching packaged Tongs core. The command accepts no arguments.

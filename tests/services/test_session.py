@@ -1104,6 +1104,58 @@ class TestResourceIssuance:
         await session.close()
 
     @pytest.mark.asyncio
+    async def test_failed_refresh_preserves_last_usable_local_inventory(
+        self, tmp_path: Path
+    ) -> None:
+        repo = make_repo(tmp_path)
+        calls = 0
+
+        def discoverer(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return [repo]
+            raise RuntimeError("private scanner detail")
+
+        session = await start_session(FakeRegistry(), discoverer=discoverer)
+        await session.discover_repositories()
+
+        with pytest.raises(ServiceError) as caught:
+            await session.discover_repositories()
+
+        assert caught.value.code is ServiceErrorCode.INTERNAL
+        assert "private scanner detail" not in str(caught.value)
+        assert session.local_repositories == (repo,)
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_discovery_finishing_after_close_cannot_publish(
+        self, tmp_path: Path
+    ) -> None:
+        repo = make_repo(tmp_path)
+        started = threading.Event()
+        release = threading.Event()
+
+        def discoverer(*args, **kwargs):
+            started.set()
+            assert release.wait(timeout=2)
+            return [repo]
+
+        session = await start_session(FakeRegistry(), discoverer=discoverer)
+        discovery = asyncio.create_task(session.discover_repositories())
+        assert await asyncio.to_thread(started.wait, 2)
+
+        await session.close()
+        release.set()
+        with pytest.raises(ServiceError) as caught:
+            await discovery
+
+        assert caught.value.code is ServiceErrorCode.CLOSED
+        with pytest.raises(ServiceError) as local_access:
+            _ = session.local_repositories
+        assert local_access.value.code is ServiceErrorCode.CLOSED
+
+    @pytest.mark.asyncio
     async def test_discovery_collapses_duplicate_repository_identity(
         self, tmp_path: Path
     ) -> None:

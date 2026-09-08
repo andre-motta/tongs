@@ -183,6 +183,15 @@ def _rpm_purelib() -> str:
     return os.fspath(path)
 
 
+def _test_plugin_pyc_paths(purelib: str) -> frozenset[str]:
+    cache_tag = sys.implementation.cache_tag
+    expected_tag = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
+    if cache_tag != expected_tag:
+        raise RuntimeError(f"unexpected system Python cache tag: {cache_tag}")
+    stem = f"{purelib}/__pycache__/tongs_rpm_test_plugin.{cache_tag}"
+    return frozenset({f"{stem}.pyc", f"{stem}.opt-1.pyc"})
+
+
 def _allowed_path(package: str, path: str, purelib: str) -> bool:
     if package == "python3-tongs":
         return (
@@ -215,6 +224,7 @@ def _allowed_path(package: str, path: str, purelib: str) -> bool:
     if package == "tongs-desktop-test-plugin":
         return (
             path == "/usr/share/licenses/tongs-desktop-test-plugin"
+            or path in _test_plugin_pyc_paths(purelib)
             or path.startswith(
                 (
                     f"{purelib}/tongs_desktop_test_plugin-",

@@ -56,6 +56,11 @@ podman image inspect "$image_tag" > "$output_dir/evidence/builder-image.json"
 podman run --rm "$image_tag" /bin/bash -c \
   'python3.12 --version; python3.12 -c "import zlib; print(zlib.ZLIB_VERSION, zlib.ZLIB_RUNTIME_VERSION)"; node --version; npm --version' \
   > "$output_dir/evidence/toolchain.txt"
+for record in rpm-nevra.txt rpm-sha256-check.txt rpm-signatures.txt; do
+  podman run --rm "$image_tag" \
+    cat "/usr/share/tongs-archive-builder/$record" \
+    > "$output_dir/evidence/$record"
+done
 
 for build in a b; do
   podman run --rm \

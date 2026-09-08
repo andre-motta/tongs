@@ -2,7 +2,7 @@ FROM registry.fedoraproject.org/fedora@sha256:f59ce614aba37211165e711d732fd4785f
 
 COPY builder-rpms.sha256 /tmp/builder-rpms.sha256
 
-RUN mkdir /tmp/builder-rpms \
+RUN mkdir /tmp/builder-rpms /usr/share/tongs-archive-builder \
     && dnf download --destdir=/tmp/builder-rpms \
         'python3.12-3.12.14-1.fc44.x86_64' \
         'python3.12-libs-3.12.14-1.fc44.x86_64' \
@@ -11,7 +11,18 @@ RUN mkdir /tmp/builder-rpms \
         'nodejs22-npm-1:10.9.8-1.22.23.1.2.fc44.noarch' \
     && cd /tmp/builder-rpms \
     && sha256sum --check /tmp/builder-rpms.sha256 \
-    && dnf install --assumeyes --setopt=install_weak_deps=False ./*.rpm \
+        > /usr/share/tongs-archive-builder/rpm-sha256-check.txt \
+    && cat /usr/share/tongs-archive-builder/rpm-sha256-check.txt \
+    && rpmkeys --checksig --verbose ./*.rpm \
+        > /usr/share/tongs-archive-builder/rpm-signatures.txt \
+    && cat /usr/share/tongs-archive-builder/rpm-signatures.txt \
+    && rpm --query --package \
+        --queryformat '%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n' \
+        ./*.rpm > /tmp/rpm-nevra.unsorted \
+    && LC_ALL=C sort /tmp/rpm-nevra.unsorted \
+        > /usr/share/tongs-archive-builder/rpm-nevra.txt \
+    && dnf install --assumeyes --setopt=install_weak_deps=False \
+        --setopt=localpkg_gpgcheck=True ./*.rpm \
     && dnf clean all \
     && rm -rf /tmp/builder-rpms /var/cache/dnf
 

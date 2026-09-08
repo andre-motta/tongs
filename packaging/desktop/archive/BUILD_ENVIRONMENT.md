@@ -5,9 +5,10 @@ base is the official Fedora 44 image manifest digest
 `sha256:f59ce614aba37211165e711d732fd4785f1c0329c4a3a4289cf29e333cf36c52`,
 queried from `registry.fedoraproject.org` on 2026-09-08. The container downloads
 five exact Fedora NEVRAs, verifies their package bytes against
-`builder-rpms.sha256`, installs them with weak dependencies disabled, and then
-asserts every compression and JavaScript tool version enforced by
-`contract.json`.
+`builder-rpms.sha256`, verifies their Fedora OpenPGP signatures against the base
+image's trusted RPM keyring, installs them with local-package signature checking
+and weak dependencies disabled, and then asserts every compression and
+JavaScript tool version enforced by `contract.json`.
 
 Build the image with `packaging/desktop/archive` as its context:
 
@@ -23,6 +24,8 @@ independent `npm ci --ignore-scripts` and producer invocation in a fresh
 container. The job compares every output byte and retains one complete output,
 both checksum lists, source and Electron inputs, and toolchain evidence for 14
 days. It has read-only repository permissions and does not publish an archive.
+The retained evidence also includes the exact builder RPM NEVRA, SHA-256 check,
+and `rpmkeys --checksig --verbose` results copied from the built image.
 
 Run the same proof on a compatible disposable host with:
 

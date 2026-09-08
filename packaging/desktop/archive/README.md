@@ -47,8 +47,8 @@ npm --prefix desktop ci --ignore-scripts
   --source-date-epoch UNIX_SECONDS
 ```
 
-Run that sequence from two clean source roots with the same external Electron
-directory and pinned toolchain. Compare the two `SHA256SUMS` files and every
+Run that sequence from two clean source roots with the same verified Electron
+ZIP archive and pinned toolchain. Compare the two `SHA256SUMS` files and every
 named output byte-for-byte. The producer refuses an unlisted Electron file,
 changed runtime mode or digest, lockfile drift, compiler drift, an unsafe source
 link, an incomplete payload, or a nonempty output directory.

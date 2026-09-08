@@ -32,7 +32,16 @@ from tongs.desktop.artifact_contract import (
 
 _CONTRACT_PATH: Final = Path("packaging/desktop/archive/contract.json")
 _ASAR_HELPER_PATH: Final = Path("packaging/desktop/archive/pack_asar.mjs")
-_APP_LICENSES: Final = ("react", "react-dom", "scheduler")
+_NPM_NOTICE_PATH: Final = "runtime/licenses/npm/THIRD_PARTY_NOTICES.txt"
+_PRESERVED_NPM_LICENSE_PATHS: Final = {
+    "node_modules/react": "runtime/licenses/react/LICENSE",
+    "node_modules/react-dom": "runtime/licenses/react-dom/LICENSE",
+    "node_modules/scheduler": "runtime/licenses/scheduler/LICENSE",
+}
+_LICENSE_FILE_RE: Final = re.compile(r"^licen[cs]e(?:[._-].+)?$", re.IGNORECASE)
+_NOTICE_FILE_RE: Final = re.compile(
+    r"^(?:notice|third[-_ ]party(?:[-_ ]notices?)?)(?:[._-].+)?$", re.IGNORECASE
+)
 _SOURCE_INPUTS: Final = (
     Path("desktop/assets"),
     Path("desktop/scripts/build.mjs"),
@@ -573,21 +582,9 @@ def _prepare_runtime_files(
     tongs_license = source / "LICENSE"
     _require_regular_file(tongs_license, "Tongs license")
     files["runtime/licenses/tongs/LICENSE"] = (tongs_license.read_bytes(), 0o644)
-    for package_name in _APP_LICENSES:
-        package_root = desktop / "node_modules" / package_name
-        metadata = _load_object(package_root / "package.json")
-        license_path = package_root / "LICENSE"
-        _require_regular_file(license_path, f"{package_name} license")
-        target = f"runtime/licenses/{package_name}/LICENSE"
-        files[target] = (license_path.read_bytes(), 0o644)
-        license_components.append(
-            {
-                "name": _string(metadata, "name"),
-                "version": _string(metadata, "version"),
-                "license": _string(metadata, "license"),
-                "license_paths": [target],
-            }
-        )
+    npm_license_files, npm_license_components = _production_npm_licenses(desktop)
+    files.update(npm_license_files)
+    license_components.extend(npm_license_components)
     license_inventory: dict[str, object] = {
         "schema_version": 1,
         "components": license_components,
@@ -733,6 +730,231 @@ def _npm_inventory(lock_path: Path) -> list[dict[str, object]]:
             | {"path": path}
         )
     return values
+
+
+def _production_npm_licenses(
+    desktop: Path,
+) -> tuple[dict[str, tuple[bytes, int]], list[dict[str, object]]]:
+    """Collect the exact installed license texts for the locked production graph."""
+    package = _load_object(desktop / "package.json")
+    lock = _load_object(desktop / "package-lock.json")
+    dependencies = _mapping(package, "dependencies")
+    packages = _mapping(lock, "packages")
+    lock_root = _mapping(packages, "")
+    if dependencies != _mapping(lock_root, "dependencies"):
+        raise ArchiveBuildError(
+            "desktop production dependencies disagree with the lock"
+        )
+
+    pending = [("", name, False) for name in sorted(dependencies)]
+    selected: set[str] = set()
+    while pending:
+        parent_path, dependency_name, optional = pending.pop(0)
+        _validate_npm_package_name(dependency_name)
+        lock_path = _resolve_locked_dependency(packages, parent_path, dependency_name)
+        if lock_path is None:
+            if optional:
+                continue
+            raise ArchiveBuildError(
+                f"production dependency is absent from the lock: {dependency_name}"
+            )
+        if lock_path in selected:
+            continue
+        selected.add(lock_path)
+        item = _object(packages[lock_path], "npm package")
+        if item.get("dev") is True:
+            raise ArchiveBuildError(
+                "production dependency is marked as development-only"
+            )
+        for name in sorted(_optional_mapping(item, "dependencies")):
+            pending.append((lock_path, name, False))
+        for name in sorted(_optional_mapping(item, "optionalDependencies")):
+            pending.append((lock_path, name, True))
+        peer_meta = _optional_mapping(item, "peerDependenciesMeta")
+        for name in sorted(_optional_mapping(item, "peerDependencies")):
+            settings = peer_meta.get(name)
+            is_optional = (
+                isinstance(settings, dict) and settings.get("optional") is True
+            )
+            pending.append((lock_path, name, is_optional))
+
+    files: dict[str, tuple[bytes, int]] = {}
+    components: list[dict[str, object]] = []
+    combined_sections: list[bytes] = []
+    for lock_path in sorted(selected):
+        item = _object(packages[lock_path], "npm package")
+        package_root = _locked_package_root(desktop, lock_path)
+        metadata = _load_object(package_root / "package.json")
+        name = _string(metadata, "name")
+        version = _string(metadata, "version")
+        license_expression = _string(metadata, "license")
+        for field in (name, version, license_expression):
+            _validate_notice_field(field)
+        if name != _package_name_from_lock_path(lock_path):
+            raise ArchiveBuildError(
+                "installed npm package name disagrees with the lock"
+            )
+        if version != _string(item, "version"):
+            raise ArchiveBuildError(
+                "installed npm package version disagrees with the lock"
+            )
+        if license_expression != _string(item, "license"):
+            raise ArchiveBuildError(
+                "installed npm package license disagrees with the lock"
+            )
+
+        source_files = _npm_license_source_files(package_root)
+        preserved = _PRESERVED_NPM_LICENSE_PATHS.get(lock_path)
+        if preserved is not None and len(source_files) == 1:
+            files[preserved] = (source_files[0].read_bytes(), 0o644)
+            license_paths = [preserved]
+        else:
+            combined_sections.append(
+                _npm_license_section(
+                    lock_path,
+                    name,
+                    version,
+                    license_expression,
+                    source_files,
+                )
+            )
+            license_paths = [_NPM_NOTICE_PATH]
+        components.append(
+            {
+                "name": name,
+                "version": version,
+                "license": license_expression,
+                "license_paths": license_paths,
+                "lock_path": lock_path,
+                "source_license_files": [path.name for path in source_files],
+            }
+        )
+
+    if combined_sections:
+        files[_NPM_NOTICE_PATH] = (b"".join(combined_sections), 0o644)
+    return files, components
+
+
+def _resolve_locked_dependency(
+    packages: Mapping[str, object], parent_path: str, name: str
+) -> str | None:
+    directory = PurePosixPath(parent_path) if parent_path else PurePosixPath(".")
+    while True:
+        candidate = (directory / "node_modules" / name).as_posix()
+        if candidate in packages:
+            return candidate
+        if str(directory) == ".":
+            return None
+        directory = directory.parent
+
+
+def _locked_package_root(desktop: Path, lock_path: str) -> Path:
+    _validate_relative_path(lock_path)
+    if not lock_path.startswith("node_modules/") or "/node_modules/" not in (
+        f"/{lock_path}"
+    ):
+        raise ArchiveBuildError("npm lock package path is invalid")
+    current = desktop
+    for part in PurePosixPath(lock_path).parts:
+        current /= part
+        try:
+            details = current.lstat()
+        except OSError as error:
+            raise ArchiveBuildError("installed npm package path is missing") from error
+        if not stat.S_ISDIR(details.st_mode):
+            raise ArchiveBuildError("installed npm package path is not a directory")
+    return current
+
+
+def _package_name_from_lock_path(lock_path: str) -> str:
+    parts = PurePosixPath(lock_path).parts
+    indices = [index for index, part in enumerate(parts) if part == "node_modules"]
+    if not indices:
+        raise ArchiveBuildError("npm lock package path is invalid")
+    start = indices[-1] + 1
+    if start >= len(parts):
+        raise ArchiveBuildError("npm lock package path is invalid")
+    if parts[start].startswith("@"):
+        if start + 2 != len(parts):
+            raise ArchiveBuildError("scoped npm lock package path is invalid")
+        name = f"{parts[start]}/{parts[start + 1]}"
+    else:
+        if start + 1 != len(parts):
+            raise ArchiveBuildError("npm lock package path is invalid")
+        name = parts[start]
+    _validate_npm_package_name(name)
+    return name
+
+
+def _validate_npm_package_name(name: str) -> None:
+    if not name or "\\" in name or any(ord(character) < 0x20 for character in name):
+        raise ArchiveBuildError("npm package name is invalid")
+    parts = name.split("/")
+    if len(parts) == 1 and not parts[0].startswith("@") and parts[0] not in {".", ".."}:
+        return
+    if (
+        len(parts) == 2
+        and parts[0].startswith("@")
+        and len(parts[0]) > 1
+        and parts[1] not in {"", ".", ".."}
+    ):
+        return
+    raise ArchiveBuildError("npm package name is invalid")
+
+
+def _npm_license_source_files(package_root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    try:
+        entries = list(package_root.iterdir())
+    except OSError as error:
+        raise ArchiveBuildError("installed npm package cannot be inspected") from error
+    for path in entries:
+        if _LICENSE_FILE_RE.fullmatch(path.name) or _NOTICE_FILE_RE.fullmatch(
+            path.name
+        ):
+            _require_regular_file(path, "npm license or notice")
+            candidates.append(path)
+    candidates.sort(key=lambda path: (path.name.casefold(), path.name))
+    if not any(_LICENSE_FILE_RE.fullmatch(path.name) for path in candidates):
+        raise ArchiveBuildError("installed npm package has no applicable license text")
+    return candidates
+
+
+def _npm_license_section(
+    lock_path: str,
+    name: str,
+    version: str,
+    license_expression: str,
+    source_files: Sequence[Path],
+) -> bytes:
+    result = [
+        (
+            "=" * 79
+            + f"\nPackage: {name}\nVersion: {version}\n"
+            + f"SPDX license: {license_expression}\nLock path: {lock_path}\n"
+            + "=" * 79
+            + "\n"
+        ).encode("utf-8")
+    ]
+    for path in source_files:
+        _validate_notice_field(path.name)
+        content = path.read_bytes()
+        result.append(f"--- BEGIN {path.name} ---\n".encode())
+        result.append(content)
+        if not content.endswith(b"\n"):
+            result.append(b"\n")
+        result.append(f"--- END {path.name} ---\n\n".encode())
+    return b"".join(result)
+
+
+def _validate_notice_field(value: str) -> None:
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        raise ArchiveBuildError("npm license metadata contains control characters")
+
+
+def _optional_mapping(value: Mapping[str, object], key: str) -> Mapping[str, object]:
+    candidate = value.get(key, {})
+    return _object(candidate, key)
 
 
 def _build_tar_gzip(

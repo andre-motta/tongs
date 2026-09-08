@@ -103,7 +103,7 @@ podman build --pull=never --tag "$source_builder" --file "$script_dir/Containerf
 podman image inspect "$source_builder" >"$output_dir/source-builder.inspect.json"
 
 podman run --rm --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$output_dir:/evidence:rw" \
+    --volume "$repo_root:/checkout:ro,z" --volume "$output_dir:/evidence:rw,Z" \
     "$source_builder" python3 /checkout/packaging/rpm/desktop/audit_providers.py \
         --manifest /checkout/packaging/rpm/desktop/manifest.json \
         --output /evidence/fedora-provider-audit.json
@@ -111,9 +111,9 @@ cp -- "$output_dir/fedora-provider-audit.json" \
     "$install_evidence/fedora-provider-audit.json"
 
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$accepted_archive:/accepted:ro" \
-    --volume "$prepared:/prepared:rw" \
-    --volume "$output_dir/payload-input-contract.json:/payload-contract.json:ro" \
+    --volume "$repo_root:/checkout:ro,z" --volume "$accepted_archive:/accepted:ro,z" \
+    --volume "$prepared:/prepared:rw,Z" \
+    --volume "$output_dir/payload-input-contract.json:/payload-contract.json:ro,z" \
     "$source_builder" \
     python3 /checkout/packaging/rpm/desktop/prepare_sources.py \
         --checkout /checkout --accepted-dir /accepted --output-dir /prepared \
@@ -121,8 +121,8 @@ podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
 core_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["pep440_version"])' \
     "$prepared/prepared-inputs.json")
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$prepared:/prepared:ro" \
-    --volume "$output_dir:/evidence:rw" "$source_builder" \
+    --volume "$repo_root:/checkout:ro,z" --volume "$prepared:/prepared:ro,z" \
+    --volume "$output_dir:/evidence:rw,Z" "$source_builder" \
     /checkout/packaging/rpm/desktop/preflight_core_version.sh \
         --prepared-dir /prepared --expected-version "$core_version" \
         --output /evidence/core-version-preflight.log
@@ -133,30 +133,30 @@ podman build --pull=never --tag "$dependency_builder" \
 podman image inspect "$dependency_builder" >"$output_dir/dependency-builder.inspect.json"
 
 podman run --rm --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$dependency_prepared:/prepared:rw" \
+    --volume "$repo_root:/checkout:ro,z" --volume "$dependency_prepared:/prepared:rw,Z" \
     "$dependency_builder" python3 /checkout/packaging/rpm/python-dependencies/prepare_sources.py \
         --manifest /checkout/packaging/rpm/python-dependencies/manifest.json \
         --output-dir /prepared
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$dependency_prepared:/prepared:ro" \
-    --volume "$dependency_srpms:/srpms:rw" "$dependency_builder" \
+    --volume "$repo_root:/checkout:ro,z" --volume "$dependency_prepared:/prepared:ro,z" \
+    --volume "$dependency_srpms:/srpms:rw,Z" "$dependency_builder" \
     /checkout/packaging/rpm/python-dependencies/build_rpms.sh \
         --source-dir /prepared --output-dir /srpms
 "$repo_root/packaging/rpm/python-dependencies/rebuild_srpms.sh" \
     --base-image "$base_image" --checkout "$repo_root" --source-sha "$source_sha" \
     --srpm-dir "$dependency_srpms" --output-dir "$dependency_rpms"
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$dependency_rpms:/rpms:ro" \
-    --volume "$companion_consumer_rpms:/selected:rw" \
-    --volume "$output_dir:/evidence:rw" "$source_builder" \
+    --volume "$repo_root:/checkout:ro,z" --volume "$dependency_rpms:/rpms:ro,z" \
+    --volume "$companion_consumer_rpms:/selected:rw,Z" \
+    --volume "$output_dir:/evidence:rw,Z" "$source_builder" \
     python3 /checkout/packaging/rpm/desktop/select_companion_rpms.py \
         --manifest /checkout/packaging/rpm/python-dependencies/manifest.json \
         --rpm-dir /rpms --output-dir /selected \
         --report /evidence/companion-rpm-selection.json
 
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$prepared:/prepared:ro" \
-    --volume "$srpms:/srpms:rw" "$source_builder" \
+    --volume "$repo_root:/checkout:ro,z" --volume "$prepared:/prepared:ro,z" \
+    --volume "$srpms:/srpms:rw,Z" "$source_builder" \
     /checkout/packaging/rpm/desktop/build_srpms.sh \
         --prepared-dir /prepared --output-dir /srpms
 "$script_dir/rebuild_srpms.sh" \
@@ -165,7 +165,7 @@ podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
     --output-dir "$rpms"
 
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$test_plugin_rpms:/output:rw" \
+    --volume "$repo_root:/checkout:ro,z" --volume "$test_plugin_rpms:/output:rw,Z" \
     "$source_builder" /checkout/packaging/rpm/desktop/build_test_plugin.sh \
         --source-dir /checkout/packaging/rpm/desktop/test-plugin \
         --license /checkout/LICENSE --output-dir /output
@@ -179,15 +179,15 @@ find "$test_plugin_rpms" -maxdepth 1 -type f -name '*.rpm' \
     -exec cp -- {} "$previous_repo/" \; -exec cp -- {} "$final_repo/" \;
 for repository in "$previous_repo" "$final_repo"; do
     podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
-        --volume "$repository:/repo:rw" "$source_builder" createrepo_c /repo
+        --volume "$repository:/repo:rw,Z" "$source_builder" createrepo_c /repo
 done
 
 podman run --rm --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" \
-    --volume "$companion_consumer_rpms:/companions:ro" \
-    --volume "$rpms/previous:/previous:ro" --volume "$rpms/final:/final:ro" \
-    --volume "$previous_repo:/previous-repo:ro" --volume "$final_repo:/final-repo:ro" \
-    --volume "$prepared:/prepared:ro" --volume "$install_evidence:/evidence:rw" \
+    --volume "$repo_root:/checkout:ro,z" \
+    --volume "$companion_consumer_rpms:/companions:ro,z" \
+    --volume "$rpms/previous:/previous:ro,z" --volume "$rpms/final:/final:ro,z" \
+    --volume "$previous_repo:/previous-repo:ro,z" --volume "$final_repo:/final-repo:ro,z" \
+    --volume "$prepared:/prepared:ro,z" --volume "$install_evidence:/evidence:rw,Z" \
     "$base_image" /checkout/packaging/rpm/desktop/install_and_verify.sh \
         --companion-dir /companions --previous-dir /previous --final-dir /final \
         --previous-repo /previous-repo --final-repo /final-repo \

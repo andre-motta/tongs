@@ -189,7 +189,10 @@ async function runProof() {
       editor,
       editorRecord,
       actions,
-      exportFilesAfterEditorExit: await readdir(exportRoot),
+      exportFilesAfterEditorExit: (await readdir(exportRoot)).filter((name) =>
+        /^tongs-slot-[1-8]-job-/.test(name)),
+      editorLedgerFiles: (await readdir(exportRoot)).filter((name) =>
+        name.startsWith(".tongs-editor-ledger.sqlite3")),
       screenshot,
       processMetrics: app.getAppMetrics().map((item) => ({
         type: item.type,
@@ -260,7 +263,12 @@ async function waitForFile(filePath) {
 async function waitForEmpty(directory) {
   const started = Date.now();
   while (Date.now() - started < 10_000) {
-    if ((await readdir(directory)).length === 0) return;
+    if (
+      (await readdir(directory)).every(
+        (name) => !/^tongs-slot-[1-8]-job-/.test(name),
+      )
+    )
+      return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("Private editor export was not cleaned after editor exit");

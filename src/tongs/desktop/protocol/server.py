@@ -17,6 +17,11 @@ from tongs.desktop.assets import (
     AssetDescriptor,
     CoreAssetSpec,
 )
+from tongs.desktop.protocol.ci_operations import (
+    CI_CAPABILITY,
+    CI_METHODS,
+    CIOperations,
+)
 from tongs.desktop.protocol.diff_projection import DiffLayout, flatten_diff
 from tongs.desktop.protocol.messages import (
     MAX_EVENT_FRAME_BYTES,
@@ -84,6 +89,7 @@ SUPPORTED_CAPABILITIES = frozenset(
     {
         "assets",
         "cancellation",
+        CI_CAPABILITY,
         "events",
         "opaque_handles",
         "paged_diffs",
@@ -95,6 +101,7 @@ SUPPORTED_CAPABILITIES = frozenset(
 SUPPORTED_METHODS = (
     "assets.list",
     "assets.read",
+    *CI_METHODS,
     "commits.list",
     "diff.open",
     "diff.page",
@@ -264,6 +271,7 @@ class DesktopSidecarServer:
         self._stopping = False
         self._location: DesktopLocation | None = None
         self._install_read_operations()
+        self._install_ci_operations()
 
     @property
     def session_id(self) -> str:
@@ -365,6 +373,13 @@ class DesktopSidecarServer:
         for method, handler in operations.items():
             self.register_operation(method, handler, mutation=False)
 
+    def _install_ci_operations(self) -> None:
+        operations = CIOperations(session=self._session, handles=self._handles)
+        for method, (handler, mutation) in operations.handlers.items():
+            self.register_operation(
+                method, cast(OperationHandler, handler), mutation=mutation
+            )
+
     async def _handle_handshake(self, frame: RequestFrame) -> None:
         if self._handshaken:
             await self._write_error(
@@ -395,7 +410,7 @@ class DesktopSidecarServer:
                     "session_id": self.session_id,
                     "capabilities": sorted(SUPPORTED_CAPABILITIES),
                     "accepted_capabilities": sorted(requested),
-                    "methods": [*SUPPORTED_METHODS, "shutdown"],
+                    "methods": [*sorted(self._operations), "shutdown"],
                     "limits": {
                         "request_frame_bytes": MAX_REQUEST_FRAME_BYTES,
                         "response_frame_bytes": MAX_RESPONSE_FRAME_BYTES,
@@ -696,7 +711,7 @@ class DesktopSidecarServer:
             params["pipeline"], HandleKind.PIPELINE, PipelineRef
         )
         jobs = await self._session.get_pipeline_jobs(pipeline)
-        return {"jobs": [self._job_wire(pipeline.repository, item) for item in jobs]}
+        return {"jobs": [self._job_wire(pipeline, item) for item in jobs]}
 
     async def _logs_open(self, params: JsonObject, _context: RequestContext) -> object:
         _require_params(
@@ -886,10 +901,10 @@ class DesktopSidecarServer:
             "value": cast(JsonValue, to_json_value(pipeline)),
         }
 
-    def _job_wire(self, repository: RepositoryRef, job: PipelineJob) -> JsonObject:
-        ref = JobRef(repository, job.id)
+    def _job_wire(self, pipeline: PipelineRef, job: PipelineJob) -> JsonObject:
+        ref = JobRef(pipeline.repository, job.id)
         return {
-            "handle": self._handles.issue(HandleKind.JOB, ref),
+            "handle": self._handles.issue(HandleKind.JOB, ref, parent=pipeline),
             "value": cast(JsonValue, to_json_value(job)),
         }
 

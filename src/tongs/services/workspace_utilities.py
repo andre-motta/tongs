@@ -7,6 +7,7 @@ import os
 import secrets
 import shlex
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePath
@@ -163,10 +164,10 @@ class WorkspaceUtilityService:
         try:
             content = await self._get_job_log(job)
         except BaseException:
-            await self._release_editor_export(reservation.slot, reservation.token)
+            await self._release_reservation(reservation)
             raise
         if not isinstance(content, str):
-            await self._release_editor_export(reservation.slot, reservation.token)
+            await self._release_reservation(reservation)
             raise ServiceError(
                 ServiceErrorCode.INVALID_RESPONSE,
                 "The forge returned an invalid job log.",
@@ -174,13 +175,13 @@ class WorkspaceUtilityService:
         try:
             byte_count = len(content.encode("utf-8"))
         except UnicodeEncodeError as error:
-            await self._release_editor_export(reservation.slot, reservation.token)
+            await self._release_reservation(reservation)
             raise ServiceError(
                 ServiceErrorCode.INVALID_RESPONSE,
                 "The job log could not be encoded safely.",
             ) from error
         if byte_count > self._max_editor_log_bytes:
-            await self._release_editor_export(reservation.slot, reservation.token)
+            await self._release_reservation(reservation)
             return EditorLogPlan(
                 EditorPlanStatus.LOG_TOO_LARGE,
                 "The job log is too large to export to an external editor.",
@@ -194,6 +195,11 @@ class WorkspaceUtilityService:
             content=content,
             reservation=reservation,
         )
+
+    async def _release_reservation(self, reservation: EditorReservation) -> None:
+        with suppress(Exception):
+            await self._release_editor_export(reservation.slot, reservation.token)
+            # A retained row stays bounded and is reclaimed on a later operation.
 
     def _editor_argv(self) -> tuple[EditorPlanStatus, str, tuple[str, ...]]:
         enabled = self._config.external_editor_enabled

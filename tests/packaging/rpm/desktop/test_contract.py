@@ -81,9 +81,7 @@ def _metadata_fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, obje
                 "bytes": archive.stat().st_size,
                 "sha256": _digest(archive),
             },
-            "evidence": {
-                name: _digest(tmp_path / name) for name in documents
-            },
+            "evidence": {name: _digest(tmp_path / name) for name in documents},
             "release_version": "0.5.0",
             "electron_version": "44.2.0",
             "compatibility": compatibility,

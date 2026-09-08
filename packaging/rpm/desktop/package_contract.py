@@ -269,8 +269,10 @@ def _validate_archive_members(
                 raise RuntimeError(f"unsafe accepted archive member: {member.name!r}")
             if len(member.name.encode()) > limits.get("max_path_bytes", 0):
                 raise RuntimeError("accepted archive path limit exceeded")
-            if member.issym() or member.islnk() or not (
-                member.isfile() or member.isdir()
+            if (
+                member.issym()
+                or member.islnk()
+                or not (member.isfile() or member.isdir())
             ):
                 raise RuntimeError(
                     f"unsupported accepted archive member: {member.name}"
@@ -308,9 +310,7 @@ def _validate_archive_members(
             digest = hashlib.sha256(stream.read()).hexdigest()
             executable = bool(member.mode & stat.S_IXUSR)
             default_mode = "0755" if record["executable"] else "0644"
-            expected = (inventory_records or {}).get(
-                member.name, (0, default_mode, "")
-            )
+            expected = (inventory_records or {}).get(member.name, (0, default_mode, ""))
             expected_mode = int(expected[1], 8)
             if member.mode & 0o7000:
                 raise RuntimeError(f"special mode in accepted archive: {member.name}")

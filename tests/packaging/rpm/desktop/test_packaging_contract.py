@@ -63,7 +63,7 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert "verify_mcp_command.py" in installer
     assert "python-dependencies/verify_install.py" in installer
     assert "[[ $launch_status -eq 124 ]]" in installer
-    assert "cmp \"$evidence_dir/installed-previous.json\"" in installer
+    assert 'cmp "$evidence_dir/installed-previous.json"' in installer
     assert "--setopt=install_weak_deps=False" in installer
 
 

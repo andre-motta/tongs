@@ -87,9 +87,10 @@ def verify(
     installed_desktop = Path("/usr/share/applications/tongs.desktop")
     if installed_desktop.read_bytes() != expected_desktop.read_bytes():
         failures.append("system desktop entry differs from prepared source")
-    if Path("/usr/share/pixmaps/tongs.png").read_bytes() != (
-        libexec_dir / "share/pixmaps/tongs.png"
-    ).read_bytes():
+    if (
+        Path("/usr/share/pixmaps/tongs.png").read_bytes()
+        != (libexec_dir / "share/pixmaps/tongs.png").read_bytes()
+    ):
         failures.append("system icon differs from accepted runtime icon")
     if failures:
         raise RuntimeError("; ".join(failures))

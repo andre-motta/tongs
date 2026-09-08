@@ -159,17 +159,13 @@ def verify_elf(package: str, output: Path) -> None:
     records = []
     failures = []
     for requirement in sorted(requirements):
-        providers = _run(
-            ["rpm", "-q", "--whatprovides", requirement], check=False
-        )
+        providers = _run(["rpm", "-q", "--whatprovides", requirement], check=False)
         if providers.returncode != 0:
             failures.append(f"missing installed ELF provider: {requirement}")
             continue
         provider_records = []
         for provider in providers.stdout.splitlines():
-            name = _run(
-                ["rpm", "-q", "--queryformat", "%{NAME}", provider]
-            ).stdout
+            name = _run(["rpm", "-q", "--queryformat", "%{NAME}", provider]).stdout
             origin = _run(
                 [
                     "dnf",
@@ -183,9 +179,7 @@ def verify_elf(package: str, output: Path) -> None:
             provider_records.append(
                 {"installed": provider, "name": name, "repository_records": origin}
             )
-        records.append(
-            {"requirement": requirement, "providers": provider_records}
-        )
+        records.append({"requirement": requirement, "providers": provider_records})
     ldd = _run(["ldd", "/usr/libexec/tongs-desktop/tongs-desktop"], check=False)
     if ldd.returncode != 0 or "not found" in ldd.stdout + ldd.stderr:
         failures.append("installed Electron ldd resolution failed")

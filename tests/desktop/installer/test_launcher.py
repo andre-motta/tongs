@@ -6,6 +6,7 @@ import hashlib
 import importlib.metadata
 import os
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -52,6 +53,10 @@ def _payload(target_root: Path, launcher: Path) -> InstalledPayload:
                 hashlib.sha256(content).hexdigest(),
                 True,
             ),
+        ),
+        tuple(
+            parent.as_posix()
+            for parent in reversed(launcher.relative_to(target_root).parents[:-1])
         ),
     )
 
@@ -247,3 +252,56 @@ def test_launch_rejects_incompatible_current_core(tmp_path: Path) -> None:
 
     with pytest.raises(InstallerError, match="incompatible"):
         validate_bound_launch(InstallationTarget(payload, environment))
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_launch_probe_stops_at_bounded_output(tmp_path: Path, stream: str) -> None:
+    target_root = tmp_path / "payload"
+    launcher = _executable(target_root / "runtime/tongs-desktop", "#!/bin/sh\n")
+    destination = "1" if stream == "stdout" else "2"
+    interpreter = _executable(
+        tmp_path / "env/bin/python",
+        f"#!/bin/sh\nhead -c 2097152 /dev/zero >&{destination}\nsleep 10\n",
+    )
+    console = _executable(tmp_path / "env/bin/tongs", f"#!{interpreter}\n")
+    environment = BoundPythonEnvironment(
+        EnvironmentKind.VENV,
+        console,
+        interpreter,
+        console.resolve(),
+        interpreter.resolve(),
+        "1",
+    )
+    started = time.monotonic()
+
+    with pytest.raises(InstallerError, match="could not be validated"):
+        validate_bound_launch(
+            InstallationTarget(_payload(target_root, launcher), environment),
+            timeout=3.0,
+        )
+
+    assert time.monotonic() - started < 2.5
+
+
+def test_launch_probe_terminates_and_reaps_hanging_child(tmp_path: Path) -> None:
+    target_root = tmp_path / "payload"
+    launcher = _executable(target_root / "runtime/tongs-desktop", "#!/bin/sh\n")
+    interpreter = _executable(tmp_path / "env/bin/python", "#!/bin/sh\nsleep 10\n")
+    console = _executable(tmp_path / "env/bin/tongs", f"#!{interpreter}\n")
+    environment = BoundPythonEnvironment(
+        EnvironmentKind.VENV,
+        console,
+        interpreter,
+        console.resolve(),
+        interpreter.resolve(),
+        "1",
+    )
+    started = time.monotonic()
+
+    with pytest.raises(InstallerError, match="could not be validated"):
+        validate_bound_launch(
+            InstallationTarget(_payload(target_root, launcher), environment),
+            timeout=0.1,
+        )
+
+    assert time.monotonic() - started < 2.0

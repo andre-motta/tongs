@@ -11,6 +11,7 @@ from unittest.mock import Mock
 import pytest
 
 import tongs.__main__ as main_module
+import tongs.desktop.installer.activation as activation_module
 from tongs.desktop.installer.activation import (
     BoundPythonEnvironment,
     DesktopInstallationPaths,
@@ -105,6 +106,30 @@ def test_transient_uvx_install_is_rejected_with_persistent_guidance(
     assert result == 2
     assert "pipx install tongs" in errors.getvalue()
     assert stage.requests == []
+    assert tuple(context.store.paths.staging_root.iterdir()) == ()
+
+
+def test_install_translates_payload_rename_failure_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, stage, _launch = _context(tmp_path)
+    errors = io.StringIO()
+    monkeypatch.setattr(
+        activation_module.os,
+        "rename",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("injected rename")),
+    )
+
+    result = run_desktop_cli(
+        ["install"], console_argv0="tongs", context=context, stderr=errors
+    )
+
+    assert result == 2
+    assert "could not be activated safely" in errors.getvalue()
+    assert stage.requests == [InstallRequest()]
+    with context.store.transaction() as transaction:
+        assert transaction.read_state() is None
+        assert transaction.read_journal() is None
     assert tuple(context.store.paths.staging_root.iterdir()) == ()
 
 

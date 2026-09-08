@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+import selectors
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import sysconfig
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -134,7 +137,7 @@ def validate_bound_launch(
     except (OSError, ValueError) as error:
         raise _repair_error("The installed desktop launcher is unsafe.") from error
     try:
-        completed = subprocess.run(
+        completed = _run_bounded_probe(
             [
                 os.fspath(environment.interpreter_path),
                 "-E",
@@ -142,13 +145,10 @@ def validate_bound_launch(
                 "-c",
                 _VERSION_PROBE,
             ],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=False,
             timeout=timeout,
             env=_probe_environment(),
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except (OSError, subprocess.TimeoutExpired, _ProbeOutputExceeded) as error:
         raise _repair_error(
             "The bound Tongs Python environment could not be validated."
         ) from error
@@ -218,6 +218,85 @@ def validate_environment_binding(environment: BoundPythonEnvironment) -> None:
         raise _repair_error(
             "The bound Tongs Python environment changed or disappeared."
         )
+
+
+class _ProbeOutputExceeded(Exception):
+    pass
+
+
+def _run_bounded_probe(
+    arguments: list[str], *, timeout: float, env: Mapping[str, str]
+) -> subprocess.CompletedProcess[bytes]:
+    process = subprocess.Popen(
+        arguments,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        return _collect_probe_output(process, arguments, timeout)
+    except BaseException:
+        _terminate_probe(process)
+        raise
+
+
+def _collect_probe_output(
+    process: subprocess.Popen[bytes], arguments: list[str], timeout: float
+) -> subprocess.CompletedProcess[bytes]:
+    assert process.stdout is not None and process.stderr is not None
+    output = bytearray()
+    errors = bytearray()
+    selector = selectors.DefaultSelector()
+    deadline = time.monotonic() + timeout
+    try:
+        selector.register(process.stdout, selectors.EVENT_READ, output)
+        selector.register(process.stderr, selectors.EVENT_READ, errors)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(arguments, timeout)
+            events = selector.select(remaining)
+            if not events:
+                raise subprocess.TimeoutExpired(arguments, timeout)
+            for key, _events in events:
+                destination = key.data
+                assert isinstance(destination, bytearray)
+                chunk = os.read(
+                    key.fd,
+                    max(1, _MAX_PROBE_BYTES + 1 - len(destination)),
+                )
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                destination.extend(chunk)
+                if len(destination) > _MAX_PROBE_BYTES:
+                    raise _ProbeOutputExceeded
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(arguments, timeout)
+        returncode = process.wait(timeout=remaining)
+        return subprocess.CompletedProcess(
+            arguments, returncode, bytes(output), bytes(errors)
+        )
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+
+
+def _terminate_probe(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
 
 
 def launch_desktop(

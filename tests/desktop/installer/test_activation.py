@@ -82,6 +82,72 @@ def test_activation_moves_complete_payload_and_retains_previous(tmp_path: Path) 
     assert not store.paths.journal_path.exists()
 
 
+def test_third_activation_removes_only_obsolete_recorded_payload(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    results = []
+    for _ in range(3):
+        staged = _stage(store)
+        with store.transaction() as transaction:
+            results.append(activate_staged_artifact(transaction, staged, environment))
+
+    with store.transaction() as transaction:
+        state = transaction.read_state()
+
+    assert state == results[2].state
+    assert state is not None and state.active == results[2].activated
+    assert state.previous == results[1].activated
+    assert state.cleanup == ()
+    assert not results[0].activated.payload.target_path.exists()
+    assert results[1].activated.payload.target_path.is_dir()
+    assert results[2].activated.payload.target_path.is_dir()
+
+
+def test_third_activation_retains_obsolete_identity_until_cleanup_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    installed = []
+    for _ in range(2):
+        staged = _stage(store)
+        with store.transaction() as transaction:
+            installed.append(activate_staged_artifact(transaction, staged, environment))
+    obsolete = installed[0].activated
+    third_stage = _stage(store)
+    original_remove = activation_module._remove_owned_payload
+
+    def fail_obsolete_cleanup(transaction, payload) -> None:
+        if payload.target_path == obsolete.payload.target_path:
+            raise InstallerError(
+                activation_module.InstallerErrorCode.STATE_CONFLICT,
+                "injected obsolete cleanup failure",
+                retryable=True,
+            )
+        original_remove(transaction, payload)
+
+    monkeypatch.setattr(
+        activation_module, "_remove_owned_payload", fail_obsolete_cleanup
+    )
+    with store.transaction() as transaction, pytest.raises(InstallerError):
+        activate_staged_artifact(transaction, third_stage, environment)
+    monkeypatch.undo()
+
+    with store.transaction() as transaction:
+        interrupted = transaction.read_state()
+        assert interrupted is not None and interrupted.active is not None
+        assert interrupted.previous == installed[1].activated
+        assert interrupted.cleanup == (obsolete,)
+        assert interrupted.recovery is RecoveryStatus.CLEANUP_REQUIRED
+        repaired = repair_activation(transaction, environment)
+
+    assert repaired.recovery is RecoveryStatus.HEALTHY
+    assert repaired.cleanup == ()
+    assert not obsolete.payload.target_path.exists()
+
+
 def test_activation_rejects_inconsistent_verified_stage_identity(
     tmp_path: Path,
 ) -> None:
@@ -96,6 +162,37 @@ def test_activation_rejects_inconsistent_verified_stage_identity(
         activate_staged_artifact(transaction, staged, environment)
 
     assert staged.staging_path.is_dir()
+    assert not store.paths.journal_path.exists()
+
+
+def test_rename_error_after_move_retains_recoverable_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    staged = _stage(store)
+    original_rename = activation_module.os.rename
+
+    def rename_then_report(*args, **kwargs) -> None:
+        original_rename(*args, **kwargs)
+        raise OSError("injected rename completion uncertainty")
+
+    monkeypatch.setattr(activation_module.os, "rename", rename_then_report)
+    with (
+        store.transaction() as transaction,
+        pytest.raises(InstallerError, match="activated safely"),
+    ):
+        activate_staged_artifact(transaction, staged, environment)
+    monkeypatch.undo()
+
+    with store.transaction() as transaction:
+        journal = transaction.read_journal()
+        assert journal is not None
+        assert journal.target.payload.target_path.is_dir()
+        recovered = recover_interrupted_activation(transaction)
+
+    assert recovered is not None and recovered.recovered
+    assert recovered.state.recovery is RecoveryStatus.HEALTHY
     assert not store.paths.journal_path.exists()
 
 
@@ -126,6 +223,26 @@ def test_payload_validation_rejects_oversized_sparse_member_before_reading(
         validate_installed_payload(payload)
 
     assert reads == 0
+
+
+@pytest.mark.parametrize("mutation", ["extra-directory", "directory-mode"])
+def test_payload_validation_enforces_complete_directory_identity(
+    tmp_path: Path, mutation: str
+) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    staged = _stage(store)
+    with store.transaction() as transaction:
+        installed = activate_staged_artifact(transaction, staged, environment)
+    payload = installed.activated.payload
+    if mutation == "extra-directory":
+        (payload.target_path / "injected-empty").mkdir()
+    else:
+        directory = payload.target_path / payload.directories[-1]
+        directory.chmod(0o700)
+
+    with pytest.raises(InstallerError, match="incomplete or changed"):
+        validate_installed_payload(payload)
 
 
 def test_menu_failure_preserves_old_active_and_journal_recovers_new(
@@ -293,6 +410,112 @@ async def test_uninstall_preserves_watermark_and_unrelated_rpm_files(
     assert not store.paths.menu_path.exists()
 
 
+def test_uninstall_removes_active_and_previous_owned_payloads(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    installed = []
+    for _ in range(2):
+        staged = _stage(store)
+        with store.transaction() as transaction:
+            installed.append(activate_staged_artifact(transaction, staged, environment))
+
+    with store.transaction() as transaction:
+        removed = uninstall_user_activation(transaction)
+
+    assert removed is not None
+    assert removed.recovery is RecoveryStatus.UNINSTALLED
+    assert removed.active is None and removed.previous is None
+    assert removed.cleanup == ()
+    assert not installed[0].activated.payload.target_path.exists()
+    assert not installed[1].activated.payload.target_path.exists()
+
+
+@pytest.mark.parametrize("failed_index", [0, 1])
+def test_uninstall_cleanup_retry_retains_every_remaining_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_index: int
+) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    installed = []
+    for _ in range(2):
+        staged = _stage(store)
+        with store.transaction() as transaction:
+            installed.append(activate_staged_artifact(transaction, staged, environment))
+    failed_path = installed[1 - failed_index].activated.payload.target_path
+    original_remove = activation_module._remove_owned_payload
+    failed = False
+
+    def fail_selected_cleanup(transaction, payload) -> None:
+        nonlocal failed
+        if payload.target_path == failed_path and not failed:
+            failed = True
+            raise InstallerError(
+                activation_module.InstallerErrorCode.STATE_CONFLICT,
+                "injected owned cleanup failure",
+                retryable=True,
+            )
+        original_remove(transaction, payload)
+
+    monkeypatch.setattr(
+        activation_module, "_remove_owned_payload", fail_selected_cleanup
+    )
+    with store.transaction() as transaction, pytest.raises(InstallerError):
+        uninstall_user_activation(transaction)
+    monkeypatch.undo()
+
+    with store.transaction() as transaction:
+        interrupted = transaction.read_state()
+        assert interrupted is not None
+        assert interrupted.recovery is RecoveryStatus.CLEANUP_REQUIRED
+        remaining = {target.payload.target_path for target in interrupted.cleanup}
+        assert failed_path in remaining
+        completed = uninstall_user_activation(transaction)
+
+    assert completed is not None
+    assert completed.recovery is RecoveryStatus.UNINSTALLED
+    assert completed.cleanup == ()
+    assert not any(item.activated.payload.target_path.exists() for item in installed)
+
+
+def test_uninstall_retries_after_delete_reports_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    staged = _stage(store)
+    with store.transaction() as transaction:
+        installed = activate_staged_artifact(transaction, staged, environment)
+    original_remove = activation_module._remove_owned_payload
+    reported = False
+
+    def delete_then_report(transaction, payload) -> None:
+        nonlocal reported
+        original_remove(transaction, payload)
+        if not reported:
+            reported = True
+            raise InstallerError(
+                activation_module.InstallerErrorCode.STATE_CONFLICT,
+                "injected post-delete fsync uncertainty",
+                retryable=True,
+            )
+
+    monkeypatch.setattr(activation_module, "_remove_owned_payload", delete_then_report)
+    with store.transaction() as transaction, pytest.raises(InstallerError):
+        uninstall_user_activation(transaction)
+    monkeypatch.undo()
+
+    assert not installed.activated.payload.target_path.exists()
+    with store.transaction() as transaction:
+        interrupted = transaction.read_state()
+        assert interrupted is not None
+        assert interrupted.cleanup == (installed.activated,)
+        completed = uninstall_user_activation(transaction)
+
+    assert completed is not None
+    assert completed.recovery is RecoveryStatus.UNINSTALLED
+    assert completed.cleanup == ()
+
+
 @pytest.mark.parametrize("boundary", ["menu", "payload"])
 def test_uninstall_cleanup_is_durable_and_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
@@ -336,7 +559,8 @@ def test_uninstall_cleanup_is_durable_and_retryable(
         interrupted = transaction.read_state()
         assert interrupted is not None
         assert interrupted.active is None
-        assert interrupted.previous == installed.activated
+        assert interrupted.previous is None
+        assert installed.activated in interrupted.cleanup
         assert interrupted.recovery is RecoveryStatus.CLEANUP_REQUIRED
         completed = uninstall_user_activation(transaction)
 
@@ -413,6 +637,36 @@ def test_repair_rebinds_missing_menu_without_network(tmp_path: Path) -> None:
     assert hashlib.sha256(store.paths.menu_path.read_bytes()).hexdigest() == (
         repaired.menu_sha256
     )
+
+
+def test_repair_rebinds_recovered_journal_to_invoking_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    first_environment = _environment(tmp_path, "first")
+    second_environment = _environment(tmp_path, "second")
+    staged = _stage(store)
+
+    def fail_menu(*_args: object, **_kwargs: object) -> str:
+        raise InstallerError(
+            activation_module.InstallerErrorCode.STATE_CONFLICT,
+            "injected menu failure",
+        )
+
+    monkeypatch.setattr(activation_module, "install_user_menu", fail_menu)
+    with store.transaction() as transaction, pytest.raises(InstallerError):
+        activate_staged_artifact(transaction, staged, first_environment)
+    monkeypatch.undo()
+
+    with store.transaction() as transaction:
+        repaired = repair_activation(transaction, second_environment)
+
+    assert repaired.active is not None
+    assert repaired.active.environment == second_environment
+    assert (
+        second_environment.console_path.as_posix() in store.paths.menu_path.read_text()
+    )
+    assert not store.paths.journal_path.exists()
 
 
 @pytest.mark.parametrize("published", [False, True])

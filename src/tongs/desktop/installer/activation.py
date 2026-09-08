@@ -115,6 +115,7 @@ class InstalledPayload:
     launcher_path: Path
     compatibility: DesktopCompatibility
     files: tuple[InstallFile, ...]
+    directories: tuple[str, ...] = ()
     ownership: str = "user"
 
 
@@ -133,6 +134,7 @@ class DesktopInstallationState:
     previous: InstallationTarget | None
     menu_sha256: str | None
     recovery: RecoveryStatus
+    cleanup: tuple[InstallationTarget, ...] = ()
     schema_version: int = _STATE_SCHEMA
 
     def __post_init__(self) -> None:
@@ -386,6 +388,7 @@ def activate_staged_artifact(
         )
     )
     installed = False
+    published = False
     candidate_menu_digest: str | None = None
     try:
         if target.payload.target_path.exists():
@@ -394,8 +397,15 @@ def activate_staged_artifact(
                 "The desktop version destination already exists.",
                 retryable=True,
             )
-        os.rename(staged.staging_path, target.payload.target_path)
-        installed = True
+        stage_details = staged.staging_path.lstat()
+        try:
+            os.rename(staged.staging_path, target.payload.target_path)
+            installed = True
+        except OSError:
+            installed = _rename_reached_target(
+                staged.staging_path, target.payload.target_path, stage_details
+            )
+            raise
         _fsync_directory(transaction.paths.staging_root)
         _fsync_directory(transaction.paths.versions_root)
         candidate_menu_digest = hashlib.sha256(
@@ -408,28 +418,40 @@ def activate_staged_artifact(
         )
         if menu_digest != candidate_menu_digest:
             raise AssertionError("installed desktop menu digest changed")
+        previous = current.active if current is not None else None
+        cleanup = _cleanup_targets(current, active=target, previous=previous)
         replacement = DesktopInstallationState(
             expected_generation + 1,
             target,
-            current.active
-            if current is not None and current.active != target
-            else (current.previous if current is not None else None),
+            previous,
             menu_digest,
-            RecoveryStatus.HEALTHY,
+            (RecoveryStatus.CLEANUP_REQUIRED if cleanup else RecoveryStatus.HEALTHY),
+            cleanup,
         )
         transaction.write_state(current, replacement)
+        published = True
         try:
             transaction.remove_journal()
         except InstallerError:
             pass
-        return ActivationResult(replacement, target)
-    except BaseException:
+        completed = _complete_cleanup(
+            transaction, replacement, final_recovery=RecoveryStatus.HEALTHY
+        )
+        return ActivationResult(completed, target)
+    except BaseException as error:
         if not installed:
             try:
                 transaction.remove_journal()
             except InstallerError:
                 pass
-        _restore_previous_menu(transaction, current, candidate_menu_digest)
+        if not published:
+            _restore_previous_menu(transaction, current, candidate_menu_digest)
+        if isinstance(error, OSError):
+            raise InstallerError(
+                InstallerErrorCode.STATE_CONFLICT,
+                "The verified desktop payload could not be activated safely.",
+                retryable=True,
+            ) from error
         raise
 
 
@@ -447,7 +469,10 @@ def recover_interrupted_activation(
             validate_installed_payload(journal.target.payload)
             _repair_journal_menu(transaction, current, journal)
             transaction.remove_journal()
-            return ActivationResult(current, journal.target, recovered=True)
+            completed = _complete_cleanup(
+                transaction, current, final_recovery=RecoveryStatus.HEALTHY
+            )
+            return ActivationResult(completed, journal.target, recovered=True)
         raise InstallerError(
             InstallerErrorCode.STATE_CONFLICT,
             "The interrupted desktop activation no longer matches current state.",
@@ -458,16 +483,22 @@ def recover_interrupted_activation(
         journal.target.environment.console_path,
         replace_digest=_menu_replacement_digest(transaction, current, journal),
     )
+    previous = current.active if current is not None else None
+    cleanup = _cleanup_targets(current, active=journal.target, previous=previous)
     replacement = DesktopInstallationState(
         generation + 1,
         journal.target,
-        current.active if current is not None else None,
+        previous,
         digest,
-        RecoveryStatus.HEALTHY,
+        RecoveryStatus.CLEANUP_REQUIRED if cleanup else RecoveryStatus.HEALTHY,
+        cleanup,
     )
     transaction.write_state(current, replacement)
     transaction.remove_journal()
-    return ActivationResult(replacement, journal.target, recovered=True)
+    completed = _complete_cleanup(
+        transaction, replacement, final_recovery=RecoveryStatus.HEALTHY
+    )
+    return ActivationResult(completed, journal.target, recovered=True)
 
 
 def discard_interrupted_activation(
@@ -481,7 +512,7 @@ def discard_interrupted_activation(
     referenced_paths = (
         {
             target.payload.target_path
-            for target in (current.active, current.previous)
+            for target in (current.active, current.previous, *current.cleanup)
             if target is not None
         }
         if current is not None
@@ -508,6 +539,12 @@ def require_activation_environment(
 
     validate_environment_binding(environment)
     current = transaction.read_state()
+    if current is not None and current.cleanup:
+        raise InstallerError(
+            InstallerErrorCode.STATE_CONFLICT,
+            "Desktop payload cleanup is incomplete; run repair before installing another release.",
+            retryable=True,
+        )
     if (
         current is not None
         and current.active is not None
@@ -530,41 +567,107 @@ def uninstall_user_activation(
     if (
         current.active is None
         and current.previous is None
+        and not current.cleanup
         and current.menu_sha256 is None
         and current.recovery is RecoveryStatus.UNINSTALLED
     ):
         return current
-    if current.active is not None and current.active.payload.ownership != "user":
-        raise InstallerError(
-            InstallerErrorCode.STATE_CONFLICT,
-            "The selected desktop installation is not per-user owned.",
-        )
     if current.active is None and current.recovery is RecoveryStatus.CLEANUP_REQUIRED:
         replacement = current
     else:
+        cleanup = _unique_targets(
+            (*current.cleanup, current.active, current.previous),
+            exclude=(),
+        )
         replacement = DesktopInstallationState(
             current.generation + 1,
             None,
-            current.active or current.previous,
+            None,
             current.menu_sha256,
             RecoveryStatus.CLEANUP_REQUIRED,
+            cleanup,
         )
         transaction.write_state(current, replacement)
     remove_user_menu(
         transaction.paths.menu_path, expected_digest=replacement.menu_sha256
     )
-    cleanup = replacement.previous
-    if cleanup is not None:
-        _remove_owned_payload(transaction, cleanup.payload)
-    final = replace(
+    return _complete_cleanup(
+        transaction,
         replacement,
-        generation=replacement.generation + 1,
-        previous=None,
-        menu_sha256=None,
-        recovery=RecoveryStatus.UNINSTALLED,
+        final_recovery=RecoveryStatus.UNINSTALLED,
+        clear_menu=True,
     )
-    transaction.write_state(replacement, final)
-    return final
+
+
+def _cleanup_targets(
+    current: DesktopInstallationState | None,
+    *,
+    active: InstallationTarget,
+    previous: InstallationTarget | None,
+) -> tuple[InstallationTarget, ...]:
+    if current is None:
+        return ()
+    return _unique_targets(
+        (*current.cleanup, current.active, current.previous),
+        exclude=(active, previous),
+    )
+
+
+def _unique_targets(
+    targets: tuple[InstallationTarget | None, ...],
+    *,
+    exclude: tuple[InstallationTarget | None, ...],
+) -> tuple[InstallationTarget, ...]:
+    excluded = {target.payload.target_path for target in exclude if target is not None}
+    observed = set(excluded)
+    result: list[InstallationTarget] = []
+    for target in targets:
+        if target is None or target.payload.target_path in observed:
+            continue
+        observed.add(target.payload.target_path)
+        result.append(target)
+    return tuple(result)
+
+
+def _complete_cleanup(
+    transaction: DesktopInstallationTransaction,
+    state: DesktopInstallationState,
+    *,
+    final_recovery: RecoveryStatus,
+    clear_menu: bool = False,
+) -> DesktopInstallationState:
+    if final_recovery not in {RecoveryStatus.HEALTHY, RecoveryStatus.UNINSTALLED}:
+        raise ValueError("cleanup final recovery state is invalid")
+    current = _drain_cleanup(transaction, state)
+    if current.recovery is final_recovery and (
+        not clear_menu or current.menu_sha256 is None
+    ):
+        return current
+    replacement = replace(
+        current,
+        generation=current.generation + 1,
+        menu_sha256=None if clear_menu else current.menu_sha256,
+        recovery=final_recovery,
+    )
+    transaction.write_state(current, replacement)
+    return replacement
+
+
+def _drain_cleanup(
+    transaction: DesktopInstallationTransaction,
+    state: DesktopInstallationState,
+) -> DesktopInstallationState:
+    current = state
+    while current.cleanup:
+        _remove_owned_payload(transaction, current.cleanup[0].payload)
+        replacement = replace(
+            current,
+            generation=current.generation + 1,
+            cleanup=current.cleanup[1:],
+        )
+        transaction.write_state(current, replacement)
+        current = replacement
+    return current
 
 
 def _discard_journal_for_uninstall(
@@ -594,15 +697,18 @@ def repair_activation(
     """Recover a journal or revalidate and explicitly rebind the active install."""
     if not environment.kind.persistent:
         raise _persistent_environment_error()
-    recovered = recover_interrupted_activation(transaction)
-    if recovered is not None:
-        return recovered.state
+    from tongs.desktop.installer.launcher import validate_environment_binding
+
+    validate_environment_binding(environment)
+    recover_interrupted_activation(transaction)
     current = transaction.read_state()
     if current is None or current.active is None:
         raise InstallerError(
             InstallerErrorCode.STATE_CONFLICT,
             "No verified per-user desktop installation is available to repair.",
         )
+    current = _drain_cleanup(transaction, current)
+    assert current.active is not None
     validate_installed_payload(current.active.payload)
     digest = install_user_menu(
         transaction.paths.menu_path,
@@ -615,6 +721,7 @@ def repair_activation(
         current.previous,
         digest,
         RecoveryStatus.HEALTHY,
+        current.cleanup,
     )
     try:
         transaction.write_state(current, replacement)
@@ -709,6 +816,11 @@ def _prepare_staged_target(
             for entry in contract.layout.entries
             if entry.entry_type is ArchiveEntryType.FILE
         ),
+        directories=tuple(
+            entry.path
+            for entry in contract.layout.entries
+            if entry.entry_type is ArchiveEntryType.DIRECTORY
+        ),
     )
     _validate_payload_at(stage, payload, staged_path=True)
     return InstallationTarget(payload, environment)
@@ -802,8 +914,9 @@ def _validate_payload_at(
             or stat.S_IMODE(details.st_mode) & 0o077
         ):
             raise OSError("unsafe payload root")
-        expected_files = {PurePosixPath(item.path) for item in payload.files}
+        expected_files, expected_directories = _declared_payload_paths(payload)
         actual_files: set[PurePosixPath] = set()
+        actual_directories: set[PurePosixPath] = set()
         for directory, names, filenames in os.walk(root, followlinks=False):
             directory_path = Path(directory)
             directory_details = directory_path.lstat()
@@ -812,6 +925,13 @@ def _validate_payload_at(
                 or directory_details.st_uid != os.geteuid()
             ):
                 raise OSError("unsafe payload directory")
+            if directory_path != root:
+                relative_directory = PurePosixPath(
+                    directory_path.relative_to(root).as_posix()
+                )
+                actual_directories.add(relative_directory)
+                if stat.S_IMODE(directory_details.st_mode) != 0o755:
+                    raise OSError("payload directory mode changed")
             for name in names:
                 member_details = (directory_path / name).lstat()
                 if not stat.S_ISDIR(member_details.st_mode):
@@ -825,7 +945,7 @@ def _validate_payload_at(
                 ):
                     raise OSError("payload contains an unsafe member")
                 actual_files.add(PurePosixPath(member.relative_to(root).as_posix()))
-        if actual_files != expected_files:
+        if actual_files != expected_files or actual_directories != expected_directories:
             raise OSError("payload members changed")
         for declared in payload.files:
             if _payload_file_digest(root_fd, declared) != declared.sha256:
@@ -921,6 +1041,27 @@ def _restore_previous_menu(
             )
     except (InstallerError, OSError):
         return
+
+
+def _rename_reached_target(
+    staging_path: Path, target_path: Path, source_details: os.stat_result
+) -> bool:
+    try:
+        target_details = target_path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    try:
+        staging_path.lstat()
+    except FileNotFoundError:
+        return (
+            target_details.st_dev == source_details.st_dev
+            and target_details.st_ino == source_details.st_ino
+        )
+    except OSError:
+        return True
+    return False
 
 
 def _repair_journal_menu(
@@ -1120,6 +1261,7 @@ def _encode_state(state: DesktopInstallationState) -> bytes:
             "generation": state.generation,
             "active": _target_json(state.active),
             "previous": _target_json(state.previous),
+            "cleanup": [_target_json(target) for target in state.cleanup],
             "menu_sha256": state.menu_sha256,
             "recovery": state.recovery.value,
         }
@@ -1135,17 +1277,23 @@ def _decode_state(document: bytes, versions_root: Path) -> DesktopInstallationSt
             "generation",
             "active",
             "previous",
+            "cleanup",
             "menu_sha256",
             "recovery",
         },
     )
     try:
+        raw_cleanup = value["cleanup"]
+        if not isinstance(raw_cleanup, list) or len(raw_cleanup) > 10_000:
+            raise _invalid_state("Desktop cleanup state is invalid.")
+        cleanup = tuple(_required_target(item) for item in raw_cleanup)
         result = DesktopInstallationState(
             _positive_int(value["generation"]),
             _target_from_json(value["active"]),
             _target_from_json(value["previous"]),
             _optional_digest(value["menu_sha256"]),
             RecoveryStatus(_string(value["recovery"])),
+            cleanup,
             _positive_int(value["schema_version"]),
         )
         _validate_state_targets(result, versions_root)
@@ -1241,6 +1389,7 @@ def _target_json(target: InstallationTarget | None) -> object:
                 }
                 for item in payload.files
             ],
+            "directories": list(payload.directories),
         },
         "environment": {
             "kind": environment.kind.value,
@@ -1273,6 +1422,7 @@ def _target_from_json(value: object) -> InstallationTarget | None:
             "ownership",
             "compatibility",
             "files",
+            "directories",
         },
     )
     _exact_keys(
@@ -1309,6 +1459,14 @@ def _target_from_json(value: object) -> InstallationTarget | None:
                 executable,
             )
         )
+    raw_directories = payload["directories"]
+    if (
+        not isinstance(raw_directories, list)
+        or len(raw_directories) > 10_000
+        or not all(isinstance(item, str) for item in raw_directories)
+    ):
+        raise _invalid_state("Desktop installation directory state is invalid.")
+    directories = tuple(_string(item) for item in raw_directories)
     target_path = _absolute_path(payload["target_path"])
     launcher_path = _absolute_path(payload["launcher_path"])
     try:
@@ -1329,6 +1487,7 @@ def _target_from_json(value: object) -> InstallationTarget | None:
                     _positive_int(compatibility["plugin_api_major"]),
                 ),
                 tuple(files),
+                directories,
                 _string(payload["ownership"]),
             ),
             BoundPythonEnvironment(
@@ -1347,41 +1506,87 @@ def _target_from_json(value: object) -> InstallationTarget | None:
     return target
 
 
+def _required_target(value: object) -> InstallationTarget:
+    target = _target_from_json(value)
+    if target is None:
+        raise _invalid_state("Desktop cleanup target is invalid.")
+    return target
+
+
 def _validate_state_targets(
     state: DesktopInstallationState, versions_root: Path
 ) -> None:
-    for target in (state.active, state.previous):
+    for target in (state.active, state.previous, *state.cleanup):
         if target is not None:
             _validate_target_location(target, versions_root)
 
 
 def _validate_state_shape(state: DesktopInstallationState) -> None:
+    targets = tuple(
+        target
+        for target in (state.active, state.previous, *state.cleanup)
+        if target is not None
+    )
+    paths = [target.payload.target_path for target in targets]
+    if len(paths) != len(set(paths)):
+        raise _invalid_state("Desktop installation targets are not distinct.")
     if state.active is None:
         if state.recovery is RecoveryStatus.UNINSTALLED:
-            if state.previous is not None or state.menu_sha256 is not None:
+            if (
+                state.previous is not None
+                or state.cleanup
+                or state.menu_sha256 is not None
+            ):
                 raise _invalid_state("Desktop uninstall state is inconsistent.")
             return
         if state.recovery is not RecoveryStatus.CLEANUP_REQUIRED:
             raise _invalid_state("Desktop installation state has no active target.")
+        if not state.cleanup and state.menu_sha256 is None:
+            raise _invalid_state("Desktop cleanup state has no remaining work.")
         return
     if state.menu_sha256 is None or state.recovery is RecoveryStatus.UNINSTALLED:
         raise _invalid_state("Desktop active installation state is inconsistent.")
-    if (
-        state.previous is not None
-        and state.previous.payload.target_path == state.active.payload.target_path
-    ):
-        raise _invalid_state("Desktop active and previous targets are identical.")
+    if state.cleanup and state.recovery is not RecoveryStatus.CLEANUP_REQUIRED:
+        raise _invalid_state("Desktop payload cleanup state is inconsistent.")
 
 
 def _validate_target_location(target: InstallationTarget, versions_root: Path) -> None:
     payload = target.payload
     _validate_payload_target(payload, versions_root)
     try:
+        _declared_payload_paths(payload)
         payload.launcher_path.relative_to(payload.target_path)
     except ValueError as error:
         raise _invalid_state(
             "Desktop launcher is outside its installation target."
         ) from error
+
+
+def _declared_payload_paths(
+    payload: InstalledPayload,
+) -> tuple[set[PurePosixPath], set[PurePosixPath]]:
+    files = {PurePosixPath(item.path) for item in payload.files}
+    directories = {PurePosixPath(item) for item in payload.directories}
+    if len(files) != len(payload.files) or len(directories) != len(payload.directories):
+        raise ValueError("duplicate payload member")
+    for raw, path in (
+        *((item.path, PurePosixPath(item.path)) for item in payload.files),
+        *((item, PurePosixPath(item)) for item in payload.directories),
+    ):
+        if (
+            path.is_absolute()
+            or not path.parts
+            or ".." in path.parts
+            or path.as_posix() != raw
+        ):
+            raise ValueError("unsafe payload member path")
+    for path in (*files, *directories):
+        parent = path.parent
+        while parent != PurePosixPath("."):
+            if parent not in directories:
+                raise ValueError("payload parent directory is undeclared")
+            parent = parent.parent
+    return files, directories
 
 
 def _validate_payload_target(payload: InstalledPayload, versions_root: Path) -> None:

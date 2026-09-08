@@ -35,8 +35,8 @@ artifact containing the upstream Electron distribution. It does not claim that
 this package is eligible for Fedora or COPR publication review.
 
 The end-to-end harness is deliberately restricted to a disposable GitHub-hosted
-runner because it performs normal Fedora DNF and Podman operations. It rebuilds
-It first probes every command required before the clean container's bootstrap
+runner because it performs normal Fedora DNF and Podman operations. It first
+probes every command required before the clean container's bootstrap
 transaction, without installing anything into that image. It rebuilds the exact
 source wheel once with Fedora's packaging macros and rejects any version mismatch
 before rebuilding the seven accepted issue 85 companion SRPMs.

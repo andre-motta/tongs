@@ -77,7 +77,7 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 
 ## Models
 
-`src/tongs/diff/models.py` defines three frozen dataclasses:
+`src/tongs/diff/models.py` defines four frozen dataclasses:
 
 **DiffLine:**
 - `old_lineno: int | None` -- line number in old file (None for additions)
@@ -103,11 +103,22 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 - `is_metadata_only` -- derived property for binary, empty, mode-only, or
   unavailable files
 
+**SplitDiffRow:**
+- `old: DiffLine | None`, `new: DiffLine | None` -- independent references to
+  the original `DiffLine` objects; a missing cell is `None`
+- `old_anchor`, `new_anchor` -- properties returning the respective `DiffLine`
+  only when it is a comment-anchorable context/deletion or context/addition
+  line with a line number, otherwise `None`
+
 ## Language Detection
 
-`_detect_language(path)` maps file extensions to language names via `LANGUAGE_MAP` dict. Also handles extensionless special files: `Dockerfile`, `Makefile`, `Jenkinsfile`.
-
-Supported: python, javascript, typescript, rust, go, ruby, java, c, cpp, csharp, bash, yaml, json, toml, markdown, html, css, sql, xml, dockerfile, hcl, groovy, makefile.
+`_detect_language(path)` calls Pygments `get_lexer_for_filename(path)` and
+returns `lexer.aliases[0]` (falling back to `lexer.name.lower()` if the lexer
+has no aliases). It returns `""` for `/dev/null` or when Pygments raises for
+an unrecognized path. There is no `LANGUAGE_MAP` dict and no project-defined
+special-case branch for extensionless files; the supported language set is
+whatever Pygments' own filename pattern matching recognizes, which changes
+with the installed Pygments version rather than a fixed list maintained here.
 
 Used by the terminal renderer to select Rich syntax highlighting.
 

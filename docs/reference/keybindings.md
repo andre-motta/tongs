@@ -33,6 +33,8 @@ These bindings work everywhere in the application.
 | ++f++ | Cycle forge filter (All / GH / GL) |
 | ++s++ | Cycle sort order (name / forge / host) |
 | ++enter++ | Open scoped inbox for selected repo |
+| ++escape++ | Go back |
+| ++ctrl+r++ | Refresh repo list |
 
 ## MR detail
 
@@ -41,14 +43,16 @@ These bindings work everywhere in the application.
 | ++1++ | Overview tab |
 | ++2++ | Diff tab |
 | ++3++ | Commits tab |
-| ++4++ | Pipeline tab |
-| ++5++ | Discussion tab |
+| ++4++ | Discussion tab |
+| ++5++ | Pipeline tab |
 | ++c++ | Add comment (general comment from Overview, inline from Diff) |
 | ++a+shift++ | Approve (double-press to confirm) |
 | ++u+shift++ | Unapprove (double-press to confirm) |
 | ++m+shift++ | Merge (double-press to confirm) |
 | ++x+shift++ | Close (double-press to confirm) |
 | ++ctrl+y++ | Copy MR URL to clipboard |
+| ++ctrl+g++ | Start review mode, or open the review draft screen once a draft exists |
+| ++alt+close-bracket++ | Cycle to the next recovered review draft for this MR |
 
 ## Diff viewer
 
@@ -65,7 +69,11 @@ These bindings work everywhere in the application.
 | ++f3++ | Suggest changes (opens `$EDITOR`) |
 | ++n++ / ++n+shift++ | Next / previous file |
 | ++m++ | Toggle Markdown preview |
+| ++v++ | Toggle unified/split diff mode |
 | ++escape++ | Clear selection |
+
+In split diff mode, ++h++ and ++l++ move focus between the old and new side
+columns.
 
 ## Comment editor
 
@@ -74,6 +82,32 @@ These bindings work everywhere in the application.
 | ++ctrl+s++ | Submit comment |
 | ++escape++ | Cancel (double-press if text has been entered) |
 | ++f2++ | Open in external editor |
+
+## Review draft
+
+Press ++ctrl+g++ from MR detail to start review mode or, once a draft exists,
+to open the review draft screen and inspect it. It submits, edits, or
+discards the local review draft for the current MR.
+
+| Key | Action |
+|-----|--------|
+| ++escape++ | Close (double-press to discard unsaved summary or verdict changes) |
+| ++v++ | Cycle verdict (Comment / Approve, plus Request changes on GitHub) |
+| ++ctrl+s++ | Submit the review |
+| ++e++ | Edit the selected draft comment |
+| ++x++ | Remove the selected draft comment (double-press to confirm) |
+| ++d+shift++ | Discard the local review draft (double-press to confirm) |
+| ++n+shift++ | Start a new revision (only when the draft is stale) |
+| ++r++ | Resume a paused submission attempt |
+
+When a submission attempt is interrupted with an unknown outcome, three
+additional bindings reconcile it (each requires a second press to confirm):
+
+| Key | Action |
+|-----|--------|
+| ++1++ | Retry the remaining, unconfirmed comments |
+| ++2++ | Return the remaining comments to local editing |
+| ++3++ | Mark the remaining comments as already submitted |
 
 ## Discussion tab
 

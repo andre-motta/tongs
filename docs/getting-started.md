@@ -23,8 +23,12 @@ you do not need `glab` installed.
 === "uvx"
 
     ```bash
-    uvx install tongs
+    uvx tongs
     ```
+
+    uvx runs tongs in a temporary, isolated environment without installing it.
+    For a persistent install that puts `tongs` on your `PATH`, use
+    `uv tool install tongs` instead.
 
 === "pip"
 

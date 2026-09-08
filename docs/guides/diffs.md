@@ -12,6 +12,15 @@ The diff viewer uses a split-pane layout:
 - **Right pane** -- the diff content for the selected file, with syntax
   highlighting, line numbers, and gutter markers
 
+## Unified and split view
+
+Press ++v++ to toggle between unified and split diff layout. In split view,
+the old and new sides of the file render in synchronized side-by-side
+columns; press ++h++ or ++l++ to move focus between the old and new side.
+At narrow terminal widths, split view falls back to unified and tongs
+notifies you that split was selected but unified is being used at that
+width.
+
 ## File navigation
 
 | Key | Action |

@@ -6,8 +6,9 @@ desktop RPM.
 
 `manifest.json` records the Fedora target, Python 3.12 minimum, expected Fedora
 providers, source-built companion frontier, source hashes, licenses, and build
-order. Each companion also declares its exact binary RPM name, epoch, version,
-release, and architecture for the issue 52 consumer allowlist.
+order. Each companion also declares its exact binary RPM name, epoch, release,
+and architecture in `binary_rpm`, plus a sibling `version` field, for the
+issue 52 consumer allowlist.
 `prepare_sources.py` downloads only those exact source distributions,
 checks their byte counts and SHA-256 hashes, and prepares the Cargo inputs for
 `rfc3161-client`. The Rust preparation preserves its upstream `Cargo.lock`,
@@ -30,5 +31,5 @@ Local tests validate the manifest and evidence parsers without invoking DNF,
 Podman, RPM, Cargo, or the network:
 
 ```bash
-pytest tests/packaging/rpm/python-dependencies -v
+.venv/bin/pytest tests/packaging/rpm/python-dependencies -v
 ```

@@ -78,7 +78,7 @@ confirm a repository reference before navigation.
 Common bindings:
 
 - Inbox: `1` to `3` select scope, `r` opens repositories or returns from scoped
-  mode, `o` opens the selected review, `Ctrl+R` refreshes.
+  mode, `o` opens the selected review's URL in the browser, `Ctrl+R` refreshes.
 - Repository list: `/` filters, `f` cycles forge, `s` cycles sort, and
   `Ctrl+R` refreshes discovery.
 
@@ -144,9 +144,10 @@ known attempt identity and the service's reconciliation rules.
 
 `DiffPanel` owns `DiffFileTree` and `DiffContent`. `DiffOptionList` maps rendered
 options back to `DiffLine` values, maintains selection, indexes discussion
-anchors, and inserts expanded thread blocks. `SplitDiffTable` provides the split
-view. `v` toggles unified/split mode; the same parsed files, discussion markers,
-and durable draft markers feed both views.
+anchors, and inserts expanded thread blocks. `SplitDiffView` provides the split
+view, built from synchronized `SplitDiffColumn` widgets. `v` toggles
+unified/split mode; the same parsed files, discussion markers, and durable
+draft markers feed both views.
 
 `DiffRenderer` does one bulk Rich/Pygments highlight pass per file, then applies
 line backgrounds in Textual's `VisualStyle` before option rendering. Preserve

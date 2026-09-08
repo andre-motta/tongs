@@ -1,6 +1,6 @@
 # Discussions
 
-The Discussion tab (++5++ from MR detail) provides a card-based view of all
+The Discussion tab (++4++ from MR detail) provides a card-based view of all
 conversations on a merge request. It complements the inline diff markers by
 showing every thread in one scrollable list.
 
@@ -11,7 +11,7 @@ Each discussion card shows:
 - **Author** and timestamp
 - **Diff snippet** for inline discussions, showing the surrounding code context
 - **Full Markdown-rendered thread** with all replies
-- **Resolution status** for resolvable threads (GitLab)
+- **Resolution status** for resolvable threads (GitHub and GitLab)
 
 ## Navigation
 
@@ -43,8 +43,8 @@ immediately.
 ## Resolving threads
 
 Press ++r+shift++ (uppercase R) on a discussion to toggle its resolution status.
-This requires a double-press to confirm. Resolution is supported on GitLab; on
-GitHub, threads do not have a resolve/unresolve concept.
+This requires a double-press to confirm. Resolution is supported on both
+GitHub and GitLab.
 
 ## General MR comments
 
@@ -59,4 +59,4 @@ A typical review workflow using discussions:
 2. Press ++enter++ on a thread to jump to its location in the diff
 3. Review the surrounding code in context
 4. Press ++r++ to reply, or ++r+shift++ to resolve
-5. Press ++5++ to return to the Discussion tab and continue
+5. Press ++4++ to return to the Discussion tab and continue

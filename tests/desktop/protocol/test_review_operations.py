@@ -22,6 +22,7 @@ import pytest_asyncio
 from tongs.cache.store import CacheStore
 from tongs.config import Config
 from tongs.desktop.protocol import review_operations as review_operations_module
+from tongs.desktop.protocol import server as server_module
 from tongs.desktop.protocol.messages import JsonObject, ProtocolError, ProtocolErrorCode
 from tongs.desktop.protocol.review_operations import (
     REVIEW_CAPABILITY,
@@ -66,6 +67,9 @@ from tongs.services import (
     ServiceError,
     ServiceErrorCode,
 )
+from tongs.services import review_mutations as review_mutations_module
+from tongs.services import review_submission as review_submission_module
+from tongs.services import session as session_module
 from tongs.state.drafts import (
     DraftContent,
     DraftStore,
@@ -1247,15 +1251,46 @@ async def test_production_ndjson_roundtrip_uses_real_session_and_mock_transport(
 async def test_exact_e_p_child_binds_candidate_and_registered_review_methods(
     tmp_path: Path,
 ) -> None:
-    source = (
-        Path(__file__).parents[3]
-        / "src"
-        / "tongs"
-        / "desktop"
-        / "protocol"
-        / "review_operations.py"
-    ).resolve()
-    assert Path(review_operations_module.__file__).resolve() == source
+    checkout_root = (Path(__file__).parents[3] / "src").resolve()
+    relative_sources = (
+        Path("tongs/desktop/protocol/review_operations.py"),
+        Path("tongs/desktop/protocol/server.py"),
+        Path("tongs/services/session.py"),
+        Path("tongs/services/review_mutations.py"),
+        Path("tongs/services/review_submission.py"),
+    )
+    parent_sources = tuple(
+        Path(module.__file__).resolve()
+        for module in (
+            review_operations_module,
+            server_module,
+            session_module,
+            review_mutations_module,
+            review_submission_module,
+        )
+    )
+    _assert_candidate_sources(
+        checkout_root,
+        relative_sources,
+        parent_sources,
+        interpreter_prefix=Path(sys.prefix).resolve(),
+    )
+
+    stale_prefix = (tmp_path / "stale-prefix").resolve()
+    stale_sources = []
+    for relative_source in relative_sources:
+        stale_source = stale_prefix / relative_source
+        stale_source.parent.mkdir(parents=True, exist_ok=True)
+        stale_source.write_bytes((checkout_root / relative_source).read_bytes())
+        stale_sources.append(stale_source)
+    stale_sources[3].write_bytes(stale_sources[3].read_bytes() + b"\n# altered\n")
+    with pytest.raises(AssertionError):
+        _assert_candidate_sources(
+            checkout_root,
+            relative_sources,
+            tuple(stale_sources),
+            interpreter_prefix=stale_prefix,
+        )
 
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(tmp_path / "must-not-bind")
@@ -1268,9 +1303,15 @@ async def test_exact_e_p_child_binds_candidate_and_registered_review_methods(
         "-P",
         "-c",
         (
+            "import json;"
             "from pathlib import Path;"
             "import tongs.desktop.protocol.review_operations as module;"
-            "print(Path(module.__file__).resolve())"
+            "import tongs.desktop.protocol.server as server;"
+            "import tongs.services.session as session;"
+            "import tongs.services.review_mutations as mutations;"
+            "import tongs.services.review_submission as submission;"
+            "print(json.dumps([str(Path(item.__file__).resolve()) for item in "
+            "(module, server, session, mutations, submission)]))"
         ),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -1279,7 +1320,7 @@ async def test_exact_e_p_child_binds_candidate_and_registered_review_methods(
     )
     stdout, stderr = await asyncio.wait_for(binding.communicate(), 10)
     assert binding.returncode == 0, stderr.decode()
-    assert Path(stdout.decode().strip()) == source
+    assert tuple(Path(item) for item in json.loads(stdout)) == parent_sources
 
     process = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -1338,3 +1379,20 @@ async def test_exact_e_p_child_binds_candidate_and_registered_review_methods(
         if process.returncode is None:
             process.kill()
             await process.wait()
+
+
+def _assert_candidate_sources(
+    checkout_root: Path,
+    relative_sources: tuple[Path, ...],
+    loaded_sources: tuple[Path, ...],
+    *,
+    interpreter_prefix: Path,
+) -> None:
+    checkout_sources = tuple(checkout_root / item for item in relative_sources)
+    assert len(loaded_sources) == len(checkout_sources)
+    if loaded_sources[0] == checkout_sources[0]:
+        assert loaded_sources == checkout_sources
+        return
+    for loaded, checkout in zip(loaded_sources, checkout_sources, strict=True):
+        assert loaded.is_relative_to(interpreter_prefix)
+        assert loaded.read_bytes() == checkout.read_bytes()

@@ -89,7 +89,12 @@ def _active_status(
     assert active is not None
     menu_registered = desktop_entry_digest(store.paths.menu_path) == state.menu_sha256
     launch_ready = False
-    detail = "The per-user desktop installation is ready."
+    detail = (
+        "The per-user desktop installation can launch, but old payload cleanup "
+        "is incomplete; run 'tongs desktop repair'."
+        if state.recovery is RecoveryStatus.CLEANUP_REQUIRED
+        else "The per-user desktop installation is ready."
+    )
     recovery = state.recovery
     try:
         validate_bound_launch(active)

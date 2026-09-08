@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import os
+import signal
+import subprocess
 import sys
 import time
 from dataclasses import replace
@@ -12,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import tongs.desktop.installer.launcher as launcher_module
 from tongs.desktop.artifact_contract import DesktopCompatibility, InstallFile
 from tongs.desktop.installer.activation import (
     BoundPythonEnvironment,
@@ -305,3 +308,37 @@ def test_launch_probe_terminates_and_reaps_hanging_child(tmp_path: Path) -> None
         )
 
     assert time.monotonic() - started < 2.0
+
+
+def test_probe_timeout_terminates_group_after_leader_exits(tmp_path: Path) -> None:
+    pidfile = tmp_path / "descendant.pid"
+    environment = os.environ.copy()
+    environment["TONGS_TEST_DESCENDANT_PID"] = os.fspath(pidfile)
+    child_pid: int | None = None
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            launcher_module._run_bounded_probe(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '(sleep 30) & echo $! > "$TONGS_TEST_DESCENDANT_PID"; exit 0',
+                ],
+                timeout=0.15,
+                env=environment,
+            )
+        child_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            if time.monotonic() >= deadline:
+                pytest.fail("probe descendant remained alive after timeout cleanup")
+            time.sleep(0.01)
+    finally:
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

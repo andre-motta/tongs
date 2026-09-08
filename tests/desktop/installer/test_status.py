@@ -132,3 +132,46 @@ def test_status_preserves_retryable_cleanup_state(
     assert result.installed is False
     assert result.recovery is RecoveryStatus.CLEANUP_REQUIRED
     assert "uninstall" in result.detail
+
+
+def test_active_status_explains_pending_obsolete_payload_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _installed(tmp_path)
+    with store.transaction() as transaction:
+        first = transaction.read_state()
+    assert first is not None and first.active is not None
+    environment = first.active.environment
+    for index in range(2):
+        staged = extract_verified_archive(
+            documents()[1], verified_metadata(), store.paths.staging_root
+        )
+        if index == 1:
+            monkeypatch.setattr(
+                activation_module,
+                "_remove_owned_payload",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    InstallerError(
+                        InstallerErrorCode.STATE_CONFLICT,
+                        "injected obsolete cleanup failure",
+                        retryable=True,
+                    )
+                ),
+            )
+        with store.transaction() as transaction:
+            if index == 1:
+                with pytest.raises(InstallerError):
+                    activate_staged_artifact(transaction, staged, environment)
+            else:
+                activate_staged_artifact(transaction, staged, environment)
+    monkeypatch.setattr(status_module, "validate_bound_launch", lambda _target: None)
+
+    result = inspect_desktop_installation(
+        store, rpm_launcher=tmp_path / "missing", rpm_menu=tmp_path / "also-missing"
+    )
+
+    assert result.installed is True
+    assert result.launch_ready is True
+    assert result.recovery is RecoveryStatus.CLEANUP_REQUIRED
+    assert "old payload cleanup is incomplete" in result.detail
+    assert "tongs desktop repair" in result.detail

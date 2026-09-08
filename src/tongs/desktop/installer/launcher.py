@@ -287,11 +287,10 @@ def _collect_probe_output(
 
 
 def _terminate_probe(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
     try:
         process.wait(timeout=1.0)
     except subprocess.TimeoutExpired:

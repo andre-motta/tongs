@@ -507,6 +507,92 @@ button {
 .window-position {
   color: var(--muted);
 }
+.plugin-navigation {
+  margin-top: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+.plugin-navigation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.plugin-navigation-heading .sidebar-title {
+  margin-bottom: 7px;
+}
+.plugin-refresh {
+  padding: 2px 7px;
+}
+.plugin-navigation-record {
+  margin-bottom: 10px;
+}
+.plugin-name,
+.plugin-state,
+.plugin-version {
+  color: var(--muted);
+  font-size: 11px;
+}
+.plugin-name {
+  margin: 7px 10px 2px;
+  overflow-wrap: anywhere;
+}
+.plugin-state {
+  margin: 3px 10px 8px;
+}
+.plugin-state-failed,
+.plugin-state-incompatible {
+  color: var(--danger);
+}
+.plugin-state-disabled,
+.plugin-state-terminal_only,
+.plugin-state-stopped {
+  color: var(--warning);
+}
+.plugin-notice,
+.plugin-toast {
+  margin: 8px 2px;
+  padding: 9px;
+  font-size: 11px;
+}
+.plugin-toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+.plugin-toast-warning {
+  border-color: var(--warning);
+}
+.plugin-toast-error {
+  border-color: var(--danger);
+}
+.plugin-module {
+  min-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: clamp(16px, 3vw, 28px);
+  overflow: auto;
+}
+.plugin-module:focus-within {
+  border-color: var(--accent);
+}
+.plugin-help {
+  margin-top: 18px;
+}
+.plugin-help summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.plugin-help-content {
+  margin-top: 14px;
+}
+.plugin-help-content pre {
+  white-space: pre-wrap;
+}
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f6f8fa;
@@ -538,5 +624,8 @@ button {
   }
   .overview-grid {
     grid-template-columns: 1fr;
+  }
+  .plugin-module {
+    padding: 16px;
   }
 }

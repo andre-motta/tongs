@@ -8,9 +8,10 @@ import { useRetainedRead } from "../../core/use-read.js";
 interface Props {
   readonly bridge: DesktopBridge;
   readonly queries: QueryCoordinator;
-  readonly selected: RepositoryDto | null;
+  readonly selected: RepositoryDto | null | undefined;
   readonly navigate: (route: AppRoute) => void;
   readonly onDiscovery: (repositories: readonly RepositoryDto[]) => void;
+  readonly pluginNavigation?: ReactNode;
 }
 
 export function RepositoryNavigation({
@@ -19,6 +20,7 @@ export function RepositoryNavigation({
   selected,
   navigate,
   onDiscovery,
+  pluginNavigation,
 }: Props): ReactNode {
   const begin = useCallback(() => bridge.discoverRepositories(), [bridge]);
   const state = useRetainedRead(queries, "repositories", begin, [bridge]);
@@ -69,6 +71,7 @@ export function RepositoryNavigation({
           configured scan root, then refresh.
         </Notice>
       )}
+      {pluginNavigation}
     </aside>
   );
 }

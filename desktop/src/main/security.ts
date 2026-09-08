@@ -5,7 +5,7 @@ export const APP_ORIGIN = "tongs://app";
 export const APP_DOCUMENT = `${APP_ORIGIN}/index.html`;
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'none'", "script-src 'self'", "style-src 'self'",
-  "img-src 'self' data:", "font-src 'self'", "connect-src 'none'",
+  "img-src 'self' data:", "font-src 'self'", "connect-src 'self'",
   "object-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
 ].join("; ");
 

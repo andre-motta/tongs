@@ -19,6 +19,11 @@ import {
 import { QueryCoordinator } from "./core/query.js";
 import { createDiffFeature } from "./features/diff/index.js";
 import { createInboxFeature } from "./features/inbox/index.js";
+import {
+  createPluginsFeature,
+  usePluginSnapshot,
+} from "./features/plugins/index.js";
+import { PluginLocationPublisher } from "./features/plugins/runtime.js";
 import { RepositoryNavigation } from "./features/repositories/index.js";
 import {
   createCommitsFeature,
@@ -30,10 +35,13 @@ const navigator = new Navigator();
 const queries = new QueryCoordinator(bridge);
 const shellQueries = new QueryCoordinator(bridge);
 const registry = new FeatureRegistry();
+const pluginsFeature = createPluginsFeature(bridge);
+const pluginLocations = new PluginLocationPublisher(bridge);
 registry.register(createInboxFeature());
 registry.register(createReviewOverviewFeature());
 registry.register(createCommitsFeature());
 registry.register(createDiffFeature());
+registry.register(pluginsFeature);
 
 function App(): ReactNode {
   const [route, setRoute] = useState<AppRoute>(navigator.route);
@@ -48,6 +56,7 @@ function App(): ReactNode {
     "Connecting to the local service…",
   );
   const [serviceClass, setServiceClass] = useState("service-status");
+  const plugins = usePluginSnapshot(pluginsFeature.runtime);
   useEffect(() => navigator.subscribe(setRoute), []);
   useEffect(
     () =>
@@ -64,6 +73,16 @@ function App(): ReactNode {
       }),
     [],
   );
+  useEffect(() => {
+    pluginsFeature.runtime.start();
+    return () => {
+      void pluginsFeature.runtime.dispose();
+      void pluginLocations.dispose();
+    };
+  }, []);
+  useEffect(() => {
+    void pluginLocations.publish(route);
+  }, [route]);
   useEffect(
     () => () => {
       void queries.cancelAll();
@@ -88,7 +107,7 @@ function App(): ReactNode {
     setRepositoryGeneration((current) => current + 1);
   }, []);
   const feature = useMemo(() => registry.find(route), [route]);
-  const selected = route.kind === "inbox" ? route.repository : null;
+  const selected = route.kind === "inbox" ? route.repository : undefined;
   const featureContext: FeatureContext = {
     bridge,
     queries,
@@ -100,7 +119,13 @@ function App(): ReactNode {
     selectInlineAnchor: setInlineAnchor,
     navigate: navigation,
   };
-  const commands = registry.commands(featureContext, route);
+  const commands = [
+    ...registry.commands(featureContext, route),
+    ...pluginsFeature.commandsFor(plugins),
+  ].sort(
+    (left, right) =>
+      left.order - right.order || left.id.localeCompare(right.id),
+  );
   return (
     <>
       <header className="app-bar">
@@ -138,10 +163,21 @@ function App(): ReactNode {
           selected={selected}
           navigate={navigation}
           onDiscovery={onDiscovery}
+          pluginNavigation={pluginsFeature.navigation(
+            plugins,
+            route,
+            navigation,
+          )}
         />
         <main id="content" className="content" tabIndex={-1}>
           <ErrorBoundary
-            key={`${route.kind}:${route.kind === "review" ? `${route.item.handle}:${route.panel}` : (route.repository?.handle ?? "all")}`}
+            key={`${route.kind}:${
+              route.kind === "review"
+                ? `${route.item.handle}:${route.panel}`
+                : route.kind === "plugin"
+                  ? `${route.pluginId}:${route.navigationId}:${route.moduleId}`
+                  : (route.repository?.handle ?? "all")
+            }`}
           >
             {feature.render(featureContext, route)}
           </ErrorBoundary>

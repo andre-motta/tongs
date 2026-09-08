@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parseLaunchArguments, SIDECAR_ARGUMENTS } from "../../../desktop/dist/src/main/launch.js";
-import { assertAuthorizedSender, assertHttpsExternalUrl, assertParams, assertResult, isAllowedAppUrl } from "../../../desktop/dist/src/main/security.js";
+import { assertAuthorizedSender, assertHttpsExternalUrl, assertParams, assertResult, CONTENT_SECURITY_POLICY, isAllowedAppUrl } from "../../../desktop/dist/src/main/security.js";
 
 test("launcher accepts only exact absolute interpreter and safe cwd", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tongs-launch-"));
@@ -66,6 +66,10 @@ test("navigation and external URL policy is scheme exact", () => {
   assert.equal(isAllowedAppUrl("tongs://app/index.html"), true); assert.equal(isAllowedAppUrl("https://app/index.html"), false);
   assert.equal(isAllowedAppUrl("tongs://evil/index.html"), false); assert.equal(assertHttpsExternalUrl("https://example.com/review"), "https://example.com/review");
   assert.throws(() => assertHttpsExternalUrl("http://example.com")); assert.throws(() => assertHttpsExternalUrl("https://token@example.com"));
+});
+test("plugin help CSP admits only the trusted application origin", () => {
+  assert.match(CONTENT_SECURITY_POLICY, /connect-src 'self'/); assert.doesNotMatch(CONTENT_SECURITY_POLICY, /connect-src https?:/);
+  assert.equal(isAllowedAppUrl("tongs://app/assets/opaque"), true); assert.equal(isAllowedAppUrl("https://app/assets/opaque"), false); assert.equal(isAllowedAppUrl("tongs://remote/assets/opaque"), false);
 });
 
 test("IPC sender must be the exact top-level authorized document", () => {

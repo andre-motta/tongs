@@ -174,8 +174,26 @@ installed_closure() {
         --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{from_repo}\n' \
         | sort >"$1"
 }
+dnf_transaction_options=(
+    --assumeyes
+    --setopt=install_weak_deps=False
+    --setopt=tsflags=
+)
 
 sentinel_snapshot preinstall
+{
+    printf '[base /etc/dnf/dnf.conf]\n'
+    if [[ -f /etc/dnf/dnf.conf ]]; then
+        cat /etc/dnf/dnf.conf
+    else
+        printf '(missing)\n'
+    fi
+    printf '[lifecycle transaction options]\n'
+    printf '%s\n' "${dnf_transaction_options[@]}"
+} >"$evidence_dir/dnf-lifecycle-policy.txt"
+grep -Fx -- '--setopt=install_weak_deps=False' \
+    "$evidence_dir/dnf-lifecycle-policy.txt"
+grep -Fx -- '--setopt=tsflags=' "$evidence_dir/dnf-lifecycle-policy.txt"
 dnf repolist --all >"$evidence_dir/install-repositories.txt"
 dnf repoquery --repo=tongs-final --available \
     --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{repoid}\n' \
@@ -199,12 +217,12 @@ for package in python3-tongs 'python3-tongs+mcp' tongs-desktop \
         | grep -Fxc "$package") -eq 1 ]]
 done
 
-dnf install --assumeyes --setopt=install_weak_deps=False \
+dnf install "${dnf_transaction_options[@]}" \
     appstream desktop-file-utils diffutils libcap xorg-x11-server-Xvfb \
     xorg-x11-xauth util-linux \
     2>&1 | tee "$evidence_dir/dnf-bootstrap.log"
 assert_sentinels after-bootstrap
-dnf install --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-final \
+dnf install "${dnf_transaction_options[@]}" --enablerepo=tongs-final \
     python3-tongs tongs-desktop tongs-desktop-test-plugin \
     2>&1 | tee "$evidence_dir/dnf-clean-install.log"
 assert_sentinels clean-install
@@ -307,7 +325,7 @@ printf 'This hosted Xvfb smoke proves launcher/runtime liveness only; it makes n
 
 snapshot before-mcp
 installed_closure "$evidence_dir/mcp-closure-before.txt"
-dnf install --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-final \
+dnf install "${dnf_transaction_options[@]}" --enablerepo=tongs-final \
     'python3-tongs+mcp' 2>&1 | tee "$evidence_dir/dnf-mcp-install.log"
 assert_sentinels mcp-install
 assert_final_state with-mcp yes
@@ -340,7 +358,7 @@ PY
     --package python3-tongs --package 'python3-tongs+mcp' \
     --package tongs-desktop --package tongs-desktop-test-plugin \
     --output "$evidence_dir/owned-path-inventory.json"
-dnf remove --assumeyes 'python3-tongs+mcp' \
+dnf remove "${dnf_transaction_options[@]}" 'python3-tongs+mcp' \
     2>&1 | tee "$evidence_dir/dnf-mcp-remove.log"
 assert_sentinels mcp-remove
 assert_final_state after-mcp-removal no
@@ -357,7 +375,7 @@ snapshot after-mcp-removal
 cmp "$evidence_dir/before-mcp.json" "$evidence_dir/after-mcp-removal.json"
 
 snapshot before-reinstall
-dnf reinstall --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-final \
+dnf reinstall "${dnf_transaction_options[@]}" --enablerepo=tongs-final \
     python3-tongs tongs-desktop tongs-desktop-test-plugin \
     2>&1 | tee "$evidence_dir/dnf-reinstall.log"
 assert_sentinels reinstall
@@ -365,7 +383,8 @@ assert_final_state after-reinstall no
 snapshot after-reinstall
 cmp "$evidence_dir/before-reinstall.json" "$evidence_dir/after-reinstall.json"
 
-dnf remove --assumeyes tongs-desktop-test-plugin tongs-desktop python3-tongs \
+dnf remove "${dnf_transaction_options[@]}" \
+    tongs-desktop-test-plugin tongs-desktop python3-tongs \
     2>&1 | tee "$evidence_dir/dnf-final-cycle-remove.log"
 assert_sentinels final-cycle-remove
 /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-installed \
@@ -374,7 +393,7 @@ assert_sentinels final-cycle-remove
     --output "$evidence_dir/final-cycle-remove-installed-state.json"
 snapshot after-final-cycle-remove
 
-dnf install --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-previous \
+dnf install "${dnf_transaction_options[@]}" --enablerepo=tongs-previous \
     python3-tongs tongs-desktop tongs-desktop-test-plugin \
     2>&1 | tee "$evidence_dir/dnf-previous-install.log"
 [[ $(rpm -q tongs-desktop --queryformat '%{VERSION}') == 0.4.9 ]]
@@ -396,7 +415,8 @@ PY
 set +e
 rpm -K "$corrupt_desktop" >"$evidence_dir/corrupt-rpm-check.log" 2>&1
 corrupt_check_status=$?
-dnf upgrade --assumeyes --disablerepo='*' "$final_core" "$corrupt_desktop" \
+dnf upgrade "${dnf_transaction_options[@]}" --disablerepo='*' \
+    "$final_core" "$corrupt_desktop" \
     >"$evidence_dir/dnf-corrupt-upgrade.log" 2>&1
 corrupt_upgrade_status=$?
 set -e
@@ -416,7 +436,7 @@ snapshot after-corrupt-failure
 cmp "$evidence_dir/installed-previous.json" "$evidence_dir/after-corrupt-failure.json"
 
 set +e
-dnf upgrade --assumeyes --disablerepo='*' "$final_desktop" \
+dnf upgrade "${dnf_transaction_options[@]}" --disablerepo='*' "$final_desktop" \
     >"$evidence_dir/dnf-failed-upgrade.log" 2>&1
 failed_upgrade_status=$?
 set -e
@@ -436,7 +456,7 @@ assert_previous_state after-dependency-failure
 snapshot after-dependency-failure
 cmp "$evidence_dir/installed-previous.json" "$evidence_dir/after-dependency-failure.json"
 
-dnf upgrade --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-final \
+dnf upgrade "${dnf_transaction_options[@]}" --enablerepo=tongs-final \
     python3-tongs tongs-desktop \
     2>&1 | tee "$evidence_dir/dnf-upgrade.log"
 [[ $(rpm -q tongs-desktop --queryformat '%{VERSION}') == 0.5.0 ]]
@@ -479,7 +499,8 @@ for package in "$final_core" "$final_mcp" "$final_desktop"; do
     done
 done
 
-dnf remove --assumeyes tongs-desktop-test-plugin tongs-desktop python3-tongs \
+dnf remove "${dnf_transaction_options[@]}" \
+    tongs-desktop-test-plugin tongs-desktop python3-tongs \
     2>&1 | tee "$evidence_dir/dnf-uninstall.log"
 assert_sentinels final-uninstall
 /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-absent \

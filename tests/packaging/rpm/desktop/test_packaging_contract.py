@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[4]
@@ -99,6 +100,14 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     )
     assert 'sha256sum "$evidence_dir/expected-companion-packages.txt"' in installer
     assert "diffutils" in installer
+    assert "dnf_transaction_options=(" in installer
+    assert "--setopt=tsflags=" in installer
+    assert "dnf-lifecycle-policy.txt" in installer
+    transactions = re.findall(
+        r"^dnf (?:install|reinstall|upgrade|remove) [^\n]+$", installer, re.MULTILINE
+    )
+    assert transactions
+    assert all('"${dnf_transaction_options[@]}"' in line for line in transactions)
 
 
 def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:

@@ -73,6 +73,19 @@ test("mounted app reconciles successful discovery without losing review work", a
   fireEvent.click(button("Discussions"));
   await waitFor(() => assert.ok(labelled("Add selected line to draft")));
   setValue(labelled("Add selected line to draft"), "unsent anchored composer");
+  const suggestionExplanation = "explanation for the original anchor";
+  const suggestionReplacement = "replacement for the original anchor";
+  await waitFor(() => assert.ok(labelled("Suggestion explanation")));
+  setValue(labelled("Suggestion explanation"), suggestionExplanation);
+  setValue(labelled("Suggestion replacement code"), suggestionReplacement);
+  assert.equal(
+    labelled("Suggestion explanation").value,
+    suggestionExplanation,
+  );
+  assert.equal(
+    labelled("Suggestion replacement code").value,
+    suggestionReplacement,
+  );
 
   const writesBeforeRemoval = fixture.writes.length;
   const readsBeforeRemoval = fixture.reviewReads.length;
@@ -92,6 +105,10 @@ test("mounted app reconciles successful discovery without losing review work", a
     ),
   );
   assert.equal(fixture.writes.length, writesBeforeRemoval);
+  assert.equal(labelled("Suggestion explanation"), undefined);
+  assert.equal(labelled("Suggestion replacement code"), undefined);
+  assert.equal(document.body.textContent.includes(suggestionExplanation), false);
+  assert.equal(document.body.textContent.includes(suggestionReplacement), false);
 
   fixture.discoveries.push([repositoryA("Repo A restored"), repositoryB()]);
   fireEvent.click(button("Refresh local repositories"));
@@ -110,6 +127,33 @@ test("mounted app reconciles successful discovery without losing review work", a
   assert.ok(document.body.textContent.includes("unsent anchored composer"));
   assert.ok(document.body.textContent.includes("Draft review active"));
   assert.equal(fixture.writes.length, writesBeforeRemoval);
+
+  fireEvent.click(button("Files changed"));
+  await waitFor(() =>
+    assert.ok(document.querySelector('.diff-unified .line-content[role="button"]')),
+  );
+  fireEvent.click(document.querySelector('button[aria-label="Select old line 1"]'));
+  fireEvent.click(button("Discussions"));
+  await waitFor(() => assert.equal(labelled("Suggestion explanation"), undefined));
+  assert.equal(document.body.textContent.includes(suggestionExplanation), false);
+  assert.equal(document.body.textContent.includes(suggestionReplacement), false);
+
+  fireEvent.click(button("Files changed"));
+  await waitFor(() =>
+    assert.ok(document.querySelector('.diff-unified .line-content[role="button"]')),
+  );
+  fireEvent.click(document.querySelector('.diff-unified .line-content[role="button"]'));
+  fireEvent.click(button("Discussions"));
+  await waitFor(() =>
+    assert.equal(
+      labelled("Suggestion explanation")?.value,
+      suggestionExplanation,
+    ),
+  );
+  assert.equal(
+    labelled("Suggestion replacement code")?.value,
+    suggestionReplacement,
+  );
 
   fireEvent.click(button("← Reviews"));
   fireEvent.click(await awaitButton("Repo A restored"));

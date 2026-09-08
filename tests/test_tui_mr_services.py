@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from textual.widgets import TextArea
 
 from tongs.app import TongsApp
 from tongs.cache.store import CacheStore
@@ -34,11 +35,17 @@ from tongs.forges.models import (
 )
 from tongs.plugins.registry import PluginRegistry
 from tongs.scanner.repo import ForgeType, Remote, Repo
-from tongs.services.review_mutations import MutationOutcome, MutationStatus
+from tongs.services.ci_mutations import CIMutationOutcome
+from tongs.services.mr_actions import MRActionOutcome
+from tongs.services.review_mutations import MutationStatus
 from tongs.services.session import ApplicationSession
 from tongs.views.mr_detail import MRDetailScreen
-from tongs.widgets.comment_editor import GeneralCommentSubmitted
-from tongs.widgets.pipeline_panel import PipelinePanel
+from tongs.widgets.comment_editor import (
+    CommentEditor,
+    GeneralCommentSubmitted,
+)
+from tongs.widgets.diff_panel import CommentRequested
+from tongs.widgets.pipeline_panel import PipelinePanel, RetryJobRequested
 
 NOW = datetime(2026, 9, 7, tzinfo=UTC)
 
@@ -86,6 +93,13 @@ class _Forge:
             "https://github.com/acme/widgets/actions/runs/101",
         )
         self.job = PipelineJob(201, "test", "verify", CIStatus.FAILED)
+        self.blocked_mutation: str | None = None
+        self.mutation_started = asyncio.Event()
+
+    async def _block_mutation(self, action: str) -> None:
+        if self.blocked_mutation == action:
+            self.mutation_started.set()
+            await asyncio.Event().wait()
 
     @property
     def supports_batched_review(self) -> bool:
@@ -167,6 +181,7 @@ class _Forge:
         self, repo_path: str, number: int, body: str
     ) -> ForgeMutationResult:
         self.calls.append(("comment", repo_path, number, body))
+        await self._block_mutation("comment")
         return ForgeMutationResult("remote-comment")
 
     async def create_inline_comment(
@@ -238,6 +253,7 @@ class _Forge:
 
     async def retry_job(self, repo_path: str, job_id: int) -> None:
         self.calls.append(("retry_job", repo_path, job_id))
+        await self._block_mutation("retry_job")
 
     async def cancel_job(self, repo_path: str, job_id: int) -> None:
         self.calls.append(("cancel_job", repo_path, job_id))
@@ -259,6 +275,7 @@ class _Forge:
         **kwargs: object,
     ) -> ForgeMergeResult:
         self.calls.append(("merge", repo_path, number, kwargs.get("head_sha")))
+        await self._block_mutation("merge")
         return ForgeMergeResult("remote-merge", "merge-sha")
 
     async def invalidate_review_reads(self, repo_path: str, number: int) -> bool:
@@ -337,17 +354,6 @@ async def test_actual_textual_mr_detail_uses_production_services(
         await _settle(app)
         assert ("comment", "acme/widgets", 7, "ship it") in forge.calls
 
-        app.clear_notifications()
-        assert not screen._review_mutation_succeeded(
-            MutationOutcome("unknown-1", MutationStatus.UNKNOWN, None), "Comment"
-        )
-        await pilot.pause()
-        assert any(
-            notification.message
-            == "Comment outcome is unknown. Refresh before acting again."
-            for notification in app._notifications
-        )
-
         await pilot.press("2")
         await _settle(app)
         await pilot.press("3")
@@ -363,7 +369,9 @@ async def test_actual_textual_mr_detail_uses_production_services(
         await _settle(app)
         screen._load_job_log(forge.job, forge.pipeline)
         await _settle(app)
-        screen._do_retry_job(forge.pipeline.id, forge.job.id)
+        screen.on_retry_job_requested(
+            RetryJobRequested(forge.pipeline.id, forge.job.id)
+        )
         await _settle(app)
 
         assert ("get_diff", "acme/widgets", 7) in forge.calls
@@ -373,6 +381,137 @@ async def test_actual_textual_mr_detail_uses_production_services(
         assert ("get_pipeline_jobs", "acme/widgets", 101) in forge.calls
         assert ("get_job_log", "acme/widgets", 201) in forge.calls
         assert ("retry_job", "acme/widgets", 201) in forge.calls
+
+
+@pytest.mark.asyncio
+async def test_inline_comment_keeps_the_revision_displayed_when_line_was_selected(
+    tmp_path: Path,
+) -> None:
+    app, forge = _app(tmp_path)
+
+    async with app.run_test(notifications=True) as pilot:
+        await _settle(app)
+        table = app.screen.query_one("#reviews-table")
+        table.focus()
+        await pilot.press("enter")
+        await _settle(app)
+        screen = cast(MRDetailScreen, app.screen)
+
+        await pilot.press("2")
+        await _settle(app)
+        assert screen._displayed_diff_revision is not None
+        assert screen._displayed_diff_revision.head_sha == "head-7"
+        assert screen._cached_diff_files
+        file = screen._cached_diff_files[0]
+        line = next(
+            item
+            for item in file.hunks[0].lines
+            if item.new_lineno == 1 and item.old_lineno is None
+        )
+        screen.on_comment_requested(CommentRequested(file=file, line=line))
+        assert screen._pending_inline_revision is not None
+        assert screen._pending_inline_revision.head_sha == "head-7"
+
+        forge.detail = replace(forge.detail, head_sha="head-8")
+        screen._load_detail()
+        await _settle(app)
+        editor = screen.query_one("#comment-editor", CommentEditor)
+        editor.query_one("#comment-input", TextArea).text = "selected on head-7"
+        editor.action_submit()
+        await _settle(app)
+
+        assert not any(call[0] == "inline" for call in forge.calls)
+        records = tuple(app.session.review_mutations._ledger.values())
+        assert len(records) == 1
+        command = records[0].command
+        assert command.revision.head_sha == "head-7"  # type: ignore[union-attr]
+        assert records[0].error is not None
+        assert "revision changed" in records[0].error.message.lower()
+        assert any(
+            "revision changed" in notification.message.lower()
+            for notification in app._notifications
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "worker_group", "remote_call"),
+    [
+        ("comment", "mr-comment-mutation", "comment"),
+        ("merge", "mr-action-mutation", "merge"),
+        ("retry_job", "mr-pipeline-mutation", "retry_job"),
+    ],
+)
+async def test_cancelled_screen_mutation_retains_one_identity_and_never_replays(
+    tmp_path: Path,
+    action: str,
+    worker_group: str,
+    remote_call: str,
+) -> None:
+    app, forge = _app(tmp_path)
+    forge.blocked_mutation = action
+
+    async with app.run_test(notifications=True) as pilot:
+        await _settle(app)
+        table = app.screen.query_one("#reviews-table")
+        table.focus()
+        await pilot.press("enter")
+        await _settle(app)
+        screen = cast(MRDetailScreen, app.screen)
+        app.clear_notifications()
+
+        def trigger() -> None:
+            if action == "comment":
+                screen.on_general_comment_submitted(
+                    GeneralCommentSubmitted("one user command")
+                )
+            elif action == "merge":
+                screen.action_merge()
+                screen.action_merge()
+            else:
+                screen.on_retry_job_requested(
+                    RetryJobRequested(forge.pipeline.id, forge.job.id)
+                )
+
+        trigger()
+        await asyncio.wait_for(forge.mutation_started.wait(), timeout=1)
+        cancelled = app.workers.cancel_group(screen, worker_group)
+        assert len(cancelled) == 1
+        await _settle(app)
+
+        if action == "comment":
+            records = app.session.review_mutations._ledger
+            record = next(iter(records.values()))
+            assert record.outcome is not None
+            assert record.outcome.status is MutationStatus.UNKNOWN
+            operation_id = record.command.operation_id
+        elif action == "merge":
+            records = app.session.mr_actions._operations
+            record = next(iter(records.values()))
+            assert record.receipt is not None
+            assert record.receipt.outcome is MRActionOutcome.UNKNOWN
+            operation_id = record.command.operation_id
+        else:
+            records = app.session.ci_mutations._operations
+            record = next(iter(records.values()))
+            assert record.receipt is not None
+            assert record.receipt.outcome is CIMutationOutcome.UNKNOWN
+            operation_id = record.receipt.operation_id
+
+        assert len(records) == 1
+        assert operation_id.startswith("tui:")
+        trigger()
+        await pilot.pause()
+
+        assert len(records) == 1
+        assert len([call for call in forge.calls if call[0] == remote_call]) == 1
+        messages = [notification.message for notification in app._notifications]
+        assert any("outcome is unknown" in message for message in messages)
+        assert not any(
+            success in message
+            for message in messages
+            for success in ("Comment posted", "Merged !", "Job retried")
+        )
 
 
 @pytest.mark.asyncio
@@ -399,6 +538,7 @@ async def test_adapter_keeps_quick_writes_revision_bound_and_immediate(
             summary,
             "inline quick comment",
             position_from_diff_line(diff.files[0], addition),
+            revision=diff.revision,
             operation_id="inline-1",
         )
         verdict = await app.services.approve(summary, operation_id="approve-1")

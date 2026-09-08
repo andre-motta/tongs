@@ -216,11 +216,11 @@ class TUIServiceAdapter:
         return self.session.events()
 
     async def post_general_comment(
-        self, summary: MRSummary, body: str, *, operation_id: str | None = None
+        self, summary: MRSummary, body: str, *, operation_id: str
     ) -> MutationOutcome:
         ref = self.review_ref(summary)
         return await self.session.review_mutations.execute(
-            GeneralComment(self._operation_id("comment", operation_id), ref, body)
+            GeneralComment(operation_id, ref, body)
         )
 
     async def post_inline_comment(
@@ -229,12 +229,12 @@ class TUIServiceAdapter:
         body: str,
         position: DiffPosition,
         *,
+        revision: ReviewRevision,
         start_line: int | None = None,
         start_side: str | None = None,
-        operation_id: str | None = None,
+        operation_id: str,
     ) -> MutationOutcome:
         ref = self.review_ref(summary)
-        revision = await self._revision(summary)
         side = DiffSide(position.side)
         line = position.new_line if side is DiffSide.RIGHT else position.old_line
         if line is None:
@@ -252,7 +252,7 @@ class TUIServiceAdapter:
         )
         return await self.session.review_mutations.execute(
             InlineComment(
-                self._operation_id("inline", operation_id),
+                operation_id,
                 ref,
                 revision,
                 anchor,
@@ -266,12 +266,12 @@ class TUIServiceAdapter:
         discussion_id: str,
         body: str,
         *,
-        operation_id: str | None = None,
+        operation_id: str,
     ) -> MutationOutcome:
         ref = self.review_ref(summary)
         return await self.session.review_mutations.execute(
             Reply(
-                self._operation_id("reply", operation_id),
+                operation_id,
                 ref,
                 await self._revision(summary),
                 discussion_id,
@@ -285,12 +285,12 @@ class TUIServiceAdapter:
         discussion_id: str,
         resolved: bool,
         *,
-        operation_id: str | None = None,
+        operation_id: str,
     ) -> MutationOutcome:
         ref = self.review_ref(summary)
         return await self.session.review_mutations.execute(
             Resolve(
-                self._operation_id("resolve", operation_id),
+                operation_id,
                 ref,
                 await self._revision(summary),
                 discussion_id,
@@ -299,12 +299,12 @@ class TUIServiceAdapter:
         )
 
     async def approve(
-        self, summary: MRSummary, *, operation_id: str | None = None
+        self, summary: MRSummary, *, operation_id: str
     ) -> MutationOutcome:
         ref = self.review_ref(summary)
         return await self.session.review_mutations.execute(
             ReviewVerdict(
-                self._operation_id("approve", operation_id),
+                operation_id,
                 ref,
                 await self._revision(summary),
                 ReviewDecision.APPROVED,
@@ -312,49 +312,41 @@ class TUIServiceAdapter:
         )
 
     async def unapprove(
-        self, summary: MRSummary, *, operation_id: str | None = None
+        self, summary: MRSummary, *, operation_id: str
     ) -> MRActionReceipt:
         target = await self._review_action_target(summary)
         return await self.session.mr_actions.execute(
-            UnapproveReviewCommand(
-                self._operation_id("unapprove", operation_id), target
-            )
+            UnapproveReviewCommand(operation_id, target)
         )
 
-    async def merge(
-        self, summary: MRSummary, *, operation_id: str | None = None
-    ) -> MRActionReceipt:
+    async def merge(self, summary: MRSummary, *, operation_id: str) -> MRActionReceipt:
         target = await self._review_action_target(summary)
         return await self.session.mr_actions.execute(
-            MergeReviewCommand(self._operation_id("merge", operation_id), target)
+            MergeReviewCommand(operation_id, target)
         )
 
     async def close_review(
-        self, summary: MRSummary, *, operation_id: str | None = None
+        self, summary: MRSummary, *, operation_id: str
     ) -> MRActionReceipt:
         target = await self._review_action_target(summary)
         return await self.session.mr_actions.execute(
-            CloseReviewCommand(self._operation_id("close", operation_id), target)
+            CloseReviewCommand(operation_id, target)
         )
 
     async def retry_pipeline(
-        self, summary: MRSummary, pipeline_id: int, *, operation_id: str | None = None
+        self, summary: MRSummary, pipeline_id: int, *, operation_id: str
     ) -> CIMutationReceipt:
         target = PipelineMutationTarget(self._pipeline_ref(summary, pipeline_id))
         return await self.session.ci_mutations.execute(
-            RetryPipelineCommand(
-                self._operation_id("retry-pipeline", operation_id), target
-            )
+            RetryPipelineCommand(operation_id, target)
         )
 
     async def cancel_pipeline(
-        self, summary: MRSummary, pipeline_id: int, *, operation_id: str | None = None
+        self, summary: MRSummary, pipeline_id: int, *, operation_id: str
     ) -> CIMutationReceipt:
         target = PipelineMutationTarget(self._pipeline_ref(summary, pipeline_id))
         return await self.session.ci_mutations.execute(
-            CancelPipelineCommand(
-                self._operation_id("cancel-pipeline", operation_id), target
-            )
+            CancelPipelineCommand(operation_id, target)
         )
 
     async def retry_job(
@@ -363,12 +355,12 @@ class TUIServiceAdapter:
         pipeline_id: int,
         job_id: int,
         *,
-        operation_id: str | None = None,
+        operation_id: str,
     ) -> CIMutationReceipt:
         pipeline = self._pipeline_ref(summary, pipeline_id)
         target = JobMutationTarget(pipeline, JobRef(pipeline.repository, job_id))
         return await self.session.ci_mutations.execute(
-            RetryJobCommand(self._operation_id("retry-job", operation_id), target)
+            RetryJobCommand(operation_id, target)
         )
 
     async def cancel_job(
@@ -377,12 +369,12 @@ class TUIServiceAdapter:
         pipeline_id: int,
         job_id: int,
         *,
-        operation_id: str | None = None,
+        operation_id: str,
     ) -> CIMutationReceipt:
         pipeline = self._pipeline_ref(summary, pipeline_id)
         target = JobMutationTarget(pipeline, JobRef(pipeline.repository, job_id))
         return await self.session.ci_mutations.execute(
-            CancelJobCommand(self._operation_id("cancel-job", operation_id), target)
+            CancelJobCommand(operation_id, target)
         )
 
     async def _review_action_target(self, summary: MRSummary) -> ReviewActionTarget:
@@ -410,8 +402,9 @@ class TUIServiceAdapter:
         return PipelineRef(self.review_ref(summary).repository, pipeline_id)
 
     @staticmethod
-    def _operation_id(action: str, supplied: str | None) -> str:
-        return supplied or f"tui:{action}:{uuid4().hex}"
+    def new_operation_id(action: str) -> str:
+        """Allocate one stable ID for a complete user command."""
+        return f"tui:{action}:{uuid4().hex}"
 
     async def _list_personal(self, scope: ReviewScope) -> ReviewPage:
         hostnames = tuple(

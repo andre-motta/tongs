@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import ClassVar
 
 from rich.markup import escape
@@ -15,6 +16,7 @@ from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
+from tongs.diff.position import DiffPosition
 from tongs.forges.models import (
     CIStatus,
     Discussion,
@@ -25,6 +27,7 @@ from tongs.forges.models import (
     PipelineJob,
 )
 from tongs.services.ci_mutations import CIMutationOutcome
+from tongs.services.models import ReviewRevision
 from tongs.services.mr_actions import MRActionOutcome
 from tongs.services.review_mutations import MutationOutcome, MutationStatus
 from tongs.tui_services import TUIDiffResult
@@ -75,6 +78,16 @@ def _ci_label(status: CIStatus) -> str:
         CIStatus.UNKNOWN: "[dim]unknown[/]",
     }
     return labels.get(status, "[dim]unknown[/]")
+
+
+@dataclass(slots=True)
+class _MutationIntent:
+    """One complete TUI command retained through a terminal outcome."""
+
+    operation_id: str
+    fingerprint: tuple[object, ...]
+    action: str
+    unknown: bool = False
 
 
 def _merge_readiness(mr: MRDetail) -> str:
@@ -160,6 +173,9 @@ class MRDetailScreen(Screen):
         self._discussions_loaded = False
         self._pipeline_loaded = False
         self._cached_diff_files: list | None = None
+        self._displayed_diff_revision: ReviewRevision | None = None
+        self._pending_inline_revision: ReviewRevision | None = None
+        self._mutation_intents: dict[tuple[object, ...], _MutationIntent] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -262,16 +278,18 @@ class MRDetailScreen(Screen):
     async def _load_diff(self) -> None:
         panel = self.query_one("#diff-panel", DiffPanel)
         content = panel.query_one("#diff-content")
+        self._displayed_diff_revision = None
         content.show_placeholder("Loading diff...")
         try:
             diff, discussions = await self._fetch_diff_and_discussions()
+            self._displayed_diff_revision = diff.revision
+            self._cached_diff_files = list(diff.files)
             if not diff.files:
                 content.show_placeholder("No changes in this MR")
                 return
-            files = list(diff.files)
-            self._cached_diff_files = files
-            panel.set_files(files, list(discussions))
+            panel.set_files(self._cached_diff_files, list(discussions))
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._displayed_diff_revision = None
             content.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
 
     async def _fetch_diff_and_discussions(
@@ -392,87 +410,137 @@ class MRDetailScreen(Screen):
             self.notify(f"Could not load job log: {exc}", severity="error")
 
     def on_cancel_pipeline_requested(self, event: CancelPipelineRequested) -> None:
-        self._do_cancel_pipeline(event.pipeline_id)
+        intent = self._begin_mutation("cancel-pipeline", "Cancel", event.pipeline_id)
+        if intent is not None:
+            self._do_cancel_pipeline(event.pipeline_id, intent)
 
-    @work(exclusive=True, group="mr-pipelines")
-    async def _do_cancel_pipeline(self, pipeline_id: int) -> None:
+    @work(group="mr-pipeline-mutation")
+    async def _do_cancel_pipeline(
+        self, pipeline_id: int, intent: _MutationIntent
+    ) -> None:
         try:
             receipt = await self.app.services.cancel_pipeline(
-                self.mr_summary, pipeline_id
+                self.mr_summary, pipeline_id, operation_id=intent.operation_id
             )
             if receipt.outcome is CIMutationOutcome.UNKNOWN:
+                self._retain_unknown(intent)
                 self.notify(
                     "Cancel outcome is unknown. Refresh before acting again.",
                     severity="warning",
                 )
                 self._pipeline_loaded = False
                 return
+            self._finish_mutation(intent)
             self.notify("[green]Pipeline cancelled[/]")
             self._pipeline_loaded = False
             self._on_tab_switch("pipeline")
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Cancel failed: {exc}", severity="error")
 
     def on_retry_pipeline_requested(self, event: RetryPipelineRequested) -> None:
-        self._do_retry_pipeline(event.pipeline_id)
+        intent = self._begin_mutation("retry-pipeline", "Retry", event.pipeline_id)
+        if intent is not None:
+            self._do_retry_pipeline(event.pipeline_id, intent)
 
-    @work(exclusive=True, group="mr-pipelines")
-    async def _do_retry_pipeline(self, pipeline_id: int) -> None:
+    @work(group="mr-pipeline-mutation")
+    async def _do_retry_pipeline(
+        self, pipeline_id: int, intent: _MutationIntent
+    ) -> None:
         try:
             receipt = await self.app.services.retry_pipeline(
-                self.mr_summary, pipeline_id
+                self.mr_summary, pipeline_id, operation_id=intent.operation_id
             )
             if receipt.outcome is CIMutationOutcome.UNKNOWN:
+                self._retain_unknown(intent)
                 self.notify(
                     "Retry outcome is unknown. Refresh before acting again.",
                     severity="warning",
                 )
                 self._pipeline_loaded = False
                 return
+            self._finish_mutation(intent)
             self.notify("[green]Pipeline retried[/]")
             self._pipeline_loaded = False
             self._on_tab_switch("pipeline")
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Retry failed: {exc}", severity="error")
 
     def on_cancel_job_requested(self, event: CancelJobRequested) -> None:
-        self._do_cancel_job(event.pipeline_id, event.job_id)
+        intent = self._begin_mutation(
+            "cancel-job", "Cancel job", event.pipeline_id, event.job_id
+        )
+        if intent is not None:
+            self._do_cancel_job(event.pipeline_id, event.job_id, intent)
 
-    @work(exclusive=True, group="mr-pipelines")
-    async def _do_cancel_job(self, pipeline_id: int, job_id: int) -> None:
+    @work(group="mr-pipeline-mutation")
+    async def _do_cancel_job(
+        self, pipeline_id: int, job_id: int, intent: _MutationIntent
+    ) -> None:
         try:
             receipt = await self.app.services.cancel_job(
-                self.mr_summary, pipeline_id, job_id
+                self.mr_summary,
+                pipeline_id,
+                job_id,
+                operation_id=intent.operation_id,
             )
             if receipt.outcome is CIMutationOutcome.UNKNOWN:
+                self._retain_unknown(intent)
                 self.notify(
                     "Cancel job outcome is unknown. Refresh before acting again.",
                     severity="warning",
                 )
                 self._pipeline_loaded = False
                 return
+            self._finish_mutation(intent)
             self.notify("[green]Job cancelled[/]")
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Cancel job failed: {exc}", severity="error")
 
     def on_retry_job_requested(self, event: RetryJobRequested) -> None:
-        self._do_retry_job(event.pipeline_id, event.job_id)
+        intent = self._begin_mutation(
+            "retry-job", "Retry job", event.pipeline_id, event.job_id
+        )
+        if intent is not None:
+            self._do_retry_job(event.pipeline_id, event.job_id, intent)
 
-    @work(exclusive=True, group="mr-pipelines")
-    async def _do_retry_job(self, pipeline_id: int, job_id: int) -> None:
+    @work(group="mr-pipeline-mutation")
+    async def _do_retry_job(
+        self, pipeline_id: int, job_id: int, intent: _MutationIntent
+    ) -> None:
         try:
             receipt = await self.app.services.retry_job(
-                self.mr_summary, pipeline_id, job_id
+                self.mr_summary,
+                pipeline_id,
+                job_id,
+                operation_id=intent.operation_id,
             )
             if receipt.outcome is CIMutationOutcome.UNKNOWN:
+                self._retain_unknown(intent)
                 self.notify(
                     "Retry job outcome is unknown. Refresh before acting again.",
                     severity="warning",
                 )
                 self._pipeline_loaded = False
                 return
+            self._finish_mutation(intent)
             self.notify("[green]Job retried[/]")
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Retry job failed: {exc}", severity="error")
 
     def on_discussion_reply_requested(self, event: DiscussionReplyRequested) -> None:
@@ -529,7 +597,9 @@ class MRDetailScreen(Screen):
             return
         if self._pending_action == "approve":
             self._pending_action = ""
-            self._do_approve()
+            intent = self._begin_mutation("approve", "Approval")
+            if intent is not None:
+                self._do_approve(intent)
         else:
             self._pending_action = "approve"
             self.notify(
@@ -542,7 +612,9 @@ class MRDetailScreen(Screen):
             return
         if self._pending_action == "unapprove":
             self._pending_action = ""
-            self._do_unapprove()
+            intent = self._begin_mutation("unapprove", "Unapprove")
+            if intent is not None:
+                self._do_unapprove(intent)
         else:
             self._pending_action = "unapprove"
             self.notify(
@@ -555,7 +627,9 @@ class MRDetailScreen(Screen):
             return
         if self._pending_action == "merge":
             self._pending_action = ""
-            self._do_merge()
+            intent = self._begin_mutation("merge", "Merge")
+            if intent is not None:
+                self._do_merge(intent)
         else:
             self._pending_action = "merge"
             self.notify(
@@ -569,7 +643,9 @@ class MRDetailScreen(Screen):
             return
         if self._pending_action == "close":
             self._pending_action = ""
-            self._do_close()
+            intent = self._begin_mutation("close", "Close")
+            if intent is not None:
+                self._do_close(intent)
         else:
             self._pending_action = "close"
             self.notify(
@@ -577,71 +653,103 @@ class MRDetailScreen(Screen):
                 severity="warning",
             )
 
-    @work(exclusive=True, group="mr-action")
-    async def _do_approve(self) -> None:
+    @work(group="mr-action-mutation")
+    async def _do_approve(self, intent: _MutationIntent) -> None:
         try:
-            outcome = await self.app.services.approve(self.mr_summary)
+            outcome = await self.app.services.approve(
+                self.mr_summary, operation_id=intent.operation_id
+            )
             if not self._review_mutation_succeeded(outcome, "Approval"):
+                self._retain_unknown(intent)
                 self._load_detail()
                 return
+            self._finish_mutation(intent)
             self.notify(
                 f"[green]Approved !{self.mr_summary.number}[/]",
                 severity="information",
             )
             self._action_taken = True
             self._load_detail()
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Approve failed: {exc}", severity="error")
 
-    @work(exclusive=True, group="mr-action")
-    async def _do_unapprove(self) -> None:
+    @work(group="mr-action-mutation")
+    async def _do_unapprove(self, intent: _MutationIntent) -> None:
         try:
-            receipt = await self.app.services.unapprove(self.mr_summary)
+            receipt = await self.app.services.unapprove(
+                self.mr_summary, operation_id=intent.operation_id
+            )
             if receipt.outcome is MRActionOutcome.UNKNOWN:
+                self._retain_unknown(intent)
                 self._notify_unknown("Unapprove")
                 self._load_detail()
                 return
+            self._finish_mutation(intent)
             self.notify(
                 f"[yellow]Approval revoked on !{self.mr_summary.number}[/]",
                 severity="information",
             )
             self._action_taken = True
             self._load_detail()
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Unapprove failed: {exc}", severity="error")
 
-    @work(exclusive=True, group="mr-action")
-    async def _do_merge(self) -> None:
+    @work(group="mr-action-mutation")
+    async def _do_merge(self, intent: _MutationIntent) -> None:
         try:
-            receipt = await self.app.services.merge(self.mr_summary)
+            receipt = await self.app.services.merge(
+                self.mr_summary, operation_id=intent.operation_id
+            )
             if receipt.outcome is MRActionOutcome.UNKNOWN:
+                self._retain_unknown(intent)
                 self._notify_unknown("Merge")
                 self._load_detail()
                 return
+            self._finish_mutation(intent)
             self.notify(
                 f"[green]Merged !{self.mr_summary.number}[/]",
                 severity="information",
             )
             self._action_taken = True
             self._load_detail()
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Merge failed: {exc}", severity="error")
 
-    @work(exclusive=True, group="mr-action")
-    async def _do_close(self) -> None:
+    @work(group="mr-action-mutation")
+    async def _do_close(self, intent: _MutationIntent) -> None:
         try:
-            receipt = await self.app.services.close_review(self.mr_summary)
+            receipt = await self.app.services.close_review(
+                self.mr_summary, operation_id=intent.operation_id
+            )
             if receipt.outcome is MRActionOutcome.UNKNOWN:
+                self._retain_unknown(intent)
                 self._notify_unknown("Close")
                 self._load_detail()
                 return
+            self._finish_mutation(intent)
             self.notify(
                 f"[yellow]Closed !{self.mr_summary.number}[/]",
                 severity="information",
             )
             self._action_taken = True
             self._load_detail()
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Close failed: {exc}", severity="error")
 
     def _review_mutation_succeeded(self, outcome: MutationOutcome, action: str) -> bool:
@@ -652,9 +760,42 @@ class MRDetailScreen(Screen):
 
     def _notify_unknown(self, action: str) -> None:
         self.notify(
-            f"{action} outcome is unknown. Refresh before acting again.",
+            f"{action} outcome is unknown. The command will not be retried in this view; "
+            "refresh remote state before taking another action.",
             severity="warning",
         )
+
+    def _begin_mutation(
+        self, operation: str, action: str, *identity: object
+    ) -> _MutationIntent | None:
+        """Reserve one operation identity before a Textual worker can run."""
+        fingerprint = (operation, *identity)
+        existing = self._mutation_intents.get(fingerprint)
+        if existing is not None:
+            if existing.unknown:
+                self._notify_unknown(action)
+            else:
+                self.notify(f"{action} is already in progress.", severity="warning")
+            return None
+        intent = _MutationIntent(
+            self.app.services.new_operation_id(operation), fingerprint, action
+        )
+        self._mutation_intents[fingerprint] = intent
+        return intent
+
+    def _finish_mutation(self, intent: _MutationIntent) -> None:
+        """Release an intent after a known result or safe pre-dispatch error."""
+        if self._mutation_intents.get(intent.fingerprint) is intent:
+            self._mutation_intents.pop(intent.fingerprint)
+
+    def _retain_unknown(self, intent: _MutationIntent) -> None:
+        """Keep an uncertain command identity so it cannot be replayed."""
+        intent.unknown = True
+
+    def _cancel_mutation(self, intent: _MutationIntent) -> None:
+        """Treat worker cancellation conservatively after service admission."""
+        self._retain_unknown(intent)
+        self._notify_unknown(intent.action)
 
     def on_comment_requested(self, event: CommentRequested) -> None:
         """Handle comment request from DiffPanel."""
@@ -663,8 +804,16 @@ class MRDetailScreen(Screen):
             return
         editor = self.query_one("#comment-editor", CommentEditor)
         if event.file and event.line:
+            if self._displayed_diff_revision is None:
+                self.notify(
+                    "The displayed diff revision is unavailable. Refresh before commenting.",
+                    severity="warning",
+                )
+                return
+            self._pending_inline_revision = self._displayed_diff_revision
             editor.open_inline(event.file, event.line)
         else:
+            self._pending_inline_revision = None
             editor.open_general()
 
     def _open_suggestion(self, event: CommentRequested) -> None:
@@ -674,6 +823,14 @@ class MRDetailScreen(Screen):
         import shutil
         import subprocess
         import tempfile
+
+        revision = self._displayed_diff_revision
+        if revision is None:
+            self.notify(
+                "The displayed diff revision is unavailable. Refresh before suggesting.",
+                severity="warning",
+            )
+            return
 
         editor_cmd = None
         for var in ("VISUAL", "EDITOR"):
@@ -732,8 +889,12 @@ class MRDetailScreen(Screen):
                 new_side_lines, forge_type
             )
             position = position_from_diff_line(event.file, pos_line)
-            self._post_inline_comment(
-                body, position, start_line=start_line, start_side=start_side
+            self._start_inline_comment(
+                body,
+                position,
+                revision,
+                start_line=start_line,
+                start_side=start_side,
             )
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self.notify(f"Suggestion failed: {exc}", severity="error")
@@ -744,11 +905,21 @@ class MRDetailScreen(Screen):
 
     def on_comment_submitted(self, event: CommentSubmitted) -> None:
         """Handle inline comment submission from CommentEditor."""
-        self._post_inline_comment(event.body, event.position)
+        revision = self._pending_inline_revision
+        self._pending_inline_revision = None
+        if revision is None:
+            self.notify(
+                "The displayed diff revision is unavailable. Refresh before commenting.",
+                severity="warning",
+            )
+            return
+        self._start_inline_comment(event.body, event.position, revision)
 
     def on_general_comment_submitted(self, event: GeneralCommentSubmitted) -> None:
         """Handle general MR comment submission."""
-        self._post_general_comment(event.body)
+        intent = self._begin_mutation("comment", "Comment", event.body)
+        if intent is not None:
+            self._post_general_comment(event.body, intent)
 
     def on_reply_requested(self, event: ReplyRequested) -> None:
         """Open reply editor for an existing discussion thread."""
@@ -757,63 +928,128 @@ class MRDetailScreen(Screen):
 
     def on_reply_submitted(self, event: ReplySubmitted) -> None:
         """Post a reply to an existing discussion thread."""
-        self._post_reply(event.discussion_id, event.body)
+        intent = self._begin_mutation("reply", "Reply", event.discussion_id, event.body)
+        if intent is not None:
+            self._post_reply(event.discussion_id, event.body, intent)
 
     def on_resolve_requested(self, event: ResolveRequested) -> None:
         """Resolve or unresolve a discussion thread."""
-        self._resolve_thread(event.discussion_id, event.resolved)
+        action = "Resolve" if event.resolved else "Reopen"
+        intent = self._begin_mutation(
+            "resolve", action, event.discussion_id, event.resolved
+        )
+        if intent is not None:
+            self._resolve_thread(event.discussion_id, event.resolved, intent)
 
-    @work(exclusive=True, group="mr-comment")
-    async def _post_reply(self, discussion_id: str, body: str) -> None:
+    @work(group="mr-comment-mutation")
+    async def _post_reply(
+        self, discussion_id: str, body: str, intent: _MutationIntent
+    ) -> None:
         try:
             outcome = await self.app.services.post_reply(
-                self.mr_summary, discussion_id, body
+                self.mr_summary,
+                discussion_id,
+                body,
+                operation_id=intent.operation_id,
             )
             if not self._review_mutation_succeeded(outcome, "Reply"):
+                self._retain_unknown(intent)
                 self._diff_loaded = False
                 self._discussions_loaded = False
                 return
+            self._finish_mutation(intent)
             self.notify("[green]Reply posted[/]", severity="information")
             self._diff_loaded = False
             self._discussions_loaded = False
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Failed to post reply: {exc}", severity="error")
 
-    @work(exclusive=True, group="mr-comment")
-    async def _resolve_thread(self, discussion_id: str, resolved: bool) -> None:
+    @work(group="mr-comment-mutation")
+    async def _resolve_thread(
+        self, discussion_id: str, resolved: bool, intent: _MutationIntent
+    ) -> None:
         try:
             outcome = await self.app.services.resolve_discussion(
-                self.mr_summary, discussion_id, resolved
+                self.mr_summary,
+                discussion_id,
+                resolved,
+                operation_id=intent.operation_id,
             )
             action = "Resolve" if resolved else "Reopen"
             if not self._review_mutation_succeeded(outcome, action):
+                self._retain_unknown(intent)
                 self._diff_loaded = False
                 self._discussions_loaded = False
                 return
+            self._finish_mutation(intent)
             action = "Resolved" if resolved else "Reopened"
             self.notify(f"[green]{action} thread[/]", severity="information")
             self._diff_loaded = False
             self._discussions_loaded = False
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Failed to resolve thread: {exc}", severity="error")
 
-    @work(exclusive=True, group="mr-comment")
-    async def _post_general_comment(self, body: str) -> None:
+    @work(group="mr-comment-mutation")
+    async def _post_general_comment(self, body: str, intent: _MutationIntent) -> None:
         try:
             outcome = await self.app.services.post_general_comment(
-                self.mr_summary, body
+                self.mr_summary, body, operation_id=intent.operation_id
             )
             if not self._review_mutation_succeeded(outcome, "Comment"):
+                self._retain_unknown(intent)
                 return
+            self._finish_mutation(intent)
             self.notify("[green]Comment posted[/]", severity="information")
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Failed to post comment: {exc}", severity="error")
 
-    @work(exclusive=True, group="mr-comment")
+    def _start_inline_comment(
+        self,
+        body: str,
+        position: DiffPosition,
+        revision: ReviewRevision,
+        *,
+        start_line: int | None = None,
+        start_side: str | None = None,
+    ) -> None:
+        intent = self._begin_mutation(
+            "inline",
+            "Comment",
+            body,
+            position,
+            revision,
+            start_line,
+            start_side,
+        )
+        if intent is not None:
+            self._post_inline_comment(
+                body,
+                position,
+                revision,
+                intent,
+                start_line=start_line,
+                start_side=start_side,
+            )
+
+    @work(group="mr-comment-mutation")
     async def _post_inline_comment(
         self,
         body: str,
-        position,
+        position: DiffPosition,
+        revision: ReviewRevision,
+        intent: _MutationIntent,
         start_line: int | None = None,
         start_side: str | None = None,
     ) -> None:
@@ -822,15 +1058,23 @@ class MRDetailScreen(Screen):
                 self.mr_summary,
                 body,
                 position,
+                revision=revision,
                 start_line=start_line,
                 start_side=start_side,
+                operation_id=intent.operation_id,
             )
             if not self._review_mutation_succeeded(outcome, "Comment"):
+                self._retain_unknown(intent)
                 self._diff_loaded = False
                 self._discussions_loaded = False
                 return
+            self._finish_mutation(intent)
             self.notify("[green]Comment posted[/]", severity="information")
+        except asyncio.CancelledError:
+            self._cancel_mutation(intent)
+            raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
+            self._finish_mutation(intent)
             self.notify(f"Failed to post comment: {exc}", severity="error")
 
     def action_refresh(self) -> None:
@@ -839,4 +1083,5 @@ class MRDetailScreen(Screen):
         self._discussions_loaded = False
         self._pipeline_loaded = False
         self._cached_diff_files = None
+        self._displayed_diff_revision = None
         self._load_detail()

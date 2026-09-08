@@ -16,6 +16,34 @@ import type {
   JobMutationParams,
   PipelineMutationParams,
 } from "../shared/ci.js";
+import type {
+  ActionReceiptParams,
+  AttemptParams,
+  CreateDraftParams,
+  DiscardDraftParams,
+  DraftListResult,
+  DraftSnapshotDto,
+  GeneralCommentParams,
+  InlineCommentParams,
+  ListDraftsParams,
+  ListSubmissionsParams,
+  MergeParams,
+  MutationOutcomeDto,
+  ReconcileSubmissionParams,
+  ReplyParams,
+  ResolveParams,
+  ReviewActionCapabilitiesDto,
+  ReviewActionReceiptDto,
+  ReviewCapabilitiesResult,
+  ReviewMutationCapabilitiesDto,
+  ReviewMutationIPCResult,
+  RevisionOperationParams,
+  SaveDraftParams,
+  StartSubmissionParams,
+  SubmissionListResult,
+  SubmissionProgressDto,
+  VerdictParams,
+} from "../shared/review.js";
 
 const IPC_CHANNELS = Object.freeze({
   discoverRepositories: "tongs:repositories.discover", openRepository: "tongs:repositories.open", listReviews: "tongs:reviews.list", getReview: "tongs:reviews.get",
@@ -32,6 +60,30 @@ const CI_IPC_CHANNELS = Object.freeze({
   cancelJob: "tongs:jobs.cancel",
   receipt: "tongs:ci.receipt",
 } as const);
+const REVIEW_IPC_CHANNELS = Object.freeze({
+  mutationCapabilities: "tongs:review-mutations.capabilities",
+  comment: "tongs:review-mutations.comment",
+  inlineComment: "tongs:review-mutations.inline-comment",
+  reply: "tongs:review-mutations.reply",
+  resolve: "tongs:review-mutations.resolve",
+  verdict: "tongs:review-mutations.verdict",
+  actionCapabilities: "tongs:review-actions.capabilities",
+  merge: "tongs:review-actions.merge",
+  close: "tongs:review-actions.close",
+  reopen: "tongs:review-actions.reopen",
+  unapprove: "tongs:review-actions.unapprove",
+  actionReceipt: "tongs:review-actions.receipt",
+  createDraft: "tongs:review-drafts.create",
+  getDraft: "tongs:review-drafts.get",
+  listDrafts: "tongs:review-drafts.list",
+  saveDraft: "tongs:review-drafts.save",
+  discardDraft: "tongs:review-drafts.discard",
+  startSubmission: "tongs:review-submissions.start",
+  getSubmission: "tongs:review-submissions.status",
+  listSubmissions: "tongs:review-submissions.list",
+  resumeSubmission: "tongs:review-submissions.resume",
+  reconcileSubmission: "tongs:review-submissions.reconcile",
+} as const);
 
 const owned = new Set<string>();
 function read<T>(channel: string, params: object): DesktopRead<T> {
@@ -47,6 +99,14 @@ async function mutate(
   const value = (await ipcRenderer.invoke(channel, params)) as CIMutationIPCResult;
   if (value.error !== null) throw value.error;
   return value.receipt;
+}
+async function mutateReview<T>(channel: string, params: object): Promise<T> {
+  const value = (await ipcRenderer.invoke(
+    channel,
+    params,
+  )) as ReviewMutationIPCResult<T>;
+  if (value.error !== null) throw value.error;
+  return value.result;
 }
 const bridge: DesktopBridge = Object.freeze({
   discoverRepositories: (): DesktopRead<RepositoryListResult> => read(IPC_CHANNELS.discoverRepositories, {}),
@@ -68,6 +128,28 @@ const bridge: DesktopBridge = Object.freeze({
   retryJob: (params: JobMutationParams): Promise<CIMutationReceipt> => mutate(CI_IPC_CHANNELS.retryJob, params),
   cancelJob: (params: JobMutationParams): Promise<CIMutationReceipt> => mutate(CI_IPC_CHANNELS.cancelJob, params),
   getCIReceipt: (params: CIReceiptParams): DesktopRead<CIReceiptResult> => read(CI_IPC_CHANNELS.receipt, params),
+  getReviewMutationCapabilities: (review: string): DesktopRead<ReviewCapabilitiesResult<ReviewMutationCapabilitiesDto>> => read(REVIEW_IPC_CHANNELS.mutationCapabilities, { review }),
+  postReviewComment: (params: GeneralCommentParams): Promise<MutationOutcomeDto> => mutateReview(REVIEW_IPC_CHANNELS.comment, params),
+  postInlineReviewComment: (params: InlineCommentParams): Promise<MutationOutcomeDto> => mutateReview(REVIEW_IPC_CHANNELS.inlineComment, params),
+  replyReviewDiscussion: (params: ReplyParams): Promise<MutationOutcomeDto> => mutateReview(REVIEW_IPC_CHANNELS.reply, params),
+  resolveReviewDiscussion: (params: ResolveParams): Promise<MutationOutcomeDto> => mutateReview(REVIEW_IPC_CHANNELS.resolve, params),
+  submitReviewVerdict: (params: VerdictParams): Promise<MutationOutcomeDto> => mutateReview(REVIEW_IPC_CHANNELS.verdict, params),
+  getReviewActionCapabilities: (review: string): DesktopRead<ReviewCapabilitiesResult<ReviewActionCapabilitiesDto>> => read(REVIEW_IPC_CHANNELS.actionCapabilities, { review }),
+  mergeReview: (params: MergeParams): Promise<ReviewActionReceiptDto> => mutateReview(REVIEW_IPC_CHANNELS.merge, params),
+  closeReview: (params: RevisionOperationParams): Promise<ReviewActionReceiptDto> => mutateReview(REVIEW_IPC_CHANNELS.close, params),
+  reopenReview: (params: RevisionOperationParams): Promise<ReviewActionReceiptDto> => mutateReview(REVIEW_IPC_CHANNELS.reopen, params),
+  unapproveReview: (params: RevisionOperationParams): Promise<ReviewActionReceiptDto> => mutateReview(REVIEW_IPC_CHANNELS.unapprove, params),
+  getReviewActionReceipt: (params: ActionReceiptParams): DesktopRead<{ readonly receipt: ReviewActionReceiptDto | null }> => read(REVIEW_IPC_CHANNELS.actionReceipt, params),
+  createReviewDraft: (params: CreateDraftParams): Promise<DraftSnapshotDto> => mutateReview(REVIEW_IPC_CHANNELS.createDraft, params),
+  getReviewDraft: (params: { readonly review: string; readonly draft_id: string }): DesktopRead<DraftSnapshotDto> => read(REVIEW_IPC_CHANNELS.getDraft, params),
+  listReviewDrafts: (params: ListDraftsParams): DesktopRead<DraftListResult> => read(REVIEW_IPC_CHANNELS.listDrafts, params),
+  saveReviewDraft: (params: SaveDraftParams): Promise<DraftSnapshotDto> => mutateReview(REVIEW_IPC_CHANNELS.saveDraft, params),
+  discardReviewDraft: (params: DiscardDraftParams): Promise<{ readonly discarded: DraftSnapshotDto }> => mutateReview(REVIEW_IPC_CHANNELS.discardDraft, params),
+  startReviewSubmission: (params: StartSubmissionParams): Promise<SubmissionProgressDto> => mutateReview(REVIEW_IPC_CHANNELS.startSubmission, params),
+  getReviewSubmission: (params: AttemptParams): DesktopRead<SubmissionProgressDto> => read(REVIEW_IPC_CHANNELS.getSubmission, params),
+  listReviewSubmissions: (params: ListSubmissionsParams): DesktopRead<SubmissionListResult> => read(REVIEW_IPC_CHANNELS.listSubmissions, params),
+  resumeReviewSubmission: (params: AttemptParams): Promise<SubmissionProgressDto> => mutateReview(REVIEW_IPC_CHANNELS.resumeSubmission, params),
+  reconcileReviewSubmission: (params: ReconcileSubmissionParams): Promise<SubmissionProgressDto> => mutateReview(REVIEW_IPC_CHANNELS.reconcileSubmission, params),
   listPlugins: (): DesktopRead<PluginsResult> => read(IPC_CHANNELS.listPlugins, {}),
   invokePlugin: (params: InvokePluginParams): DesktopRead<PluginResult> => read(IPC_CHANNELS.invokePlugin, params),
   setLocation: async (params: LocationParams): Promise<AcceptedResult> => ipcRenderer.invoke(IPC_CHANNELS.setLocation, params) as Promise<AcceptedResult>,

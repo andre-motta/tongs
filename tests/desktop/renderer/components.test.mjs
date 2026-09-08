@@ -188,6 +188,8 @@ test("diff anchor selection keeps full immutable identity across layouts", async
     oldLine: null,
     newLine: 1,
     lineType: "addition",
+    contextLines: ["from typing import TYPE_CHECKING"],
+    contextComplete: true,
   });
   fireEvent.click(view.getByText("Split"));
   await waitFor(() =>

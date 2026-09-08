@@ -1,0 +1,327 @@
+name: Unpublished desktop candidate attestation
+
+on:
+  pull_request:
+    branches: [feat/desktop-app]
+    paths:
+      - .github/workflows/release-desktop.yml
+      - tests/integration/desktop/candidate_attestation.py
+      - tests/integration/desktop/test_candidate_attestation.py
+      - src/tongs/desktop/artifact_contract/**
+      - src/tongs/desktop/installer/**
+  push:
+    branches:
+      - feat/desktop-120-candidate-attestation
+      - feat/desktop-app
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  SIGSTORE_VERSION: "4.5.0"
+
+jobs:
+  no-signing-validation:
+    name: Candidate harness and unchanged installer policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      TONGS_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out exact validation source without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.TONGS_SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Require the exact validation source
+        run: test "$(git rev-parse HEAD)" = "$TONGS_SOURCE_SHA"
+      - name: Initialize an isolated validation environment
+        run: |
+          "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/tongs-candidate-venv"
+          printf 'CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
+      - name: Install the source-built verifier and test dependencies
+        run: >-
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
+          --disable-pip-version-check
+          -e ".[dev]"
+          "sigstore==${SIGSTORE_VERSION}"
+      - name: Require the isolated source-bound validation environment
+        run: |
+          "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
+          import importlib.metadata
+          import json
+          import site
+          import sys
+          from pathlib import Path
+
+          import tongs
+
+          expected_prefix = Path(sys.argv[1])
+          workspace = Path(sys.argv[2]).resolve()
+          tongs_path = Path(tongs.__file__).resolve()
+          assert Path(sys.executable) == expected_prefix / "bin/python"
+          assert Path(sys.prefix) == expected_prefix
+          assert site.ENABLE_USER_SITE is False
+          assert not [path for path in sys.path if "/.local/" in path or "dist-packages" in path]
+          assert tongs_path.is_relative_to(workspace)
+          assert importlib.metadata.version("sigstore") == "4.5.0"
+          print(json.dumps({"executable": sys.executable, "prefix": sys.prefix, "sys_path": sys.path, "tongs": str(tongs_path)}, sort_keys=True))
+          PY
+      - name: Exercise candidate harness and existing downgrade policy
+        run: >-
+          "$CANDIDATE_PYTHON" -I -m pytest -q
+          tests/integration/desktop/test_candidate_attestation.py
+          tests/desktop/installer/test_metadata.py
+          tests/desktop/installer/test_sigstore_fixture.py
+          tests/desktop/installer/test_extract.py::test_explicit_verified_downgrade_never_lowers_watermark
+          tests/desktop/installer/test_extract.py::test_implicit_downgrade_and_equal_identity_conflict_are_blocked
+
+  candidate-archive:
+    name: Build exact candidate archive without signing credentials
+    if: >-
+      github.repository == 'andre-motta/tongs' &&
+      github.repository_id == '1305350434' &&
+      github.repository_owner_id == '30708955' &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
+       github.ref == 'refs/heads/feat/desktop-app')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      source-tree: ${{ steps.source.outputs.tree }}
+    steps:
+      - name: Check out the exact candidate without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Initialize runner-scoped candidate paths
+        run: |
+          printf 'CANDIDATE_ROOT=%s/tongs-desktop-candidate\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'CANDIDATE_SOURCE_ARCHIVE=%s/candidate-source.tar\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Bind the candidate source commit and tree
+        id: source
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "andre-motta/tongs"
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          tree=$(git rev-parse 'HEAD^{tree}')
+          printf 'tree=%s\n' "$tree" >> "$GITHUB_OUTPUT"
+          git archive --format=tar --output="$CANDIDATE_SOURCE_ARCHIVE" "$GITHUB_SHA"
+      - name: Record the hosted producer environment
+        run: |
+          uname -a
+          podman version
+          "python${PYTHON_VERSION}" --version
+      - name: Build the real archive twice with the pinned producer
+        env:
+          TONGS_HEAD_SHA: ${{ github.sha }}
+        run: >-
+          packaging/desktop/archive/run_hosted.sh
+          --source-root "$GITHUB_WORKSPACE"
+          --output-dir "$CANDIDATE_ROOT"
+      - name: Initialize an isolated transfer validation environment
+        run: |
+          "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/tongs-candidate-venv"
+          printf 'CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
+      - name: Install source-built transfer validation dependencies
+        run: >-
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
+          --disable-pip-version-check
+          -e .
+          "sigstore==${SIGSTORE_VERSION}"
+      - name: Require the isolated source-bound transfer environment
+        run: |
+          "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
+          import importlib.metadata
+          import json
+          import site
+          import sys
+          from pathlib import Path
+
+          import tongs
+
+          expected_prefix = Path(sys.argv[1])
+          workspace = Path(sys.argv[2]).resolve()
+          tongs_path = Path(tongs.__file__).resolve()
+          assert Path(sys.executable) == expected_prefix / "bin/python"
+          assert Path(sys.prefix) == expected_prefix
+          assert site.ENABLE_USER_SITE is False
+          assert not [path for path in sys.path if "/.local/" in path or "dist-packages" in path]
+          assert tongs_path.is_relative_to(workspace)
+          assert importlib.metadata.version("sigstore") == "4.5.0"
+          print(json.dumps({"executable": sys.executable, "prefix": sys.prefix, "sys_path": sys.path, "tongs": str(tongs_path)}, sort_keys=True))
+          PY
+      - name: Freeze the complete source-bound producer output
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/candidate_attestation.py prepare-transfer
+          --root "$CANDIDATE_ROOT"
+          --source-archive "$CANDIDATE_SOURCE_ARCHIVE"
+          --repository "$GITHUB_REPOSITORY"
+          --repository-id "$GITHUB_REPOSITORY_ID"
+          --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID"
+          --ref "$GITHUB_REF"
+          --source-commit "$GITHUB_SHA"
+          --source-tree "${{ steps.source.outputs.tree }}"
+          --event "$GITHUB_EVENT_NAME"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Upload immutable candidate producer output
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-candidate-input-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tongs-desktop-candidate
+          if-no-files-found: error
+          retention-days: 14
+
+  candidate-attestation:
+    name: Attest and verify the exact unpublished candidate
+    needs: [no-signing-validation, candidate-archive]
+    if: >-
+      needs.no-signing-validation.result == 'success' &&
+      needs.candidate-archive.result == 'success' &&
+      github.repository == 'andre-motta/tongs' &&
+      github.repository_id == '1305350434' &&
+      github.repository_owner_id == '30708955' &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
+       github.ref == 'refs/heads/feat/desktop-app')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the exact verifier without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Initialize runner-scoped candidate paths
+        run: |
+          printf 'CANDIDATE_ROOT=%s/tongs-desktop-candidate\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'CANDIDATE_SOURCE_ARCHIVE=%s/candidate-source.tar\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/tongs-candidate-venv"
+          printf 'CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
+      - name: Require the exact signing source and immutable transfer identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "${{ needs.candidate-archive.outputs.source-tree }}"
+          test -n "${{ needs.candidate-archive.outputs.artifact-id }}"
+          test "${{ needs.candidate-archive.outputs.artifact-digest }}" != ""
+          git archive --format=tar --output="$CANDIDATE_SOURCE_ARCHIVE" "$GITHUB_SHA"
+      - name: Download only this run's immutable producer artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-candidate-input-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tongs-desktop-candidate
+      - name: Install Sigstore 4.5 and the source-built verifier
+        run: >-
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
+          --disable-pip-version-check
+          -e .
+          "sigstore==${SIGSTORE_VERSION}"
+      - name: Require the isolated source-bound signing environment
+        run: |
+          "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
+          import importlib.metadata
+          import json
+          import site
+          import sys
+          from pathlib import Path
+
+          import tongs
+
+          expected_prefix = Path(sys.argv[1])
+          workspace = Path(sys.argv[2]).resolve()
+          tongs_path = Path(tongs.__file__).resolve()
+          assert Path(sys.executable) == expected_prefix / "bin/python"
+          assert Path(sys.prefix) == expected_prefix
+          assert site.ENABLE_USER_SITE is False
+          assert not [path for path in sys.path if "/.local/" in path or "dist-packages" in path]
+          assert tongs_path.is_relative_to(workspace)
+          assert importlib.metadata.version("sigstore") == "4.5.0"
+          print(json.dumps({"executable": sys.executable, "prefix": sys.prefix, "sys_path": sys.path, "tongs": str(tongs_path)}, sort_keys=True))
+          PY
+      - name: Verify downloaded paths, bytes, source, and producer contracts
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/candidate_attestation.py validate-transfer
+          --root "$CANDIDATE_ROOT"
+          --source-archive "$CANDIDATE_SOURCE_ARCHIVE"
+          --repository "$GITHUB_REPOSITORY"
+          --repository-id "$GITHUB_REPOSITORY_ID"
+          --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID"
+          --ref "$GITHUB_REF"
+          --source-commit "$GITHUB_SHA"
+          --source-tree "${{ needs.candidate-archive.outputs.source-tree }}"
+          --event "$GITHUB_EVENT_NAME"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Attest the real manifest and archive with GitHub-managed Sigstore
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4 reviewed source
+        with:
+          subject-path: |
+            ${{ runner.temp }}/tongs-desktop-candidate/archive/desktop-manifest-v1.json
+            ${{ runner.temp }}/tongs-desktop-candidate/archive/tongs-desktop-0.5.0-fedora44-x86_64.tar.gz
+          push-to-registry: false
+          create-storage-record: false
+          show-summary: false
+      - name: Verify real signature, candidate identity, subjects, and negatives
+        env:
+          CANDIDATE_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/candidate_attestation.py verify
+          --root "$CANDIDATE_ROOT"
+          --bundle "$CANDIDATE_BUNDLE"
+          --report-root "$CANDIDATE_ROOT/attestation-evidence"
+          --repository "$GITHUB_REPOSITORY"
+          --repository-id "$GITHUB_REPOSITORY_ID"
+          --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID"
+          --ref "$GITHUB_REF"
+          --source-commit "$GITHUB_SHA"
+          --source-tree "${{ needs.candidate-archive.outputs.source-tree }}"
+          --event "$GITHUB_EVENT_NAME"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Retain the actual bundle and runtime versions
+        if: ${{ always() && steps.attest.outputs.bundle-path != '' }}
+        env:
+          CANDIDATE_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$CANDIDATE_ROOT/attestation-evidence"
+          cp "$CANDIDATE_BUNDLE" "$CANDIDATE_ROOT/attestation-evidence/candidate-attestation.sigstore.json"
+          "$CANDIDATE_PYTHON" -I --version > "$CANDIDATE_ROOT/attestation-evidence/python-version.txt"
+          "$CANDIDATE_PYTHON" -I -m pip freeze --all > "$CANDIDATE_ROOT/attestation-evidence/python-packages.txt"
+      - name: Upload bounded candidate attestation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-candidate-attestation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tongs-desktop-candidate
+          if-no-files-found: error
+          retention-days: 14

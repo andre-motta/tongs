@@ -50,6 +50,30 @@ async def _open_detail(app, pilot) -> MRDetailScreen:
     return cast(MRDetailScreen, app.screen)
 
 
+async def _wait_for_verdict_submission(app, screen: MRDetailScreen, forge) -> None:
+    """Wait for the submission worker itself, not only the forge call it makes.
+
+    The forge verdict call lands early, inside ``start_draft_submission``, so a
+    barrier that watches ``forge.calls`` alone can return while
+    ``_do_submit_review_draft`` is still suspended. Ending the ``run_test`` block
+    then cancels that worker, and its ``except asyncio.CancelledError`` handler
+    awaits ``_recover_submission_state`` on the already unmounted screen, which
+    reaches ``_refresh_draft_ui`` through ``_replace_review_draft`` and
+    ``_select_review_draft`` and fails the ``#review-draft-bar`` query.
+
+    ``MRDetailScreen._draft_busy`` is set synchronously before the worker starts
+    and is cleared in its ``finally`` after the last ``await``, so requiring both
+    conditions waits for the worker to complete. That covers the cancellation
+    path above and the ``finally`` path alike.
+    """
+    await _wait_until(
+        app,
+        lambda: (
+            any(call[0] == "verdict" for call in forge.calls) and not screen._draft_busy
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_review_mode_persists_locally_and_recovers_after_restart(
     tmp_path: Path,
@@ -224,9 +248,7 @@ async def test_submit_conflict_reopens_exact_requested_summary_and_verdict(
         )
 
         await pilot.press("ctrl+s")
-        await _wait_until(
-            app, lambda: any(call[0] == "verdict" for call in forge.calls)
-        )
+        await _wait_for_verdict_submission(app, screen, forge)
         verdict = next(call for call in forge.calls if call[0] == "verdict")
         assert verdict[3] is ReviewDecision.CHANGES_REQUESTED
         assert forge.verdict_bodies == [requested_summary]
@@ -333,9 +355,7 @@ async def test_submit_dialog_uses_shared_native_review_and_exact_frozen_version(
         await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
         await pilot.press("v")
         await pilot.press("ctrl+s")
-        await _wait_until(
-            app, lambda: any(call[0] == "verdict" for call in forge.calls)
-        )
+        await _wait_for_verdict_submission(app, screen, forge)
 
         verdict_call = next(call for call in forge.calls if call[0] == "verdict")
         assert verdict_call[3] is ReviewDecision.APPROVED
@@ -395,12 +415,15 @@ async def test_cancelled_submission_recovers_unknown_without_replaying_known_ste
         await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
         await pilot.press("2")
         await pilot.press("2")
+        # ``_draft_busy`` clears last in the submission worker, so waiting on it
+        # keeps teardown from unmounting the screen mid-worker.
         await _wait_until(
             app,
             lambda: (
                 screen._review_draft is not None
                 and screen._review_draft.state is DraftState.EDITABLE
                 and screen._review_progress is None
+                and not screen._draft_busy
             ),
         )
 
@@ -437,11 +460,14 @@ async def test_partial_submission_resumes_remaining_step_without_replaying_recei
         await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
         await pilot.press("v")
         await pilot.press("ctrl+s")
+        # ``_continue_review_submission`` early-returns while ``_draft_busy`` is
+        # set, so the resume below is dropped unless this waits for the worker.
         await _wait_until(
             app,
             lambda: (
                 screen._review_progress is not None
                 and screen._review_progress.outcome.value == "paused"
+                and not screen._draft_busy
             ),
         )
         assert len([call for call in forge.calls if call[0] == "comment"]) == 1
@@ -451,9 +477,15 @@ async def test_partial_submission_resumes_remaining_step_without_replaying_recei
         screen.action_review_draft()
         await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
         await pilot.press("r")
+        # ``_draft_busy`` clears last in the submission worker, so waiting on it
+        # keeps teardown from unmounting the screen mid-worker.
         await _wait_until(
             app,
-            lambda: screen._review_draft is None and screen._review_progress is None,
+            lambda: (
+                screen._review_draft is None
+                and screen._review_progress is None
+                and not screen._draft_busy
+            ),
         )
         assert len([call for call in forge.calls if call[0] == "comment"]) == 1
         assert len([call for call in forge.calls if call[0] == "verdict"]) == 2
@@ -832,10 +864,7 @@ async def test_submit_modal_edits_removes_and_validates_exact_summary(
 
         summary.text = "\n  exact review summary  \n"
         await pilot.press("ctrl+s")
-        await _wait_until(
-            app,
-            lambda: any(call[0] == "verdict" for call in forge.calls),
-        )
+        await _wait_for_verdict_submission(app, screen, forge)
         verdict = next(call for call in forge.calls if call[0] == "verdict")
         assert verdict[3] is ReviewDecision.CHANGES_REQUESTED
         stored = await app.session.drafts.list_drafts()
@@ -992,11 +1021,14 @@ async def test_paused_attempt_recovers_unknown_after_restart_and_can_be_asserted
         await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
         await pilot.press("v")
         await pilot.press("ctrl+s")
+        # ``_draft_busy`` clears last in the submission worker, so waiting on it
+        # keeps teardown from unmounting the screen mid-worker.
         await _wait_until(
             app,
             lambda: (
                 screen._review_progress is not None
                 and screen._review_progress.outcome.value == "paused"
+                and not screen._draft_busy
             ),
         )
         attempt_id = screen._review_progress.attempt_id
@@ -1021,9 +1053,15 @@ async def test_paused_attempt_recovers_unknown_after_restart_and_can_be_asserted
         await pilot.press("3")
         assert isinstance(restarted.screen, ReviewSubmitScreen)
         await pilot.press("3")
+        # ``_draft_busy`` clears last in the submission worker, so waiting on it
+        # keeps teardown from unmounting the screen mid-worker.
         await _wait_until(
             restarted,
-            lambda: screen._review_draft is None and screen._review_progress is None,
+            lambda: (
+                screen._review_draft is None
+                and screen._review_progress is None
+                and not screen._draft_busy
+            ),
         )
         assert not any(
             call[0] in {"comment", "inline", "reply", "verdict"}

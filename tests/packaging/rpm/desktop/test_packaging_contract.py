@@ -84,5 +84,11 @@ def test_manifest_keeps_core_and_mcp_closures_separate() -> None:
 def test_provider_audit_queries_the_mcp_extra_capability() -> None:
     audit = (PACKAGING / "audit_providers.py").read_text()
 
-    assert 'query = "python3dist(mcp[cli])"' in audit
+    assert '"python3dist(mcp[cli])"' in audit
     assert '"provider_query": query' in audit
+    assert '"python3-mcp+cli", "python3-mcp"' in audit
+    assert '"enabled_repositories"' in audit
+    assert 'args.output.write_text' in audit
+    assert audit.index('args.output.write_text') < audit.index(
+        'raise RuntimeError(f"missing Fedora providers: {missing}")'
+    )

@@ -46,10 +46,13 @@ export interface ReviewSnapshotDto {
 export interface DiffFileRow { readonly kind: "file"; readonly file_index: number; readonly old_path: string; readonly new_path: string; readonly status: string; readonly additions: number; readonly deletions: number; readonly is_binary: boolean; readonly language: string | null; readonly is_truncated: boolean; readonly is_empty: boolean; readonly is_mode_only: boolean; readonly is_unavailable: boolean; }
 export interface DiffHunkRow { readonly kind: "hunk"; readonly file_index: number; readonly hunk_index: number; readonly header: string; readonly old_start: number; readonly old_count: number; readonly new_start: number; readonly new_count: number; readonly context_text: string; }
 export interface DiffLineRow { readonly kind: "line"; readonly file_index: number; readonly hunk_index: number; readonly old_line: number | null; readonly new_line: number | null; readonly content: string; readonly line_type: string; }
-export type DiffRow = DiffFileRow | DiffHunkRow | DiffLineRow;
+export type DiffLayout = "unified" | "split";
+export interface SplitDiffCell { readonly old_line: number | null; readonly new_line: number | null; readonly content: string; readonly line_type: string; readonly anchor_side: "old" | "new" | null; }
+export interface SplitDiffRow { readonly kind: "split"; readonly file_index: number; readonly hunk_index: number; readonly row_index: number; readonly old: SplitDiffCell | null; readonly new: SplitDiffCell | null; }
+export type DiffRow = DiffFileRow | DiffHunkRow | DiffLineRow | SplitDiffRow;
 export interface SnapshotPage<T, R extends JsonObject> { readonly snapshot_id: string; readonly resource: OpaqueHandle; readonly revision: R; readonly cursor: number; readonly next_cursor: number | null; readonly entries: readonly T[]; }
 export type DiffPage = SnapshotPage<DiffRow, ReviewRevisionDto & JsonObject>;
-export interface OpenDiffParams { readonly review: OpaqueHandle; readonly max_items?: number; }
+export interface OpenDiffParams { readonly review: OpaqueHandle; readonly layout?: DiffLayout; readonly max_items?: number; }
 export interface PageParams { readonly snapshot: string; readonly resource: OpaqueHandle; readonly cursor: number; readonly max_items?: number; }
 
 export interface InlineCommentDto { readonly id: string; readonly author: UserDto; readonly body: string; readonly created_at: string; readonly file_path: string; readonly old_line: number | null; readonly new_line: number | null; readonly is_resolved: boolean; readonly replies: readonly InlineCommentDto[]; }

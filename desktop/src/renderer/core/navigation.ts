@@ -14,6 +14,7 @@ export type AppRoute =
       readonly kind: "review";
       readonly item: ReviewListItemDto;
       readonly panel: ReviewPanel;
+      readonly diffTarget?: DiscussionDiffTarget;
     }
   | {
       readonly kind: "plugin";
@@ -52,6 +53,23 @@ export interface InlineAnchorSelection {
   readonly lineType: string;
   readonly contextLines: readonly string[];
   readonly contextComplete: boolean;
+  readonly rangeOriginOldLine?: number | null;
+  readonly rangeOriginNewLine?: number | null;
+  readonly selectedLines?: readonly InlineSelectedLine[];
+}
+
+export interface InlineSelectedLine {
+  readonly oldLine: number | null;
+  readonly newLine: number | null;
+  readonly lineType: string;
+  readonly content: string;
+}
+
+export interface DiscussionDiffTarget {
+  readonly discussionId: string;
+  readonly path: string;
+  readonly side: "old" | "new";
+  readonly line: number;
 }
 
 export interface ReviewPanelContribution {

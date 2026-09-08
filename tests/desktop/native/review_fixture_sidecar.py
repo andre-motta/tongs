@@ -115,7 +115,18 @@ class _MockForgeClient:
     async def create_inline_comment(
         self, *args: object, **kwargs: object
     ) -> ForgeMutationResult:
-        self._record("create_inline_comment", str(args[0]), int(args[1]))
+        self._record(
+            "create_inline_comment",
+            str(args[0]),
+            int(args[1]),
+            file_path=str(args[2]),
+            line=int(args[3]),
+            side=str(args[4]),
+            body=str(args[5]),
+            start_line=args[6],
+            start_side=args[7],
+            resolved_anchor=kwargs,
+        )
         return ForgeMutationResult("inline-46", "inline-note-46", "thread-46")
 
     async def reply_to_discussion(

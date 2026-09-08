@@ -19,8 +19,10 @@ import type {
 } from "../../../shared/bridge.js";
 import type {
   AppRoute,
+  DiscussionDiffTarget,
   FeatureContribution,
   InlineAnchorSelection,
+  InlineSelectedLine,
 } from "../../core/navigation.js";
 import { RendererReadError, safeError } from "../../core/presentation.js";
 import { QueryCoordinator } from "../../core/query.js";
@@ -81,6 +83,7 @@ function DiffView({
   const [layout, setLayout] = useState<DiffLayout>("unified");
   const [loaded, setLoaded] = useState<LoadedDiff | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [jumpError, setJumpError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
   useEffect(() => {
@@ -107,6 +110,22 @@ function DiffView({
       void queries.cancel(`diff:${route.item.handle}`);
     };
   }, [bridge, layout, queries, reload, route.item.handle]);
+  useEffect(() => {
+    if (!loaded || !route.diffTarget) return;
+    const target = resolveDiscussionTarget(
+      route.item.handle,
+      loaded,
+      route.diffTarget,
+    );
+    if (target) {
+      setJumpError(null);
+      selectInlineAnchor(target);
+    } else {
+      setJumpError(
+        "This discussion location is unavailable in the displayed revision. Refresh the diff or open the discussion on the forge.",
+      );
+    }
+  }, [loaded, route.diffTarget, route.item.handle, selectInlineAnchor]);
   return (
     <>
       <ReviewHeader route={route} navigate={navigate} panels={panels} />
@@ -130,6 +149,19 @@ function DiffView({
           onClick={() => setReload((value) => value + 1)}
         >
           Refresh
+        </button>
+        <button
+          className="button button-secondary"
+          disabled={
+            inlineAnchor?.review !== route.item.handle ||
+            inlineAnchor.side !== "new" ||
+            inlineAnchor.contextComplete !== true ||
+            !inlineAnchor.selectedLines?.length
+          }
+          title="Select one or more contiguous new-side lines. Use Shift+click or Shift+Enter to extend the range."
+          onClick={() => navigate({ ...route, panel: "discussions" })}
+        >
+          Suggest replacement
         </button>
         {loaded && (
           <code
@@ -155,6 +187,7 @@ function DiffView({
             : ""}
         </Notice>
       )}
+      {jumpError && <Notice kind="warning">{jumpError}</Notice>}
       {loaded && (
         <DiffWorkspace
           review={route.item.handle}
@@ -302,6 +335,26 @@ function DiffWorkspace({
     if (!rebound) selectAnchor(null);
     else if (!sameAnchorIdentity(selection, rebound)) selectAnchor(rebound);
   }, [loaded, review, selectAnchor, selection]);
+  useEffect(() => {
+    if (!selection || selection.review !== review) return;
+    const matchingFile = files.find(
+      (file) => file.file_index === selection.fileIndex,
+    );
+    if (!matchingFile) return;
+    const fileRows = loaded.rows.filter(
+      (row) => row.file_index === matchingFile.file_index,
+    );
+    const rowIndex = fileRows.findIndex((row) =>
+      loaded.layout === "split"
+        ? row.kind === "split" && row.row_index === selection.rowIndex
+        : row.kind === "line" &&
+          row.old_line === selection.oldLine &&
+          row.new_line === selection.newLine &&
+          row.line_type === selection.lineType,
+    );
+    setSelected(matchingFile.file_index);
+    if (rowIndex >= 0) setTarget(rowIndex);
+  }, [files, loaded, review, selection]);
   const visible = loaded.rows.filter((row) => row.file_index === selected);
   const selectedFile =
     files.find((file) => file.file_index === selected) ?? null;
@@ -541,9 +594,19 @@ function DiffRowView({
       : row.new_line !== null
         ? "new"
         : "old";
-  const choose = (side: "old" | "new"): void => {
+  const choose = (side: "old" | "new", extend = false): void => {
     if (!selectable || !file) return;
-    selectAnchor(anchorForLine(review, loaded, file, row, side));
+    selectAnchor(
+      selectionForUnifiedLine(
+        review,
+        loaded,
+        file,
+        row,
+        side,
+        selection,
+        extend,
+      ),
+    );
   };
   const selected =
     selection !== null &&
@@ -562,7 +625,7 @@ function DiffRowView({
           selectionMatchesLine(selection, loaded, file, row, "old")
         }
         selectable={selectable}
-        choose={() => choose("old")}
+        choose={(extend) => choose("old", extend)}
       />
       <LineNumberAnchor
         label="new"
@@ -572,7 +635,7 @@ function DiffRowView({
           selectionMatchesLine(selection, loaded, file, row, "new")
         }
         selectable={selectable}
-        choose={() => choose("new")}
+        choose={(extend) => choose("new", extend)}
       />
       <code
         className={`line-content${selectable ? " selectable-line" : ""}`}
@@ -583,10 +646,13 @@ function DiffRowView({
             ? `Select ${defaultSide} line ${defaultSide === "old" ? row.old_line : row.new_line}`
             : undefined
         }
-        onClick={selectable ? () => choose(defaultSide) : undefined}
+        onClick={selectable ? (event) => choose(defaultSide, event.shiftKey) : undefined}
         onKeyDown={
           selectable
-            ? (event) => activateOnKeyboard(event, () => choose(defaultSide))
+            ? (event) =>
+                activateOnKeyboard(event, () =>
+                  choose(defaultSide, event.shiftKey),
+                )
             : undefined
         }
       >
@@ -608,7 +674,7 @@ function LineNumberAnchor({
   readonly value: number | null;
   readonly selected: boolean;
   readonly selectable: boolean;
-  readonly choose: () => void;
+  readonly choose: (extend: boolean) => void;
 }): ReactNode {
   if (value === null || !selectable)
     return <span className="line-number">{value}</span>;
@@ -617,7 +683,10 @@ function LineNumberAnchor({
       className={`line-number line-anchor${selected ? " line-anchor-selected" : ""}`}
       aria-label={`Select ${label} line ${value}`}
       aria-pressed={selected}
-      onClick={choose}
+      onClick={(event) => choose(event.shiftKey)}
+      onKeyDown={(event) =>
+        activateOnKeyboard(event, () => choose(event.shiftKey))
+      }
     >
       {value}
     </button>
@@ -714,9 +783,19 @@ function SplitCell({
     selectable &&
     selection !== null &&
     selectionMatchesSplitCell(selection, loaded, file, row, cell);
-  const choose = (): void => {
+  const choose = (extend = false): void => {
     if (!selectable || !cell || !file || !cell.anchor_side) return;
-    selectAnchor(anchorForSplitCell(review, loaded, file, row, cell));
+    selectAnchor(
+      selectionForSplitCell(
+        review,
+        loaded,
+        file,
+        row,
+        cell,
+        selection,
+        extend,
+      ),
+    );
   };
   return (
     <div
@@ -732,9 +811,11 @@ function SplitCell({
       data-anchor-side={cell?.anchor_side ?? undefined}
       data-old-line={cell?.old_line ?? undefined}
       data-new-line={cell?.new_line ?? undefined}
-      onClick={selectable ? choose : undefined}
+      onClick={selectable ? (event) => choose(event.shiftKey) : undefined}
       onKeyDown={
-        selectable ? (event) => activateOnKeyboard(event, choose) : undefined
+        selectable
+          ? (event) => activateOnKeyboard(event, () => choose(event.shiftKey))
+          : undefined
       }
     >
       {cell && (
@@ -761,14 +842,29 @@ function activateOnKeyboard(
   choose();
 }
 
-function anchorForLine(
+export function selectionForUnifiedLine(
   review: string,
   loaded: LoadedDiff,
   file: DiffFileRow,
   row: Extract<DiffRow, { readonly kind: "line" }>,
   side: "old" | "new",
+  existing: InlineAnchorSelection | null = null,
+  extend = false,
 ): InlineAnchorSelection {
-  const context = unifiedSourceContext(loaded, file, row, side);
+  const candidates = unifiedSideRows(loaded, file, row.hunk_index, side);
+  const targetIndex = candidates.indexOf(row);
+  const originIndex = extend
+    ? rangeOriginIndex(existing, review, loaded, file, row.hunk_index, side, candidates)
+    : -1;
+  const selected =
+    targetIndex >= 0 && originIndex >= 0
+      ? candidates.slice(
+          Math.min(targetIndex, originIndex),
+          Math.max(targetIndex, originIndex) + 1,
+        )
+      : [row];
+  const origin = originIndex >= 0 ? candidates[originIndex]! : row;
+  const context = unifiedRangeContext(loaded, file, selected, side);
   return Object.freeze({
     review,
     snapshotId: loaded.snapshotId,
@@ -785,19 +881,38 @@ function anchorForLine(
     lineType: row.line_type,
     contextLines: context.lines,
     contextComplete: context.complete,
+    rangeOriginOldLine: origin.old_line,
+    rangeOriginNewLine: origin.new_line,
+    selectedLines: Object.freeze(selected.map(selectedLine)),
   });
 }
 
-function anchorForSplitCell(
+export function selectionForSplitCell(
   review: string,
   loaded: LoadedDiff,
   file: DiffFileRow,
   row: SplitDiffRow,
   cell: SplitDiffCell,
+  existing: InlineAnchorSelection | null = null,
+  extend = false,
 ): InlineAnchorSelection {
   const side = cell.anchor_side;
   if (!side) throw new Error("Cannot select an unanchored split cell");
-  const context = splitSourceContext(loaded, file, row, side);
+  const candidates = splitSideRows(loaded, file, row.hunk_index, side);
+  const targetIndex = candidates.findIndex((item) => item.row === row);
+  const cells = candidates.map((item) => item.cell);
+  const originIndex = extend
+    ? rangeOriginIndex(existing, review, loaded, file, row.hunk_index, side, cells)
+    : -1;
+  const selected =
+    targetIndex >= 0 && originIndex >= 0
+      ? candidates.slice(
+          Math.min(targetIndex, originIndex),
+          Math.max(targetIndex, originIndex) + 1,
+        )
+      : [{ row, cell }];
+  const origin = originIndex >= 0 ? candidates[originIndex]!.cell : cell;
+  const context = splitRangeContext(loaded, file, selected, side);
   return Object.freeze({
     review,
     snapshotId: loaded.snapshotId,
@@ -814,6 +929,154 @@ function anchorForSplitCell(
     lineType: cell.line_type,
     contextLines: context.lines,
     contextComplete: context.complete,
+    rangeOriginOldLine: origin.old_line,
+    rangeOriginNewLine: origin.new_line,
+    selectedLines: Object.freeze(selected.map((item) => selectedLine(item.cell))),
+  });
+}
+
+type SourceRow = Extract<DiffRow, { readonly kind: "line" }>;
+
+function selectedLine(line: {
+  readonly old_line: number | null;
+  readonly new_line: number | null;
+  readonly line_type: string;
+  readonly content: string;
+}): InlineSelectedLine {
+  return Object.freeze({
+    oldLine: line.old_line,
+    newLine: line.new_line,
+    lineType: line.line_type,
+    content: line.content,
+  });
+}
+
+function unifiedSideRows(
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+  hunkIndex: number,
+  side: "old" | "new",
+): SourceRow[] {
+  return loaded.rows.filter(
+    (candidate): candidate is SourceRow =>
+      candidate.kind === "line" &&
+      candidate.file_index === file.file_index &&
+      candidate.hunk_index === hunkIndex &&
+      candidate.line_type !== "no_newline" &&
+      (side === "old"
+        ? candidate.old_line !== null
+        : candidate.new_line !== null),
+  );
+}
+
+function splitSideRows(
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+  hunkIndex: number,
+  side: "old" | "new",
+): { readonly row: SplitDiffRow; readonly cell: SplitDiffCell }[] {
+  return loaded.rows
+    .filter(
+      (candidate): candidate is SplitDiffRow =>
+        candidate.kind === "split" &&
+        candidate.file_index === file.file_index &&
+        candidate.hunk_index === hunkIndex,
+    )
+    .map((candidate) => ({ row: candidate, cell: candidate[side] }))
+    .filter(
+      (item): item is { readonly row: SplitDiffRow; readonly cell: SplitDiffCell } =>
+        item.cell !== null &&
+        item.cell.line_type !== "no_newline" &&
+        (side === "old"
+          ? item.cell.old_line !== null
+          : item.cell.new_line !== null),
+    );
+}
+
+function rangeOriginIndex<T extends {
+  readonly old_line: number | null;
+  readonly new_line: number | null;
+}>(
+  existing: InlineAnchorSelection | null,
+  review: string,
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+  hunkIndex: number,
+  side: "old" | "new",
+  candidates: readonly T[],
+): number {
+  if (
+    !existing ||
+    existing.review !== review ||
+    existing.snapshotId !== loaded.snapshotId ||
+    existing.resource !== loaded.resource ||
+    !sameRevisionValue(existing.revision, loaded.revision) ||
+    existing.fileIndex !== file.file_index ||
+    existing.hunkIndex !== hunkIndex ||
+    existing.side !== side
+  )
+    return -1;
+  const oldLine =
+    existing.rangeOriginOldLine !== undefined
+      ? existing.rangeOriginOldLine
+      : existing.oldLine;
+  const newLine =
+    existing.rangeOriginNewLine !== undefined
+      ? existing.rangeOriginNewLine
+      : existing.newLine;
+  return candidates.findIndex(
+    (candidate) =>
+      candidate.old_line === oldLine && candidate.new_line === newLine,
+  );
+}
+
+function unifiedRangeContext(
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+  selected: readonly SourceRow[],
+  side: "old" | "new",
+): SourceContext {
+  const first = selected[0];
+  const last = selected.at(-1);
+  if (!first || !last)
+    return Object.freeze({ lines: Object.freeze([]), complete: false });
+  const candidates = unifiedSideRows(loaded, file, first.hunk_index, side);
+  const firstIndex = candidates.indexOf(first);
+  const lastIndex = candidates.indexOf(last);
+  if (firstIndex < 0 || lastIndex < 0)
+    return Object.freeze({ lines: Object.freeze([]), complete: false });
+  return Object.freeze({
+    lines: Object.freeze(
+      candidates
+        .slice(Math.max(0, firstIndex - 2), lastIndex + 3)
+        .map((candidate) => candidate.content),
+    ),
+    complete: contextIsComplete(loaded, file),
+  });
+}
+
+function splitRangeContext(
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+  selected: readonly { readonly row: SplitDiffRow; readonly cell: SplitDiffCell }[],
+  side: "old" | "new",
+): SourceContext {
+  const first = selected[0];
+  const last = selected.at(-1);
+  if (!first || !last)
+    return Object.freeze({ lines: Object.freeze([]), complete: false });
+  const candidates = splitSideRows(loaded, file, first.row.hunk_index, side);
+  const firstIndex = candidates.findIndex((item) => item.row === first.row);
+  const lastIndex = candidates.findIndex((item) => item.row === last.row);
+  if (firstIndex < 0 || lastIndex < 0)
+    return Object.freeze({ lines: Object.freeze([]), complete: false });
+  return Object.freeze({
+    lines: Object.freeze(
+      candidates
+        .slice(Math.max(0, firstIndex - 2), lastIndex + 3)
+        .map((item) => item.cell.content),
+    ),
+    complete: contextIsComplete(loaded, file),
   });
 }
 
@@ -828,14 +1091,7 @@ export function unifiedSourceContext(
   target: Extract<DiffRow, { readonly kind: "line" }>,
   side: "old" | "new",
 ): SourceContext {
-  const candidates = loaded.rows.filter(
-    (row): row is Extract<DiffRow, { readonly kind: "line" }> =>
-      row.kind === "line" &&
-      row.file_index === file.file_index &&
-      row.hunk_index === target.hunk_index &&
-      row.line_type !== "no_newline" &&
-      (side === "old" ? row.old_line !== null : row.new_line !== null),
-  );
+  const candidates = unifiedSideRows(loaded, file, target.hunk_index, side);
   const index = candidates.indexOf(target);
   if (index < 0) return Object.freeze({ lines: Object.freeze([]), complete: false });
   return Object.freeze({
@@ -854,22 +1110,7 @@ export function splitSourceContext(
   target: SplitDiffRow,
   side: "old" | "new",
 ): SourceContext {
-  const candidates = loaded.rows
-    .filter(
-      (row): row is SplitDiffRow =>
-        row.kind === "split" &&
-        row.file_index === file.file_index &&
-        row.hunk_index === target.hunk_index,
-    )
-    .map((row) => ({ row, cell: row[side] }))
-    .filter(
-      (item): item is { readonly row: SplitDiffRow; readonly cell: SplitDiffCell } =>
-        item.cell !== null &&
-        item.cell.line_type !== "no_newline" &&
-        (side === "old"
-          ? item.cell.old_line !== null
-          : item.cell.new_line !== null),
-    );
+  const candidates = splitSideRows(loaded, file, target.hunk_index, side);
   const index = candidates.findIndex((item) => item.row === target);
   if (index < 0) return Object.freeze({ lines: Object.freeze([]), complete: false });
   return Object.freeze({
@@ -890,6 +1131,53 @@ function contextIsComplete(loaded: LoadedDiff, file: DiffFileRow): boolean {
   );
 }
 
+export function resolveDiscussionTarget(
+  review: string,
+  loaded: LoadedDiff,
+  target: DiscussionDiffTarget,
+): InlineAnchorSelection | null {
+  if (!Number.isInteger(target.line) || target.line <= 0) return null;
+  const file = loaded.rows.find(
+    (row): row is DiffFileRow =>
+      row.kind === "file" &&
+      (target.side === "new"
+        ? row.new_path === target.path
+        : row.old_path === target.path),
+  );
+  if (
+    !file ||
+    file.is_binary ||
+    file.is_truncated ||
+    file.is_unavailable ||
+    file.is_empty ||
+    file.is_mode_only
+  )
+    return null;
+  if (loaded.layout === "split") {
+    for (const row of loaded.rows) {
+      if (row.kind !== "split" || row.file_index !== file.file_index) continue;
+      const cell = row[target.side];
+      if (
+        cell?.anchor_side === target.side &&
+        (target.side === "new" ? cell.new_line : cell.old_line) === target.line
+      )
+        return selectionForSplitCell(review, loaded, file, row, cell);
+    }
+    return null;
+  }
+  const row = loaded.rows.find(
+    (candidate): candidate is SourceRow =>
+      candidate.kind === "line" &&
+      candidate.file_index === file.file_index &&
+      candidate.line_type !== "no_newline" &&
+      (target.side === "new" ? candidate.new_line : candidate.old_line) ===
+        target.line,
+  );
+  return row
+    ? selectionForUnifiedLine(review, loaded, file, row, target.side)
+    : null;
+}
+
 export function rebindInlineAnchor(
   selection: InlineAnchorSelection,
   review: string,
@@ -908,19 +1196,55 @@ export function rebindInlineAnchor(
   );
   if (!file) return null;
   if (loaded.layout === "split") {
-    for (const row of loaded.rows) {
-      if (row.kind !== "split" || row.file_index !== file.file_index) continue;
-      for (const cell of [row.old, row.new]) {
-        if (
-          cell?.anchor_side === selection.side &&
-          cell.old_line === selection.oldLine &&
-          cell.new_line === selection.newLine &&
-          cell.line_type === selection.lineType
-        )
-          return anchorForSplitCell(review, loaded, file, row, cell);
-      }
-    }
-    return null;
+    const target = loaded.rows.find(
+      (row): row is SplitDiffRow =>
+        row.kind === "split" &&
+        row.file_index === file.file_index &&
+        [row.old, row.new].some(
+          (cell) =>
+            cell?.anchor_side === selection.side &&
+            cell.old_line === selection.oldLine &&
+            cell.new_line === selection.newLine &&
+            cell.line_type === selection.lineType,
+        ),
+    );
+    if (!target) return null;
+    const cell = target[selection.side];
+    if (!cell || cell.anchor_side !== selection.side) return null;
+    const origin = splitSideRows(
+      loaded,
+      file,
+      target.hunk_index,
+      selection.side,
+    ).find(
+      (item) =>
+        item.cell.old_line ===
+          (selection.rangeOriginOldLine !== undefined
+            ? selection.rangeOriginOldLine
+            : selection.oldLine) &&
+        item.cell.new_line ===
+          (selection.rangeOriginNewLine !== undefined
+            ? selection.rangeOriginNewLine
+            : selection.newLine),
+    );
+    if (!origin) return null;
+    const base = selectionForSplitCell(
+      review,
+      loaded,
+      file,
+      origin.row,
+      origin.cell,
+    );
+    const rebound = selectionForSplitCell(
+      review,
+      loaded,
+      file,
+      target,
+      cell,
+      base,
+      Boolean(selection.selectedLines && selection.selectedLines.length > 1),
+    );
+    return sameSelectedSource(selection, rebound) ? rebound : null;
   }
   const row = loaded.rows.find(
     (candidate): candidate is Extract<DiffRow, { readonly kind: "line" }> =>
@@ -934,7 +1258,41 @@ export function rebindInlineAnchor(
         ? candidate.old_line !== null
         : candidate.new_line !== null),
   );
-  return row ? anchorForLine(review, loaded, file, row, selection.side) : null;
+  if (!row) return null;
+  const origin = unifiedSideRows(
+    loaded,
+    file,
+    row.hunk_index,
+    selection.side,
+  ).find(
+    (candidate) =>
+      candidate.old_line ===
+        (selection.rangeOriginOldLine !== undefined
+          ? selection.rangeOriginOldLine
+          : selection.oldLine) &&
+      candidate.new_line ===
+        (selection.rangeOriginNewLine !== undefined
+          ? selection.rangeOriginNewLine
+          : selection.newLine),
+  );
+  if (!origin) return null;
+  const base = selectionForUnifiedLine(
+    review,
+    loaded,
+    file,
+    origin,
+    selection.side,
+  );
+  const rebound = selectionForUnifiedLine(
+    review,
+    loaded,
+    file,
+    row,
+    selection.side,
+    base,
+    Boolean(selection.selectedLines && selection.selectedLines.length > 1),
+  );
+  return sameSelectedSource(selection, rebound) ? rebound : null;
 }
 
 function selectionMatchesLine(
@@ -944,12 +1302,23 @@ function selectionMatchesLine(
   row: Extract<DiffRow, { readonly kind: "line" }>,
   side: "old" | "new",
 ): boolean {
-  return Boolean(
-    file &&
-      sameAnchorIdentity(
-        selection,
-        anchorForLine(selection.review, loaded, file, row, side),
-      ),
+  if (
+    !file ||
+    selection.side !== side ||
+    !selectionBelongsToLoadedFile(selection, loaded, file)
+  )
+    return false;
+  if (selection.selectedLines)
+    return selection.selectedLines.some(
+      (line) =>
+        line.oldLine === row.old_line &&
+        line.newLine === row.new_line &&
+        line.lineType === row.line_type &&
+        line.content === row.content,
+    );
+  return sameAnchorIdentity(
+    selection,
+    selectionForUnifiedLine(selection.review, loaded, file, row, side),
   );
 }
 
@@ -960,13 +1329,59 @@ function selectionMatchesSplitCell(
   row: SplitDiffRow,
   cell: SplitDiffCell,
 ): boolean {
+  if (
+    !file ||
+    cell.anchor_side !== selection.side ||
+    !selectionBelongsToLoadedFile(selection, loaded, file)
+  )
+    return false;
+  if (selection.selectedLines)
+    return selection.selectedLines.some(
+      (line) =>
+        line.oldLine === cell.old_line &&
+        line.newLine === cell.new_line &&
+        line.lineType === cell.line_type &&
+        line.content === cell.content,
+    );
+  return sameAnchorIdentity(
+    selection,
+    selectionForSplitCell(selection.review, loaded, file, row, cell),
+  );
+}
+
+function selectionBelongsToLoadedFile(
+  selection: InlineAnchorSelection,
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+): boolean {
+  return (
+    selection.snapshotId === loaded.snapshotId &&
+    selection.resource === loaded.resource &&
+    sameRevisionValue(selection.revision, loaded.revision) &&
+    selection.fileIndex === file.file_index &&
+    selection.oldPath === file.old_path &&
+    selection.newPath === file.new_path
+  );
+}
+
+function sameSelectedSource(
+  left: InlineAnchorSelection,
+  right: InlineAnchorSelection,
+): boolean {
+  if (!left.selectedLines) return true;
   return Boolean(
-    file &&
-      cell.anchor_side &&
-      sameAnchorIdentity(
-        selection,
-        anchorForSplitCell(selection.review, loaded, file, row, cell),
-      ),
+    right.selectedLines &&
+      left.selectedLines.length === right.selectedLines.length &&
+      left.selectedLines.every((line, index) => {
+        const candidate = right.selectedLines![index];
+        return (
+          candidate !== undefined &&
+          line.oldLine === candidate.oldLine &&
+          line.newLine === candidate.newLine &&
+          line.lineType === candidate.lineType &&
+          line.content === candidate.content
+        );
+      }),
   );
 }
 
@@ -989,6 +1404,9 @@ function sameAnchorIdentity(
     left.newLine === right.newLine &&
     left.lineType === right.lineType &&
     left.contextComplete === right.contextComplete &&
+    left.rangeOriginOldLine === right.rangeOriginOldLine &&
+    left.rangeOriginNewLine === right.rangeOriginNewLine &&
+    sameSelectedSource(left, right) &&
     left.contextLines.length === right.contextLines.length &&
     left.contextLines.every((line, index) => line === right.contextLines[index])
   );

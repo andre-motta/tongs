@@ -79,3 +79,10 @@ def test_manifest_keeps_core_and_mcp_closures_separate() -> None:
         for requirement in manifest["core_runtime_requirements"]
     )
     assert "mcp[cli]" in manifest["mcp_requirement"]
+
+
+def test_provider_audit_queries_the_mcp_extra_capability() -> None:
+    audit = (PACKAGING / "audit_providers.py").read_text()
+
+    assert 'query = "python3dist(mcp[cli])"' in audit
+    assert '"provider_query": query' in audit

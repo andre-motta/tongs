@@ -55,8 +55,13 @@ def audit(manifest: dict[str, Any]) -> dict[str, Any]:
     records = []
     missing = []
     for requirement in requirements:
-        providers = _query(requirement)
-        records.append({"requirement": requirement, "providers": providers})
+        query = requirement
+        if requirement == manifest["mcp_requirement"]:
+            query = "python3dist(mcp[cli])"
+        providers = _query(query)
+        records.append(
+            {"provider_query": query, "requirement": requirement, "providers": providers}
+        )
         if not providers and "sigstore" not in requirement:
             missing.append(requirement)
     if missing:

@@ -20,6 +20,7 @@ from tongs.services.models import ReviewRevision
 from tongs.services.review_submission import SubmissionOutcome, SubmissionProgress
 from tongs.state.drafts import (
     DraftComment,
+    DraftContent,
     DraftSnapshot,
     DraftState,
     DraftVerdict,
@@ -37,6 +38,7 @@ class ReviewSubmitActionKind(str, Enum):
     NEW_REVISION = "new_revision"
     RESUME = "resume"
     RECONCILE = "reconcile"
+    DISMISS_RECOVERY = "dismiss_recovery"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,14 +105,24 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
         current_revision: ReviewRevision | None,
         *,
         progress: SubmissionProgress | None = None,
+        recovered_content: DraftContent | None = None,
+        supports_submission: bool = True,
+        submission_unavailable_reason: str = "Batch review submission is unavailable.",
         supports_request_changes: bool = True,
     ) -> None:
         super().__init__()
         self.draft = draft
         self.current_revision = current_revision
         self.progress = progress
+        self.recovered_content = recovered_content
+        self.supports_submission = supports_submission
+        self.submission_unavailable_reason = submission_unavailable_reason
         self.supports_request_changes = supports_request_changes
-        self._verdict = draft.verdict or DraftVerdict.COMMENT
+        self._verdict = (
+            recovered_content.verdict
+            if recovered_content is not None
+            else draft.verdict
+        ) or DraftVerdict.COMMENT
         self._comment_ids: list[UUID] = []
         self._pending_confirmation: str | None = None
 
@@ -127,7 +139,12 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
             yield Static("", id="review-submit-status")
             yield OptionList(id="review-submit-comments")
             yield Static("", id="review-submit-verdict")
-            yield TextArea(self.draft.body, id="review-submit-body")
+            yield TextArea(
+                self.recovered_content.body
+                if self.recovered_content is not None
+                else self.draft.body,
+                id="review-submit-body",
+            )
             yield Static("", id="review-submit-help")
             yield Footer()
 
@@ -174,11 +191,14 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
         status = self.query_one("#review-submit-status", Static)
         if self.progress is None:
             state = self.draft.state.value
-            detail = (
-                "old revision; submission and new anchors are blocked"
-                if self.stale
-                else "ready"
-            )
+            if self.stale:
+                detail = "old revision; submission and new anchors are blocked"
+            elif not self.supports_submission:
+                detail = "batch submission unavailable"
+            elif self.recovered_content is not None:
+                detail = "submission conflict; requested fields recovered"
+            else:
+                detail = "ready"
             status.update(
                 f"Version {self.draft.version} | {escape(state)} | {escape(detail)}"
             )
@@ -210,6 +230,13 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
             )
         elif self.stale:
             help_text = "Press N for a separate current-revision draft; old inline text stays here."
+        elif not self.supports_submission:
+            help_text = self.submission_unavailable_reason
+        elif self.recovered_content is not None:
+            help_text = (
+                "Requested summary and verdict recovered. Review current comments, "
+                "then Ctrl+S to retry."
+            )
         else:
             help_text = "Ctrl+S submit | e edit | x remove | D discard (destructive actions require two presses)"
         self.query_one("#review-submit-help", Static).update(help_text)
@@ -223,7 +250,11 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
             "close", "Press Esc again to discard unsaved summary or verdict changes."
         ):
             return
-        self.dismiss(None)
+        self.dismiss(
+            self._action(ReviewSubmitActionKind.DISMISS_RECOVERY)
+            if self.recovered_content is not None
+            else None
+        )
 
     def action_cycle_verdict(self) -> None:
         verdicts = [DraftVerdict.COMMENT, DraftVerdict.APPROVE]
@@ -237,6 +268,9 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
         if self.progress is not None or self.stale:
             self.notify("This draft cannot start a new submission.", severity="warning")
             return
+        if not self.supports_submission:
+            self.notify(self.submission_unavailable_reason, severity="warning")
+            return
         body = self.query_one("#review-submit-body", TextArea).text
         if self._verdict is DraftVerdict.REQUEST_CHANGES and not body.strip():
             self.notify(
@@ -249,6 +283,9 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
             )
         )
 
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        return action != "submit" or self.supports_submission
+
     def action_edit_comment(self) -> None:
         if self.draft.state is not DraftState.EDITABLE:
             self.notify("This draft is not editable while submission is active.")
@@ -256,7 +293,12 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
         comment_id = self._selected_comment_id()
         if comment_id is not None:
             self.dismiss(
-                self._action(ReviewSubmitActionKind.EDIT, comment_id=comment_id)
+                self._action(
+                    ReviewSubmitActionKind.EDIT,
+                    body=self.query_one("#review-submit-body", TextArea).text,
+                    verdict=self._verdict,
+                    comment_id=comment_id,
+                )
             )
 
     def action_remove_comment(self) -> None:
@@ -269,7 +311,14 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
         key = f"remove:{comment_id}"
         if not self._confirm(key, "Press x again to remove this local draft comment."):
             return
-        self.dismiss(self._action(ReviewSubmitActionKind.REMOVE, comment_id=comment_id))
+        self.dismiss(
+            self._action(
+                ReviewSubmitActionKind.REMOVE,
+                body=self.query_one("#review-submit-body", TextArea).text,
+                verdict=self._verdict,
+                comment_id=comment_id,
+            )
+        )
 
     def action_discard(self) -> None:
         if self.draft.state is not DraftState.EDITABLE:

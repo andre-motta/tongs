@@ -217,6 +217,7 @@ class MRDetailScreen(Screen):
         self._cached_diff_files: list | None = None
         self._displayed_diff_revision: ReviewRevision | None = None
         self._current_review_revision: ReviewRevision | None = None
+        self._supports_batched_review: bool | None = None
         self._pending_inline_revision: ReviewRevision | None = None
         self._mutation_intents: dict[tuple[object, ...], _MutationIntent] = {}
         self._review_drafts: tuple[DraftSnapshot, ...] = ()
@@ -265,6 +266,7 @@ class MRDetailScreen(Screen):
             snapshot = await self.app.services.get_review(self.mr_summary)
             self.mr_detail = snapshot.detail
             self._current_review_revision = snapshot.revision
+            self._supports_batched_review = snapshot.capabilities.batched_review
             overview = self.query_one("#mr-overview", MROverview)
             overview.set_mr(self.mr_detail)
             description_widget = self.query_one("#mr-description", Markdown)
@@ -370,13 +372,23 @@ class MRDetailScreen(Screen):
         draft = self._review_draft
         if draft is None:
             return
+        github = self.mr_summary.forge_host.forge_type.value == "github"
+        supports_submission = self._supports_batched_review is not None and (
+            not github or self._supports_batched_review
+        )
         screen = ReviewSubmitScreen(
             draft,
             self._current_review_revision,
             progress=self._review_progress,
-            supports_request_changes=(
-                self.mr_summary.forge_host.forge_type.value == "github"
+            recovered_content=self._draft_conflict,
+            supports_submission=supports_submission,
+            submission_unavailable_reason=(
+                "GitHub batch review submission is unavailable for this repository. "
+                "Quick comments remain available outside review mode."
+                if github and self._supports_batched_review is False
+                else "Review capabilities are unavailable. Refresh before submitting."
             ),
+            supports_request_changes=github,
         )
         self.app.push_screen(screen, self._handle_review_action)
 
@@ -384,25 +396,59 @@ class MRDetailScreen(Screen):
         if action is None:
             return
         draft = self._review_draft
-        if (
-            draft is None
-            or action.draft_id != draft.id
-            or action.expected_version != draft.version
-        ):
+        if draft is None or action.draft_id != draft.id:
             self.notify(
                 "The review draft changed while the dialog was open. Reopen it.",
                 severity="warning",
             )
             return
+        if action.expected_version != draft.version:
+            if action.kind in {
+                ReviewSubmitActionKind.SUBMIT,
+                ReviewSubmitActionKind.EDIT,
+                ReviewSubmitActionKind.REMOVE,
+            }:
+                self._draft_conflict = replace(
+                    draft.content, body=action.body, verdict=action.verdict
+                )
+                self._refresh_draft_ui()
+                self.notify(
+                    "Draft changed while the dialog was open. Review the recovered summary and verdict.",
+                    severity="warning",
+                )
+                self.call_after_refresh(self._show_review_draft)
+            else:
+                self.notify(
+                    "The review draft changed while the dialog was open. Reopen it.",
+                    severity="warning",
+                )
+            return
         if action.kind is ReviewSubmitActionKind.EDIT and action.comment_id:
-            self._open_draft_comment(action.comment_id)
+            self._save_review_content(
+                draft,
+                replace(draft.content, body=action.body, verdict=action.verdict),
+                edit_comment_id=action.comment_id,
+                reopen_after_conflict=True,
+            )
         elif action.kind is ReviewSubmitActionKind.REMOVE and action.comment_id:
             comments = tuple(
                 comment for comment in draft.comments if comment.id != action.comment_id
             )
-            self._save_review_content(draft, replace(draft.content, comments=comments))
+            self._save_review_content(
+                draft,
+                replace(
+                    draft.content,
+                    body=action.body,
+                    verdict=action.verdict,
+                    comments=comments,
+                ),
+                reopen_after_conflict=True,
+            )
         elif action.kind is ReviewSubmitActionKind.DISCARD:
             self._discard_review_draft(draft)
+        elif action.kind is ReviewSubmitActionKind.DISMISS_RECOVERY:
+            self._draft_conflict = None
+            self._refresh_draft_ui()
         elif action.kind is ReviewSubmitActionKind.NEW_REVISION:
             self._create_current_revision_draft(draft)
         elif action.kind is ReviewSubmitActionKind.SUBMIT:
@@ -506,6 +552,8 @@ class MRDetailScreen(Screen):
         content: DraftContent,
         *,
         acknowledge_editor: bool = False,
+        edit_comment_id: UUID | None = None,
+        reopen_after_conflict: bool = False,
     ) -> None:
         if self._draft_busy:
             if acknowledge_editor:
@@ -517,7 +565,13 @@ class MRDetailScreen(Screen):
         self._draft_busy = True
         self._refresh_draft_ui()
         self._persist_review_content(
-            target, draft.id, draft.version, content, acknowledge_editor
+            target,
+            draft.id,
+            draft.version,
+            content,
+            acknowledge_editor,
+            edit_comment_id,
+            reopen_after_conflict,
         )
 
     @work(group="review-draft-save")
@@ -528,7 +582,10 @@ class MRDetailScreen(Screen):
         expected_version: int,
         content: DraftContent,
         acknowledge_editor: bool,
+        edit_comment_id: UUID | None,
+        reopen_after_conflict: bool,
     ) -> None:
+        reopen_review = False
         editor = self.query_one("#comment-editor", CommentEditor)
         try:
             current_revision = self._current_review_revision or target.revision
@@ -544,6 +601,8 @@ class MRDetailScreen(Screen):
             if acknowledge_editor:
                 self._clear_pending_draft_editor()
                 editor.acknowledge_submission()
+            elif edit_comment_id is not None:
+                self._open_draft_comment(edit_comment_id)
             self.notify("Draft saved locally.")
         except DraftConflictError as exc:
             current_revision = self._current_review_revision or target.revision
@@ -555,9 +614,10 @@ class MRDetailScreen(Screen):
                 )
             else:
                 self.notify(
-                    "Draft version changed elsewhere. Reopen the review before changing it.",
+                    "Draft version changed elsewhere. Review the recovered summary and verdict.",
                     severity="warning",
                 )
+                reopen_review = reopen_after_conflict
         except asyncio.CancelledError:
             if acknowledge_editor:
                 editor.reject_submission(
@@ -572,6 +632,8 @@ class MRDetailScreen(Screen):
         finally:
             self._draft_busy = False
             self._refresh_draft_ui()
+            if reopen_review:
+                self.call_after_refresh(self._show_review_draft)
 
     def _replace_review_draft(self, draft: DraftSnapshot) -> None:
         self._review_drafts = tuple(
@@ -651,6 +713,7 @@ class MRDetailScreen(Screen):
         original: DraftContent,
         requested: DraftContent,
     ) -> None:
+        reopen_after_conflict = False
         try:
             if requested != original:
                 saved = await self.app.services.save_draft(
@@ -671,8 +734,9 @@ class MRDetailScreen(Screen):
         except DraftConflictError as exc:
             self._replace_review_draft(exc.current)
             self._draft_conflict = exc.caller_content
+            reopen_after_conflict = True
             self.notify(
-                "Draft changed elsewhere before submission. The requested summary and verdict are preserved.",
+                "Draft changed elsewhere before submission. Review the recovered summary and verdict.",
                 severity="warning",
             )
         except asyncio.CancelledError:
@@ -684,6 +748,8 @@ class MRDetailScreen(Screen):
         finally:
             self._draft_busy = False
             self._refresh_draft_ui()
+            if reopen_after_conflict:
+                self.call_after_refresh(self._show_review_draft)
 
     def _continue_review_submission(
         self,

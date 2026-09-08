@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from textual.widgets import OptionList, TextArea
+from textual.widgets import OptionList, Static, TextArea
 
 from tests.test_tui_mr_services import _app, _settle, _wait_until
 from tongs.errors import RateLimitError
@@ -165,6 +165,70 @@ async def test_version_conflict_keeps_editor_buffer_until_deliberate_retry(
         assert editor.display is False
         assert screen._review_draft.body == "external summary"
         assert screen._review_draft.comments[0].body == "my unsaved comment"
+
+
+@pytest.mark.asyncio
+async def test_submit_conflict_reopens_exact_requested_summary_and_verdict(
+    tmp_path: Path,
+) -> None:
+    app, forge = _app(tmp_path)
+
+    async with app.run_test(notifications=True) as pilot:
+        screen = await _open_detail(app, pilot)
+        screen.action_review_draft()
+        await _wait_until(app, lambda: screen._review_draft is not None)
+        draft = screen._review_draft
+        assert draft is not None
+
+        screen.action_review_draft()
+        await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
+        modal = cast(ReviewSubmitScreen, app.screen)
+        await pilot.press("v")
+        await pilot.press("v")
+        requested_summary = "\n  preserve this requested summary  \n"
+        modal.query_one("#review-submit-body", TextArea).text = requested_summary
+
+        external = await app.session.drafts.save_draft(
+            draft.id,
+            draft.version,
+            replace(
+                draft.content,
+                body="external winning summary",
+                verdict=DraftVerdict.APPROVE,
+            ),
+            current_revision=draft.revision,
+        )
+        await pilot.press("ctrl+s")
+        await _wait_until(
+            app,
+            lambda: (
+                isinstance(app.screen, ReviewSubmitScreen) and app.screen is not modal
+            ),
+        )
+
+        recovered = cast(ReviewSubmitScreen, app.screen)
+        await pilot.pause()
+        assert screen._review_draft is not None
+        assert screen._review_draft.version == external.version
+        assert screen._review_draft.body == "external winning summary"
+        assert (
+            recovered.query_one("#review-submit-body", TextArea).text
+            == requested_summary
+        )
+        assert recovered._verdict is DraftVerdict.REQUEST_CHANGES
+        status = recovered.query_one("#review-submit-status", Static)
+        assert "requested fields recovered" in str(status.render())
+        assert not any(
+            call[0] in {"comment", "inline", "reply", "verdict"} for call in forge.calls
+        )
+
+        await pilot.press("ctrl+s")
+        await _wait_until(
+            app, lambda: any(call[0] == "verdict" for call in forge.calls)
+        )
+        verdict = next(call for call in forge.calls if call[0] == "verdict")
+        assert verdict[3] is ReviewDecision.CHANGES_REQUESTED
+        assert forge.verdict_bodies == [requested_summary]
 
 
 @pytest.mark.asyncio
@@ -775,6 +839,130 @@ async def test_submit_modal_edits_removes_and_validates_exact_summary(
         assert verdict[3] is ReviewDecision.CHANGES_REQUESTED
         stored = await app.session.drafts.list_drafts()
         assert stored[0].body == "\n  exact review summary  \n"
+
+
+@pytest.mark.asyncio
+async def test_modal_edit_and_remove_persist_fields_and_recover_conflict(
+    tmp_path: Path,
+) -> None:
+    app, _forge = _app(tmp_path)
+
+    async with app.run_test(notifications=True) as pilot:
+        screen = await _open_detail(app, pilot)
+        screen.action_review_draft()
+        await _wait_until(app, lambda: screen._review_draft is not None)
+        screen.action_add_comment()
+        editor = screen.query_one("#comment-editor", CommentEditor)
+        editor.query_one("#comment-input", TextArea).text = "draft comment"
+        editor.action_submit()
+        await _wait_until(
+            app,
+            lambda: (
+                screen._review_draft is not None
+                and len(screen._review_draft.comments) == 1
+            ),
+        )
+        draft = screen._review_draft
+        assert draft is not None
+
+        screen.action_review_draft()
+        await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
+        await pilot.pause()
+        first_modal = cast(ReviewSubmitScreen, app.screen)
+        first_modal.query_one(
+            "#review-submit-body", TextArea
+        ).text = "summary before editing"
+        await pilot.press("v")
+        external = await app.session.drafts.save_draft(
+            draft.id,
+            draft.version,
+            replace(draft.content, body="external summary"),
+            current_revision=draft.revision,
+        )
+        screen._replace_review_draft(external)
+
+        await pilot.press("e")
+        await _wait_until(
+            app,
+            lambda: (
+                isinstance(app.screen, ReviewSubmitScreen)
+                and app.screen is not first_modal
+            ),
+        )
+        recovered = cast(ReviewSubmitScreen, app.screen)
+        await pilot.pause()
+        assert screen._review_draft is not None
+        assert screen._review_draft.version == external.version
+        assert recovered.query_one("#review-submit-body", TextArea).text == (
+            "summary before editing"
+        )
+        assert recovered._verdict is DraftVerdict.APPROVE
+        assert editor.display is False
+
+        await pilot.press("e")
+        await _wait_until(app, lambda: app.screen is screen and editor.display)
+        assert screen._review_draft is not None
+        assert screen._review_draft.body == "summary before editing"
+        assert screen._review_draft.verdict is DraftVerdict.APPROVE
+        editor.query_one("#comment-input", TextArea).text = "edited comment"
+        editor.action_submit()
+        await _wait_until(
+            app,
+            lambda: (
+                screen._review_draft is not None
+                and screen._review_draft.comments[0].body == "edited comment"
+            ),
+        )
+
+        screen.action_review_draft()
+        await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
+        await pilot.pause()
+        remove_modal = cast(ReviewSubmitScreen, app.screen)
+        remove_modal.query_one(
+            "#review-submit-body", TextArea
+        ).text = "summary before removal"
+        await pilot.press("v")
+        await pilot.press("x")
+        await pilot.press("x")
+        await _wait_until(
+            app,
+            lambda: (
+                screen._review_draft is not None and screen._review_draft.comments == ()
+            ),
+        )
+        assert screen._review_draft is not None
+        assert screen._review_draft.body == "summary before removal"
+        assert screen._review_draft.verdict is DraftVerdict.REQUEST_CHANGES
+
+
+@pytest.mark.asyncio
+async def test_github_without_batch_capability_disables_submit_with_reason(
+    tmp_path: Path,
+) -> None:
+    app, forge = _app(tmp_path)
+    forge.batched_review = False
+
+    async with app.run_test(notifications=True) as pilot:
+        screen = await _open_detail(app, pilot)
+        assert screen._supports_batched_review is False
+        screen.action_review_draft()
+        await _wait_until(app, lambda: screen._review_draft is not None)
+        screen.action_review_draft()
+        await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
+        await pilot.pause()
+        modal = cast(ReviewSubmitScreen, app.screen)
+
+        assert modal.supports_submission is False
+        assert modal.check_action("submit", ()) is False
+        help_text = modal.query_one("#review-submit-help", Static)
+        assert "GitHub batch review submission is unavailable" in str(
+            help_text.render()
+        )
+        modal.action_submit()
+        assert app.screen is modal
+        assert not any(
+            call[0] in {"comment", "inline", "reply", "verdict"} for call in forge.calls
+        )
 
 
 @pytest.mark.asyncio

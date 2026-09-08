@@ -1,0 +1,3 @@
+include README.md pyproject.toml
+recursive-include src/tongs_example_dashboard/assets *.css *.md *.mjs
+recursive-include tests *.mjs *.py

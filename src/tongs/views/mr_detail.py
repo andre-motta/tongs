@@ -278,20 +278,19 @@ class MRDetailScreen(Screen):
     @work(exclusive=True, group="mr-diff")
     async def _load_diff(self) -> None:
         panel = self.query_one("#diff-panel", DiffPanel)
-        content = panel.query_one("#diff-content")
         self._displayed_diff_revision = None
-        content.show_placeholder("Loading diff...")
+        panel.show_placeholder("Loading diff...")
         try:
             diff, discussions = await self._fetch_diff_and_discussions()
             self._displayed_diff_revision = diff.revision
             self._cached_diff_files = list(diff.files)
             if not diff.files:
-                content.show_placeholder("No changes in this MR")
+                panel.show_placeholder("No changes in this MR")
                 return
             panel.set_files(self._cached_diff_files, list(discussions))
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._displayed_diff_revision = None
-            content.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
+            panel.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
 
     async def _fetch_diff_and_discussions(
         self,

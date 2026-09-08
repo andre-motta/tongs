@@ -817,12 +817,23 @@ class DiffContent(Widget):
         option_list.clear_options()
         option_list._line_map.clear()
         option_list._line_types.clear()
+        option_list._comment_map.clear()
+        option_list._comment_indices.clear()
+        option_list._expanded_threads.clear()
+        option_list._current_file = None
+        option_list._selection_anchor = None
+        option_list._pending_resolve = None
+        option_list._explicit_selection_side = None
         option_list.add_option(
             Option(Text(message, style=Style(dim=True)), disabled=True)
         )
         self.query_one(SplitDiffView).show_placeholder(message)
         self._showing_preview = False
+        self._preview_selection = None
+        self._current_file = None
+        self._file_discussions = []
         self._show_active_diff()
+        self.post_message(DiffSelectionChanged(None))
 
     def jump_to(
         self,
@@ -1337,6 +1348,9 @@ class DiffPanel(Widget):
         files: list[DiffFile],
         discussions: list[Discussion] | None = None,
     ) -> None:
+        if not files:
+            self.show_placeholder("No changes")
+            return
         self._files = files
         self._discussions_by_file = {}
         for d in discussions or []:
@@ -1354,11 +1368,16 @@ class DiffPanel(Widget):
 
         tree = self.query_one("#diff-file-tree", DiffFileTree)
         tree.set_files(files, self._discussions_by_file)
-        if files:
-            self._show_file(0)
-        else:
-            content = self.query_one("#diff-content", DiffContent)
-            content.show_placeholder("No changes")
+        self._show_file(0)
+
+    def show_placeholder(self, message: str) -> None:
+        """Replace all source-backed panel state with an authoritative message."""
+        self._files = []
+        self._current_index = 0
+        self._discussions_by_file = {}
+        self.query_one("#diff-file-tree", DiffFileTree).set_files([])
+        self.query_one("#diff-file-header", Static).update("")
+        self.query_one("#diff-content", DiffContent).show_placeholder(message)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         if event.node.data is not None and isinstance(event.node.data, int):

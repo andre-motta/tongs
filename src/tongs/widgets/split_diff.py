@@ -528,6 +528,12 @@ class SplitDiffView(Widget):
             self.restore_selection(selection)
 
     def show_placeholder(self, message: str) -> None:
+        self._file = None
+        self._discussions = []
+        self._discussion_index.clear()
+        self._highlight_map.clear()
+        self._expanded_threads.clear()
+        self._active_side = DiffSide.NEW
         for column in self._columns():
             column.clear_options()
             column._line_map.clear()
@@ -535,7 +541,9 @@ class SplitDiffView(Widget):
             column._comment_map.clear()
             column._comment_indices.clear()
             column._selection_anchor = None
-            column._current_file = self._file
+            column._current_file = None
+            column._expanded_threads.clear()
+            column._pending_resolve = None
             column.add_option(
                 Option(_single_line(message, Style(dim=True)), disabled=True)
             )

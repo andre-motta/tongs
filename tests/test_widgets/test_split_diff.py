@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.widgets import Static
 
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, FileStatus, LineType
 from tongs.forges.models import Discussion, InlineComment, User
@@ -13,12 +15,15 @@ from tongs.state.drafts import DiffSide
 from tongs.widgets.diff_panel import (
     CommentMode,
     CommentRequested,
+    DiffContent,
+    DiffFileTree,
     DiffOptionList,
     DiffPanel,
     ReplyRequested,
     ResolveRequested,
 )
 from tongs.widgets.split_diff import (
+    DiffModeState,
     DiffSelection,
     DiffViewMode,
     SplitDiffColumn,
@@ -440,3 +445,125 @@ async def test_added_deleted_and_metadata_only_files_have_valid_sides() -> None:
         await pilot.pause()
         assert not app.query_one("#split-old", SplitDiffColumn)._line_map
         assert not app.query_one("#split-new", SplitDiffColumn)._line_map
+
+
+@pytest.mark.parametrize(
+    ("message", "use_empty_files"),
+    (
+        ("No changes", True),
+        ("Loading diff...", False),
+        ("Could not load diff. Try Ctrl+R. (failure)", False),
+    ),
+)
+@pytest.mark.asyncio
+async def test_placeholder_cannot_restore_prior_source_on_layout_or_navigation(
+    message: str,
+    use_empty_files: bool,
+) -> None:
+    app = _DiffApp()
+    original = _file()
+    secret = replace(original.hunks[0].lines[0], content="secret_stale_line = True")
+    file = replace(
+        original,
+        old_path="before/secret.md",
+        new_path="after/secret.md",
+        hunks=(
+            replace(
+                original.hunks[0],
+                lines=(secret, *original.hunks[0].lines[1:]),
+            ),
+        ),
+        language="markdown",
+    )
+    original_discussion = _discussion()
+    discussion = replace(
+        original_discussion,
+        root_comment=replace(
+            original_discussion.root_comment,
+            file_path="after/secret.md",
+        ),
+    )
+
+    async with app.run_test(size=(160, 30)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.set_files([file], [discussion])
+        content = panel.query_one("#diff-content", DiffContent)
+        content._preview_selection = panel.selection
+        content._showing_preview = True
+        content._show_active_diff()
+        await pilot.pause()
+        assert content._showing_preview
+
+        if use_empty_files:
+            panel.set_files([])
+        else:
+            panel.show_placeholder(message)
+        await pilot.pause()
+
+        def assert_authoritative_placeholder() -> None:
+            unified = app.query_one(DiffOptionList)
+            split = app.query_one(SplitDiffView)
+            columns = (
+                app.query_one("#split-old", SplitDiffColumn),
+                app.query_one("#split-new", SplitDiffColumn),
+            )
+            assert panel.selection is None
+            assert panel._files == []
+            assert panel._discussions_by_file == {}
+            assert str(app.query_one(DiffFileTree).root.label) == "Changed files (0)"
+            assert str(app.query_one("#diff-file-header", Static).render()) == ""
+            assert content._current_file is None
+            assert content._file_discussions == []
+            assert content._preview_selection is None
+            assert not content._showing_preview
+            assert unified._current_file is None
+            assert unified._line_map == {}
+            assert unified._comment_map == {}
+            assert split._file is None
+            assert split._discussions == []
+            assert split._discussion_index == {}
+            for widget in (unified, *columns):
+                assert widget.option_count == 1
+                assert "secret_stale_line" not in str(
+                    widget.get_option_at_index(0).prompt
+                )
+            assert all(column._current_file is None for column in columns)
+            assert all(column._line_map == {} for column in columns)
+
+        assert_authoritative_placeholder()
+        app.query_one(DiffOptionList).focus()
+        await pilot.press("c")
+        await pilot.pause()
+        assert app.comments == []
+
+        panel.action_comment()
+        await pilot.pause()
+        assert len(app.comments) == 1
+        assert app.comments[0].file is None
+        assert app.comments[0].line is None
+        app.comments.clear()
+
+        await pilot.press("v")
+        await pilot.pause()
+        assert panel.mode_state == DiffModeState(DiffViewMode.SPLIT, DiffViewMode.SPLIT)
+        assert_authoritative_placeholder()
+        app.query_one("#split-old", SplitDiffColumn).focus()
+        await pilot.press("c")
+        await pilot.pause()
+        assert app.comments == []
+
+        await pilot.press("n", "shift+n")
+        await pilot.pause()
+        assert_authoritative_placeholder()
+
+        await pilot.resize_terminal(80, 30)
+        await pilot.pause()
+        assert panel.mode_state == DiffModeState(
+            DiffViewMode.SPLIT, DiffViewMode.UNIFIED
+        )
+        assert_authoritative_placeholder()
+
+        await pilot.resize_terminal(160, 30)
+        await pilot.pause()
+        assert panel.mode_state == DiffModeState(DiffViewMode.SPLIT, DiffViewMode.SPLIT)
+        assert_authoritative_placeholder()

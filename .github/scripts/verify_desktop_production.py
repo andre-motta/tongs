@@ -150,6 +150,7 @@ def validate_receipt(
                 path,
                 expected_size=expected_size,
                 expected_sha256=expected_hash,
+                maximum_size=MAX_RECEIPT_BYTES if kind == "input" else None,
             )
             bound_files.append(BoundFile(path, observed_size, observed_hash, kind))
     return ReceiptValidation(document, tuple(bound_files))
@@ -543,12 +544,13 @@ def _verify_staged_file(
     *,
     expected_size: int | None,
     expected_sha256: str,
+    maximum_size: int | None,
 ) -> tuple[int, str]:
     first_size, first_digest, first_stat, first_root_stat = _read_staged_file(
-        root, relative_path, expected_size
+        root, relative_path, expected_size, maximum_size
     )
     second_size, second_digest, second_stat, second_root_stat = _read_staged_file(
-        root, relative_path, expected_size
+        root, relative_path, expected_size, maximum_size
     )
     _same_identity(
         first_root_stat, second_root_stat, "staged evidence root was replaced"
@@ -572,7 +574,10 @@ def _verify_staged_file(
 
 
 def _read_staged_file(
-    root: Path, relative_path: str, expected_size: int | None
+    root: Path,
+    relative_path: str,
+    expected_size: int | None,
+    maximum_size: int | None,
 ) -> tuple[int, str, os.stat_result, os.stat_result]:
     file_fd, before_stat, root_stat = _open_bound_file(root, relative_path)
     hasher = hashlib.sha256()
@@ -585,6 +590,10 @@ def _read_staged_file(
                 if expected_size is not None and observed_size > expected_size:
                     raise ReceiptValidationError(
                         f"staged file {relative_path!r} exceeds its declared size"
+                    )
+                if maximum_size is not None and observed_size > maximum_size:
+                    raise ReceiptValidationError(
+                        f"staged file {relative_path!r} exceeds its supported size bound"
                     )
             after_stat = os.fstat(stream.fileno())
     except ReceiptValidationError:
@@ -607,14 +616,18 @@ def _read_staged_file(
 def _read_staged_bytes(root: Path, relative_path: str, maximum: int) -> bytes:
     first = _read_staged_bytes_once(root, relative_path, maximum)
     second = _read_staged_bytes_once(root, relative_path, maximum)
-    if first != second:
+    if first[0] != second[0]:
         raise ReceiptValidationError(
             f"staged file {relative_path!r} changed during verification"
         )
-    return first
+    _same_identity(first[1], second[1], f"staged file {relative_path!r} was replaced")
+    _same_identity(first[2], second[2], "staged evidence root was replaced")
+    return first[0]
 
 
-def _read_staged_bytes_once(root: Path, relative_path: str, maximum: int) -> bytes:
+def _read_staged_bytes_once(
+    root: Path, relative_path: str, maximum: int
+) -> tuple[bytes, os.stat_result, os.stat_result]:
     file_fd, before_stat, root_stat = _open_bound_file(root, relative_path)
     chunks: list[bytes] = []
     observed_size = 0
@@ -642,7 +655,7 @@ def _read_staged_bytes_once(root: Path, relative_path: str, maximum: int) -> byt
             f"staged file {relative_path!r} changed during read"
         )
     _same_identity(root_stat, _lstat_root(root), "staged evidence root was replaced")
-    return b"".join(chunks)
+    return b"".join(chunks), after_stat, root_stat
 
 
 def _lstat_root(root: Path) -> os.stat_result:

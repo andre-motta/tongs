@@ -340,6 +340,43 @@ def test_receipt_document_size_is_bounded(tmp_path: Path) -> None:
         VERIFY.validate_receipt(oversized, evidence_root=tmp_path, policy=_policy())
 
 
+def test_input_receipt_at_bound_is_accepted(tmp_path: Path) -> None:
+    data = _receipt_data(tmp_path)
+    input_bytes = b"i" * VERIFY.MAX_RECEIPT_BYTES
+    input_path = tmp_path / "inputs" / "build.json"
+    input_path.write_bytes(input_bytes)
+    data["inputs"][0]["sha256"] = _digest(input_bytes)  # type: ignore[index]
+
+    result = _validate(tmp_path, data)
+
+    assert result.bound_files[-1].size == VERIFY.MAX_RECEIPT_BYTES
+
+
+def test_oversized_input_receipt_is_rejected(tmp_path: Path) -> None:
+    data = _receipt_data(tmp_path)
+    input_bytes = b"i" * (VERIFY.MAX_RECEIPT_BYTES + 1)
+    input_path = tmp_path / "inputs" / "build.json"
+    input_path.write_bytes(input_bytes)
+    data["inputs"][0]["sha256"] = _digest(input_bytes)  # type: ignore[index]
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="supported size bound"):
+        _validate(tmp_path, data)
+
+
+def test_artifact_archive_is_not_limited_by_receipt_bound(tmp_path: Path) -> None:
+    data = _receipt_data(tmp_path)
+    artifact_bytes = b"a" * (VERIFY.MAX_RECEIPT_BYTES + 1)
+    artifact_path = tmp_path / "artifacts" / "archive.tar.gz"
+    artifact_path.write_bytes(artifact_bytes)
+    data["artifacts"][0].update(  # type: ignore[index]
+        {"size": len(artifact_bytes), "sha256": _digest(artifact_bytes)}
+    )
+
+    result = _validate(tmp_path, data)
+
+    assert result.bound_files[1].size == VERIFY.MAX_RECEIPT_BYTES + 1
+
+
 def test_unknown_top_level_field_is_rejected(tmp_path: Path) -> None:
     data = _receipt_data(tmp_path)
     data["unexpected"] = "producer-controlled"
@@ -364,13 +401,18 @@ def test_file_replacement_between_binding_reads_is_rejected(
     calls = 0
 
     def read_once_then_replace(
-        root: Path, relative_path: str, expected_size: int | None
+        root: Path,
+        relative_path: str,
+        expected_size: int | None,
+        maximum_size: int | None,
     ) -> tuple[int, str, object, object]:
         nonlocal calls
-        result = original_read(root, relative_path, expected_size)
+        result = original_read(root, relative_path, expected_size, maximum_size)
         calls += 1
         if calls == 1:
-            (root / REPORT_PATH).write_bytes(b"X" * len(REPORT_BYTES))
+            replacement = root / "reports" / "replacement.xml"
+            replacement.write_bytes(b"X" * len(REPORT_BYTES))
+            os.replace(replacement, root / REPORT_PATH)
         return result
 
     monkeypatch.setattr(VERIFY, "_read_staged_file", read_once_then_replace)

@@ -432,6 +432,15 @@ def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
     assert "runner.temp" not in workflow_env
     assert "CANDIDATE_ROOT=%s/tongs-desktop-candidate" in workflow
     assert '>> "$GITHUB_ENV"' in workflow
+    assert workflow.count('-I -m venv "$RUNNER_TEMP/tongs-candidate-venv"') == 3
+    assert "CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python" in workflow
+    assert workflow.count('"$CANDIDATE_PYTHON" -I -m pip install') == 3
+    assert '"$CANDIDATE_PYTHON" -I -m pytest' in workflow
+    assert workflow.count('"$CANDIDATE_PYTHON" -I\n') == 3
+    assert workflow.count("--isolated") == 3
+    assert workflow.count("PYTHONNOUSERSITE=1") == 3
+    assert workflow.count("site.ENABLE_USER_SITE is False") == 3
+    assert workflow.count("tongs_path.is_relative_to(workspace)") == 3
     assert "${{ runner.temp }}/tongs-desktop-candidate" in workflow
     assert "push-to-registry: false" in workflow
     assert "create-storage-record: false" in workflow

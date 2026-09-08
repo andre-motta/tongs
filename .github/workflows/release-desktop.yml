@@ -39,15 +39,43 @@ jobs:
           persist-credentials: false
       - name: Require the exact validation source
         run: test "$(git rev-parse HEAD)" = "$TONGS_SOURCE_SHA"
+      - name: Initialize an isolated validation environment
+        run: |
+          "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/tongs-candidate-venv"
+          printf 'CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
       - name: Install the source-built verifier and test dependencies
         run: >-
-          "python${PYTHON_VERSION}" -m pip install
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
           --disable-pip-version-check
           -e ".[dev]"
           "sigstore==${SIGSTORE_VERSION}"
+      - name: Require the isolated source-bound validation environment
+        run: |
+          "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
+          import importlib.metadata
+          import json
+          import site
+          import sys
+          from pathlib import Path
+
+          import tongs
+
+          expected_prefix = Path(sys.argv[1])
+          workspace = Path(sys.argv[2]).resolve()
+          tongs_path = Path(tongs.__file__).resolve()
+          assert Path(sys.executable) == expected_prefix / "bin/python"
+          assert Path(sys.prefix) == expected_prefix
+          assert site.ENABLE_USER_SITE is False
+          assert not [path for path in sys.path if "/.local/" in path or "dist-packages" in path]
+          assert tongs_path.is_relative_to(workspace)
+          assert importlib.metadata.version("sigstore") == "4.5.0"
+          print(json.dumps({"executable": sys.executable, "prefix": sys.prefix, "sys_path": sys.path, "tongs": str(tongs_path)}, sort_keys=True))
+          PY
       - name: Exercise candidate harness and existing downgrade policy
         run: >-
-          "python${PYTHON_VERSION}" -m pytest -q
+          "$CANDIDATE_PYTHON" -I -m pytest -q
           tests/integration/desktop/test_candidate_attestation.py
           tests/desktop/installer/test_metadata.py
           tests/desktop/installer/test_sigstore_fixture.py
@@ -104,15 +132,43 @@ jobs:
           packaging/desktop/archive/run_hosted.sh
           --source-root "$GITHUB_WORKSPACE"
           --output-dir "$CANDIDATE_ROOT"
+      - name: Initialize an isolated transfer validation environment
+        run: |
+          "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/tongs-candidate-venv"
+          printf 'CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
       - name: Install source-built transfer validation dependencies
         run: >-
-          "python${PYTHON_VERSION}" -m pip install
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
           --disable-pip-version-check
           -e .
           "sigstore==${SIGSTORE_VERSION}"
+      - name: Require the isolated source-bound transfer environment
+        run: |
+          "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
+          import importlib.metadata
+          import json
+          import site
+          import sys
+          from pathlib import Path
+
+          import tongs
+
+          expected_prefix = Path(sys.argv[1])
+          workspace = Path(sys.argv[2]).resolve()
+          tongs_path = Path(tongs.__file__).resolve()
+          assert Path(sys.executable) == expected_prefix / "bin/python"
+          assert Path(sys.prefix) == expected_prefix
+          assert site.ENABLE_USER_SITE is False
+          assert not [path for path in sys.path if "/.local/" in path or "dist-packages" in path]
+          assert tongs_path.is_relative_to(workspace)
+          assert importlib.metadata.version("sigstore") == "4.5.0"
+          print(json.dumps({"executable": sys.executable, "prefix": sys.prefix, "sys_path": sys.path, "tongs": str(tongs_path)}, sort_keys=True))
+          PY
       - name: Freeze the complete source-bound producer output
         run: >-
-          "python${PYTHON_VERSION}"
+          "$CANDIDATE_PYTHON" -I
           tests/integration/desktop/candidate_attestation.py prepare-transfer
           --root "$CANDIDATE_ROOT"
           --source-archive "$CANDIDATE_SOURCE_ARCHIVE"
@@ -163,6 +219,9 @@ jobs:
         run: |
           printf 'CANDIDATE_ROOT=%s/tongs-desktop-candidate\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           printf 'CANDIDATE_SOURCE_ARCHIVE=%s/candidate-source.tar\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/tongs-candidate-venv"
+          printf 'CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
       - name: Require the exact signing source and immutable transfer identity
         run: |
           set -euo pipefail
@@ -178,13 +237,36 @@ jobs:
           path: ${{ runner.temp }}/tongs-desktop-candidate
       - name: Install Sigstore 4.5 and the source-built verifier
         run: >-
-          "python${PYTHON_VERSION}" -m pip install
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
           --disable-pip-version-check
           -e .
           "sigstore==${SIGSTORE_VERSION}"
+      - name: Require the isolated source-bound signing environment
+        run: |
+          "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
+          import importlib.metadata
+          import json
+          import site
+          import sys
+          from pathlib import Path
+
+          import tongs
+
+          expected_prefix = Path(sys.argv[1])
+          workspace = Path(sys.argv[2]).resolve()
+          tongs_path = Path(tongs.__file__).resolve()
+          assert Path(sys.executable) == expected_prefix / "bin/python"
+          assert Path(sys.prefix) == expected_prefix
+          assert site.ENABLE_USER_SITE is False
+          assert not [path for path in sys.path if "/.local/" in path or "dist-packages" in path]
+          assert tongs_path.is_relative_to(workspace)
+          assert importlib.metadata.version("sigstore") == "4.5.0"
+          print(json.dumps({"executable": sys.executable, "prefix": sys.prefix, "sys_path": sys.path, "tongs": str(tongs_path)}, sort_keys=True))
+          PY
       - name: Verify downloaded paths, bytes, source, and producer contracts
         run: >-
-          "python${PYTHON_VERSION}"
+          "$CANDIDATE_PYTHON" -I
           tests/integration/desktop/candidate_attestation.py validate-transfer
           --root "$CANDIDATE_ROOT"
           --source-archive "$CANDIDATE_SOURCE_ARCHIVE"
@@ -211,7 +293,7 @@ jobs:
         env:
           CANDIDATE_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: >-
-          "python${PYTHON_VERSION}"
+          "$CANDIDATE_PYTHON" -I
           tests/integration/desktop/candidate_attestation.py verify
           --root "$CANDIDATE_ROOT"
           --bundle "$CANDIDATE_BUNDLE"
@@ -233,8 +315,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$CANDIDATE_ROOT/attestation-evidence"
           cp "$CANDIDATE_BUNDLE" "$CANDIDATE_ROOT/attestation-evidence/candidate-attestation.sigstore.json"
-          "python${PYTHON_VERSION}" --version > "$CANDIDATE_ROOT/attestation-evidence/python-version.txt"
-          "python${PYTHON_VERSION}" -m pip freeze --all > "$CANDIDATE_ROOT/attestation-evidence/python-packages.txt"
+          "$CANDIDATE_PYTHON" -I --version > "$CANDIDATE_ROOT/attestation-evidence/python-version.txt"
+          "$CANDIDATE_PYTHON" -I -m pip freeze --all > "$CANDIDATE_ROOT/attestation-evidence/python-packages.txt"
       - name: Upload bounded candidate attestation evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

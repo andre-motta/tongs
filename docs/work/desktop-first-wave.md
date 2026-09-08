@@ -1,5 +1,11 @@
 # Desktop first-wave assignment drafts
 
+This document preserves the original assignment drafts. For current work status,
+use [issue #17](https://github.com/andre-motta/tongs/issues/17) and its children.
+The [project SDLC profile](../SDLC.md) supersedes the historical instructions below
+to keep every completed issue open until main delivery. Verified scoped work items
+may now close under Astra's tracker gate; final product acceptance remains separate.
+
 These issue-ready drafts remain planned. None is ready or assigned. Every item is
 blocked until the production desktop design passes independent review and Astra
 integrates its design PR into `feat/desktop-app`, records the exact merge SHA, and

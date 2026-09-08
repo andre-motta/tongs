@@ -118,10 +118,19 @@ or newly discovered dependency. A blocker is recorded separately from progress.
 For this initiative, track:
 `planned -> ready -> assigned -> review -> feature integrated -> CTO accepted -> main delivered`.
 Record local candidate integration and the actual remote merge SHA separately.
-A merge to the feature branch is not delivery to main. Keep implementation issues
-open until the final accepted change lands in main; use `Refs #...` in intermediate
-PRs rather than premature closing language. Preserve rejected/interrupted worktrees,
-review findings, assignments, evidence and next actions for safe resumption.
+A merge to the feature branch is not delivery to main. The CTO authorized closing
+completed scoped work items after independent review, feature integration and
+required post-merge checks are verified. Astra, or an explicitly delegated tracker
+agent, checks the item's full acceptance criteria before closing it and records the
+accepted PR head, merge commit and evidence. Closure means that scoped work is
+complete on `feat/desktop-app`; it does not imply CTO acceptance or main delivery.
+Keep the parent feature, incomplete work, deferred RFEs and outstanding production
+acceptance gates open. Readiness still depends on verified prerequisite commits.
+This exception is recorded in [issue #23](https://github.com/andre-motta/tongs/issues/23).
+
+Contributors continue using `Refs #...` in intermediate PRs and do not close issues
+automatically. Preserve rejected/interrupted worktrees, review findings,
+assignments, evidence and next actions for safe resumption.
 
 Use the [desktop PR template](https://github.com/andre-motta/tongs/blob/feat/desktop-app/.github/PULL_REQUEST_TEMPLATE/desktop.md)
 for intermediate work. Baseline CI/lint/dependency failures remain unmet; branch

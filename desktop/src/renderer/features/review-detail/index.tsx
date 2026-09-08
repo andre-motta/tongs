@@ -3,7 +3,6 @@ import type {
   DesktopBridge,
   ReviewSnapshotDto,
 } from "../../../shared/bridge.js";
-import { parseInertMarkdown } from "../../core/markdown.js";
 import type {
   AppRoute,
   FeatureContribution,
@@ -11,6 +10,7 @@ import type {
 } from "../../core/navigation.js";
 import { formatDate, safeError } from "../../core/presentation.js";
 import type { QueryCoordinator } from "../../core/query.js";
+import { SafeMarkdown } from "../../core/safe-markdown.js";
 import { useRetainedRead } from "../../core/use-read.js";
 
 export function ReviewHeader({
@@ -94,6 +94,10 @@ function ReviewOverview({
   const state = useRetainedRead(queries, `review:${route.item.handle}`, begin, [
     route.item.handle,
   ]);
+  const openExternal = useCallback(
+    (url: string) => bridge.openExternal(url),
+    [bridge],
+  );
   return (
     <>
       <ReviewHeader route={route} navigate={navigate} panels={panels} />
@@ -117,7 +121,9 @@ function ReviewOverview({
           </button>
         </Notice>
       )}
-      {state.value && <Overview snapshot={state.value} />}
+      {state.value && (
+        <Overview openExternal={openExternal} snapshot={state.value} />
+      )}
     </>
   );
 }
@@ -231,11 +237,12 @@ function ReadRefreshButton({
 }
 
 function Overview({
+  openExternal,
   snapshot,
 }: {
+  readonly openExternal: (url: string) => Promise<boolean>;
   readonly snapshot: ReviewSnapshotDto;
 }): ReactNode {
-  const blocks = parseInertMarkdown(snapshot.detail.description);
   const facts = [
     ["State", snapshot.detail.state],
     ["Merge", snapshot.detail.merge_status],
@@ -250,20 +257,13 @@ function Overview({
     <div className="overview-grid">
       <section className="panel">
         <h2 className="section-title">Description</h2>
-        {blocks.length === 0 ? (
+        {snapshot.detail.description.length === 0 ? (
           <Notice kind="empty">No description was provided.</Notice>
         ) : (
-          blocks.map((block, index) =>
-            block.kind === "heading" ? (
-              <h3 key={index}>{block.text}</h3>
-            ) : block.kind === "code" ? (
-              <pre key={index}>{block.text}</pre>
-            ) : block.kind === "list" ? (
-              <li key={index}>{block.text}</li>
-            ) : (
-              <p key={index}>{block.text}</p>
-            ),
-          )
+          <SafeMarkdown
+            openExternal={openExternal}
+            source={snapshot.detail.description}
+          />
         )}
       </section>
       <aside className="panel facts">

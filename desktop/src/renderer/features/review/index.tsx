@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -36,6 +37,10 @@ import type {
   InlineAnchorSelection,
 } from "../../core/navigation.js";
 import { safeError } from "../../core/presentation.js";
+import {
+  SafeMarkdown,
+  safeMarkdownPresentationBytes,
+} from "../../core/safe-markdown.js";
 import { ReviewHeader } from "../review-detail/index.js";
 import {
   acknowledgeQuickUncertainty,
@@ -75,6 +80,7 @@ import {
 } from "./suggestion.js";
 
 const ACTIVE_DRAFT_STATES = ["editable", "submitting", "partial", "unknown"] as const;
+const DISCUSSION_MARKDOWN_BUDGET_BYTES = 256 * 1024;
 const workflowCache = new Map<string, ReviewWorkflowState>();
 type Confirmation =
   | ReviewAction
@@ -98,7 +104,7 @@ const composerCache = new Map<string, ComposerBuffers>();
 interface ReviewFeatureBridge extends DesktopBridge, ReviewDesktopBridge {}
 
 export function createReviewFeature(
-  bridge: ReviewDesktopBridge,
+  bridge: DesktopBridge,
 ): FeatureContribution {
   return {
     id: "review.workflow",
@@ -121,7 +127,7 @@ export function createReviewFeature(
     render: (context, route) =>
       route.kind === "review" && route.panel === "discussions" ? (
         <ReviewWorkflow
-          bridge={bridge as ReviewFeatureBridge}
+          bridge={bridge}
           context={context}
           route={route}
         />
@@ -185,6 +191,14 @@ function ReviewWorkflow({
     squash: false,
     cleanup: false,
   });
+  const openExternal = useCallback(
+    (url: string) => bridge.openExternal(url),
+    [bridge],
+  );
+  const markdownAllocations = useMemo(
+    () => allocateDiscussionMarkdown(discussions),
+    [discussions],
+  );
   const quickBlocked =
     workflow?.quick?.status === "sending" || workflow?.quick?.status === "unknown";
   const setGeneralBody = (body: string): void => {
@@ -865,7 +879,7 @@ function ReviewWorkflow({
               <Notice kind="empty">No discussions yet.</Notice>
             ) : (
               <div className="review-workflow-thread-list" onKeyDown={moveButtonFocus}>
-                {discussions.map((discussion) => (
+                {discussions.map((discussion, index) => (
                   <DiscussionCard
                     key={discussion.id}
                     discussion={discussion}
@@ -875,6 +889,8 @@ function ReviewWorkflow({
                     setReply={setReplyBuffer}
                     sendReply={sendReply}
                     resolve={resolveDiscussion}
+                    markdownAllocation={markdownAllocations[index]}
+                    openExternal={openExternal}
                     showInDiff={(target) =>
                       context.navigate({
                         ...route,
@@ -998,6 +1014,8 @@ function DiscussionCard({
   sendReply,
   resolve,
   showInDiff,
+  markdownAllocation,
+  openExternal,
 }: {
   readonly discussion: DiscussionDto;
   readonly canReply: boolean;
@@ -1007,6 +1025,8 @@ function DiscussionCard({
   readonly sendReply: () => Promise<void>;
   readonly resolve: (discussion: DiscussionDto) => Promise<void>;
   readonly showInDiff: (target: DiscussionDiffTarget) => void;
+  readonly markdownAllocation: DiscussionMarkdownAllocation | undefined;
+  readonly openExternal: (url: string) => Promise<boolean>;
 }): ReactNode {
   const composing = reply?.id === discussion.id;
   const diffTarget = discussionDiffTarget(discussion);
@@ -1016,9 +1036,19 @@ function DiscussionCard({
         {discussion.root_comment.author.display_name || discussion.root_comment.author.username}
         {discussion.is_inline ? ` · ${discussion.root_comment.file_path}` : ""}
       </p>
-      <p>{discussion.root_comment.body}</p>
-      {discussion.root_comment.replies.map((item) => (
-        <blockquote key={item.id}>{item.body}</blockquote>
+      <DiscussionMarkdownBody
+        allocated={markdownAllocation?.root === true}
+        body={discussion.root_comment.body}
+        openExternal={openExternal}
+      />
+      {discussion.root_comment.replies.map((item, index) => (
+        <blockquote key={item.id}>
+          <DiscussionMarkdownBody
+            allocated={markdownAllocation?.replies[index] === true}
+            body={item.body}
+            openExternal={openExternal}
+          />
+        </blockquote>
       ))}
       <div className="review-workflow-row">
         {discussion.is_inline && (
@@ -1071,6 +1101,58 @@ function DiscussionCard({
       )}
     </article>
   );
+}
+
+function DiscussionMarkdownBody({
+  allocated,
+  body,
+  openExternal,
+}: {
+  readonly allocated: boolean;
+  readonly body: string;
+  readonly openExternal: (url: string) => Promise<boolean>;
+}): ReactNode {
+  return allocated ? (
+    <SafeMarkdown openExternal={openExternal} source={body} />
+  ) : (
+    <p className="safe-markdown-aggregate-omission" role="status">
+      Markdown omitted because the discussion display budget was exhausted. Open
+      this review on the forge to read the complete discussion.
+    </p>
+  );
+}
+
+interface DiscussionMarkdownAllocation {
+  readonly root: boolean;
+  readonly replies: readonly boolean[];
+}
+
+export function allocateDiscussionMarkdown(
+  discussions: readonly DiscussionDto[],
+): readonly DiscussionMarkdownAllocation[] {
+  let remaining = DISCUSSION_MARKDOWN_BUDGET_BYTES;
+  let exhausted = false;
+  return Object.freeze(
+    discussions.map((discussion) => {
+      const root = allocate(discussion.root_comment.body);
+      const replies = discussion.root_comment.replies.map((reply) =>
+        allocate(reply.body),
+      );
+      return Object.freeze({ root, replies: Object.freeze(replies) });
+    }),
+  );
+
+  function allocate(source: string): boolean {
+    if (exhausted) return false;
+    const bytes = safeMarkdownPresentationBytes(source);
+    if (bytes > remaining) {
+      exhausted = true;
+      remaining = 0;
+      return false;
+    }
+    remaining -= bytes;
+    return true;
+  }
 }
 
 export function discussionDiffTarget(

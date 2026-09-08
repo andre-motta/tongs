@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.019" timestamp="2026-09-08T10:46:47.647014-04:00" hostname="alustosa-5090"><testcase classname="tests.integration.desktop.fixtures.desktop_test_reports_pytest_failure_sample" name="test_failure_is_reported" time="0.001"><failure message="RuntimeError: controlled fixture failure">def test_failure_is_reported() -&gt; None:
+&gt;       raise RuntimeError("controlled fixture failure")
+E       RuntimeError: controlled fixture failure
+
+tests/integration/desktop/fixtures/desktop_test_reports_pytest_failure_sample.py:7: RuntimeError</failure></testcase></testsuite></testsuites>

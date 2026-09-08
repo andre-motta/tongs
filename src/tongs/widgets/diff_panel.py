@@ -25,6 +25,19 @@ from textual.widgets._option_list import Option
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, LineType
 from tongs.forges.models import Discussion
 from tongs.helpers import relative_time
+from tongs.state.drafts import DiffSide
+from tongs.widgets.split_diff import (
+    DiffModeChanged,
+    DiffModeState,
+    DiffSelection,
+    DiffSelectionChanged,
+    DiffViewMode,
+    SplitCommentRequested,
+    SplitDiffView,
+    SplitReplyRequested,
+    SplitResolveRequested,
+    is_actionable,
+)
 
 
 class CommentMode(Enum):
@@ -43,12 +56,14 @@ class CommentRequested(Message):
         line: DiffLine | None = None,
         mode: CommentMode = CommentMode.COMMENT,
         context_lines: list[DiffLine] | None = None,
+        side: DiffSide | None = None,
     ) -> None:
         super().__init__()
         self.file = file
         self.line = line
         self.mode = mode
         self.context_lines = context_lines
+        self.side = side
 
 
 class DiffFileTree(Tree):
@@ -177,10 +192,71 @@ class DiffOptionList(OptionList):
         self._expanded_threads: set[str] = set()
         self._comment_indices: list[int] = []
         self._pending_resolve: str | None = None
+        self._explicit_selection_side: DiffSide | None = None
 
     _ADDITION_BG = VisualStyle(background=TextualColor(0, 40, 0))
     _DELETION_BG = VisualStyle(background=TextualColor(40, 0, 0))
     _SELECTION_BG = VisualStyle(background=TextualColor(0, 50, 100))
+
+    @property
+    def selection(self) -> DiffSelection | None:
+        """Return the unified cursor as an original-coordinate selection."""
+        if (
+            self._current_file is None
+            or self.highlighted is None
+            or (line := self._line_map.get(self.highlighted)) is None
+        ):
+            return None
+        inferred_side = (
+            DiffSide.OLD if line.line_type is LineType.DELETION else DiffSide.NEW
+        )
+        side = (
+            self._explicit_selection_side
+            if self._explicit_selection_side is not None
+            and is_actionable(line, self._explicit_selection_side)
+            else inferred_side
+        )
+        selected_lines = self._get_selection_lines() or [line]
+        actionable = tuple(
+            candidate for candidate in selected_lines if is_actionable(candidate, side)
+        )
+        if line not in actionable:
+            actionable = (line,)
+        return DiffSelection(self._current_file, side, line, actionable)
+
+    def restore_selection(self, selection: DiffSelection) -> bool:
+        """Restore a selection by its original parsed line objects."""
+        if self._current_file != selection.file:
+            return False
+        selected = self._find_line(selection.line)
+        if selected is None:
+            return False
+        self.highlighted = selected
+        self._explicit_selection_side = selection.side
+        range_indices = [
+            index
+            for line in selection.lines
+            if (index := self._find_line(line)) is not None
+        ]
+        self._selection_anchor = None
+        if len(range_indices) > 1:
+            self._selection_anchor = (
+                min(range_indices)
+                if selected == max(range_indices)
+                else max(range_indices)
+            )
+        self.scroll_to_highlight()
+        return True
+
+    def _find_line(self, target: DiffLine) -> int | None:
+        return next(
+            (
+                index
+                for index, line in self._line_map.items()
+                if line is target or line == target
+            ),
+            None,
+        )
 
     def render_line(self, y: int) -> Strip:
         line_number = self.scroll_offset.y + y
@@ -256,6 +332,7 @@ class DiffOptionList(OptionList):
     def action_clear_selection(self) -> None:
         self._selection_anchor = None
         self.refresh()
+        self.post_message(DiffSelectionChanged(self.selection))
 
     def action_toggle_discussion(self) -> None:
         """Expand or collapse discussion threads on the current line."""
@@ -338,6 +415,7 @@ class DiffOptionList(OptionList):
                 line=dl,
                 mode=CommentMode.COMMENT,
                 context_lines=context,
+                side=self._explicit_selection_side,
             )
         )
         self._selection_anchor = None
@@ -353,6 +431,9 @@ class DiffOptionList(OptionList):
         if dl.line_type == LineType.DELETION:
             self.app.notify("Cannot suggest on deletion lines")
             return
+        if self._explicit_selection_side is DiffSide.OLD:
+            self.app.notify("Suggestions are available on the new side only")
+            return
 
         context = (
             self._get_selection_lines() if self._selection_anchor is not None else None
@@ -363,6 +444,7 @@ class DiffOptionList(OptionList):
                 line=dl,
                 mode=CommentMode.SUGGEST,
                 context_lines=context,
+                side=self._explicit_selection_side,
             )
         )
         self._selection_anchor = None
@@ -377,11 +459,15 @@ class DiffOptionList(OptionList):
 
     def action_cursor_down(self) -> None:
         self._selection_anchor = None
+        self._explicit_selection_side = None
         self._move_cursor_down()
+        self.post_message(DiffSelectionChanged(self.selection))
 
     def action_cursor_up(self) -> None:
         self._selection_anchor = None
+        self._explicit_selection_side = None
         self._move_cursor_up()
+        self.post_message(DiffSelectionChanged(self.selection))
 
     def action_extend_down(self) -> None:
         """Shift+J: extend selection downward."""
@@ -389,6 +475,7 @@ class DiffOptionList(OptionList):
             self._selection_anchor = self.highlighted
         self._move_cursor_down()
         self.refresh()
+        self.post_message(DiffSelectionChanged(self.selection))
 
     def action_extend_up(self) -> None:
         """Shift+K: extend selection upward."""
@@ -396,6 +483,7 @@ class DiffOptionList(OptionList):
             self._selection_anchor = self.highlighted
         self._move_cursor_up()
         self.refresh()
+        self.post_message(DiffSelectionChanged(self.selection))
 
     def action_next_comment(self) -> None:
         """Jump to the next line with a discussion."""
@@ -437,11 +525,15 @@ class DiffOptionList(OptionList):
             self.refresh()
         else:
             self._selection_anchor = None
+            self._explicit_selection_side = None
             self.highlighted = clicked_option
+        self.post_message(DiffSelectionChanged(self.selection))
 
 
 class DiffContent(Widget):
-    """Container composing DiffOptionList and Markdown preview."""
+    """Container coordinating unified, split, and Markdown diff views."""
+
+    MIN_SPLIT_WIDTH = 88
 
     DEFAULT_CSS = """
     DiffContent {
@@ -458,13 +550,92 @@ class DiffContent(Widget):
         self._showing_preview: bool = False
         self._current_file: DiffFile | None = None
         self._file_discussions: list[Discussion] = []
+        self._requested_mode = DiffViewMode.UNIFIED
+        self._effective_mode = DiffViewMode.UNIFIED
+        self._preview_selection: DiffSelection | None = None
 
     def compose(self) -> ComposeResult:
         yield DiffOptionList(id="diff-option-list")
+        yield SplitDiffView(id="split-diff-view")
         yield Markdown(id="diff-markdown-preview")
 
     def on_mount(self) -> None:
+        self.query_one(SplitDiffView).display = False
         self.query_one("#diff-markdown-preview", Markdown).display = False
+
+    @property
+    def mode_state(self) -> DiffModeState:
+        """Return the user preference and current responsive layout."""
+        return DiffModeState(self._requested_mode, self._effective_mode)
+
+    @property
+    def selection(self) -> DiffSelection | None:
+        """Return a source-backed selection independent of visual layout."""
+        if self._showing_preview:
+            return self._preview_selection
+        if self._effective_mode is DiffViewMode.SPLIT:
+            return self.query_one(SplitDiffView).selection
+        return self.query_one(DiffOptionList).selection
+
+    def request_mode(self, mode: DiffViewMode) -> DiffModeState:
+        """Select a preferred layout, applying narrow fallback if necessary."""
+        old_state = self.mode_state
+        selection = self.selection
+        self._requested_mode = mode
+        effective = self._effective_for_width(self.size.width)
+        self._set_effective_mode(effective, selection)
+        state = self.mode_state
+        if state != old_state:
+            self.post_message(DiffModeChanged(state))
+        return state
+
+    def toggle_mode(self) -> DiffModeState:
+        """Toggle the persistent user preference."""
+        requested = (
+            DiffViewMode.UNIFIED
+            if self._requested_mode is DiffViewMode.SPLIT
+            else DiffViewMode.SPLIT
+        )
+        return self.request_mode(requested)
+
+    def on_resize(self, event: events.Resize) -> None:
+        old_state = self.mode_state
+        selection = self.selection
+        self._set_effective_mode(self._effective_for_width(event.size.width), selection)
+        if self.mode_state != old_state:
+            self.post_message(DiffModeChanged(self.mode_state))
+
+    def _effective_for_width(self, width: int) -> DiffViewMode:
+        if self._requested_mode is DiffViewMode.SPLIT and width >= self.MIN_SPLIT_WIDTH:
+            return DiffViewMode.SPLIT
+        return DiffViewMode.UNIFIED
+
+    def _set_effective_mode(
+        self,
+        mode: DiffViewMode,
+        selection: DiffSelection | None,
+    ) -> None:
+        if mode is self._effective_mode:
+            return
+        self._copy_expanded_threads(self._effective_mode, mode)
+        self._effective_mode = mode
+        if self._current_file is not None:
+            self._render_current_file(selection)
+        elif not self._showing_preview:
+            self._show_active_diff()
+        self.post_message(DiffSelectionChanged(self.selection))
+
+    def _copy_expanded_threads(
+        self, source: DiffViewMode, target: DiffViewMode
+    ) -> None:
+        unified = self.query_one(DiffOptionList)
+        split = self.query_one(SplitDiffView)
+        if source is DiffViewMode.UNIFIED and target is DiffViewMode.SPLIT:
+            split._expanded_threads.clear()
+            split._expanded_threads.update(unified._expanded_threads)
+        elif source is DiffViewMode.SPLIT and target is DiffViewMode.UNIFIED:
+            unified._expanded_threads.clear()
+            unified._expanded_threads.update(split.expanded_threads)
 
     def show_file(
         self, file: DiffFile, discussions: list[Discussion] | None = None
@@ -472,9 +643,39 @@ class DiffContent(Widget):
         self._showing_preview = False
         self._current_file = file
         self._file_discussions = discussions or []
-        self._show_diff(file)
+        self._render_current_file()
 
-    def _show_diff(self, file: DiffFile) -> None:
+    def _render_current_file(self, selection: DiffSelection | None = None) -> None:
+        file = self._current_file
+        if file is None:
+            return
+        if self._effective_mode is DiffViewMode.SPLIT:
+            split = self.query_one(SplitDiffView)
+            split.show_file(
+                file,
+                self._file_discussions,
+                _build_highlight_map(file),
+                selection,
+            )
+        else:
+            self._show_diff(file, selection)
+        self._show_active_diff()
+
+    def _show_active_diff(self) -> None:
+        unified = self.query_one(DiffOptionList)
+        split = self.query_one(SplitDiffView)
+        markdown = self.query_one("#diff-markdown-preview", Markdown)
+        unified.display = (
+            not self._showing_preview and self._effective_mode is DiffViewMode.UNIFIED
+        )
+        split.display = (
+            not self._showing_preview and self._effective_mode is DiffViewMode.SPLIT
+        )
+        markdown.display = self._showing_preview
+
+    def _show_diff(
+        self, file: DiffFile, selection: DiffSelection | None = None
+    ) -> None:
         option_list = self.query_one(DiffOptionList)
         option_list.clear_options()
         option_list._line_map.clear()
@@ -483,9 +684,7 @@ class DiffContent(Widget):
         option_list._comment_indices.clear()
         option_list._current_file = file
         option_list._selection_anchor = None
-
-        option_list.display = True
-        self.query_one("#diff-markdown-preview", Markdown).display = False
+        option_list._explicit_selection_side = None
 
         if file.is_binary:
             option_list.add_option(
@@ -554,22 +753,45 @@ class DiffContent(Widget):
 
         if first_changed_idx is not None:
             option_list.highlighted = first_changed_idx
+        if selection is not None:
+            option_list.restore_selection(selection)
 
     def on__thread_toggled(self, event: _ThreadToggled) -> None:
         """Re-render the diff when a thread is expanded or collapsed."""
         if self._current_file:
             ol = self.query_one(DiffOptionList)
-            target_dl = (
-                ol._line_map.get(ol.highlighted) if ol.highlighted is not None else None
+            selection = ol.selection
+            self._show_diff(self._current_file, selection)
+
+    def on_split_comment_requested(self, event: SplitCommentRequested) -> None:
+        """Translate split interactions to the established screen contract."""
+        event.stop()
+        selection = event.selection
+        self.post_message(
+            CommentRequested(
+                file=selection.file,
+                line=selection.line,
+                mode=CommentMode.SUGGEST if event.suggest else CommentMode.COMMENT,
+                context_lines=list(selection.lines),
+                side=selection.side,
             )
-            self._show_diff(self._current_file)
-            if target_dl is not None:
-                new_ol = self.query_one(DiffOptionList)
-                for idx, dl in new_ol._line_map.items():
-                    if dl is target_dl:
-                        new_ol.highlighted = idx
-                        new_ol.scroll_to_highlight()
-                        break
+        )
+
+    def on_split_reply_requested(self, event: SplitReplyRequested) -> None:
+        event.stop()
+        selection = event.selection
+        self.post_message(
+            ReplyRequested(
+                event.discussion.id,
+                selection.file,
+                selection.line,
+                event.discussion.root_comment.author.username,
+            )
+        )
+
+    def on_split_resolve_requested(self, event: SplitResolveRequested) -> None:
+        event.stop()
+        self.post_message(ResolveRequested(event.discussion_id, event.resolved))
 
     def toggle_markdown_preview(self, file: DiffFile) -> None:
         """Toggle between diff view and rendered markdown preview."""
@@ -577,31 +799,69 @@ class DiffContent(Widget):
             self.app.notify("Not a markdown file")
             return
 
-        option_list = self.query_one(DiffOptionList)
         md = self.query_one("#diff-markdown-preview", Markdown)
 
         if self._showing_preview:
             self._showing_preview = False
-            option_list.display = True
-            md.display = False
-            self._show_diff(file)
+            self._render_current_file(self._preview_selection)
+            self._preview_selection = None
         else:
+            self._preview_selection = self.selection
             self._showing_preview = True
-            option_list.display = False
-            md.display = True
             new_content = _reconstruct_new_content(file)
             md.update(new_content if new_content else "*No content to preview*")
+            self._show_active_diff()
 
     def show_placeholder(self, message: str) -> None:
         option_list = self.query_one(DiffOptionList)
         option_list.clear_options()
         option_list._line_map.clear()
         option_list._line_types.clear()
+        option_list._comment_map.clear()
+        option_list._comment_indices.clear()
+        option_list._expanded_threads.clear()
+        option_list._current_file = None
+        option_list._selection_anchor = None
+        option_list._pending_resolve = None
+        option_list._explicit_selection_side = None
         option_list.add_option(
             Option(Text(message, style=Style(dim=True)), disabled=True)
         )
-        option_list.display = True
-        self.query_one("#diff-markdown-preview", Markdown).display = False
+        self.query_one(SplitDiffView).show_placeholder(message)
+        self._showing_preview = False
+        self._preview_selection = None
+        self._current_file = None
+        self._file_discussions = []
+        self._show_active_diff()
+        self.post_message(DiffSelectionChanged(None))
+
+    def jump_to(
+        self,
+        line: int | None,
+        side: DiffSide,
+        discussion_id: str = "",
+    ) -> bool:
+        """Jump to one original-coordinate line in the active layout."""
+        if self._current_file is None:
+            return False
+        if self._effective_mode is DiffViewMode.SPLIT:
+            return self.query_one(SplitDiffView).jump_to(line or 0, side, discussion_id)
+
+        option_list = self.query_one(DiffOptionList)
+        if discussion_id:
+            option_list._expanded_threads.add(discussion_id)
+            self._show_diff(self._current_file, option_list.selection)
+        if line is None:
+            return False
+        for index, candidate in option_list._line_map.items():
+            coordinate = (
+                candidate.old_lineno if side is DiffSide.OLD else candidate.new_lineno
+            )
+            if coordinate == line:
+                option_list.highlighted = index
+                option_list.scroll_to_highlight()
+                return True
+        return False
 
 
 class DiffRenderer:
@@ -1053,6 +1313,7 @@ class DiffPanel(Widget):
         Binding("n", "next_file", "Next file", show=True),
         Binding("shift+n", "prev_file", "Prev file", show=False),
         Binding("m", "preview_markdown", "Preview MD", show=False),
+        Binding("v", "toggle_diff_mode", "Unified/Split", show=True),
     ]
 
     def __init__(self, **kwargs) -> None:
@@ -1068,25 +1329,55 @@ class DiffPanel(Widget):
                 yield Static(id="diff-file-header")
                 yield DiffContent(id="diff-content")
 
+    @property
+    def mode_state(self) -> DiffModeState:
+        """Expose the stable requested/effective mode seam."""
+        return self.query_one("#diff-content", DiffContent).mode_state
+
+    @property
+    def selection(self) -> DiffSelection | None:
+        """Expose the current source-coordinate selection."""
+        return self.query_one("#diff-content", DiffContent).selection
+
+    def request_mode(self, mode: DiffViewMode) -> DiffModeState:
+        """Request a unified or split layout."""
+        return self.query_one("#diff-content", DiffContent).request_mode(mode)
+
     def set_files(
         self,
         files: list[DiffFile],
         discussions: list[Discussion] | None = None,
     ) -> None:
+        if not files:
+            self.show_placeholder("No changes")
+            return
         self._files = files
         self._discussions_by_file = {}
         for d in discussions or []:
             if d.is_inline and d.root_comment.file_path:
                 fp = d.root_comment.file_path
-                self._discussions_by_file.setdefault(fp, []).append(d)
+                display_path = next(
+                    (
+                        file.new_path
+                        for file in files
+                        if fp in {file.old_path, file.new_path}
+                    ),
+                    fp,
+                )
+                self._discussions_by_file.setdefault(display_path, []).append(d)
 
         tree = self.query_one("#diff-file-tree", DiffFileTree)
         tree.set_files(files, self._discussions_by_file)
-        if files:
-            self._show_file(0)
-        else:
-            content = self.query_one("#diff-content", DiffContent)
-            content.show_placeholder("No changes")
+        self._show_file(0)
+
+    def show_placeholder(self, message: str) -> None:
+        """Replace all source-backed panel state with an authoritative message."""
+        self._files = []
+        self._current_index = 0
+        self._discussions_by_file = {}
+        self.query_one("#diff-file-tree", DiffFileTree).set_files([])
+        self.query_one("#diff-file-header", Static).update("")
+        self.query_one("#diff-content", DiffContent).show_placeholder(message)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         if event.node.data is not None and isinstance(event.node.data, int):
@@ -1116,6 +1407,11 @@ class DiffPanel(Widget):
         if self._files:
             self._show_file((self._current_index - 1) % len(self._files))
 
+    def action_toggle_diff_mode(self) -> None:
+        state = self.query_one("#diff-content", DiffContent).toggle_mode()
+        if state.narrow_fallback:
+            self.app.notify("Split view selected; using unified at this width")
+
     def action_comment(self) -> None:
         """Fallback comment action when DiffOptionList does not have focus."""
         if self._files and 0 <= self._current_index < len(self._files):
@@ -1140,24 +1436,24 @@ class DiffPanel(Widget):
         for i, f in enumerate(self._files):
             if f.new_path == file_path or f.old_path == file_path:
                 self._show_file(i)
-                ol = self.query_one(DiffOptionList)
-                if discussion_id:
-                    ol._expanded_threads.add(discussion_id)
-                if line is not None:
-                    for idx, dl in ol._line_map.items():
-                        if dl.new_lineno == line or dl.old_lineno == line:
-                            ol.highlighted = idx
-                            ol.scroll_to_highlight()
-                            break
-                if discussion_id:
-                    content = self.query_one("#diff-content", DiffContent)
-                    content._show_diff(f)
-                    if line is not None:
-                        for idx, dl in ol._line_map.items():
-                            if dl.new_lineno == line or dl.old_lineno == line:
-                                ol.highlighted = idx
-                                ol.scroll_to_highlight()
-                                break
+                file_discussions = self._discussions_by_file.get(f.new_path, [])
+                target = next(
+                    (
+                        discussion
+                        for discussion in file_discussions
+                        if discussion.id == discussion_id
+                    ),
+                    None,
+                )
+                side = (
+                    DiffSide.OLD
+                    if target is not None
+                    and target.root_comment.old_line is not None
+                    and target.root_comment.new_line is None
+                    else DiffSide.NEW
+                )
+                content = self.query_one("#diff-content", DiffContent)
+                content.jump_to(line, side, discussion_id)
                 return
 
     def action_preview_markdown(self) -> None:

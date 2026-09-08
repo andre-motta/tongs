@@ -30,6 +30,7 @@ from tongs.services.ci_mutations import CIMutationOutcome
 from tongs.services.models import ReviewRevision
 from tongs.services.mr_actions import MRActionOutcome
 from tongs.services.review_mutations import MutationOutcome, MutationStatus
+from tongs.state.drafts import DiffSide
 from tongs.tui_services import TUIDiffResult
 from tongs.views.suggestion import (
     build_suggestion_template,
@@ -277,20 +278,19 @@ class MRDetailScreen(Screen):
     @work(exclusive=True, group="mr-diff")
     async def _load_diff(self) -> None:
         panel = self.query_one("#diff-panel", DiffPanel)
-        content = panel.query_one("#diff-content")
         self._displayed_diff_revision = None
-        content.show_placeholder("Loading diff...")
+        panel.show_placeholder("Loading diff...")
         try:
             diff, discussions = await self._fetch_diff_and_discussions()
             self._displayed_diff_revision = diff.revision
             self._cached_diff_files = list(diff.files)
             if not diff.files:
-                content.show_placeholder("No changes in this MR")
+                panel.show_placeholder("No changes in this MR")
                 return
             panel.set_files(self._cached_diff_files, list(discussions))
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._displayed_diff_revision = None
-            content.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
+            panel.show_placeholder(f"Could not load diff. Try Ctrl+R. ({exc})")
 
     async def _fetch_diff_and_discussions(
         self,
@@ -811,7 +811,7 @@ class MRDetailScreen(Screen):
                 )
                 return
             self._pending_inline_revision = self._displayed_diff_revision
-            editor.open_inline(event.file, event.line)
+            editor.open_inline(event.file, event.line, side=event.side)
         else:
             self._pending_inline_revision = None
             editor.open_general()
@@ -823,6 +823,10 @@ class MRDetailScreen(Screen):
         import shutil
         import subprocess
         import tempfile
+
+        if event.side is DiffSide.OLD:
+            self.notify("Suggestions are available on the new side only")
+            return
 
         revision = self._displayed_diff_revision
         if revision is None:

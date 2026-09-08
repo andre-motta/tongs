@@ -40,6 +40,11 @@ from tongs.desktop.protocol.messages import (
     encode_response,
     to_json_value,
 )
+from tongs.desktop.protocol.review_operations import (
+    REVIEW_CAPABILITY,
+    REVIEW_METHODS,
+    ReviewOperations,
+)
 from tongs.desktop.protocol.state import (
     MAX_SNAPSHOT_RETAINED_BYTES,
     HandleKind,
@@ -95,6 +100,7 @@ SUPPORTED_CAPABILITIES = frozenset(
         "paged_diffs",
         "paged_logs",
         "plugins",
+        REVIEW_CAPABILITY,
         "split_diffs",
     }
 )
@@ -116,6 +122,7 @@ SUPPORTED_METHODS = (
     "repositories.discover",
     "repositories.open",
     "review_pipelines.list",
+    *REVIEW_METHODS,
     "reviews.get",
     "reviews.list",
 )
@@ -272,6 +279,7 @@ class DesktopSidecarServer:
         self._location: DesktopLocation | None = None
         self._install_read_operations()
         self._install_ci_operations()
+        self._install_review_operations()
 
     @property
     def session_id(self) -> str:
@@ -282,9 +290,8 @@ class DesktopSidecarServer:
     ) -> None:
         """Register a future operation with explicit cancellation semantics.
 
-        S6 registers reads only. Downstream mutation slices can register typed
-        service operations here. A cancel frame signals a dispatched mutation but
-        does not cancel its task or claim that remote work rolled back.
+        A cancel frame signals a dispatched mutation but does not cancel its task
+        or claim that remote work rolled back.
         """
         if method in self._operations:
             raise ValueError(f"Duplicate sidecar operation: {method}")
@@ -375,6 +382,13 @@ class DesktopSidecarServer:
 
     def _install_ci_operations(self) -> None:
         operations = CIOperations(session=self._session, handles=self._handles)
+        for method, (handler, mutation) in operations.handlers.items():
+            self.register_operation(
+                method, cast(OperationHandler, handler), mutation=mutation
+            )
+
+    def _install_review_operations(self) -> None:
+        operations = ReviewOperations(session=self._session, handles=self._handles)
         for method, (handler, mutation) in operations.handlers.items():
             self.register_operation(
                 method, cast(OperationHandler, handler), mutation=mutation

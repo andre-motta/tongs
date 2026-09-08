@@ -50,11 +50,12 @@ class ReceiptValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ReceiptPolicy:
-    """Consumer supplied identity, required checks and report formats.
+    """Consumer supplied identity and allowlist for one receipt.
 
-    ``report_formats`` must contain one nonempty allowed-format collection for
-    every required check ID.  This policy is supplied by the consumer and is
-    never read from the receipt itself.
+    Required-check-set completeness is a workflow concern owned by issue #53.
+    This child intentionally validates one receipt against one expected check
+    ID.  The policy is supplied by the consumer and is never read from the
+    receipt itself.
     """
 
     expected_commit: str
@@ -64,8 +65,8 @@ class ReceiptPolicy:
     expected_attempt: int
     expected_environment: str
     expected_provenance: str
-    required_check_ids: Collection[str]
-    report_formats: Mapping[str, frozenset[str]]
+    expected_check_id: str
+    allowed_report_formats: Collection[str]
 
     def __post_init__(self) -> None:
         _validate_sha1(self.expected_commit, "expected commit")
@@ -74,34 +75,25 @@ class ReceiptPolicy:
         _validate_decimal_string(self.expected_run_id, "expected run ID")
         _validate_positive_integer(self.expected_attempt, "expected attempt")
         _validate_text(self.expected_environment, "expected environment")
+        _validate_text(self.expected_provenance, "expected provenance")
         if self.expected_provenance not in _PROVENANCES:
             raise ReceiptValidationError("expected provenance is unsupported")
-        check_ids = tuple(self.required_check_ids)
-        if not check_ids:
-            raise ReceiptValidationError("required check IDs must not be empty")
-        for check_id in check_ids:
-            _validate_text(check_id, "required check ID")
-        if len(check_ids) != len(set(check_ids)):
+        _validate_text(self.expected_check_id, "expected check ID")
+        formats = tuple(self.allowed_report_formats)
+        if not formats:
+            raise ReceiptValidationError("allowed report formats must not be empty")
+        for report_format in formats:
+            _validate_text(report_format, "report format")
+        if len(formats) != len(set(formats)):
             raise ReceiptValidationError(
-                "required check IDs must not contain duplicates"
+                "allowed report formats must not contain duplicates"
             )
-        object.__setattr__(self, "required_check_ids", frozenset(check_ids))
-        configured_ids = frozenset(self.report_formats)
-        if configured_ids != self.required_check_ids:
-            raise ReceiptValidationError(
-                "report formats must be configured for exactly the required check IDs"
-            )
-        for check_id, formats in self.report_formats.items():
-            if not formats:
+        object.__setattr__(self, "allowed_report_formats", frozenset(formats))
+        for report_format in formats:
+            if report_format not in INITIAL_REPORT_FORMATS:
                 raise ReceiptValidationError(
-                    f"report formats for {check_id!r} must not be empty"
+                    f"report format {report_format!r} is unsupported"
                 )
-            for report_format in formats:
-                _validate_text(report_format, "report format")
-                if report_format not in INITIAL_REPORT_FORMATS:
-                    raise ReceiptValidationError(
-                        f"report format {report_format!r} is unsupported"
-                    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,8 +270,10 @@ def _validate_structure(
     if type(document["schema_version"]) is not int or document["schema_version"] != 1:
         raise ReceiptValidationError("schema_version must be integer 1")
     check_id = _require_text(document["check_id"], "check_id")
-    if check_id not in policy.required_check_ids:
-        raise ReceiptValidationError(f"check_id {check_id!r} is not required")
+    if check_id != policy.expected_check_id:
+        raise ReceiptValidationError(
+            f"check_id {check_id!r} does not match the consumer expectation"
+        )
 
     source = _require_object(document["source"], "source")
     _require_exact_keys(source, {"commit", "tree"}, "source")
@@ -331,7 +325,7 @@ def _validate_structure(
     normalized_paths: set[str] = set()
     for entry in reports:
         _validate_report_entry(
-            entry, policy.report_formats[check_id], paths, normalized_paths
+            entry, policy.allowed_report_formats, paths, normalized_paths
         )
     for entry in artifacts:
         _validate_artifact_entry(entry, paths, normalized_paths)
@@ -502,7 +496,10 @@ def _open_bound_file(
         | getattr(os, "O_NOFOLLOW", 0)
     )
     file_flags = (
-        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
     )
     try:
         directory_fd = os.open(root, directory_flags)
@@ -668,16 +665,8 @@ def _same_identity(first: os.stat_result, second: os.stat_result, message: str) 
 
 
 def _parse_policy(arguments: argparse.Namespace) -> ReceiptPolicy:
-    formats: dict[str, frozenset[str]] = {}
-    for item in arguments.format:
-        try:
-            check_id, report_format = item.split("=", 1)
-        except ValueError as error:
-            raise ReceiptValidationError("--format must be CHECK_ID=FORMAT") from error
-        if check_id in formats:
-            formats[check_id] = formats[check_id] | frozenset({report_format})
-        else:
-            formats[check_id] = frozenset({report_format})
+    if len(arguments.check_id) != 1:
+        raise ReceiptValidationError("--check-id must occur exactly once")
     return ReceiptPolicy(
         expected_commit=arguments.commit,
         expected_tree=arguments.tree,
@@ -686,8 +675,8 @@ def _parse_policy(arguments: argparse.Namespace) -> ReceiptPolicy:
         expected_attempt=arguments.attempt,
         expected_environment=arguments.environment,
         expected_provenance=arguments.provenance,
-        required_check_ids=tuple(arguments.check_id),
-        report_formats=formats,
+        expected_check_id=arguments.check_id[0],
+        allowed_report_formats=tuple(arguments.format),
     )
 
 
@@ -712,8 +701,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--format",
         action="append",
         required=True,
-        metavar="CHECK_ID=FORMAT",
-        help="Allowed report format for a configured check; repeat as needed",
+        metavar="FORMAT",
+        help="Allowed report format for this receipt; repeat as needed",
     )
     return parser
 

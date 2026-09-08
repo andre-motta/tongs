@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -58,8 +59,8 @@ def _policy(
         expected_attempt=ATTEMPT,
         expected_environment=ENVIRONMENT,
         expected_provenance=PROVENANCE,
-        required_check_ids=frozenset({check_id}),
-        report_formats={check_id: frozenset({report_format})},
+        expected_check_id=check_id,
+        allowed_report_formats=frozenset({report_format}),
     )
 
 
@@ -199,23 +200,8 @@ def test_consumer_check_id_and_format_are_independent(tmp_path: Path) -> None:
     data = _receipt_data(tmp_path)
     data["check_id"] = "desktop-python-313"
 
-    with pytest.raises(VERIFY.ReceiptValidationError, match="not required"):
+    with pytest.raises(VERIFY.ReceiptValidationError, match="consumer expectation"):
         _validate(tmp_path, data)
-
-
-def test_consumer_required_check_ids_reject_duplicates() -> None:
-    with pytest.raises(VERIFY.ReceiptValidationError, match="duplicates"):
-        VERIFY.ReceiptPolicy(
-            expected_commit=COMMIT,
-            expected_tree=TREE,
-            expected_repository=REPOSITORY,
-            expected_run_id=RUN_ID,
-            expected_attempt=ATTEMPT,
-            expected_environment=ENVIRONMENT,
-            expected_provenance=PROVENANCE,
-            required_check_ids=[CHECK_ID, CHECK_ID],
-            report_formats={CHECK_ID: frozenset({VERIFY.PYTEST_JUNIT_FORMAT})},
-        )
 
 
 def test_duplicate_json_keys_are_rejected_before_schema_validation(
@@ -294,6 +280,101 @@ def test_symlinked_report_is_not_a_real_bound_file(tmp_path: Path) -> None:
     )
 
     with pytest.raises(VERIFY.ReceiptValidationError):
+        _validate(tmp_path, data)
+
+
+def test_symlinked_evidence_root_is_rejected(tmp_path: Path) -> None:
+    real_root = tmp_path / "real-root"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="real directory"):
+        _validate(linked_root, _receipt_data(real_root))
+
+
+def test_symlinked_intermediate_directory_is_rejected(tmp_path: Path) -> None:
+    data = _receipt_data(tmp_path)
+    reports = tmp_path / "reports"
+    real_reports = tmp_path / "real-reports"
+    reports.rename(real_reports)
+    reports.symlink_to(real_reports, target_is_directory=True)
+
+    with pytest.raises(VERIFY.ReceiptValidationError):
+        _validate(tmp_path, data)
+
+
+def test_symlinked_receipt_is_rejected(tmp_path: Path) -> None:
+    data = _receipt_data(tmp_path)
+    real_receipt = tmp_path / "real-receipt.json"
+    real_receipt.write_bytes(_encoded(data))
+    linked_receipt = tmp_path / "receipt.json"
+    linked_receipt.symlink_to(real_receipt)
+
+    with pytest.raises(VERIFY.ReceiptValidationError):
+        VERIFY.validate_receipt_file(
+            linked_receipt, evidence_root=tmp_path, policy=_policy()
+        )
+
+
+def test_fifo_is_rejected_without_waiting_for_a_writer(tmp_path: Path) -> None:
+    data = _receipt_data(tmp_path)
+    fifo_path = tmp_path / "reports" / "result.pipe"
+    os.mkfifo(fifo_path)
+    data["reports"][0].update(  # type: ignore[index]
+        {
+            "path": "reports/result.pipe",
+            "size": 1,
+            "sha256": "0" * 64,
+        }
+    )
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="regular file"):
+        _validate(tmp_path, data)
+
+
+def test_receipt_document_size_is_bounded(tmp_path: Path) -> None:
+    oversized = b"{" + b"x" * VERIFY.MAX_RECEIPT_BYTES + b"}"
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="size"):
+        VERIFY.validate_receipt(oversized, evidence_root=tmp_path, policy=_policy())
+
+
+def test_unknown_top_level_field_is_rejected(tmp_path: Path) -> None:
+    data = _receipt_data(tmp_path)
+    data["unexpected"] = "producer-controlled"
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="unexpected"):
+        _validate(tmp_path, data)
+
+
+def test_malformed_digest_is_rejected_before_file_access(tmp_path: Path) -> None:
+    data = _receipt_data(tmp_path)
+    data["reports"][0]["sha256"] = "not-a-digest"  # type: ignore[index]
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="SHA-256"):
+        _validate(tmp_path, data)
+
+
+def test_file_replacement_between_binding_reads_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _receipt_data(tmp_path)
+    original_read = VERIFY._read_staged_file
+    calls = 0
+
+    def read_once_then_replace(
+        root: Path, relative_path: str, expected_size: int | None
+    ) -> tuple[int, str, object, object]:
+        nonlocal calls
+        result = original_read(root, relative_path, expected_size)
+        calls += 1
+        if calls == 1:
+            (root / REPORT_PATH).write_bytes(b"X" * len(REPORT_BYTES))
+        return result
+
+    monkeypatch.setattr(VERIFY, "_read_staged_file", read_once_then_replace)
+    with pytest.raises(VERIFY.ReceiptValidationError, match="replaced|changed"):
         _validate(tmp_path, data)
 
 
@@ -379,9 +460,45 @@ def test_cli_does_not_advertise_structural_validation_as_production_success(
             "--check-id",
             CHECK_ID,
             "--format",
-            f"{CHECK_ID}={VERIFY.PYTEST_JUNIT_FORMAT}",
+            VERIFY.PYTEST_JUNIT_FORMAT,
         ]
     )
 
     assert result == 0
     assert "production success require independent checks" in capsys.readouterr().out
+
+
+def test_cli_rejects_duplicate_check_id_occurrences(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = VERIFY.main(
+        [
+            "--receipt",
+            str(tmp_path / "missing.json"),
+            "--evidence-root",
+            str(tmp_path),
+            "--commit",
+            COMMIT,
+            "--tree",
+            TREE,
+            "--repository",
+            REPOSITORY,
+            "--run-id",
+            RUN_ID,
+            "--attempt",
+            str(ATTEMPT),
+            "--environment",
+            ENVIRONMENT,
+            "--provenance",
+            PROVENANCE,
+            "--check-id",
+            CHECK_ID,
+            "--check-id",
+            CHECK_ID,
+            "--format",
+            VERIFY.PYTEST_JUNIT_FORMAT,
+        ]
+    )
+
+    assert result == 1
+    assert "exactly once" in capsys.readouterr().err

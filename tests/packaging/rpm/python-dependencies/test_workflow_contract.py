@@ -45,6 +45,14 @@ def test_builder_uses_only_fedora_packaged_python_build_tools() -> None:
     assert "rustup" not in containerfile
 
 
+def test_offline_build_keeps_tool_caches_in_disposable_topdir() -> None:
+    builder = (PACKAGING / "build_rpms.sh").read_text()
+
+    assert 'export HOME="$topdir/home"' in builder
+    assert 'export XDG_CACHE_HOME="$topdir/cache"' in builder
+    assert 'export CARGO_HOME="$topdir/cargo-home"' in builder
+
+
 def test_workflow_has_minimal_permissions_and_retains_artifacts() -> None:
     workflow = WORKFLOW.read_text()
 

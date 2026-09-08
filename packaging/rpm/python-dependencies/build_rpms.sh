@@ -37,6 +37,10 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p -- "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+export HOME="$topdir/home"
+export XDG_CACHE_HOME="$topdir/cache"
+export CARGO_HOME="$topdir/cargo-home"
+mkdir -p -- "$HOME" "$XDG_CACHE_HOME" "$CARGO_HOME"
 
 python3 "$script_dir/validate_manifest.py" "$script_dir/manifest.json"
 cp -- "$source_dir"/*.tar.gz "$topdir/SOURCES/"

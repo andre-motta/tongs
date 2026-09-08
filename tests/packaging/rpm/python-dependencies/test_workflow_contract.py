@@ -101,8 +101,10 @@ def test_offline_build_keeps_tool_caches_in_disposable_topdir() -> None:
 
 
 def test_each_srpm_gets_clean_builddep_environment_and_offline_rebuild() -> None:
+    srpm_builder = (PACKAGING / "build_rpms.sh").read_text()
     rebuilder = (PACKAGING / "rebuild_srpms.sh").read_text()
 
+    assert 'cp -- "$source_dir"/rfc3161-cargo-inventory.json' in srpm_builder
     assert "dnf builddep" in rebuilder
     assert "--network=none" in rebuilder
     assert rebuilder.index("dnf builddep") < rebuilder.index("--network=none")

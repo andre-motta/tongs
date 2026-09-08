@@ -103,3 +103,24 @@ def test_cargo_vendor_config_is_relocatable() -> None:
 
     assert result == '[source.vendored-sources]\ndirectory = "vendor"\n'
     assert str(vendor) not in result
+
+
+@pytest.mark.parametrize(
+    "final_url",
+    [
+        "http://files.pythonhosted.org/source.tar.gz",
+        "https://example.com/source.tar.gz",
+    ],
+)
+def test_download_redirect_requires_same_https_host(final_url: str) -> None:
+    with pytest.raises(RuntimeError, match="outside HTTPS host"):
+        prepare_sources._validate_download_url(
+            "https://files.pythonhosted.org/source.tar.gz", final_url
+        )
+
+
+def test_download_accepts_same_https_host() -> None:
+    prepare_sources._validate_download_url(
+        "https://files.pythonhosted.org/source.tar.gz",
+        "https://files.pythonhosted.org/redirected/source.tar.gz",
+    )

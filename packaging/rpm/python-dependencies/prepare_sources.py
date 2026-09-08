@@ -23,6 +23,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validate_download_url(expected_url: str, final_url: str) -> None:
+    expected = urlparse(expected_url)
+    final = urlparse(final_url)
+    if final.scheme != "https" or final.hostname != expected.hostname:
+        raise RuntimeError(
+            f"source redirected outside HTTPS host {expected.hostname}: {final_url}"
+        )
+
+
 def _download(source: dict[str, Any], output: Path) -> None:
     request = urllib.request.Request(
         source["url"], headers={"User-Agent": "tongs-issue-85-source-preparer/1"}
@@ -33,11 +42,7 @@ def _download(source: dict[str, Any], output: Path) -> None:
         urllib.request.urlopen(request, timeout=60) as response,
         output.open("wb") as dest,
     ):
-        expected_host = urlparse(source["url"]).hostname
-        if urlparse(response.geturl()).hostname != expected_host:
-            raise RuntimeError(
-                f"source redirected outside {expected_host}: {response.geturl()}"
-            )
+        _validate_download_url(source["url"], response.geturl())
         while block := response.read(1024 * 1024):
             read_bytes += len(block)
             if read_bytes > expected_bytes:

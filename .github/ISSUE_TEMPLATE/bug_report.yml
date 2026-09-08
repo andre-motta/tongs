@@ -44,12 +44,48 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Interface
+      description: Where the bug happened.
+      options:
+        - Terminal interface (TUI)
+        - MCP server plugin
+        - Desktop workspace (unreleased, built from source)
+        - Not interface-specific
+    validations:
+      required: true
+
   - type: input
     id: tongs-version
     attributes:
       label: tongs version
-      description: Output of `tongs --version` or `pip show tongs`.
+      description: >-
+        There is no `tongs --version` flag. Run `pip show tongs` in the
+        environment where tongs is installed, or
+        `python -c "from importlib.metadata import version; print(version('tongs'))"`.
       placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How you installed tongs
+      description: >-
+        Packaging paths differ, so this narrows down where a failure comes from.
+        The desktop archive and the RPMs are built from this repository and are
+        not published anywhere yet.
+      options:
+        - pipx install tongs
+        - uvx tongs
+        - uv tool install tongs
+        - pip install tongs
+        - Editable install from a source checkout
+        - Per-user desktop archive built from source (unreleased)
+        - RPM built from packaging/rpm (unreleased, not published)
+        - Other or unsure
     validations:
       required: true
 
@@ -76,6 +112,28 @@ body:
       label: Terminal emulator
       description: The terminal you were using when the bug occurred.
       placeholder: "kitty / Alacritty / GNOME Terminal / Windows Terminal"
+    validations:
+      required: false
+
+  - type: input
+    id: desktop-session
+    attributes:
+      label: Desktop session
+      description: >-
+        Desktop workspace bugs only. Give the desktop environment and whether the
+        window ran on X11, XWayland, or Wayland.
+      placeholder: "Fedora 44 KDE Plasma, XWayland"
+    validations:
+      required: false
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: >-
+        Desktop workspace bugs only. Give the GPU and driver, or say software
+        rendering if the window ran without hardware acceleration.
+      placeholder: "Intel UHD 620, Mesa 25.x"
     validations:
       required: false
 

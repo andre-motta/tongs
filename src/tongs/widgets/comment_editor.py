@@ -12,6 +12,7 @@ from contextlib import suppress
 from dataclasses import replace
 from typing import ClassVar
 
+from rich.markup import escape
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.message import Message
@@ -159,7 +160,7 @@ class CommentEditor(Widget):
             display_line = line.new_lineno or line.old_lineno or ""
         self._position = position
         header = self.query_one("#editor-header", Static)
-        header.update(f"[bold]Comment on {display_path}:{display_line}[/]")
+        header.update(f"[bold]Comment on {escape(display_path)}:{display_line}[/]")
         text_area = self.query_one("#comment-input", TextArea)
         text_area.clear()
         self.display = True

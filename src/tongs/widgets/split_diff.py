@@ -24,7 +24,7 @@ from textual.widgets import OptionList
 from textual.widgets._option_list import Option
 
 from tongs.diff.alignment import align_hunk
-from tongs.diff.models import DiffFile, DiffLine, LineType
+from tongs.diff.models import DiffFile, DiffLine, LineType, SplitDiffRow
 from tongs.forges.models import Discussion
 from tongs.helpers import relative_time
 from tongs.state.drafts import DiffSide
@@ -181,8 +181,20 @@ class SplitDiffColumn(OptionList):
         Binding("h", "focus_old", "Old side", show=False),
         Binding("l", "focus_new", "New side", show=False),
         Binding("escape", "clear_selection", "Clear sel", show=False),
-        Binding("right_square_bracket", "next_comment", "Next comment", show=True),
-        Binding("left_square_bracket", "prev_comment", "Prev comment", show=True),
+        Binding(
+            "right_square_bracket",
+            "next_comment",
+            "Next comment",
+            show=True,
+            key_display="]",
+        ),
+        Binding(
+            "left_square_bracket",
+            "prev_comment",
+            "Prev comment",
+            show=True,
+            key_display="[",
+        ),
         Binding("d", "toggle_discussion", "Show/Hide thread", show=True),
         Binding("r", "reply_discussion", "Reply", show=True),
         Binding("R", "resolve_discussion", "Resolve", show=True),
@@ -309,6 +321,11 @@ class SplitDiffColumn(OptionList):
             for index in range(low, high + 1)
             if index in self._line_map
         ]
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "clear_selection":
+            return self._selection_anchor is not None
+        return True
 
     def action_clear_selection(self) -> None:
         self._selection_anchor = None
@@ -623,8 +640,16 @@ class SplitDiffView(Widget):
         for column in (old_column, new_column):
             column.reset(file, self._expanded_threads)
 
-        old_options = [Option(Text(" OLD", style=Style(bold=True)), disabled=True)]
-        new_options = [Option(Text(" NEW", style=Style(bold=True)), disabled=True)]
+        old_options = [
+            Option(
+                Text(f" OLD  {file.old_path}", style=Style(bold=True)), disabled=True
+            )
+        ]
+        new_options = [
+            Option(
+                Text(f" NEW  {file.new_path}", style=Style(bold=True)), disabled=True
+            )
+        ]
         option_index = 1
         first_actionable: dict[DiffSide, int | None] = {
             DiffSide.OLD: None,
@@ -636,7 +661,7 @@ class SplitDiffView(Widget):
         }
 
         if file.is_binary or not file.hunks:
-            message = "[Binary file]" if file.is_binary else "Diff not available"
+            message = _placeholder_message(file)
             placeholder = Option(Text(message, style=Style(dim=True)), disabled=True)
             old_options.append(placeholder)
             new_options.append(
@@ -648,7 +673,20 @@ class SplitDiffView(Widget):
                 old_options.append(Option(header.copy(), disabled=True))
                 new_options.append(Option(header.copy(), disabled=True))
                 option_index += 1
-                for row in align_hunk(hunk):
+                for row in _fold_context_rows(align_hunk(hunk)):
+                    if isinstance(row, str):
+                        marker = Option(
+                            Text(f"      {row}", style=Style(dim=True)), disabled=True
+                        )
+                        old_options.append(marker)
+                        new_options.append(
+                            Option(
+                                Text(f"      {row}", style=Style(dim=True)),
+                                disabled=True,
+                            )
+                        )
+                        option_index += 1
+                        continue
                     old_discussions = _line_discussions(
                         row.old, DiffSide.OLD, self._discussion_index
                     )
@@ -792,6 +830,50 @@ def _discussion_index(
             root = discussion.root_comment
             index.setdefault((root.old_line, root.new_line), []).append(discussion)
     return index
+
+
+def _fold_context_rows(
+    rows: tuple[SplitDiffRow, ...], context_lines: int = 3
+) -> tuple[SplitDiffRow | str, ...]:
+    """Fold long unchanged runs equally on both source sides."""
+    result: list[SplitDiffRow | str] = []
+    run: list[SplitDiffRow] = []
+
+    def flush() -> None:
+        if len(run) > context_lines * 2:
+            result.extend(run[:context_lines])
+            result.append(f"... {len(run) - context_lines * 2} unchanged lines ...")
+            result.extend(run[-context_lines:])
+        else:
+            result.extend(run)
+        run.clear()
+
+    for row in rows:
+        if (
+            row.old is not None
+            and row.new is row.old
+            and row.old.line_type is LineType.CONTEXT
+        ):
+            run.append(row)
+        else:
+            flush()
+            result.append(row)
+    flush()
+    return tuple(result)
+
+
+def _placeholder_message(file: DiffFile) -> str:
+    if file.is_binary:
+        return "[Binary file]"
+    if file.is_truncated:
+        return "Diff truncated by the forge. Press o to view in browser."
+    if file.is_empty:
+        return "[Empty file]"
+    if file.is_mode_only:
+        return "[File mode changed]"
+    if file.is_unavailable:
+        return "Diff unavailable from the forge. Press o to view in browser."
+    return "Diff not available. Press o to view in browser."
 
 
 def _line_discussions(

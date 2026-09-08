@@ -292,3 +292,96 @@ async def test_discussion_state_and_actions_survive_layout_changes() -> None:
         assert [(event.discussion_id, event.resolved) for event in app.resolutions] == [
             (discussion.id, True)
         ]
+
+
+@pytest.mark.asyncio
+async def test_long_context_is_folded_without_creating_comment_anchors() -> None:
+    app = _DiffApp()
+    context = tuple(
+        DiffLine(number, number, f"context {number}", LineType.CONTEXT)
+        for number in range(1, 11)
+    )
+    addition = DiffLine(None, 11, "changed", LineType.ADDITION)
+    file = DiffFile(
+        "long.py",
+        "long.py",
+        FileStatus.MODIFIED,
+        (DiffHunk("@@ -1,10 +1,11 @@", 1, 10, 1, 11, (*context, addition)),),
+    )
+
+    async with app.run_test(size=(160, 30)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.set_files([file])
+        panel.request_mode(DiffViewMode.SPLIT)
+        await pilot.pause()
+
+        old = app.query_one("#split-old", SplitDiffColumn)
+        new = app.query_one("#split-new", SplitDiffColumn)
+        assert context[4] not in old._line_map.values()
+        assert context[4] not in new._line_map.values()
+        assert old.option_count == new.option_count
+        assert old.option_count == 10  # side header, hunk, 3 + fold + 3, change
+
+
+@pytest.mark.asyncio
+async def test_added_deleted_and_metadata_only_files_have_valid_sides() -> None:
+    app = _DiffApp()
+    added = DiffFile(
+        "new.py",
+        "new.py",
+        FileStatus.ADDED,
+        (
+            DiffHunk(
+                "@@ -0,0 +1 @@",
+                0,
+                0,
+                1,
+                1,
+                (DiffLine(None, 1, "new", LineType.ADDITION),),
+            ),
+        ),
+    )
+    deleted = DiffFile(
+        "old.py",
+        "old.py",
+        FileStatus.DELETED,
+        (
+            DiffHunk(
+                "@@ -1 +0,0 @@",
+                1,
+                1,
+                0,
+                0,
+                (DiffLine(1, None, "old", LineType.DELETION),),
+            ),
+        ),
+    )
+    metadata = DiffFile(
+        "large.py",
+        "large.py",
+        FileStatus.MODIFIED,
+        (),
+        additions=20,
+        is_truncated=True,
+    )
+
+    async with app.run_test(size=(160, 30)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.request_mode(DiffViewMode.SPLIT)
+        for file, populated_side in (
+            (added, DiffSide.NEW),
+            (deleted, DiffSide.OLD),
+        ):
+            panel.set_files([file])
+            await pilot.pause()
+            assert bool(app.query_one("#split-old", SplitDiffColumn)._line_map) is (
+                populated_side is DiffSide.OLD
+            )
+            assert bool(app.query_one("#split-new", SplitDiffColumn)._line_map) is (
+                populated_side is DiffSide.NEW
+            )
+
+        panel.set_files([metadata])
+        await pilot.pause()
+        assert not app.query_one("#split-old", SplitDiffColumn)._line_map
+        assert not app.query_one("#split-new", SplitDiffColumn)._line_map

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import bisect
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.console import Console
 from rich.markdown import Markdown as RichMarkdown
@@ -28,6 +29,9 @@ from tongs.diff.models import DiffFile, DiffLine, LineType, SplitDiffRow
 from tongs.forges.models import Discussion
 from tongs.helpers import relative_time
 from tongs.state.drafts import DiffSide
+
+if TYPE_CHECKING:
+    from tongs.widgets.review_draft import DraftMarker
 
 
 class DiffViewMode(str, Enum):
@@ -498,6 +502,7 @@ class SplitDiffView(Widget):
         self._highlight_map: dict[int, Text] = {}
         self._expanded_threads: set[str] = set()
         self._active_side = DiffSide.NEW
+        self._draft_markers: tuple[DraftMarker, ...] = ()
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -518,11 +523,13 @@ class SplitDiffView(Widget):
         discussions: list[Discussion],
         highlight_map: dict[int, Text],
         selection: DiffSelection | None = None,
+        draft_markers: tuple[DraftMarker, ...] = (),
     ) -> None:
         self._file = file
         self._discussions = discussions
         self._discussion_index = _discussion_index(discussions)
         self._highlight_map = highlight_map
+        self._draft_markers = draft_markers
         self._populate()
         if selection is not None:
             self.restore_selection(selection)
@@ -534,6 +541,7 @@ class SplitDiffView(Widget):
         self._highlight_map.clear()
         self._expanded_threads.clear()
         self._active_side = DiffSide.NEW
+        self._draft_markers = ()
         for column in self._columns():
             column.clear_options()
             column._line_map.clear()
@@ -683,7 +691,10 @@ class SplitDiffView(Widget):
                 old_options.append(Option(header.copy(), disabled=True))
                 new_options.append(Option(header.copy(), disabled=True))
                 option_index += 1
-                for row in _fold_context_rows(align_hunk(hunk)):
+                for row in _fold_context_rows(
+                    align_hunk(hunk),
+                    preserve=lambda row: self._row_has_visible_detail(file, row),
+                ):
                     if isinstance(row, str):
                         marker = Option(
                             _single_line(f"      {row}", Style(dim=True)), disabled=True
@@ -741,6 +752,20 @@ class SplitDiffView(Widget):
                         new_options.append(Option(thread_line, disabled=True))
                         option_index += 1
 
+                    for marker in self._markers_for_row(file, row.old, row.new):
+                        for marker_line in _draft_marker_lines(marker):
+                            if marker.side is DiffSide.OLD:
+                                old_options.append(Option(marker_line, disabled=True))
+                                new_options.append(
+                                    Option(_single_line(""), disabled=True)
+                                )
+                            else:
+                                old_options.append(
+                                    Option(_single_line(""), disabled=True)
+                                )
+                                new_options.append(Option(marker_line, disabled=True))
+                            option_index += 1
+
         old_column.add_options(old_options)
         new_column.add_options(new_options)
         preferred = (
@@ -755,6 +780,35 @@ class SplitDiffView(Widget):
                 self._active_side = other_side
         if preferred is not None:
             self._set_synchronized_highlight(preferred)
+
+    def _markers_for_row(
+        self,
+        file: DiffFile,
+        old_line: DiffLine | None,
+        new_line: DiffLine | None,
+    ) -> tuple[DraftMarker, ...]:
+        return tuple(
+            marker
+            for marker in self._draft_markers
+            if (
+                marker.side is DiffSide.OLD
+                and old_line is not None
+                and marker.matches(file, old_line, DiffSide.OLD)
+            )
+            or (
+                marker.side is DiffSide.NEW
+                and new_line is not None
+                and marker.matches(file, new_line, DiffSide.NEW)
+            )
+        )
+
+    def _row_has_visible_detail(self, file: DiffFile, row: SplitDiffRow) -> bool:
+        if self._markers_for_row(file, row.old, row.new):
+            return True
+        return bool(
+            _line_discussions(row.old, DiffSide.OLD, self._discussion_index)
+            or _line_discussions(row.new, DiffSide.NEW, self._discussion_index)
+        )
 
     def _cell_option(
         self,
@@ -847,8 +901,26 @@ def _single_line(content: str, style: Style | None = None) -> Text:
     return Text(content, style=style, no_wrap=True, overflow="crop")
 
 
+def _draft_marker_lines(marker: DraftMarker) -> tuple[Text, ...]:
+    state = " stale" if marker.stale else ""
+    body_lines = marker.body.split("\n")
+    return tuple(
+        _single_line(
+            (
+                f"      DRAFT {marker.side.value}{state}: {body_line}"
+                if index == 0
+                else f"      {' ' * (7 + len(marker.side.value) + len(state))}{body_line}"
+            ),
+            Style(color="yellow", bold=index == 0),
+        )
+        for index, body_line in enumerate(body_lines)
+    )
+
+
 def _fold_context_rows(
-    rows: tuple[SplitDiffRow, ...], context_lines: int = 3
+    rows: tuple[SplitDiffRow, ...],
+    context_lines: int = 3,
+    preserve: Callable[[SplitDiffRow], bool] | None = None,
 ) -> tuple[SplitDiffRow | str, ...]:
     """Fold long unchanged runs equally on both source sides."""
     result: list[SplitDiffRow | str] = []
@@ -868,6 +940,7 @@ def _fold_context_rows(
             row.old is not None
             and row.new is row.old
             and row.old.line_type is LineType.CONTEXT
+            and not (preserve is not None and preserve(row))
         ):
             run.append(row)
         else:

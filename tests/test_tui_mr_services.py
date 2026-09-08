@@ -97,7 +97,10 @@ class _Forge:
         )
         self.job = PipelineJob(201, "test", "verify", CIStatus.FAILED)
         self.blocked_mutation: str | None = None
+        self.verdict_error: Exception | None = None
+        self.verdict_bodies: list[str] = []
         self.mutation_started = asyncio.Event()
+        self.batched_review = True
 
     async def _block_mutation(self, action: str) -> None:
         if self.blocked_mutation == action:
@@ -106,7 +109,7 @@ class _Forge:
 
     @property
     def supports_batched_review(self) -> bool:
-        return True
+        return self.batched_review
 
     @property
     def supports_thread_resolution(self) -> bool:
@@ -224,6 +227,10 @@ class _Forge:
         head_sha: str | None = None,
     ) -> ForgeMutationResult:
         self.calls.append(("verdict", repo_path, number, verdict, head_sha))
+        self.verdict_bodies.append(body)
+        await self._block_mutation("verdict")
+        if self.verdict_error is not None:
+            raise self.verdict_error
         return ForgeMutationResult("remote-verdict")
 
     async def reply_to_discussion(

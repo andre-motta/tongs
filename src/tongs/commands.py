@@ -127,6 +127,20 @@ class TongsCommandProvider(Provider):
                 lambda: screen.action_focus_tab("pipeline"),
             ),
             ("Comment", "Add a general comment", lambda: screen.action_add_comment()),
+            (
+                "Submit Review"
+                if getattr(screen, "_review_draft", None)
+                else "Start Review",
+                "Inspect the durable review draft"
+                if getattr(screen, "_review_draft", None)
+                else "Begin saving review comments locally",
+                lambda: screen.action_review_draft(),
+            ),
+            (
+                "Next Review Draft",
+                "Cycle durable drafts for this review",
+                lambda: screen.action_next_review_draft(),
+            ),
             ("Approve", "Approve this MR", lambda: screen.action_approve()),
             ("Unapprove", "Remove approval", lambda: screen.action_unapprove()),
             ("Merge", "Merge this MR", lambda: screen.action_merge()),

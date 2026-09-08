@@ -179,9 +179,12 @@ tongs ships with one built-in plugin registered via entry points.
 
 ### MCP server (`mcp`)
 
-The MCP plugin adds a **Start MCP Server** command to the palette. When
-triggered, it launches the `tongs-mcp` stdio server in a subprocess, allowing AI
-agents (Claude Code, Cursor, etc.) to query MR data programmatically.
+The MCP plugin adds a **Start MCP Server** command to the palette only when
+the optional MCP dependency is importable. Install it with
+`pip install "tongs[mcp]"`; without that extra, the plugin registers no
+commands. When triggered, it spawns `python -m tongs.mcp.server` in a
+subprocess, allowing AI agents (Claude Code, Cursor, etc.) to query MR data
+programmatically.
 
 Entry point registration in tongs' own `pyproject.toml`:
 

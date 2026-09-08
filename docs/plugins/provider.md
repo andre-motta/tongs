@@ -186,7 +186,7 @@ most 500 characters. Versions use PEP 440 syntax and are at most 100 characters.
 | Field | Purpose and validation |
 | --- | --- |
 | `plugin_id`, `title`, `version` | Stable provider identity and display metadata. |
-| `compatibility` | Requires `api_major=1`. Optional `minimum_host_version` is a PEP 440 lower bound for Tongs. |
+| `compatibility` | Manifest validation requires a positive integer `api_major`; discovery then rejects a manifest whose `api_major` does not exactly match the host's supported value. Optional `minimum_host_version` is a PEP 440 lower bound for Tongs. |
 | `modules` | At least one UI module. Each names one bundle, one module entry asset, and optional stylesheet assets from that same bundle. |
 | `asset_bundles` | Package resource roots and their declared assets and size limits. |
 | `navigation` | Navigation IDs and titles bound to declared module IDs. |

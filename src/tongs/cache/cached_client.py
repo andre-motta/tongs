@@ -11,6 +11,7 @@ from tongs.cache.store import CacheStore
 from tongs.forges.base import ForgeClient
 from tongs.forges.models import (
     CIStatus,
+    ForgeMergeResult,
     ForgeMutationResult,
     MRDetail,
     MRState,
@@ -23,8 +24,8 @@ _BACKGROUND_CLOSE_TIMEOUT = 1.0
 
 
 def _finish_background_invalidation(
-    tasks: dict[tuple[str, int], asyncio.Task[bool]],
-    key: tuple[str, int],
+    tasks: dict[tuple[str, ...], asyncio.Task[bool]],
+    key: tuple[str, ...],
     task: asyncio.Task[bool],
 ) -> None:
     if tasks.get(key) is task:
@@ -108,7 +109,7 @@ class CachedForgeClient:
         self._diff_ttl = diff_ttl
         self._dirty_review_prefixes: dict[str, int] = {}
         self._dirty_generation = 0
-        self._invalidation_tasks: dict[tuple[str, int], asyncio.Task[bool]] = {}
+        self._invalidation_tasks: dict[tuple[str, ...], asyncio.Task[bool]] = {}
         self._closed = False
 
     def _key(self, *parts: str | int) -> str:
@@ -164,9 +165,9 @@ class CachedForgeClient:
             result = await self._inner.approve_mr(repo_path, number, head_sha=head_sha)
         return await self._finish_review_mutation(repo_path, number, result)
 
-    async def unapprove_mr(self, repo_path: str, number: int) -> None:
-        await self._inner.unapprove_mr(repo_path, number)
-        await self._cache.invalidate_prefix(self._key(repo_path, "mrs"))
+    async def unapprove_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
+        result = await self._inner.unapprove_mr(repo_path, number)
+        return await self._finish_review_mutation(repo_path, number, result)
 
     async def merge_mr(
         self,
@@ -174,17 +175,47 @@ class CachedForgeClient:
         number: int,
         squash: bool = False,
         delete_branch: bool = True,
-    ) -> None:
-        await self._inner.merge_mr(repo_path, number, squash, delete_branch)
-        await self._cache.invalidate_prefix(self._key(repo_path))
+        *,
+        head_sha: str | None = None,
+        expected_source_repository: str | None = None,
+        expected_source_branch: str | None = None,
+        expected_target_branch: str | None = None,
+    ) -> ForgeMergeResult:
+        if all(
+            item is None
+            for item in (
+                head_sha,
+                expected_source_repository,
+                expected_source_branch,
+                expected_target_branch,
+            )
+        ):
+            result = await self._inner.merge_mr(
+                repo_path, number, squash, delete_branch
+            )
+        else:
+            result = await self._inner.merge_mr(
+                repo_path,
+                number,
+                squash,
+                delete_branch,
+                head_sha=head_sha,
+                expected_source_repository=expected_source_repository,
+                expected_source_branch=expected_source_branch,
+                expected_target_branch=expected_target_branch,
+            )
+        prefixes = (self._key(repo_path),)
+        self._mark_review_dirty(prefixes)
+        self._schedule_review_invalidation(prefixes)
+        return replace(result, cache_invalidated=False)
 
-    async def close_mr(self, repo_path: str, number: int) -> None:
-        await self._inner.close_mr(repo_path, number)
-        await self._cache.invalidate_prefix(self._key(repo_path, "mrs"))
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
+        result = await self._inner.close_mr(repo_path, number)
+        return await self._finish_review_mutation(repo_path, number, result)
 
-    async def reopen_mr(self, repo_path: str, number: int) -> None:
-        await self._inner.reopen_mr(repo_path, number)
-        await self._cache.invalidate_prefix(self._key(repo_path, "mrs"))
+    async def reopen_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
+        result = await self._inner.reopen_mr(repo_path, number)
+        return await self._finish_review_mutation(repo_path, number, result)
 
     async def add_comment(
         self, repo_path: str, number: int, body: str
@@ -279,7 +310,7 @@ class CachedForgeClient:
         return await self._invalidate_marked(prefixes, generation)
 
     async def _invalidate_marked(
-        self, prefixes: tuple[str, str], generation: int
+        self, prefixes: tuple[str, ...], generation: int
     ) -> bool:
         results = await asyncio.gather(
             *(self._cache.invalidate_prefix(prefix) for prefix in prefixes),
@@ -297,13 +328,11 @@ class CachedForgeClient:
     ) -> ForgeMutationResult:
         prefixes = self._review_prefixes(repo_path, number)
         self._mark_review_dirty(prefixes)
-        self._schedule_review_invalidation(repo_path, number, prefixes)
+        self._schedule_review_invalidation(prefixes)
         return replace(result, cache_invalidated=False)
 
-    def _schedule_review_invalidation(
-        self, repo_path: str, number: int, prefixes: tuple[str, str]
-    ) -> None:
-        key = (repo_path, number)
+    def _schedule_review_invalidation(self, prefixes: tuple[str, ...]) -> None:
+        key = prefixes
         active = self._invalidation_tasks.get(key)
         if self._closed or (active is not None and not active.done()):
             return
@@ -317,7 +346,7 @@ class CachedForgeClient:
             )
         )
 
-    async def _drain_review_invalidation(self, prefixes: tuple[str, str]) -> bool:
+    async def _drain_review_invalidation(self, prefixes: tuple[str, ...]) -> bool:
         while not self._closed:
             generations = [
                 self._dirty_review_prefixes.get(prefix) for prefix in prefixes
@@ -331,7 +360,7 @@ class CachedForgeClient:
                 return True
         return False
 
-    def _mark_review_dirty(self, prefixes: tuple[str, str]) -> int:
+    def _mark_review_dirty(self, prefixes: tuple[str, ...]) -> int:
         self._dirty_generation += 1
         for prefix in prefixes:
             self._dirty_review_prefixes[prefix] = self._dirty_generation
@@ -345,12 +374,15 @@ class CachedForgeClient:
 
     async def close(self) -> None:
         self._closed = True
-        tasks = tuple(self._invalidation_tasks.values())
-        for task in tasks:
-            task.cancel()
-        pending: set[asyncio.Task[bool]] = set()
-        if tasks:
-            _, pending = await asyncio.wait(tasks, timeout=_BACKGROUND_CLOSE_TIMEOUT)
-        await self._inner.close()
+        pending = set(self._invalidation_tasks.values())
+        for _attempt in range(2):
+            if not pending:
+                break
+            for task in pending:
+                task.cancel()
+            _done, pending = await asyncio.wait(
+                pending, timeout=_BACKGROUND_CLOSE_TIMEOUT
+            )
         if pending:
             raise RuntimeError("cache invalidation tasks did not stop")
+        await self._inner.close()

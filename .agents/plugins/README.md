@@ -17,6 +17,10 @@ contexts, declaration allowlists, resource validation, plugin IDs, and UI
 scoping are supported isolation boundaries for accidental access. They do not
 sandbox a hostile installed extension.
 
+Use `docs/guides/plugins.md` for the terminal user contract,
+`docs/plugins/provider.md` for the desktop provider contract, and
+`examples/desktop-plugin/README.md` for the installable reference package.
+
 ## Plugin System Architecture
 
 The plugin system enables extending tongs with new commands, screens, and lifecycle hooks. It uses Python entry points for discovery and TOML config for filtering.
@@ -234,14 +238,24 @@ strings and floats must be finite.
 
 ## Testing
 
-Tests in `tests/test_plugins/test_plugin_system.py` cover:
-- TongsPlugin ABC enforcement
-- PluginRegistry discovery with mocked entry points
-- Config-based plugin disabling
-- Graceful failure on bad plugins
-- Lifecycle hook invocation
+Terminal plugin and MCP tests:
 
-Tests in `tests/test_mcp/test_server.py` cover:
-- MCP tool functions with mocked ForgeRegistry
-- Input validation (repo_path format)
-- Tool output structure
+```bash
+pytest tests/test_plugins/test_plugin_system.py -v
+pytest tests/test_mcp/test_server.py -v
+```
+
+Production desktop provider tests:
+
+```bash
+pytest tests/plugins/test_desktop_contract.py \
+  tests/plugins/test_desktop_discovery.py \
+  tests/plugins/test_desktop_lifecycle.py \
+  tests/plugins/test_desktop_resources.py -v
+```
+
+The separately installable example carries Python provider tests and a prebuilt
+ESM module test under `examples/desktop-plugin/tests/`. Install it into the same
+environment as the checkout before running its Python test. Its module test uses
+a mocked scoped host API; native host integration belongs to the coordinated
+desktop acceptance flow.

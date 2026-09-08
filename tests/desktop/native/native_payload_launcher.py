@@ -532,6 +532,13 @@ def _collect_owned_tree(
         if previous is not None:
             observation = _validate_process_refresh(previous, observation, observations)
         observations[pid] = observation
+        # Observations accumulate across the whole run, so bound the retained
+        # set with the same limit the pure verifier applies to the evidence it
+        # consumes and fail closed rather than growing without limit.
+        if len(observations) > MAX_PROCESSES:
+            raise NativeAcceptanceError(
+                "retained owned process evidence exceeds its bound"
+            )
         pending.extend(_child_pids(pid))
 
 

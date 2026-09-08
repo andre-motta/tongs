@@ -2677,6 +2677,154 @@ def test_process_refresh_rejects_arbitrary_prior_raw_state(tmp_path: Path) -> No
         )
 
 
+def test_injected_renderer_failure_reports_bounded_process_evidence(
+    tmp_path: Path,
+) -> None:
+    """Attempt 10: the injected PID was observed, but never with role renderer."""
+
+    fixture = _fixture(tmp_path)
+    observations = []
+    for observation in fixture["observations"]:
+        processes = tuple(
+            replace(process, role="helper") if process.pid == 103 else process
+            for process in observation.processes
+        )
+        observations.append(replace(observation, processes=processes))
+    fixture["observations"] = tuple(observations)
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        _verify(fixture)
+
+    message = str(raised.value)
+    assert "deliberately crashed renderer lacks live process evidence" in message
+    assert "observed=103,role='helper'" in message
+    assert "sandbox=(1,2,1)" in message
+    assert "argv_fields=" in message
+    assert "roster=(" in message
+    assert "103:helper" in message
+
+
+def test_injected_renderer_failure_reports_an_absent_pid(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    report_path = fixture["evidence"] / fixture["policy"].runs[0].report_path
+    report = json.loads(report_path.read_bytes())
+    report["rendererCrashRecovery"]["injectedRendererPid"] = 4242
+    _write(report_path, (json.dumps(report) + "\n").encode(), 0o600)
+    fixture["observations"] = (
+        replace(
+            fixture["observations"][0],
+            outputs=capture_expected_outputs(
+                fixture["evidence"],
+                fixture["policy"].runs[0],
+                fixture["policy"].evidence_uid,
+            ),
+        ),
+        fixture["observations"][1],
+    )
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        _verify(fixture)
+
+    message = str(raised.value)
+    assert "deliberately crashed renderer lacks live process evidence" in message
+    assert "observed=4242,absent" in message
+    assert "roster=(" in message
+
+
+def test_metric_pid_failure_reports_bounded_process_evidence(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    observations = []
+    for observation in fixture["observations"]:
+        processes = tuple(
+            replace(process, role="helper") if process.role == "gpu" else process
+            for process in observation.processes
+        )
+        observations.append(replace(observation, processes=processes))
+    fixture["observations"] = tuple(observations)
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        _verify(fixture)
+
+    message = str(raised.value)
+    assert "smoke metric PID lacks owned process evidence" in message
+    assert "expected_role='gpu'" in message
+    assert "observed=102,role='helper'" in message
+    assert "roster=(" in message
+
+
+def test_collect_owned_tree_retains_a_process_observed_once() -> None:
+    """A child seen in one poll stays in the evidence after it exits."""
+
+    ready_read, ready_write = os.pipe()
+    release_read, release_write = os.pipe()
+    script = """
+import os
+import sys
+
+ready = int(sys.argv[1])
+release = int(sys.argv[2])
+child = os.fork()
+if child == 0:
+    os.write(ready, f"{os.getpid()}\\n".encode())
+    os.read(release, 1)
+    os._exit(0)
+os.waitpid(child, 0)
+os.read(release, 1)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(ready_write), str(release_read)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        pass_fds=(ready_write, release_read),
+        start_new_session=True,
+    )
+    os.close(ready_write)
+    os.close(release_read)
+    try:
+        readable, _, _ = select.select((ready_read,), (), (), 2)
+        assert readable
+        child_pid = int(os.read(ready_read, 64).strip())
+        observations: dict[int, ProcessObservation] = {}
+        launcher_module._collect_owned_tree(process.pid, observations)
+        assert child_pid in observations
+        captured = observations[child_pid]
+
+        os.write(release_write, b"x")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if not Path(f"/proc/{child_pid}").exists():
+                break
+            time.sleep(launcher_module.POLL_SECONDS)
+        else:
+            pytest.fail("short-lived child did not exit")
+
+        launcher_module._collect_owned_tree(process.pid, observations)
+        assert observations[child_pid] == captured
+    finally:
+        os.write(release_write, b"x")
+        os.close(ready_read)
+        os.close(release_write)
+        process.wait(timeout=5)
+
+
+def test_collect_owned_tree_fails_closed_on_too_many_retained_observations(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    template = fixture["observations"][0].processes[0]
+    observations = {
+        pid: replace(template, pid=pid)
+        for pid in range(900_000, 900_000 + acceptance_module.MAX_PROCESSES)
+    }
+    assert len(observations) == acceptance_module.MAX_PROCESSES
+
+    with pytest.raises(
+        NativeAcceptanceError, match="retained owned process evidence exceeds its bound"
+    ):
+        launcher_module._collect_owned_tree(os.getpid(), observations)
+
+
 def test_collect_owned_tree_accepts_one_inherited_fork_exec_transition() -> None:
     ready_read, ready_write = os.pipe()
     release_read, release_write = os.pipe()

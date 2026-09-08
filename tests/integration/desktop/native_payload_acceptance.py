@@ -1400,7 +1400,8 @@ def _verify_smoke_report(
         item.pid == injected_pid and item.role == "renderer" for item in processes
     ):
         raise NativeAcceptanceError(
-            "deliberately crashed renderer lacks live process evidence"
+            "deliberately crashed renderer lacks live process evidence: "
+            f"{_process_evidence_summary(injected_pid, processes)}"
         )
     probes = (
         _mapping(reload.get("initialRendererProbe"), "initial renderer probe"),
@@ -1617,6 +1618,42 @@ def accepted_compact_titles(
     return (plain,) if permuted == plain else (plain, permuted)
 
 
+def _process_evidence_summary(pid: int, processes: Sequence[ProcessObservation]) -> str:
+    """Bounded evidence about one PID and the observed roster, for diagnostics.
+
+    A role that reads ``helper`` for a Chromium child means the collector only
+    ever saw its compacted process title, because a title carries no
+    ``--type=`` token of its own. See
+    ``.worktrees/desktop-125-attempt10-analysis.md``.
+    """
+
+    match = next((item for item in processes if item.pid == pid), None)
+    if match is None:
+        detail = f"observed={pid},absent"
+    else:
+        argv = match.argv
+        raw = match.raw_argv or argv
+        detail = (
+            f"observed={pid},role={match.role!r},executable={match.executable!r},"
+            f"sandbox=({match.sandbox.no_new_privs},{match.sandbox.seccomp},"
+            f"{match.sandbox.seccomp_filters}),"
+            f"argv_fields={len(argv)},raw_fields={len(raw)},"
+            f"argv0={_bounded_evidence_value(argv[0] if argv else '')}"
+        )
+    roster = ",".join(
+        f"{item.pid}:{item.role}" for item in list(processes)[:MAX_PROCESSES]
+    )
+    return f"{detail};roster=({roster})"
+
+
+def _bounded_evidence_value(value: str) -> str:
+    encoded = value.encode("utf-8", errors="replace")
+    if len(encoded) <= MAX_ARGUMENT_BYTES:
+        return repr(value)
+    kept = encoded[:MAX_ARGUMENT_BYTES].decode("utf-8", errors="replace")
+    return f"{kept!r}...({len(encoded) - MAX_ARGUMENT_BYTES} more bytes)"
+
+
 def _verify_raw_process_argv(process: ProcessObservation) -> None:
     raw = process.raw_argv
     if raw is None:
@@ -1810,7 +1847,9 @@ def _verify_process_observations(
             process = by_pid.get(pid)
             if process is None or process.role != role:
                 raise NativeAcceptanceError(
-                    "smoke metric PID lacks owned process evidence"
+                    "smoke metric PID lacks owned process evidence: "
+                    f"expected_role={role!r},"
+                    f"{_process_evidence_summary(pid, processes)}"
                 )
             if expected_type in {"GPU", "Tab"}:
                 linux = _mapping(metric.get("linuxSandbox"), "metric Linux sandbox")

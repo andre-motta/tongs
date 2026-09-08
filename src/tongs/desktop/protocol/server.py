@@ -17,6 +17,12 @@ from tongs.desktop.assets import (
     AssetDescriptor,
     CoreAssetSpec,
 )
+from tongs.desktop.protocol.ci_operations import (
+    CI_CAPABILITY,
+    CI_METHODS,
+    CIOperations,
+)
+from tongs.desktop.protocol.diff_projection import DiffLayout, flatten_diff
 from tongs.desktop.protocol.messages import (
     MAX_EVENT_FRAME_BYTES,
     MAX_PENDING_REQUESTS,
@@ -41,7 +47,6 @@ from tongs.desktop.protocol.state import (
     SnapshotStore,
 )
 from tongs.diff.conversion import convert_forge_changes
-from tongs.diff.models import DiffFile, DiffHunk, DiffLine
 from tongs.forges.models import MRState, MRSummary, Pipeline, PipelineJob
 from tongs.plugins.desktop import (
     DesktopCallContext,
@@ -84,16 +89,19 @@ SUPPORTED_CAPABILITIES = frozenset(
     {
         "assets",
         "cancellation",
+        CI_CAPABILITY,
         "events",
         "opaque_handles",
         "paged_diffs",
         "paged_logs",
         "plugins",
+        "split_diffs",
     }
 )
 SUPPORTED_METHODS = (
     "assets.list",
     "assets.read",
+    *CI_METHODS,
     "commits.list",
     "diff.open",
     "diff.page",
@@ -263,6 +271,7 @@ class DesktopSidecarServer:
         self._stopping = False
         self._location: DesktopLocation | None = None
         self._install_read_operations()
+        self._install_ci_operations()
 
     @property
     def session_id(self) -> str:
@@ -364,6 +373,13 @@ class DesktopSidecarServer:
         for method, handler in operations.items():
             self.register_operation(method, handler, mutation=False)
 
+    def _install_ci_operations(self) -> None:
+        operations = CIOperations(session=self._session, handles=self._handles)
+        for method, (handler, mutation) in operations.handlers.items():
+            self.register_operation(
+                method, cast(OperationHandler, handler), mutation=mutation
+            )
+
     async def _handle_handshake(self, frame: RequestFrame) -> None:
         if self._handshaken:
             await self._write_error(
@@ -394,7 +410,7 @@ class DesktopSidecarServer:
                     "session_id": self.session_id,
                     "capabilities": sorted(SUPPORTED_CAPABILITIES),
                     "accepted_capabilities": sorted(requested),
-                    "methods": [*SUPPORTED_METHODS, "shutdown"],
+                    "methods": [*sorted(self._operations), "shutdown"],
                     "limits": {
                         "request_frame_bytes": MAX_REQUEST_FRAME_BYTES,
                         "response_frame_bytes": MAX_RESPONSE_FRAME_BYTES,
@@ -594,16 +610,27 @@ class DesktopSidecarServer:
     async def _diff_open(self, params: JsonObject, _context: RequestContext) -> object:
         _require_params(
             params,
-            allowed=frozenset({"review", "max_items"}),
+            allowed=frozenset({"review", "layout", "max_items"}),
             required=frozenset({"review"}),
         )
+        try:
+            layout = DiffLayout(
+                _optional_text(params, "layout", "unified", max_length=20)
+            )
+        except ValueError:
+            raise ProtocolError(
+                ProtocolErrorCode.INVALID_PARAMS,
+                "The diff layout is invalid.",
+            ) from None
         review_handle = _text(params, "review", max_length=100)
         review = self._handles.resolve(review_handle, HandleKind.REVIEW, ReviewRef)
         raw = await self._session.get_raw_diff(review)
         files = convert_forge_changes(raw.changes)
-        entries = _flatten_diff(files)
+        entries = flatten_diff(files, layout)
         revision = cast(JsonObject, to_json_value(raw.revision))
-        snapshot_id = self._snapshots.create(review_handle, revision, entries)
+        snapshot_id = self._snapshots.create(
+            review_handle, revision, entries, projection=layout.value
+        )
         return self._snapshot_page_wire(
             self._snapshots.page(
                 snapshot_id,
@@ -684,7 +711,7 @@ class DesktopSidecarServer:
             params["pipeline"], HandleKind.PIPELINE, PipelineRef
         )
         jobs = await self._session.get_pipeline_jobs(pipeline)
-        return {"jobs": [self._job_wire(pipeline.repository, item) for item in jobs]}
+        return {"jobs": [self._job_wire(pipeline, item) for item in jobs]}
 
     async def _logs_open(self, params: JsonObject, _context: RequestContext) -> object:
         _require_params(
@@ -874,10 +901,10 @@ class DesktopSidecarServer:
             "value": cast(JsonValue, to_json_value(pipeline)),
         }
 
-    def _job_wire(self, repository: RepositoryRef, job: PipelineJob) -> JsonObject:
-        ref = JobRef(repository, job.id)
+    def _job_wire(self, pipeline: PipelineRef, job: PipelineJob) -> JsonObject:
+        ref = JobRef(pipeline.repository, job.id)
         return {
-            "handle": self._handles.issue(HandleKind.JOB, ref),
+            "handle": self._handles.issue(HandleKind.JOB, ref, parent=pipeline),
             "value": cast(JsonValue, to_json_value(job)),
         }
 
@@ -885,6 +912,7 @@ class DesktopSidecarServer:
     def _snapshot_page_wire(page: object) -> JsonObject:
         value = cast(JsonObject, to_json_value(page))
         value["resource"] = value.pop("resource_handle")
+        value.pop("projection")
         return value
 
     def _facade_for_plugin(
@@ -1312,34 +1340,6 @@ def _detail_wire(snapshot: ReviewSnapshot) -> JsonObject:
     return result
 
 
-def _flatten_diff(files: tuple[DiffFile, ...]) -> tuple[JsonObject, ...]:
-    entries: list[JsonObject] = []
-    for file_index, file in enumerate(files):
-        entries.append(
-            {
-                "kind": "file",
-                "file_index": file_index,
-                "old_path": file.old_path,
-                "new_path": file.new_path,
-                "status": file.status.value,
-                "additions": file.additions,
-                "deletions": file.deletions,
-                "is_binary": file.is_binary,
-                "language": file.language,
-                "is_truncated": file.is_truncated,
-                "is_empty": file.is_empty,
-                "is_mode_only": file.is_mode_only,
-                "is_unavailable": file.is_unavailable,
-            }
-        )
-        for hunk_index, hunk in enumerate(file.hunks):
-            entries.append(_hunk_wire(file_index, hunk_index, hunk))
-            entries.extend(
-                _line_wire(file_index, hunk_index, line) for line in hunk.lines
-            )
-    return tuple(entries)
-
-
 def _log_entries(encoded: bytes) -> tuple[JsonObject, ...]:
     """Split UTF-8 log bytes into independently decodable bounded rows."""
     if not encoded:
@@ -1363,32 +1363,6 @@ def _log_entries(encoded: bytes) -> tuple[JsonObject, ...]:
         entries.append({"text": text})
         start = end
     return tuple(entries)
-
-
-def _hunk_wire(file_index: int, hunk_index: int, hunk: DiffHunk) -> JsonObject:
-    return {
-        "kind": "hunk",
-        "file_index": file_index,
-        "hunk_index": hunk_index,
-        "header": hunk.header,
-        "old_start": hunk.old_start,
-        "old_count": hunk.old_count,
-        "new_start": hunk.new_start,
-        "new_count": hunk.new_count,
-        "context_text": hunk.context_text,
-    }
-
-
-def _line_wire(file_index: int, hunk_index: int, line: DiffLine) -> JsonObject:
-    return {
-        "kind": "line",
-        "file_index": file_index,
-        "hunk_index": hunk_index,
-        "old_line": line.old_lineno,
-        "new_line": line.new_lineno,
-        "content": line.content,
-        "line_type": line.line_type.value,
-    }
 
 
 def _plugin_record_wire(

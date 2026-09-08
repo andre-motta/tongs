@@ -27,6 +27,7 @@ _DEFAULT_PAGE_ITEMS = 400
 _MAX_PAGE_ITEMS = 1000
 _PAGE_TARGET_BYTES = 512 * 1024
 _HandleT = TypeVar("_HandleT")
+_ParentT = TypeVar("_ParentT")
 
 
 class HandleKind(StrEnum):
@@ -40,6 +41,7 @@ class HandleKind(StrEnum):
 class _HandleRecord:
     kind: HandleKind
     value: object
+    parent: object | None = None
 
 
 class HandleRegistry:
@@ -51,10 +53,12 @@ class HandleRegistry:
         self.session_id = secrets.token_urlsafe(24)
         self._max_handles = max_handles
         self._records: dict[str, _HandleRecord] = {}
-        self._reverse: dict[tuple[HandleKind, object], str] = {}
+        self._reverse: dict[tuple[HandleKind, object, object | None], str] = {}
 
-    def issue(self, kind: HandleKind, value: object) -> str:
-        key = (kind, value)
+    def issue(
+        self, kind: HandleKind, value: object, *, parent: object | None = None
+    ) -> str:
+        key = (kind, value, parent)
         existing = self._reverse.get(key)
         if existing is not None:
             return existing
@@ -65,7 +69,7 @@ class HandleRegistry:
                 retryable=True,
             )
         token = self._new_token()
-        self._records[token] = _HandleRecord(kind, value)
+        self._records[token] = _HandleRecord(kind, value, parent)
         self._reverse[key] = token
         return token
 
@@ -95,8 +99,27 @@ class HandleRegistry:
             )
         return cast(_HandleT, record.value)
 
-    def find(self, kind: HandleKind, value: object) -> str | None:
-        return self._reverse.get((kind, value))
+    def resolve_with_parent(
+        self,
+        token: object,
+        kind: HandleKind,
+        expected_type: type[_HandleT],
+        parent_type: type[_ParentT],
+    ) -> tuple[_HandleT, _ParentT]:
+        """Resolve one handle and its immutable admission-time parent."""
+        value = self.resolve(token, kind, expected_type)
+        record = self._records[cast(str, token)]
+        if not isinstance(record.parent, parent_type):
+            raise ProtocolError(
+                ProtocolErrorCode.INVALID_HANDLE,
+                "The resource handle has no valid parent association.",
+            )
+        return value, cast(_ParentT, record.parent)
+
+    def find(
+        self, kind: HandleKind, value: object, *, parent: object | None = None
+    ) -> str | None:
+        return self._reverse.get((kind, value, parent))
 
     def clear(self) -> None:
         self._records.clear()
@@ -117,6 +140,7 @@ class SnapshotPage:
     cursor: int
     next_cursor: int | None
     entries: tuple[JsonObject, ...]
+    projection: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +151,7 @@ class _Snapshot:
     entries: tuple[bytes, ...]
     byte_count: int
     created_at: float
+    projection: str | None
 
 
 class SnapshotStore:
@@ -164,6 +189,8 @@ class SnapshotStore:
         resource_handle: str,
         revision: Mapping[str, JsonValue],
         entries: Sequence[Mapping[str, JsonValue]],
+        *,
+        projection: str | None = None,
     ) -> str:
         self.prune()
         encoded_revision = _encode_object(revision)
@@ -202,6 +229,7 @@ class SnapshotStore:
             encoded_entries,
             byte_count,
             self._clock(),
+            projection,
         )
         self._snapshots[snapshot_id] = snapshot
         self._order.append(snapshot_id)
@@ -253,6 +281,7 @@ class SnapshotStore:
             cursor,
             next_cursor,
             tuple(selected),
+            snapshot.projection,
         )
 
     def expire_for_resource(self, resource_handle: str) -> None:

@@ -206,8 +206,7 @@ async function captureSmokeReport(outputPath: string): Promise<void> {
     rendererProbe,
     uiProof,
     uiProofScreenshot: uiProof === null ? null : uiScreenshotPath,
-    narrowUiProofScreenshot:
-      uiProof === null ? null : narrowUiScreenshotPath,
+    narrowUiProofScreenshot: uiProof === null ? null : narrowUiScreenshotPath,
     gpu,
     gpuFeatureStatus: app.getGPUFeatureStatus(),
     metrics,
@@ -272,13 +271,16 @@ async function navigateSmokeReview(reviewNumber: number): Promise<object> {
       const splitButton = [...document.querySelectorAll('.diff-toolbar button')].find((item) => item.textContent === 'Split');
       if (!splitButton) throw new Error("Split layout control missing");
       splitButton.click();
-      await waitFor("split diff", () => document.querySelector('.diff-split .split-row'), 60000);
+      const splitAnchor = await waitFor("split diff", () => document.querySelector('.diff-split .split-cell[data-anchor-side]'), 60000);
+      splitAnchor.click();
+      const selectedAnchor = await waitFor("line selection", () => document.querySelector('.diff-split .split-cell[aria-pressed="true"]'), 10000);
       return {
         provenance: "Actual read-only forge data rendered through the production bridge; smoke navigation is capture scaffolding",
         reviewNumber: ${reviewNumber},
         listedTitle,
         selectedFile: document.querySelector('.file-item.nav-item-active')?.textContent ?? null,
         revision: (() => { const item = document.querySelector('.revision'); return item ? { head_sha: item.dataset.headSha, base_sha: item.dataset.baseSha, start_sha: item.dataset.startSha || null } : null; })(),
+        selectedAnchor: { side: selectedAnchor.dataset.anchorSide, old_line: selectedAnchor.dataset.oldLine || null, new_line: selectedAnchor.dataset.newLine || null },
         unifiedSourceSample: unified,
         splitSourceSample: [...document.querySelectorAll('.diff-split .line-content')].slice(0, 12).map((item) => item.textContent),
       };

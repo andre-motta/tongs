@@ -7,7 +7,7 @@ import { parseInertMarkdown } from "../../core/markdown.js";
 import type {
   AppRoute,
   FeatureContribution,
-  ReviewPanel,
+  ReviewPanelContribution,
 } from "../../core/navigation.js";
 import { formatDate, safeError } from "../../core/presentation.js";
 import type { QueryCoordinator } from "../../core/query.js";
@@ -16,9 +16,11 @@ import { useRetainedRead } from "../../core/use-read.js";
 export function ReviewHeader({
   route,
   navigate,
+  panels,
 }: {
   readonly route: Extract<AppRoute, { kind: "review" }>;
   readonly navigate: (route: AppRoute) => void;
+  readonly panels: readonly ReviewPanelContribution[];
 }): ReactNode {
   return (
     <>
@@ -43,17 +45,15 @@ export function ReviewHeader({
         </button>
       </header>
       <nav className="tabs" aria-label="Review sections">
-        {(["overview", "diff", "commits"] as const).map((panel) => (
+        {panels.map((panel) => (
           <button
-            key={panel}
-            className={`tab ${route.panel === panel ? "tab-active" : ""}`}
-            data-panel={panel}
-            aria-current={route.panel === panel ? "page" : undefined}
-            onClick={() => navigate({ ...route, panel: panel as ReviewPanel })}
+            key={panel.id}
+            className={`tab ${route.panel === panel.id ? "tab-active" : ""}`}
+            data-panel={panel.id}
+            aria-current={route.panel === panel.id ? "page" : undefined}
+            onClick={() => navigate({ ...route, panel: panel.id })}
           >
-            {panel === "diff"
-              ? "Files changed"
-              : panel[0]?.toUpperCase() + panel.slice(1)}
+            {panel.label}
           </button>
         ))}
       </nav>
@@ -65,6 +65,7 @@ export function createReviewOverviewFeature(): FeatureContribution {
   return {
     id: "review.overview",
     order: 20,
+    reviewPanel: { id: "overview", label: "Overview", order: 10 },
     matches: (route) => route.kind === "review" && route.panel === "overview",
     render: (context, route) =>
       route.kind === "review" && route.panel === "overview" ? (
@@ -73,6 +74,7 @@ export function createReviewOverviewFeature(): FeatureContribution {
           queries={context.queries}
           route={route}
           navigate={context.navigate}
+          panels={context.reviewPanels}
         />
       ) : null,
   };
@@ -83,6 +85,7 @@ function ReviewOverview({
   queries,
   route,
   navigate,
+  panels,
 }: ReviewProps): ReactNode {
   const begin = useCallback(
     () => bridge.getReview(route.item.handle),
@@ -93,15 +96,25 @@ function ReviewOverview({
   ]);
   return (
     <>
-      <ReviewHeader route={route} navigate={navigate} />
+      <ReviewHeader route={route} navigate={navigate} panels={panels} />
+      <ReadRefreshButton state={state} label="review details" />
       {state.loading && !state.value && (
         <Notice kind="loading">Loading review details…</Notice>
       )}
       {Boolean(state.error) && (
         <Notice kind="error">
-          {state.value
-            ? "Refresh failed. Showing the previous review details."
-            : safeError(state.error)}
+          <span>
+            {state.value
+              ? "Refresh failed. Showing the previous review details."
+              : safeError(state.error)}
+          </span>
+          <button
+            className="button button-secondary notice-action"
+            disabled={state.loading}
+            onClick={state.refresh}
+          >
+            {state.value ? "Refresh again" : "Retry"}
+          </button>
         </Notice>
       )}
       {state.value && <Overview snapshot={state.value} />}
@@ -113,6 +126,7 @@ export function createCommitsFeature(): FeatureContribution {
   return {
     id: "review.commits",
     order: 21,
+    reviewPanel: { id: "commits", label: "Commits", order: 30 },
     matches: (route) => route.kind === "review" && route.panel === "commits",
     render: (context, route) =>
       route.kind === "review" && route.panel === "commits" ? (
@@ -121,12 +135,19 @@ export function createCommitsFeature(): FeatureContribution {
           queries={context.queries}
           route={route}
           navigate={context.navigate}
+          panels={context.reviewPanels}
         />
       ) : null,
   };
 }
 
-function Commits({ bridge, queries, route, navigate }: ReviewProps): ReactNode {
+function Commits({
+  bridge,
+  queries,
+  route,
+  navigate,
+  panels,
+}: ReviewProps): ReactNode {
   const begin = useCallback(
     () => bridge.listCommits(route.item.handle),
     [bridge, route.item.handle],
@@ -139,15 +160,25 @@ function Commits({ bridge, queries, route, navigate }: ReviewProps): ReactNode {
   );
   return (
     <>
-      <ReviewHeader route={route} navigate={navigate} />
+      <ReviewHeader route={route} navigate={navigate} panels={panels} />
+      <ReadRefreshButton state={state} label="commits" />
       {state.loading && !state.value && (
         <Notice kind="loading">Loading commits…</Notice>
       )}
       {Boolean(state.error) && (
         <Notice kind="error">
-          {state.value
-            ? "Refresh failed. Showing previous commits."
-            : safeError(state.error)}
+          <span>
+            {state.value
+              ? "Refresh failed. Showing previous commits."
+              : safeError(state.error)}
+          </span>
+          <button
+            className="button button-secondary notice-action"
+            disabled={state.loading}
+            onClick={state.refresh}
+          >
+            {state.value ? "Refresh again" : "Retry"}
+          </button>
         </Notice>
       )}
       {state.value &&
@@ -176,6 +207,27 @@ interface ReviewProps {
   readonly queries: QueryCoordinator;
   readonly route: Extract<AppRoute, { kind: "review" }>;
   readonly navigate: (route: AppRoute) => void;
+  readonly panels: readonly ReviewPanelContribution[];
+}
+
+function ReadRefreshButton({
+  state,
+  label,
+}: {
+  readonly state: { readonly loading: boolean; readonly refresh: () => void };
+  readonly label: string;
+}): ReactNode {
+  return (
+    <div className="view-actions">
+      <button
+        className="button button-secondary"
+        disabled={state.loading}
+        onClick={state.refresh}
+      >
+        {state.loading ? `Refreshing ${label}…` : `Refresh ${label}`}
+      </button>
+    </div>
+  );
 }
 
 function Overview({

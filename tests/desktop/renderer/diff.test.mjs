@@ -101,8 +101,109 @@ test("diff reconstruction rejects a revision change between pages", async () => 
   };
   await assert.rejects(
     loadAllPages("review", "unified", bridge, new QueryCoordinator(bridge)),
-    /revision_changed/,
+    (error) => error.code === "revision_changed" && error.retryable === false,
   );
+});
+
+test("diff reconstruction rejects nonprogressing and mismatched page cursors", async () => {
+  for (const page of [
+    {
+      snapshot_id: "s1",
+      resource: "review",
+      revision,
+      cursor: 1,
+      next_cursor: 1,
+      entries: [],
+    },
+    {
+      snapshot_id: "s1",
+      resource: "review",
+      revision,
+      cursor: 2,
+      next_cursor: null,
+      entries: [],
+    },
+  ]) {
+    let calls = 0;
+    const bridge = {
+      cancelRead: async () => true,
+      openDiff: () =>
+        read("open", {
+          snapshot_id: "s1",
+          resource: "review",
+          revision,
+          cursor: 0,
+          next_cursor: 1,
+          entries: [],
+        }),
+      pageDiff: () => {
+        calls += 1;
+        return read("page", page);
+      },
+    };
+    await assert.rejects(
+      loadAllPages("review", "unified", bridge, new QueryCoordinator(bridge)),
+      (error) => error.code === "invalid_response",
+    );
+    assert.equal(calls, 1);
+  }
+});
+
+test("diff reconstruction rejects a backward first cursor", async () => {
+  const bridge = {
+    cancelRead: async () => true,
+    openDiff: () =>
+      read("open", {
+        snapshot_id: "s1",
+        resource: "review",
+        revision,
+        cursor: 0,
+        next_cursor: 0,
+        entries: [],
+      }),
+  };
+  await assert.rejects(
+    loadAllPages("review", "unified", bridge, new QueryCoordinator(bridge)),
+    (error) => error.code === "invalid_response",
+  );
+});
+
+test("diff reconstruction retains a bounded partial result at the row cap", async () => {
+  const row = {
+    kind: "line",
+    file_index: 0,
+    hunk_index: 0,
+    old_line: 1,
+    new_line: 1,
+    content: "context",
+    line_type: "context",
+  };
+  let pageCalls = 0;
+  const bridge = {
+    cancelRead: async () => true,
+    openDiff: () =>
+      read("open", {
+        snapshot_id: "s1",
+        resource: "review",
+        revision,
+        cursor: 0,
+        next_cursor: 1000,
+        entries: Array(100_000).fill(row),
+      }),
+    pageDiff: () => {
+      pageCalls += 1;
+      throw new Error("must stop at the renderer bound");
+    },
+  };
+  const result = await loadAllPages(
+    "review",
+    "unified",
+    bridge,
+    new QueryCoordinator(bridge),
+  );
+  assert.equal(result.rows.length, 100_000);
+  assert.equal(result.partialError.code, "pagination_limit");
+  assert.equal(pageCalls, 0);
 });
 
 function read(requestToken, value) {

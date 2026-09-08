@@ -68,6 +68,11 @@ button {
 .service-status-warning {
   color: var(--warning);
 }
+.app-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .app-layout {
   height: calc(100vh - 52px);
   display: grid;
@@ -95,6 +100,8 @@ button {
   width: calc(100% - 16px);
   margin: 0 8px 10px;
   font-size: 12px;
+  line-height: 1.25;
+  white-space: normal;
 }
 .nav-item,
 .file-item {
@@ -137,6 +144,11 @@ button {
   display: flex;
   align-items: center;
   gap: 7px;
+}
+.view-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: -10px 0 12px;
 }
 .view-title {
   margin: 2px 0;
@@ -195,6 +207,9 @@ button {
 }
 .notice-empty {
   border-style: dashed;
+}
+.notice-action {
+  margin-left: 12px;
 }
 .review-list,
 .commit-list {
@@ -410,6 +425,29 @@ button {
   text-align: right;
   user-select: none;
 }
+.line-anchor {
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.line-anchor:hover,
+.line-anchor:focus-visible,
+.selectable-line:focus-visible {
+  color: var(--text);
+  background: var(--accent-2);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.line-anchor-selected,
+.line-selected {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.selectable-line {
+  cursor: pointer;
+}
 .line-content {
   padding: 2px 8px;
   white-space: pre;
@@ -424,23 +462,33 @@ button {
   color: var(--muted);
   font-style: italic;
 }
-.split-row {
+.split-panes {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   min-width: 0;
 }
-.split-cell {
+.split-pane {
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-right: 1px solid var(--border);
+}
+.split-pane-content {
+  width: max-content;
+  min-width: 100%;
+}
+.split-metadata {
+  min-height: 35px;
+  white-space: nowrap;
+}
+.split-cell {
+  min-width: 100%;
   min-height: 22px;
   display: grid;
-  grid-template-columns: 55px minmax(0, 1fr);
-  border-right: 1px solid var(--border);
-  overflow: hidden;
+  grid-template-columns: 55px max-content;
 }
 .split-cell .line-content {
   display: block;
-  min-width: 0;
-  overflow-x: auto;
 }
 .split-empty {
   background: #0a0e15;

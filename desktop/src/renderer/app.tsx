@@ -13,6 +13,8 @@ import {
   FeatureRegistry,
   Navigator,
   type AppRoute,
+  type FeatureContext,
+  type InlineAnchorSelection,
 } from "./core/navigation.js";
 import { QueryCoordinator } from "./core/query.js";
 import { createDiffFeature } from "./features/diff/index.js";
@@ -40,6 +42,8 @@ function App(): ReactNode {
   );
   const [repositoriesReady, setRepositoriesReady] = useState(false);
   const [repositoryGeneration, setRepositoryGeneration] = useState(0);
+  const [inlineAnchor, setInlineAnchor] =
+    useState<InlineAnchorSelection | null>(null);
   const [serviceStatus, setServiceStatus] = useState(
     "Connecting to the local service…",
   );
@@ -70,10 +74,14 @@ function App(): ReactNode {
   useEffect(() => {
     void publishNativeProbe(setServiceStatus, setServiceClass);
   }, []);
-  const navigation = useCallback(
-    (next: AppRoute) => navigator.navigate(next),
-    [],
-  );
+  const navigation = useCallback((next: AppRoute) => {
+    setInlineAnchor((current) =>
+      next.kind === "review" && current?.review === next.item.handle
+        ? current
+        : null,
+    );
+    navigator.navigate(next);
+  }, []);
   const onDiscovery = useCallback((next: readonly RepositoryDto[]) => {
     setRepositories(next);
     setRepositoriesReady(true);
@@ -81,6 +89,18 @@ function App(): ReactNode {
   }, []);
   const feature = useMemo(() => registry.find(route), [route]);
   const selected = route.kind === "inbox" ? route.repository : null;
+  const featureContext: FeatureContext = {
+    bridge,
+    queries,
+    repositories,
+    repositoriesReady,
+    repositoryGeneration,
+    reviewPanels: registry.reviewPanels(),
+    inlineAnchor,
+    selectInlineAnchor: setInlineAnchor,
+    navigate: navigation,
+  };
+  const commands = registry.commands(featureContext, route);
   return (
     <>
       <header className="app-bar">
@@ -88,9 +108,28 @@ function App(): ReactNode {
           <img src="/icon.png" alt="" width="32" height="32" />
           <strong>Tongs</strong>
         </div>
-        <p id="service-status" className={serviceClass}>
-          {serviceStatus}
-        </p>
+        <div className="app-actions">
+          {commands.map((command) => {
+            const disabledReason = command.disabledReason(
+              featureContext,
+              route,
+            );
+            return (
+              <button
+                key={command.id}
+                className="button button-secondary"
+                disabled={disabledReason !== null}
+                title={disabledReason ?? undefined}
+                onClick={() => void command.run(featureContext, route)}
+              >
+                {command.label}
+              </button>
+            );
+          })}
+          <p id="service-status" className={serviceClass}>
+            {serviceStatus}
+          </p>
+        </div>
       </header>
       <div className="app-layout">
         <RepositoryNavigation
@@ -104,17 +143,7 @@ function App(): ReactNode {
           <ErrorBoundary
             key={`${route.kind}:${route.kind === "review" ? `${route.item.handle}:${route.panel}` : (route.repository?.handle ?? "all")}`}
           >
-            {feature.render(
-              {
-                bridge,
-                queries,
-                repositories,
-                repositoriesReady,
-                repositoryGeneration,
-                navigate: navigation,
-              },
-              route,
-            )}
+            {feature.render(featureContext, route)}
           </ErrorBoundary>
         </main>
       </div>

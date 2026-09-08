@@ -13,6 +13,10 @@ import {
   inboxPresentation,
   listDiscoveredReviews,
 } from "../../../desktop/dist/src/renderer/features/inbox/index.js";
+import {
+  RendererReadError,
+  safeError,
+} from "../../../desktop/dist/src/renderer/core/presentation.js";
 
 test("markdown remains inert data without HTML or remote resource parsing", () => {
   const blocks = parseInertMarkdown(
@@ -44,6 +48,85 @@ test("feature registry rejects duplicate seams and selects by stable order", () 
   registry.register(inbox);
   assert.equal(registry.find({ kind: "inbox", repository: null }).id, "inbox");
   assert.throws(() => registry.register(inbox), /Duplicate feature/);
+});
+
+test("feature registry orders typed panels and route-aware commands", () => {
+  const registry = new FeatureRegistry();
+  const command = (id, order, visible = true) => ({
+    id,
+    label: id,
+    order,
+    isVisible: () => visible,
+    disabledReason: () => (id === "later" ? "Requires a draft" : null),
+    run: () => {},
+  });
+  registry.register({
+    id: "diff",
+    order: 20,
+    reviewPanel: { id: "diff", label: "Files changed", order: 20 },
+    commands: [
+      command("later", 20),
+      command("first", 10),
+      command("hidden", 1, false),
+    ],
+    matches: () => true,
+    render: () => {},
+  });
+  registry.register({
+    id: "overview",
+    order: 10,
+    reviewPanel: { id: "overview", label: "Overview", order: 10 },
+    matches: () => true,
+    render: () => {},
+  });
+  const route = { kind: "inbox", repository: null };
+  const context = featureContext();
+  assert.deepEqual(
+    registry.reviewPanels().map((panel) => panel.id),
+    ["overview", "diff"],
+  );
+  assert.deepEqual(
+    registry
+      .commands(context, route)
+      .map((item) => [item.id, item.disabledReason(context, route)]),
+    [
+      ["first", null],
+      ["later", "Requires a draft"],
+    ],
+  );
+  assert.throws(
+    () =>
+      registry.register({
+        id: "duplicate-panel",
+        order: 30,
+        reviewPanel: { id: "diff", label: "Duplicate", order: 30 },
+        matches: () => false,
+        render: () => {},
+      }),
+    /Duplicate review panel/,
+  );
+  assert.throws(
+    () =>
+      registry.register({
+        id: "duplicate-command",
+        order: 30,
+        commands: [command("first", 30)],
+        matches: () => false,
+        render: () => {},
+      }),
+    /Duplicate command/,
+  );
+});
+
+test("renderer errors preserve typed revision and paging messages", () => {
+  assert.match(
+    safeError(new RendererReadError("revision_changed", "internal", false)),
+    /review changed/,
+  );
+  assert.match(
+    safeError(new RendererReadError("pagination_limit", "internal", false)),
+    /bounded partial snapshot/,
+  );
 });
 
 test("navigator publishes typed route changes", () => {
@@ -151,3 +234,17 @@ test("All reviews queries only current locally discovered handles", async () => 
   ]);
   assert.deepEqual(read.requestTokens, ["token-1", "token-2"]);
 });
+
+function featureContext() {
+  return {
+    bridge: {},
+    queries: {},
+    repositories: [],
+    repositoriesReady: true,
+    repositoryGeneration: 1,
+    reviewPanels: [],
+    inlineAnchor: null,
+    selectInlineAnchor: () => {},
+    navigate: () => {},
+  };
+}

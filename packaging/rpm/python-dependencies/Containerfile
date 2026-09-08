@@ -1,0 +1,20 @@
+FROM registry.fedoraproject.org/fedora:44
+
+LABEL org.opencontainers.image.title="Tongs Python companion RPM builder"
+LABEL org.opencontainers.image.description="Disposable Fedora 44 source RPM build environment for issue 85"
+
+RUN dnf install --assumeyes --setopt=install_weak_deps=False \
+        cargo \
+        gcc \
+        git-core \
+        maturin \
+        openssl-devel \
+        python3-devel \
+        python3-flit-core \
+        python3-hatchling \
+        python3-packaging \
+        python3-pip \
+        python3-setuptools \
+        pyproject-rpm-macros \
+        rpm-build \
+    && dnf clean all

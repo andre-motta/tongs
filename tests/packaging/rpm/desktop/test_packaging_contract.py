@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -127,9 +128,11 @@ def test_hosted_smoke_executes_complete_retained_validation_path(
         function_source
     )
 
-    retained = (
-        Path(__file__).with_name("fixtures") / "hosted-launch-079059e.stdout"
+    encoded_retained = (
+        Path(__file__).with_name("fixtures") / "hosted-launch-079059e.stdout.b64"
     ).read_bytes()
+    assert encoded_retained.endswith(b"\n")
+    retained = base64.b64decode(encoded_retained[:-1], validate=True)
     assert hashlib.sha256(retained).hexdigest() == (
         "4c8ac97b098c0d80ada5632acb062b7d5d8dafb5482ea64d6516f11019d955ea"
     )

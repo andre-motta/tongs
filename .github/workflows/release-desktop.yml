@@ -288,7 +288,7 @@ jobs:
           epoch=$(git show -s --format=%ct "$GITHUB_SHA")
           source_digest=$(sha256sum "$CANDIDATE_SOURCE_ARCHIVE" | cut -d' ' -f1)
           name=$("$CANDIDATE_PYTHON" -I -c \
-            'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"][0]["filename"])' \
+            'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"][0]["name"])' \
             "$CANDIDATE_ROOT/archive/desktop-manifest-v1.json")
           archive="$CANDIDATE_ROOT/archive/$name"
           archive_digest=$(sha256sum "$archive" | cut -d' ' -f1)

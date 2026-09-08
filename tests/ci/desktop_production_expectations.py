@@ -166,7 +166,7 @@ def _release_manifest_archive_name(transfer_root: Path) -> str:
     artifacts = document.get("artifacts")
     if not isinstance(artifacts, list) or len(artifacts) != 1:
         _fail("the downloaded release manifest does not declare one artifact")
-    name = artifacts[0].get("filename")
+    name = artifacts[0].get("name")
     if not isinstance(name, str) or not name:
         _fail("the downloaded release manifest does not name its archive")
     return name

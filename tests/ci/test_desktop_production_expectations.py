@@ -57,7 +57,7 @@ def transfer_root(tmp_path: Path) -> Path:
     root = tmp_path / "transfer"
     (root / "archive").mkdir(parents=True)
     (root / "archive/desktop-manifest-v1.json").write_text(
-        '{"artifacts": [{"filename": "tongs-desktop-0.5.0-fedora44-x86_64.tar.gz"}]}'
+        '{"artifacts": [{"name": "tongs-desktop-0.5.0-fedora44-x86_64.tar.gz"}]}'
     )
     return root
 

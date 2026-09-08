@@ -300,7 +300,7 @@ jobs:
           archive_dir="$RUNNER_TEMP/tongs-desktop-archive/archive"
           version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release_version"])' \
             "$archive_dir/desktop-manifest-v1.json")
-          name=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"][0]["filename"])' \
+          name=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"][0]["name"])' \
             "$archive_dir/desktop-manifest-v1.json")
           {
             printf 'release_version=%s\n' "$version"

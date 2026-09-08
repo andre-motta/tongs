@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.desktop.installed_core_composition import (
+    _entrypoint_interpreter,
     sha256_file,
     validate_audit_records,
     validate_inputs,
@@ -97,6 +98,22 @@ def test_input_contract_rejects_changed_wheel_hash(tmp_path: Path) -> None:
     arguments.expected_wheel_sha256 = "f" * 64
     with pytest.raises(RuntimeError, match="SHA-256 does not match"):
         validate_inputs(arguments)
+
+
+def test_entrypoint_provenance_uses_exact_versioned_shebang(tmp_path: Path) -> None:
+    environment = tmp_path / "candidate"
+    binary = environment / "bin/python3.14"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"python")
+    entrypoint = environment / "bin/tongs"
+    entrypoint.write_text(f"#!{binary}\n")
+    assert _entrypoint_interpreter(entrypoint, environment) == binary.resolve()
+
+    outside = tmp_path / "outside-python"
+    outside.write_bytes(b"python")
+    entrypoint.write_text(f"#!{outside}\n")
+    with pytest.raises(RuntimeError, match="escaped the candidate environment"):
+        _entrypoint_interpreter(entrypoint, environment)
 
 
 def test_audit_validation_rejects_forbidden_attempt_and_checkout_origin(

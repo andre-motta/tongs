@@ -323,10 +323,28 @@ def _clean_terminal(raw: bytes) -> str:
     return without_ansi.decode("utf-8", errors="replace")
 
 
+def _entrypoint_interpreter(executable: Path, environment_root: Path) -> Path:
+    first_line = executable.open("rb").readline(4096)
+    if not first_line.startswith(b"#!") or not first_line.endswith(b"\n"):
+        raise RuntimeError("installed tongs entry point has no bounded shebang")
+    try:
+        value = first_line[2:-1].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RuntimeError("installed tongs shebang is not UTF-8") from error
+    if " " in value or "\0" in value:
+        raise RuntimeError("installed tongs shebang must name one interpreter")
+    interpreter = Path(value)
+    if not interpreter.is_absolute() or not interpreter.is_file():
+        raise RuntimeError("installed tongs shebang interpreter is unavailable")
+    if not _inside(interpreter, environment_root / "bin"):
+        raise RuntimeError("installed tongs shebang escaped the candidate environment")
+    return interpreter.resolve()
+
+
 def _run_tui(
     executable: Path,
     *,
-    python: Path,
+    interpreter: Path,
     scan_root: Path,
     home: Path,
     audit_root: Path,
@@ -343,7 +361,7 @@ def _run_tui(
         "PYTHONPATH": str(audit_root),
         "TERM": "xterm-256color",
         "TONGS_INSTALLED_CORE_AUDIT_PATH": str(audit_path),
-        "TONGS_INSTALLED_CORE_EXPECTED_PYTHON": str(python),
+        "TONGS_INSTALLED_CORE_EXPECTED_PYTHON": str(interpreter),
         "TONGS_INSTALLED_CORE_SOURCE_ROOT": str(source_root),
         "XDG_CACHE_HOME": str(home / ".cache"),
         "XDG_CONFIG_HOME": str(home / ".config"),
@@ -427,6 +445,7 @@ def _run_tui(
         "environment_keys": sorted(environment),
         "exit_status": process.returncode,
         "pid": process.pid,
+        "interpreter": str(interpreter),
         "screen_markers": list(_REQUIRED_SCREEN_TEXT),
         "terminal_bin": {
             "path": str(raw_path),
@@ -480,6 +499,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     executable = paths["environment_root"] / "bin/tongs"
     if not executable.is_file() or not bool(executable.stat().st_mode & stat.S_IXUSR):
         raise RuntimeError("installed ordinary tongs entry point is missing")
+    tui_interpreter = _entrypoint_interpreter(executable, paths["environment_root"])
 
     audit_root = paths["evidence_root"] / "audit-hook"
     audit_root.mkdir(mode=0o700)
@@ -495,7 +515,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     audit_path = paths["evidence_root"] / "installed-core-audit.jsonl"
     tui = _run_tui(
         executable,
-        python=python,
+        interpreter=tui_interpreter,
         scan_root=scan_root,
         home=home,
         audit_root=audit_root,
@@ -506,7 +526,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     audit_records = _read_jsonl(audit_path)
     audit_validation = validate_audit_records(
         audit_records,
-        expected_python=python,
+        expected_python=tui_interpreter,
         installed_package_root=package_root,
         source_root=paths["source_root"],
         audit_root=audit_root,

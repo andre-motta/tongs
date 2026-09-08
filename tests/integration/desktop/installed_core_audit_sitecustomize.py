@@ -14,7 +14,12 @@ _EXPECTED_PYTHON = Path(os.environ["TONGS_INSTALLED_CORE_EXPECTED_PYTHON"]).reso
 _SOURCE_ROOT = Path(os.environ["TONGS_INSTALLED_CORE_SOURCE_ROOT"]).resolve()
 _WRITING = False
 _BLOCKED = False
-_FORBIDDEN_IMPORTS = ("mcp", "sigstore", "tongs.desktop.installer")
+_FORBIDDEN_IMPORTS = (
+    "mcp",
+    "sigstore",
+    "tongs.desktop.installer",
+    "tongs.mcp.server",
+)
 _FORBIDDEN_EVENTS = frozenset(
     {
         "os.exec",

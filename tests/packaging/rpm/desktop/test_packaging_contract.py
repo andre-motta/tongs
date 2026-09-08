@@ -22,6 +22,8 @@ def test_two_srpms_and_optional_mcp_ownership_are_explicit() -> None:
         "Requires:       python3-tongs = @CORE_RPM_VERSION@-@RPM_RELEASE@%{?dist}"
     )
     assert exact_core in desktop
+    assert "SETUPTOOLS_SCM_PRETEND_VERSION=@CORE_PEP440_VERSION@" in core
+    assert "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS=@CORE_PEP440_VERSION@" in core
 
 
 def test_desktop_retains_runtime_and_has_no_scriptlets() -> None:
@@ -62,7 +64,20 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert "verify_sidecar_plugin.py" in installer
     assert "verify_mcp_command.py" in installer
     assert "python-dependencies/verify_install.py" in installer
-    assert "[[ $launch_status -eq 124 ]]" in installer
+    assert "rpm -V" in (PACKAGING / "verify_rpm_state.py").read_text()
+    assert "[[ $status -eq 124 ]]" in installer
+    assert "preinstall-sentinels.json" in installer
+    assert "user-archive-sentinel" in installer
+    assert "tongs_user_plugin_sentinel.py" in installer
+    assert "verify_mcp_provider.py" in installer
+    assert "post-mcp-sidecar-plugin.ndjson" in installer
+    assert "run_desktop_smoke post-mcp-hosted-launch" in installer
+    assert "package-file-metadata-with-mcp.json" in installer
+    assert "for query in scripts triggers filetriggers" in installer
+    assert 'cmp "$evidence_dir/clean-final.json"' in installer
+    assert harness.index("preflight_core_version.sh") < harness.index(
+        "python-dependencies/prepare_sources.py"
+    )
     assert 'cmp "$evidence_dir/installed-previous.json"' in installer
     assert "--setopt=install_weak_deps=False" in installer
 

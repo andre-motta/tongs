@@ -101,6 +101,25 @@ podman run --rm --cap-drop=all --security-opt=no-new-privileges \
     "$source_builder" python3 /checkout/packaging/rpm/desktop/audit_providers.py \
         --manifest /checkout/packaging/rpm/desktop/manifest.json \
         --output /evidence/fedora-provider-audit.json
+cp -- "$output_dir/fedora-provider-audit.json" \
+    "$install_evidence/fedora-provider-audit.json"
+
+podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
+    --volume "$repo_root:/checkout:ro" --volume "$accepted_archive:/accepted:ro" \
+    --volume "$prepared:/prepared:rw" \
+    --volume "$output_dir/payload-input-contract.json:/payload-contract.json:ro" \
+    "$source_builder" \
+    python3 /checkout/packaging/rpm/desktop/prepare_sources.py \
+        --checkout /checkout --accepted-dir /accepted --output-dir /prepared \
+        --manifest /payload-contract.json "${fixture_arguments[@]}"
+core_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["pep440_version"])' \
+    "$prepared/prepared-inputs.json")
+podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
+    --volume "$repo_root:/checkout:ro" --volume "$prepared:/prepared:ro" \
+    --volume "$output_dir:/evidence:rw" "$source_builder" \
+    /checkout/packaging/rpm/desktop/preflight_core_version.sh \
+        --prepared-dir /prepared --expected-version "$core_version" \
+        --output /evidence/core-version-preflight.log
 
 podman run --rm --cap-drop=all --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" --volume "$dependency_prepared:/prepared:rw" \
@@ -116,14 +135,6 @@ podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
     --base-image "$base_image" --checkout "$repo_root" --source-sha "$source_sha" \
     --srpm-dir "$dependency_srpms" --output-dir "$dependency_rpms"
 
-podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$accepted_archive:/accepted:ro" \
-    --volume "$prepared:/prepared:rw" \
-    --volume "$output_dir/payload-input-contract.json:/payload-contract.json:ro" \
-    "$source_builder" \
-    python3 /checkout/packaging/rpm/desktop/prepare_sources.py \
-        --checkout /checkout --accepted-dir /accepted --output-dir /prepared \
-        --manifest /payload-contract.json "${fixture_arguments[@]}"
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" --volume "$prepared:/prepared:ro" \
     --volume "$srpms:/srpms:rw" "$source_builder" \

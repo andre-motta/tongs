@@ -53,10 +53,12 @@ dependency. The Python modules remain owned by python3-tongs.
 %autosetup -n tongs-@CORE_PEP440_VERSION@
 
 %build
+export SETUPTOOLS_SCM_PRETEND_VERSION=@CORE_PEP440_VERSION@
 export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS=@CORE_PEP440_VERSION@
 %pyproject_wheel
 
 %install
+export SETUPTOOLS_SCM_PRETEND_VERSION=@CORE_PEP440_VERSION@
 export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS=@CORE_PEP440_VERSION@
 %pyproject_install
 %pyproject_save_files -l tongs

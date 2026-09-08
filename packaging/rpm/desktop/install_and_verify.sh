@@ -38,9 +38,18 @@ previous_desktop=$(find "$previous_dir" -maxdepth 1 -type f -name 'tongs-desktop
 final_core=$(find "$final_dir" -maxdepth 1 -type f -name 'python3-tongs-[0-9]*.noarch.rpm' -print -quit)
 final_mcp=$(find "$final_dir" -maxdepth 1 -type f -name 'python3-tongs+mcp-*.noarch.rpm' -print -quit)
 final_desktop=$(find "$final_dir" -maxdepth 1 -type f -name 'tongs-desktop-*.x86_64.rpm' -print -quit)
-for package in "$previous_core" "$previous_desktop" "$final_core" "$final_mcp" "$final_desktop"; do
+previous_test_plugin=$(find "$previous_repo" -maxdepth 1 -type f -name 'tongs-desktop-test-plugin-*.noarch.rpm' -print -quit)
+final_test_plugin=$(find "$final_repo" -maxdepth 1 -type f -name 'tongs-desktop-test-plugin-*.noarch.rpm' -print -quit)
+for package in "$previous_core" "$previous_desktop" "$previous_test_plugin" \
+    "$final_core" "$final_mcp" "$final_desktop" "$final_test_plugin"; do
     [[ -f "$package" ]] || { printf 'missing lifecycle package\n' >&2; exit 1; }
 done
+companion_count=$(find "$companion_dir" -maxdepth 1 -type f -name '*.rpm' \
+    ! -name '*.src.rpm' ! -name '*-debuginfo-*' | wc -l)
+[[ $companion_count -eq 7 ]] || {
+    printf 'expected seven source-built companion RPMs, found %s\n' "$companion_count" >&2
+    exit 1
+}
 
 cat >/etc/yum.repos.d/tongs-previous.repo <<EOF
 [tongs-previous]
@@ -58,13 +67,20 @@ gpgcheck=0
 EOF
 dnf repolist --all >"$evidence_dir/install-repositories.txt"
 
-install -d /root/.local/share/applications /root/.config/tongs
+user_site=$(/usr/bin/python3 -c 'import site; print(site.getusersitepackages())')
+install -d /root/.local/share/applications /root/.config/tongs \
+    /root/.local/share/tongs/desktop/versions/user-archive-sentinel "$user_site"
 printf 'per-user menu sentinel\n' >/root/.local/share/applications/tongs.desktop
 printf 'user configuration sentinel\n' >/root/.config/tongs/config.toml
+printf 'per-user archive sentinel\n' \
+    >/root/.local/share/tongs/desktop/versions/user-archive-sentinel/archive.txt
+printf 'per-user plugin sentinel\n' >"$user_site/tongs_user_plugin_sentinel.py"
 printf 'unrelated sentinel\n' >/tmp/tongs-rpm-unrelated
 sentinels=(
     /root/.local/share/applications/tongs.desktop
     /root/.config/tongs/config.toml
+    /root/.local/share/tongs/desktop/versions/user-archive-sentinel/archive.txt
+    "$user_site/tongs_user_plugin_sentinel.py"
     /tmp/tongs-rpm-unrelated
 )
 tracked_packages=(python3-tongs tongs-desktop tongs-desktop-test-plugin)
@@ -82,13 +98,69 @@ snapshot() {
     /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" snapshot \
         "${arguments[@]}" --output "$evidence_dir/$name.json"
 }
+sentinel_snapshot() {
+    local name=$1
+    local arguments=()
+    local sentinel
+    for sentinel in "${sentinels[@]}"; do
+        arguments+=(--sentinel "$sentinel")
+    done
+    /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" snapshot \
+        "${arguments[@]}" --output "$evidence_dir/$name-sentinels.json"
+}
+assert_sentinels() {
+    local name=$1
+    sentinel_snapshot "$name"
+    cmp "$evidence_dir/preinstall-sentinels.json" \
+        "$evidence_dir/$name-sentinels.json"
+}
+assert_final_state() {
+    local name=$1
+    local include_mcp=$2
+    local arguments=(
+        --expected-rpm "$final_core"
+        --expected-rpm "$final_desktop"
+        --expected-rpm "$final_test_plugin"
+    )
+    if [[ "$include_mcp" == yes ]]; then
+        arguments+=(--expected-rpm "$final_mcp")
+    else
+        arguments+=(--absent 'python3-tongs+mcp')
+    fi
+    /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-installed \
+        "${arguments[@]}" --output "$evidence_dir/$name-installed-state.json"
+}
+assert_previous_state() {
+    local name=$1
+    /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-installed \
+        --expected-rpm "$previous_core" --expected-rpm "$previous_desktop" \
+        --expected-rpm "$previous_test_plugin" --absent 'python3-tongs+mcp' \
+        --output "$evidence_dir/$name-installed-state.json"
+}
+installed_closure() {
+    dnf repoquery --installed \
+        --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{from_repo}\n' \
+        | sort >"$1"
+}
+
+sentinel_snapshot preinstall
+dnf repoquery --repo=tongs-final --available \
+    --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{repoid}\n' \
+    | sort >"$evidence_dir/final-repository-packages.txt"
+for package in python3-tongs 'python3-tongs+mcp' tongs-desktop \
+    tongs-desktop-test-plugin; do
+    grep -F "$package|" "$evidence_dir/final-repository-packages.txt"
+done
 
 dnf install --assumeyes --setopt=install_weak_deps=False \
     appstream desktop-file-utils libcap xorg-x11-server-Xvfb xorg-x11-xauth util-linux \
     2>&1 | tee "$evidence_dir/dnf-bootstrap.log"
+assert_sentinels after-bootstrap
 dnf install --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-final \
     python3-tongs tongs-desktop tongs-desktop-test-plugin \
     2>&1 | tee "$evidence_dir/dnf-clean-install.log"
+assert_sentinels clean-install
+assert_final_state clean-final no
 snapshot clean-final
 
 if rpm -q 'python3-tongs+mcp' >"$evidence_dir/minimal-mcp-package.txt" 2>&1; then
@@ -99,7 +171,7 @@ if rpm -q 'python3-mcp+cli' >"$evidence_dir/minimal-mcp-provider.txt" 2>&1; then
     printf 'minimal transaction unexpectedly installed python3-mcp+cli\n' >&2
     exit 1
 fi
-if dnf repoquery --installed --whatprovides 'python3dist(mcp[cli])' \
+if rpm -q --whatprovides 'python3dist(mcp[cli])' \
     >"$evidence_dir/minimal-mcp-capability.txt" 2>&1 && \
     [[ -s "$evidence_dir/minimal-mcp-capability.txt" ]]; then
     printf 'minimal transaction unexpectedly contains the MCP CLI capability\n' >&2
@@ -130,11 +202,16 @@ PY
 /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" metadata \
     --package python3-tongs --package tongs-desktop \
     --package tongs-desktop-test-plugin \
+    --install-manifest "$prepared_dir/SOURCES/desktop-install.json" \
+    --libexec-dir /usr/libexec/tongs-desktop --checkout-license "$checkout/LICENSE" \
+    --test-plugin-module "$packaging_dir/test-plugin/module.mjs" \
     --output "$evidence_dir/package-file-metadata.json"
 /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" elf \
     --package tongs-desktop --output "$evidence_dir/elf-provider-map.json"
 timeout --signal=TERM 20s /usr/bin/python3 -E -P "$packaging_dir/verify_sidecar_plugin.py" \
-    --expected-version "$core_version" --output "$evidence_dir/sidecar-plugin.ndjson"
+    --expected-version "$core_version" \
+    --expected-module "$packaging_dir/test-plugin/module.mjs" \
+    --output "$evidence_dir/sidecar-plugin.ndjson"
 desktop-file-validate /usr/share/applications/tongs.desktop
 appstreamcli validate --no-net /usr/share/metainfo/io.github.andre_motta.tongs.metainfo.xml \
     >"$evidence_dir/appstream-validation.txt"
@@ -147,26 +224,42 @@ set -e
 [[ $argument_status -eq 64 ]] || { printf 'launcher argument guard failed\n' >&2; exit 1; }
 useradd --create-home --shell /bin/bash tongs-rpm-test
 install -d -m 0700 -o tongs-rpm-test -g tongs-rpm-test /tmp/tongs-rpm-runtime
-set +e
-runuser -u tongs-rpm-test -- env XDG_RUNTIME_DIR=/tmp/tongs-rpm-runtime \
-    timeout --signal=TERM 12s xvfb-run -a sh -x /usr/bin/tongs-desktop \
-    >"$evidence_dir/hosted-launch.stdout" 2>"$evidence_dir/hosted-launch.stderr"
-launch_status=$?
-set -e
-printf '%s\n' "$launch_status" >"$evidence_dir/hosted-launch.exit-status"
-[[ $launch_status -eq 124 ]] || {
-    printf 'desktop launch did not remain live for the bounded X11 window: %s\n' \
-        "$launch_status" >&2
-    exit 1
+run_desktop_smoke() {
+    local name=$1
+    local status
+    set +e
+    runuser -u tongs-rpm-test -- env XDG_RUNTIME_DIR=/tmp/tongs-rpm-runtime \
+        timeout --signal=TERM 12s xvfb-run -a sh -x /usr/bin/tongs-desktop \
+        >"$evidence_dir/$name.stdout" 2>"$evidence_dir/$name.stderr"
+    status=$?
+    set -e
+    printf '%s\n' "$status" >"$evidence_dir/$name.exit-status"
+    [[ $status -eq 124 ]] || {
+        printf 'desktop launch did not remain live for the bounded X11 window: %s\n' \
+            "$status" >&2
+        exit 1
+    }
+    grep -F -- 'exec /usr/libexec/tongs-desktop/tongs-desktop --ozone-platform=x11' \
+        "$evidence_dir/$name.stderr"
+    ! grep -Eiq 'Traceback|ModuleNotFoundError|sidecar failed|FATAL|No such file' \
+        "$evidence_dir/$name.stdout" "$evidence_dir/$name.stderr"
 }
-grep -F -- 'exec /usr/libexec/tongs-desktop/tongs-desktop --ozone-platform=x11' \
-    "$evidence_dir/hosted-launch.stderr"
+run_desktop_smoke hosted-launch
 printf 'This hosted Xvfb smoke proves launcher/runtime liveness only; it makes no hardware GPU claim.\n' \
     >"$evidence_dir/hosted-launch-scope.txt"
 
 snapshot before-mcp
+installed_closure "$evidence_dir/mcp-closure-before.txt"
 dnf install --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-final \
     'python3-tongs+mcp' 2>&1 | tee "$evidence_dir/dnf-mcp-install.log"
+assert_sentinels mcp-install
+assert_final_state with-mcp yes
+installed_closure "$evidence_dir/mcp-closure-after.txt"
+/usr/bin/python3 -E -P "$packaging_dir/verify_mcp_provider.py" \
+    --audit "$evidence_dir/fedora-provider-audit.json" \
+    --before "$evidence_dir/mcp-closure-before.txt" \
+    --after "$evidence_dir/mcp-closure-after.txt" \
+    --output "$evidence_dir/mcp-provider-install.json"
 [[ $(rpm -qf /usr/bin/tongs-mcp --queryformat '%{NAME}') == 'python3-tongs+mcp' ]]
 command -v tongs-mcp >"$evidence_dir/tongs-mcp-path.txt"
 timeout --signal=TERM 20s /usr/bin/python3 -E -P "$packaging_dir/verify_mcp_command.py" \
@@ -179,9 +272,30 @@ commands = MCPPlugin().get_commands()
 assert len(commands) == 1 and commands[0][0] == "Start MCP Server"
 print("MCP command available with optional dependency")
 PY
+/usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" metadata \
+    --package python3-tongs --package 'python3-tongs+mcp' \
+    --package tongs-desktop --package tongs-desktop-test-plugin \
+    --install-manifest "$prepared_dir/SOURCES/desktop-install.json" \
+    --libexec-dir /usr/libexec/tongs-desktop --checkout-license "$checkout/LICENSE" \
+    --test-plugin-module "$packaging_dir/test-plugin/module.mjs" \
+    --output "$evidence_dir/package-file-metadata-with-mcp.json"
+/usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" inventory \
+    --package python3-tongs --package 'python3-tongs+mcp' \
+    --package tongs-desktop --package tongs-desktop-test-plugin \
+    --output "$evidence_dir/owned-path-inventory.json"
 dnf remove --assumeyes 'python3-tongs+mcp' \
     2>&1 | tee "$evidence_dir/dnf-mcp-remove.log"
+assert_sentinels mcp-remove
+assert_final_state after-mcp-removal no
 ! command -v tongs-mcp
+/usr/bin/tongs --help >"$evidence_dir/post-mcp-tongs-help.txt"
+grep -F 'Terminal code review inbox for GitHub and GitLab' \
+    "$evidence_dir/post-mcp-tongs-help.txt"
+timeout --signal=TERM 20s /usr/bin/python3 -E -P "$packaging_dir/verify_sidecar_plugin.py" \
+    --expected-version "$core_version" \
+    --expected-module "$packaging_dir/test-plugin/module.mjs" \
+    --output "$evidence_dir/post-mcp-sidecar-plugin.ndjson"
+run_desktop_smoke post-mcp-hosted-launch
 snapshot after-mcp-removal
 cmp "$evidence_dir/before-mcp.json" "$evidence_dir/after-mcp-removal.json"
 
@@ -189,21 +303,26 @@ snapshot before-reinstall
 dnf reinstall --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-final \
     python3-tongs tongs-desktop tongs-desktop-test-plugin \
     2>&1 | tee "$evidence_dir/dnf-reinstall.log"
+assert_sentinels reinstall
+assert_final_state after-reinstall no
 snapshot after-reinstall
 cmp "$evidence_dir/before-reinstall.json" "$evidence_dir/after-reinstall.json"
 
-for package in python3-tongs tongs-desktop tongs-desktop-test-plugin; do
-    rpm -q "$package" --queryformat '[%{FILENAMES}|%{FILEMODES:perms}\n]' \
-        | awk -F '|' '$2 !~ /^d/ {print $1}' >>"$evidence_dir/owned-files.txt"
-done
 dnf remove --assumeyes tongs-desktop-test-plugin tongs-desktop python3-tongs \
     2>&1 | tee "$evidence_dir/dnf-final-cycle-remove.log"
+assert_sentinels final-cycle-remove
+/usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-installed \
+    --absent python3-tongs --absent 'python3-tongs+mcp' --absent tongs-desktop \
+    --absent tongs-desktop-test-plugin \
+    --output "$evidence_dir/final-cycle-remove-installed-state.json"
 snapshot after-final-cycle-remove
 
 dnf install --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-previous \
     python3-tongs tongs-desktop tongs-desktop-test-plugin \
     2>&1 | tee "$evidence_dir/dnf-previous-install.log"
 [[ $(rpm -q tongs-desktop --queryformat '%{VERSION}') == 0.4.9 ]]
+assert_sentinels previous-install
+assert_previous_state installed-previous
 snapshot installed-previous
 
 corrupt_desktop=/tmp/corrupt-tongs-desktop.rpm
@@ -229,7 +348,13 @@ set -e
     exit 1
 }
 grep -Eiq 'NOT OK|BAD|digest|payload|checksum|does not verify|signature' \
-    "$evidence_dir/corrupt-rpm-check.log" "$evidence_dir/dnf-corrupt-upgrade.log"
+    "$evidence_dir/corrupt-rpm-check.log"
+grep -Eiq 'digest|payload|checksum|does not verify|signature|corrupt' \
+    "$evidence_dir/dnf-corrupt-upgrade.log"
+printf 'rpm -K: package integrity rejection\ndnf: package integrity rejection\n' \
+    >"$evidence_dir/corrupt-negative-classification.txt"
+assert_sentinels corrupt-failure
+assert_previous_state after-corrupt-failure
 snapshot after-corrupt-failure
 cmp "$evidence_dir/installed-previous.json" "$evidence_dir/after-corrupt-failure.json"
 
@@ -244,6 +369,13 @@ set -e
 }
 grep -Eiq 'nothing provides|conflicting requests|cannot install|problem with installed package' \
     "$evidence_dir/dnf-failed-upgrade.log"
+rpm -K "$final_desktop" >"$evidence_dir/exact-dependency-rpm-check.log" 2>&1
+grep -Eiq 'digests signatures OK|digests OK|signature' \
+    "$evidence_dir/exact-dependency-rpm-check.log"
+printf 'rpm -K: candidate integrity accepted\ndnf: exact core dependency rejection\n' \
+    >"$evidence_dir/exact-dependency-negative-classification.txt"
+assert_sentinels dependency-failure
+assert_previous_state after-dependency-failure
 snapshot after-dependency-failure
 cmp "$evidence_dir/installed-previous.json" "$evidence_dir/after-dependency-failure.json"
 
@@ -251,7 +383,10 @@ dnf upgrade --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-fina
     python3-tongs tongs-desktop \
     2>&1 | tee "$evidence_dir/dnf-upgrade.log"
 [[ $(rpm -q tongs-desktop --queryformat '%{VERSION}') == 0.5.0 ]]
+assert_sentinels successful-upgrade
+assert_final_state upgraded-final no
 snapshot upgraded-final
+cmp "$evidence_dir/clean-final.json" "$evidence_dir/upgraded-final.json"
 /usr/bin/python3 -E -P "$packaging_dir/verify_install.py" \
     --install-manifest "$prepared_dir/SOURCES/desktop-install.json" \
     --libexec-dir /usr/libexec/tongs-desktop --expected-version "$core_version" \
@@ -276,17 +411,23 @@ core_evr=$(rpm -q python3-tongs --queryformat '%{VERSION}-%{RELEASE}')
 grep -Fx "python3-tongs = $core_evr" "$evidence_dir/desktop-requires.txt"
 grep -Fx "python3-tongs = $core_evr" "$evidence_dir/mcp-requires.txt"
 for package in "$final_core" "$final_mcp" "$final_desktop"; do
-    rpm -qp --scripts "$package" >>"$evidence_dir/package-scriptlets.txt"
+    # RPM's --filetriggers output includes package and transaction file triggers.
+    for query in scripts triggers filetriggers; do
+        result="$evidence_dir/$(basename "$package").$query.txt"
+        rpm -qp --"$query" "$package" >"$result"
+        [[ ! -s "$result" ]] || {
+            printf 'built RPM unexpectedly contains %s: %s\n' "$query" "$package" >&2
+            exit 1
+        }
+    done
 done
-[[ ! -s "$evidence_dir/package-scriptlets.txt" ]]
 
 dnf remove --assumeyes tongs-desktop-test-plugin tongs-desktop python3-tongs \
     2>&1 | tee "$evidence_dir/dnf-uninstall.log"
-while IFS= read -r owned; do
-    [[ -z "$owned" ]] && continue
-    [[ ! -e "$owned" && ! -L "$owned" ]] || {
-        printf 'owned path remains after uninstall: %s\n' "$owned" >&2
-        exit 1
-    }
-done <"$evidence_dir/owned-files.txt"
+assert_sentinels final-uninstall
+/usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-absent \
+    --inventory "$evidence_dir/owned-path-inventory.json" \
+    --package python3-tongs --package 'python3-tongs+mcp' \
+    --package tongs-desktop --package tongs-desktop-test-plugin \
+    --output "$evidence_dir/final-uninstall-absence.json"
 snapshot after-uninstall

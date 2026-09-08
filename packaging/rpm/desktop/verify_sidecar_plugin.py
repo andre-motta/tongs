@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import importlib.metadata
 import importlib.util
 import json
@@ -42,7 +44,7 @@ def _request(
     raise RuntimeError(f"sidecar exited before responding to {method}")
 
 
-def verify(expected_version: str, output_path: Path) -> None:
+def verify(expected_version: str, expected_module: Path, output_path: Path) -> None:
     command = ["/usr/bin/python3", "-E", "-P", "-m", "tongs.desktop.sidecar"]
     environment = os.environ.copy()
     environment["PYTHONNOUSERSITE"] = "1"
@@ -69,6 +71,23 @@ def verify(expected_version: str, output_path: Path) -> None:
                 },
             )
             plugins = _request(process, output, "list", "plugins.list", {})
+            assets = _request(process, output, "assets", "assets.list", {})
+            descriptor = next(
+                item
+                for item in assets["assets"]
+                if item["plugin_id"] == "rpm-test" and item["asset_id"] == "module"
+            )
+            asset = _request(
+                process,
+                output,
+                "asset-read",
+                "assets.read",
+                {
+                    "asset": descriptor["handle"],
+                    "offset": 0,
+                    "length": descriptor["byte_count"],
+                },
+            )
             invocation = _request(
                 process,
                 output,
@@ -83,6 +102,13 @@ def verify(expected_version: str, output_path: Path) -> None:
             )
             assert plugin["state"] == "started"
             assert plugin["manifest"]["assets_available"] is True
+            expected_bytes = expected_module.read_bytes()
+            assert descriptor["byte_count"] == len(expected_bytes)
+            assert descriptor["sha256"] == hashlib.sha256(expected_bytes).hexdigest()
+            assert (
+                base64.b64decode(asset["data_base64"], validate=True) == expected_bytes
+            )
+            assert asset["next_offset"] is None
             assert invocation["value"] == {"invocation": "rpm-invoke", "value": 52}
             assert shutdown == {"accepted": True}
             assert process.stdin is not None
@@ -102,18 +128,49 @@ def verify(expected_version: str, output_path: Path) -> None:
     module = importlib.util.find_spec("tongs_rpm_test_plugin")
     if module is None or module.origin is None:
         raise RuntimeError("installed RPM test plugin module is unavailable")
-    paths = [module.origin, os.fspath(distribution.locate_file(""))]
-    forbidden = ("/checkout", "/.venv", "/site-packages/.local", "/root/")
+    assets_module = importlib.util.find_spec("tongs_rpm_test_plugin_assets")
+    if (
+        assets_module is None
+        or assets_module.submodule_search_locations is None
+        or len(assets_module.submodule_search_locations) != 1
+    ):
+        raise RuntimeError("installed RPM test plugin asset package is unavailable")
+    asset_root = Path(next(iter(assets_module.submodule_search_locations)))
+    installed_asset = asset_root / "assets/module.mjs"
+    if installed_asset.read_bytes() != expected_module.read_bytes():
+        raise RuntimeError("installed asset module differs from its source")
+    paths = [
+        module.origin,
+        os.fspath(distribution.locate_file("")),
+        os.fspath(asset_root),
+        os.fspath(installed_asset),
+    ]
+    forbidden = ("/checkout", "/.venv", "/root/.local", "/home/")
     if any(marker in path for path in paths for marker in forbidden):
         raise RuntimeError(f"plugin resolved outside the system installation: {paths}")
+    with output_path.open("a") as output:
+        output.write(
+            json.dumps(
+                {
+                    "asset_package_root": os.fspath(asset_root),
+                    "asset_sha256": hashlib.sha256(
+                        installed_asset.read_bytes()
+                    ).hexdigest(),
+                    "distribution_root": os.fspath(distribution.locate_file("")),
+                    "module_origin": module.origin,
+                }
+            )
+            + "\n"
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-version", required=True)
+    parser.add_argument("--expected-module", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    verify(args.expected_version, args.output)
+    verify(args.expected_version, args.expected_module, args.output)
     return 0
 
 

@@ -2,8 +2,9 @@
 
 The desktop workspace brings local repository discovery, review reading, code
 diffs, CI inspection, and installed plugin views into one window. This page
-describes the current unreleased desktop interface. It does not publish a
-desktop artifact or change how Tongs is installed. See [Desktop
+describes the current unreleased desktop interface. Tongs remains
+terminal-first, and this page does not publish a desktop artifact or change
+how Tongs is installed. See [Desktop
 installation](installation.md) for the per-user lifecycle and [Desktop plugin
 providers](../plugins/provider.md) for provider packaging and configuration.
 
@@ -23,10 +24,21 @@ scan_depth = 5
 
 The desktop workspace does not provide an online repository picker. Clone a
 repository below the scan root, then choose **Refresh local repositories** in
-the sidebar. The repository name then appears as a sidebar entry. Choose **All
-reviews** to combine review reads from every
-discovered repository, or choose one repository to scope the inbox to that
-project.
+the sidebar. The repository name then appears as a sidebar entry. Use the
+sidebar search to filter by display name, the forge filter to choose **All
+forges**, **GitHub**, or **GitLab**, and the sort control to order by **Name**,
+**Forge**, or **Host**. Repositories without a detected host remain visible;
+**Host** sorting places them after entries with a known host and then uses the
+display name as a tie-breaker.
+
+Choose **All reviews** to combine review reads from every discovered
+repository, or choose one repository to scope the inbox to that project. A
+refresh keeps the current repository context, review text, and saved drafts
+when that context is still available. Choosing a different repository starts
+that repository's inbox context and resets the inbox query to its default
+state. If a selected repository disappears during discovery, the workspace
+returns to **All reviews** while preserving unsaved review text and saved
+drafts.
 
 While discovery is running, the sidebar shows **Finding admitted
 repositories…**. If no repository is found, it shows **No local repositories
@@ -35,17 +47,26 @@ If discovery fails, use **Retry**.
 
 ## Find a review
 
-The workspace opens on **All reviews** with **Open** selected. Use the header
-controls to switch to **Closed & merged**, or choose **Refresh** to fetch the
-current list again. An individual repository page uses the same controls but
-reads only that repository.
+The workspace opens on **All reviews** with **Open** selected. The inbox
+scopes are **My Reviews**, **My MRs**, and **All Open**. **My Reviews** and
+**My MRs** show open items only. **All Open** can switch between **Open** and
+**Closed & merged**. The closed state is unavailable in the two personal
+scopes because closed and merged reviews are provided by **All Open**.
+
+Use the review sort control to choose **Updated**, **Title**, **CI status**, or
+**Author**. Choose **Refresh reviews** to fetch the current list again; while
+an existing list refreshes, the control is labelled **Refreshing…**. An
+individual repository page uses the same controls but reads only that
+repository.
 
 Each review card shows its CI state, number, title, author, source and target
 branches, and last update time. Select a card to open its detail view. When
 **All reviews** spans several repositories, a failed repository read is shown
 above the cards while reviews from repositories that did respond remain
 available. An empty scope shows **No open reviews match this repository
-scope.** or **No closed or merged reviews match this repository scope.**
+scope.** or **No closed or merged reviews match this repository scope.** The
+personal scopes use their own empty messages, such as **No open reviews are
+waiting for you.** and **You have no open merge requests.**
 
 The review header contains **← Reviews**, the review number and title, and an
 **Open on forge** button. That button opens the review's existing forge URL in
@@ -71,6 +92,41 @@ loaded, the desktop keeps the previous result visible and labels the failure.
 Use the view's refresh control to try again. If the current revision is not
 available, revision-bound reads are disabled until the review can be loaded
 again.
+
+## Comment, suggest, and submit
+
+The **Discussions** panel has two paths. **Quick comment** and **Quick inline
+comment** act immediately against the selected review. Choose **Start review**
+to create a durable draft, or **Resume review** to reopen one saved draft.
+While a durable draft is active, the controls add general comments, selected
+lines, and suggestions to that draft. The draft remains bound to the review
+revision it was created from. If another writer changes the draft, the
+workspace reports a version conflict and preserves your unsaved text so you
+can resolve it deliberately.
+
+If the review revision changes, old inline anchors stay on the old draft and
+cannot be submitted against the new revision. The workspace can create a
+separate current-revision draft with portable body, verdict, and general
+comments; old inline comments and replies remain for deliberate recreation.
+Submit a draft only after checking its current revision.
+
+Quick actions can be accepted, rejected, or unknown. Durable submissions show
+confirmed progress and can end submitted, paused, or unknown. An unknown
+result requires an explicit receipt check or reconciliation choice. Confirmed
+steps are not replayed automatically, and the workspace never silently
+repeats an uncertain remote write. A partial or paused submission can resume
+its existing durable attempt; an unknown submission offers explicit choices to
+retry remaining steps, return the draft to editing, or mark it submitted after
+you inspect the forge.
+
+Suggestions are available from a valid selection in the current complete diff.
+Select contiguous new-side lines in either **Unified** or **Split** layout,
+then choose **Suggest replacement**. Deletions, old-side selections, partial
+diffs, unavailable files, and selections from an earlier revision cannot
+produce a suggestion. Edit both the optional explanation and replacement
+code before choosing **Post quick suggestion** or **Add suggestion to draft**;
+**Cancel and keep text** leaves the entered text available. GitHub suggestions
+use its `suggestion` block, while GitLab uses its `suggestion:-0+N` form.
 
 ## Work with a diff
 
@@ -102,6 +158,24 @@ the latest diff. If paging reaches a safety bound, it keeps a bounded partial
 view and explains that the diff is incomplete. Invalid or inconsistent page
 data is reported as an error rather than being silently combined with another
 revision.
+
+The diff toolbar also provides **Suggest replacement** when the selected
+context meets the rules above. Suggestions are limited to the current
+revision and contiguous new-side source lines. The layout changes how the
+selection is displayed, not which side can be suggested.
+
+## Read descriptions and discussions
+
+Descriptions and discussions support ordinary Markdown formatting, including
+headings, lists, emphasis, code blocks, and links. Raw HTML stays inert, and
+images are shown as text placeholders. A body that is too large or complex
+for the safe renderer falls back to an explicitly limited plain-text preview;
+additional content is marked as omitted. The combined discussion display also
+has a bounded Markdown budget, so later comments can show an omission notice
+when that budget is exhausted.
+
+HTTPS links open in the external browser only after you explicitly activate
+the link. Displaying a link does not open it.
 
 ## Inspect pipelines, jobs, and logs
 

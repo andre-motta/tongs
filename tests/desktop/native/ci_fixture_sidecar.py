@@ -197,6 +197,14 @@ class _FixtureSession:
     async def clear_cache(self) -> None:
         self._client._record("clear_cache", REPOSITORY.project_path, 0)
 
+    def emit_change(
+        self,
+        kind: ServiceEventKind,
+        resource: RepositoryRef | ReviewRef | PipelineRef | None = None,
+    ) -> None:
+        """Expose the production session event facade to protocol adapters."""
+        self._emit_change(kind, resource)
+
     async def events(self) -> AsyncIterator[ServiceEvent]:
         while True:
             event = await self._events.get()

@@ -66,7 +66,7 @@ SUMMARY = MRSummary(
     ci_status=CIStatus.RUNNING,
     created_at=NOW,
     updated_at=NOW,
-    web_url="https://fixture.invalid/proof/desktop-ci/merge_requests/47",
+    web_url="https://fixture.example/proof/desktop-ci/merge_requests/47",
     additions=47,
     deletions=2,
 )
@@ -137,9 +137,8 @@ class _FixtureClient:
 
 
 class _FixtureSession:
-    config = Config()
-
     def __init__(self, action_log: Path) -> None:
+        self.config = Config(editor_command=os.environ.get("TONGS_EDITOR_COMMAND", ""))
         self._events: asyncio.Queue[ServiceEvent | None] = asyncio.Queue()
         self._sequence = 0
         self._client = _FixtureClient(action_log)
@@ -195,6 +194,17 @@ class _FixtureSession:
             "search-target mutation receipt\n"
         )
 
+    async def clear_cache(self) -> None:
+        self._client._record("clear_cache", REPOSITORY.project_path, 0)
+
+    def emit_change(
+        self,
+        kind: ServiceEventKind,
+        resource: RepositoryRef | ReviewRef | PipelineRef | None = None,
+    ) -> None:
+        """Expose the production session event facade to protocol adapters."""
+        self._emit_change(kind, resource)
+
     async def events(self) -> AsyncIterator[ServiceEvent]:
         while True:
             event = await self._events.get()
@@ -210,7 +220,9 @@ class _FixtureSession:
         return cast(ForgeClient, self._client)
 
     def _emit_change(
-        self, kind: ServiceEventKind, resource: PipelineRef | None
+        self,
+        kind: ServiceEventKind,
+        resource: RepositoryRef | ReviewRef | PipelineRef | None = None,
     ) -> None:
         self._sequence += 1
         self._events.put_nowait(ServiceEvent(self._sequence, kind, resource))

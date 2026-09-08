@@ -59,6 +59,8 @@ class CacheResource(Protocol):
 
     async def open(self) -> None: ...
 
+    async def clear(self) -> None: ...
+
     async def close(self) -> None: ...
 
 
@@ -848,6 +850,12 @@ class ApplicationSession:
                 "The forge returned an invalid job log.",
             )
         return result
+
+    async def clear_cache(self) -> None:
+        """Clear the session-owned API cache without touching durable drafts."""
+        self._require_started()
+        cache = cast(CacheResource, self._cache)
+        await cache.clear()
 
     async def events(self) -> AsyncIterator[ServiceEvent]:
         """Subscribe to ordered, bounded resource invalidation hints."""

@@ -67,6 +67,13 @@ from tongs.services.review_mutations import (
     ReviewMutationService,
     ReviewVerdict,
 )
+from tongs.services.workspace_utilities import (
+    EditorLogPlan,
+    EditorPlanStatus,
+    EditorReservation,
+    ReviewUrl,
+    WorkspaceUtilityService,
+)
 
 if TYPE_CHECKING:
     from tongs.services.review_submission import (
@@ -130,6 +137,9 @@ __all__ = [
     "CloseReviewCommand",
     "DiffAnchor",
     "DiffSide",
+    "EditorLogPlan",
+    "EditorPlanStatus",
+    "EditorReservation",
     "ForgeCapabilities",
     "GeneralComment",
     "HostFailure",
@@ -169,6 +179,7 @@ __all__ = [
     "ReviewScope",
     "ReviewSnapshot",
     "ReviewSubmissionService",
+    "ReviewUrl",
     "ReviewVerdict",
     "ServiceError",
     "ServiceErrorCode",
@@ -181,4 +192,5 @@ __all__ = [
     "SubmissionStep",
     "SubmissionStepKind",
     "UnapproveReviewCommand",
+    "WorkspaceUtilityService",
 ]

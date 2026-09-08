@@ -142,6 +142,72 @@ test("pipeline panel renders hierarchy, inert paged logs, search, and keyboard s
   assert.deepEqual(jobReads, ["pipeline-101", "pipeline-102"]);
 });
 
+test("selected pipeline and job open only their service DTO forge URLs", async () => {
+  const opened = [];
+  const bridge = baseBridge({
+    openExternal: async (url) => {
+      opened.push(url);
+      return true;
+    },
+  });
+  const view = renderFeature(bridge);
+  await view.findByText("build-201");
+
+  fireEvent.click(view.getByRole("button", { name: "Open pipeline on forge" }));
+  await view.findByText("Pipeline link sent to your browser.");
+  fireEvent.click(view.getByRole("button", { name: "Open job on forge" }));
+  await view.findByText("Job link sent to your browser.");
+
+  assert.deepEqual(opened, [
+    "https://example.invalid/pipeline/101",
+    "https://example.invalid/job/201",
+  ]);
+});
+
+test("loaded selected job opens in editor once and reports exact outcome", async () => {
+  const jobs = [];
+  const completion = deferred();
+  const bridge = baseBridge({
+    openJobLogInEditor: async (handle) => {
+      jobs.push(handle);
+      return completion.promise;
+    },
+  });
+  const view = renderFeature(bridge);
+  await view.findByText("safe output");
+  const open = view.getByRole("button", { name: "Open log in editor" });
+
+  fireEvent.click(open);
+  fireEvent.click(open);
+  assert.equal(jobs.length, 1);
+  completion.resolve({
+    outcome: "started",
+    message: "Editor started. Tongs cannot confirm that the exported log was opened.",
+  });
+
+  await view.findByText(/Tongs cannot confirm/);
+  assert.deepEqual(jobs, ["job-201"]);
+});
+
+test("editor and forge launch failures are actionable", async () => {
+  const bridge = baseBridge({
+    openExternal: async () => {
+      throw new Error("denied");
+    },
+    openJobLogInEditor: async () => ({
+      outcome: "terminal_unsupported",
+      message: "Configure a wait-capable graphical editor.",
+    }),
+  });
+  const view = renderFeature(bridge);
+  await view.findByText("safe output");
+
+  fireEvent.click(view.getByRole("button", { name: "Open pipeline on forge" }));
+  await view.findByText(/Pipeline could not be opened/);
+  fireEvent.click(view.getByRole("button", { name: "Open log in editor" }));
+  await view.findByText("Configure a wait-capable graphical editor.");
+});
+
 test("confirmed job action sends one exact opaque target and keeps its receipt", async () => {
   const writes = [];
   const completion = deferred();
@@ -465,6 +531,10 @@ function baseBridge(overrides = {}) {
       receipt(params.operation_id, "cancel_job", "known", null, false),
     getCIReceipt: () => read({ receipt: null }),
     openExternal: async () => true,
+    openJobLogInEditor: async () => ({
+      outcome: "started",
+      message: "Editor started.",
+    }),
     ...overrides,
   };
 }

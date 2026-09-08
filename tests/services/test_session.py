@@ -113,6 +113,7 @@ class FakeCache:
         self.open_error = open_error
         self.open_calls = 0
         self.close_calls = 0
+        self.clear_calls = 0
 
     async def open(self) -> None:
         self.open_calls += 1
@@ -121,6 +122,9 @@ class FakeCache:
 
     async def close(self) -> None:
         self.close_calls += 1
+
+    async def clear(self) -> None:
+        self.clear_calls += 1
 
 
 class FakeDraftStore:
@@ -494,6 +498,26 @@ async def start_session(
         **kwargs,
     )
     return await session.start()
+
+
+@pytest.mark.asyncio
+async def test_clear_cache_uses_session_owned_cache_without_draft_lifecycle() -> None:
+    cache = FakeCache()
+    drafts = FakeDraftStore()
+    session = ApplicationSession(
+        config=Config(max_parallel=2),
+        cache=cache,
+        draft_store=cast(DraftStore, drafts),
+        forge_registry=FakeRegistry(),
+    )
+    await session.start()
+
+    await session.clear_cache()
+
+    assert cache.clear_calls == 1
+    assert drafts.open_calls == 1
+    assert drafts.close_calls == 0
+    await session.close()
 
 
 class TestReferences:

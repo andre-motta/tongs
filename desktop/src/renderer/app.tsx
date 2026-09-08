@@ -29,6 +29,11 @@ import { createPipelinesFeature } from "./features/pipelines/index.js";
 import { createReviewFeature } from "./features/review/index.js";
 import { RepositoryNavigation } from "./features/repositories/index.js";
 import {
+  WorkspaceUtilityController,
+  WorkspaceUtilityOverlay,
+  createUtilitiesFeature,
+} from "./features/utilities/index.js";
+import {
   createCommitsFeature,
   createReviewOverviewFeature,
 } from "./features/review-detail/index.js";
@@ -40,6 +45,7 @@ const shellQueries = new QueryCoordinator(bridge);
 const registry = new FeatureRegistry();
 const pluginsFeature = createPluginsFeature(bridge);
 const pluginLocations = new PluginLocationPublisher(bridge);
+const utilityController = new WorkspaceUtilityController();
 registry.register(createInboxFeature());
 registry.register(createReviewOverviewFeature());
 registry.register(createCommitsFeature());
@@ -47,6 +53,7 @@ registry.register(createDiffFeature());
 registry.register(pluginsFeature);
 registry.register(createPipelinesFeature());
 registry.register(createReviewFeature(bridge));
+registry.register(createUtilitiesFeature(utilityController));
 
 function App(): ReactNode {
   const [route, setRoute] = useState<AppRoute>(navigator.route);
@@ -206,6 +213,10 @@ function App(): ReactNode {
           </ErrorBoundary>
         </main>
       </div>
+      <WorkspaceUtilityOverlay
+        controller={utilityController}
+        context={featureContext}
+      />
     </>
   );
 }

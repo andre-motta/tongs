@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import path from "node:path";
 import test from "node:test";
 import {
   MAX_RESPONSE_BYTES,
@@ -17,6 +18,7 @@ const caps = [
   "paged_logs",
   "plugins",
   "review_mutations",
+  "workspace_utilities",
 ];
 const methods = [
   "assets.list",
@@ -60,6 +62,10 @@ const methods = [
   "review_submissions.status",
   "reviews.get",
   "reviews.list",
+  "utilities.cache_clear",
+  "utilities.job_log_export",
+  "utilities.job_log_release",
+  "utilities.review_url",
   "drafts.create",
   "drafts.discard",
   "drafts.get",
@@ -96,7 +102,7 @@ function harness({
       `${JSON.stringify({ v: 1, type: "response", id: frame.id, result })}\n`,
     );
   };
-  const spawn = () => {
+  const spawn = (_executable, _arguments, options) => {
     const child = new EventEmitter();
     children.push(child);
     child.stdin = new PassThrough();
@@ -107,6 +113,7 @@ function harness({
     child.exitCode = null;
     child.signalCode = null;
     child.frames = [];
+    child.spawnOptions = options;
     child.finish = (code = 0, signal = null) => {
       child.exitCode = code;
       child.signalCode = signal;
@@ -161,6 +168,45 @@ function transportFor(fake, shutdownTimeout = 1_000) {
     fake.spawn,
   );
 }
+
+test("trusted launch binds the sidecar to the exact editor export root", async () => {
+  const fake = harness();
+  const variable = "TONGS_DESKTOP_EDITOR_EXPORT_ROOT";
+  const original = process.env[variable];
+  process.env[variable] = "/tmp/renderer-selected-root";
+  const trustedRoot = path.join(process.cwd(), ".trusted-editor-exports");
+  const transport = new SidecarTransport(
+    { ...launch, utilityExportRoot: trustedRoot },
+    1_000,
+    1_000,
+    1_000,
+    fake.spawn,
+  );
+  try {
+    await transport.start();
+    assert.equal(fake.children[0].spawnOptions.env[variable], trustedRoot);
+  } finally {
+    await transport.stop();
+    if (original === undefined) delete process.env[variable];
+    else process.env[variable] = original;
+  }
+});
+
+test("launch without utility authority strips an inherited export root", async () => {
+  const fake = harness();
+  const variable = "TONGS_DESKTOP_EDITOR_EXPORT_ROOT";
+  const original = process.env[variable];
+  process.env[variable] = "/tmp/untrusted-editor-exports";
+  const transport = transportFor(fake);
+  try {
+    await transport.start();
+    assert.equal(fake.children[0].spawnOptions.env[variable], undefined);
+  } finally {
+    await transport.stop();
+    if (original === undefined) delete process.env[variable];
+    else process.env[variable] = original;
+  }
+});
 
 test("unexpected EOF fails every pending read and records one crash", async () => {
   const fake = harness();

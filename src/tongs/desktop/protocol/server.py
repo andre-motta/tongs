@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import Protocol, cast
 
 from tongs.desktop.assets import (
@@ -16,6 +18,10 @@ from tongs.desktop.assets import (
     AssetCatalog,
     AssetDescriptor,
     CoreAssetSpec,
+)
+from tongs.desktop.editor_exports import (
+    EDITOR_EXPORT_ROOT_ENV,
+    EditorExportLedger,
 )
 from tongs.desktop.protocol.ci_operations import (
     CI_CAPABILITY,
@@ -50,6 +56,11 @@ from tongs.desktop.protocol.state import (
     HandleKind,
     HandleRegistry,
     SnapshotStore,
+)
+from tongs.desktop.protocol.utility_operations import (
+    UTILITY_CAPABILITY,
+    UTILITY_METHODS,
+    UtilityOperations,
 )
 from tongs.diff.conversion import convert_forge_changes
 from tongs.forges.models import MRState, MRSummary, Pipeline, PipelineJob
@@ -102,6 +113,7 @@ SUPPORTED_CAPABILITIES = frozenset(
         "plugins",
         REVIEW_CAPABILITY,
         "split_diffs",
+        UTILITY_CAPABILITY,
     }
 )
 SUPPORTED_METHODS = (
@@ -122,6 +134,7 @@ SUPPORTED_METHODS = (
     "repositories.discover",
     "repositories.open",
     "review_pipelines.list",
+    *UTILITY_METHODS,
     *REVIEW_METHODS,
     "reviews.get",
     "reviews.list",
@@ -247,6 +260,16 @@ class _EventBuffer:
         )
 
 
+class _UnavailableEditorExports:
+    """Fail closed when a non-production caller omits the trusted export root."""
+
+    async def reserve(self, _job_id: int, _token: str) -> None:
+        return None
+
+    async def release(self, _slot: int, _token: str) -> bool:
+        return False
+
+
 class DesktopSidecarServer:
     """Own one desktop session and dispatch strict protocol-major-1 requests."""
 
@@ -257,6 +280,7 @@ class DesktopSidecarServer:
         plugin_registry: DesktopPluginRegistry | None = None,
         core_assets: tuple[CoreAssetSpec, ...] = (),
         shutdown_timeout: float = _DEFAULT_SHUTDOWN_TIMEOUT,
+        editor_exports: EditorExportLedger | None = None,
     ) -> None:
         if shutdown_timeout <= 0:
             raise ValueError("shutdown_timeout must be positive")
@@ -264,6 +288,13 @@ class DesktopSidecarServer:
         self._plugin_registry = plugin_registry
         self._core_assets = core_assets
         self._shutdown_timeout = shutdown_timeout
+        export_root = os.environ.get(EDITOR_EXPORT_ROOT_ENV)
+        self._editor_exports = editor_exports
+        if self._editor_exports is None and export_root is not None:
+            self._editor_exports = EditorExportLedger(Path(export_root))
+        self._editor_export_authority = (
+            self._editor_exports or _UnavailableEditorExports()
+        )
         self._handles = HandleRegistry()
         self._snapshots = SnapshotStore()
         self._assets = AssetCatalog()
@@ -280,6 +311,7 @@ class DesktopSidecarServer:
         self._install_read_operations()
         self._install_ci_operations()
         self._install_review_operations()
+        self._install_utility_operations()
 
     @property
     def session_id(self) -> str:
@@ -389,6 +421,17 @@ class DesktopSidecarServer:
 
     def _install_review_operations(self) -> None:
         operations = ReviewOperations(session=self._session, handles=self._handles)
+        for method, (handler, mutation) in operations.handlers.items():
+            self.register_operation(
+                method, cast(OperationHandler, handler), mutation=mutation
+            )
+
+    def _install_utility_operations(self) -> None:
+        operations = UtilityOperations(
+            session=self._session,
+            handles=self._handles,
+            reservations=self._editor_export_authority,
+        )
         for method, (handler, mutation) in operations.handlers.items():
             self.register_operation(
                 method, cast(OperationHandler, handler), mutation=mutation
@@ -1117,6 +1160,8 @@ class DesktopSidecarServer:
         if registry is not None:
             await _bounded_cleanup(registry.stop_all(), self._shutdown_timeout)
         await _bounded_cleanup(self._session.close(), self._shutdown_timeout)
+        if self._editor_exports is not None:
+            await _bounded_cleanup(self._editor_exports.close(), self._shutdown_timeout)
         self._snapshots.clear()
         self._handles.clear()
         self._assets.clear()

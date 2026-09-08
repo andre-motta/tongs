@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, protocol, session } from "electron";
+import { app, BrowserWindow, clipboard, protocol, session } from "electron";
 import { AssetCatalog } from "./assets.js";
 import { DesktopIpcController } from "./ipc.js";
 import { parseLaunchArguments } from "./launch.js";
@@ -12,6 +12,7 @@ import {
 } from "./security.js";
 import { RendererRecoveryCoordinator } from "./renderer_lifecycle.js";
 import { SidecarTransport } from "./sidecar.js";
+import { WorkspaceUtilities } from "./utilities.js";
 
 protocol.registerSchemesAsPrivileged([APP_SCHEME_REGISTRATION]);
 const forbidden = [
@@ -58,7 +59,14 @@ async function run(): Promise<void> {
   desktopSession.webRequest.onBeforeRequest((details, callback) =>
     callback({ cancel: !isAllowedAppUrl(details.url) }),
   );
-  transport = new SidecarTransport(launch);
+  const editorExportRoot = path.join(
+    app.getPath("temp"),
+    "tongs-editor-exports",
+  );
+  transport = new SidecarTransport({
+    ...launch,
+    utilityExportRoot: editorExportRoot,
+  });
   await transport.start();
   const assets = new AssetCatalog(transport, path.join(desktopRoot, "shell"));
   await assets.refresh();
@@ -82,7 +90,12 @@ async function run(): Promise<void> {
       spellcheck: false,
     },
   });
-  controller = new DesktopIpcController(window, transport, assets);
+  const utilities = new WorkspaceUtilities(
+    transport,
+    clipboard,
+    editorExportRoot,
+  );
+  controller = new DesktopIpcController(window, transport, assets, utilities);
   controller.register();
   const owner = window;
   const sidecar = transport;

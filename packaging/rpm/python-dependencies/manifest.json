@@ -50,7 +50,7 @@
       "distribution": "sigstore-rekor-types",
       "version": "0.0.18",
       "rpm_source_name": "python-sigstore-rekor-types",
-      "module": "sigstore_rekor_types",
+      "module": "rekor_types",
       "license": "Apache-2.0",
       "python_requires": ">=3.8",
       "build_backend": "setuptools",

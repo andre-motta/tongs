@@ -56,6 +56,17 @@ def test_manifest_requires_system_python_and_fedora_providers() -> None:
     assert not any("sigstore" in requirement for requirement in requirements)
 
 
+def test_rekor_distribution_records_its_actual_import_package() -> None:
+    manifest = json.loads(MANIFEST.read_text())
+    rekor = next(
+        item
+        for item in manifest["companions"]
+        if item["distribution"] == "sigstore-rekor-types"
+    )
+
+    assert rekor["module"] == "rekor_types"
+
+
 def test_manifest_rejects_unapproved_source_host() -> None:
     manifest = json.loads(MANIFEST.read_text())
     manifest["companions"][0]["source"]["url"] = "https://example.com/source.tar.gz"

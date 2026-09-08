@@ -37,6 +37,13 @@ def test_rust_spec_uses_locked_sources_and_fedora_openssl() -> None:
     assert "CARGO_NET_OFFLINE=true" in spec
 
 
+def test_rekor_spec_maps_python_extra_to_fedora_providers() -> None:
+    spec = (PACKAGING / "specs" / "python-sigstore-rekor-types.spec").read_text()
+
+    assert '"pydantic >=2,<3", "email-validator >=2"' in spec
+    assert "%pyproject_save_files -l rekor_types" in spec
+
+
 def test_builder_uses_only_fedora_packaged_python_build_tools() -> None:
     containerfile = (PACKAGING / "Containerfile").read_text()
 

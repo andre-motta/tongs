@@ -20,13 +20,14 @@ Python data models for the Rekor transparency log API.
 
 %prep
 %autosetup -n sigstore_rekor_types-%{version}
+sed -i 's/"pydantic\[email\] >=2,<3",/"pydantic >=2,<3", "email-validator >=2",/' pyproject.toml
 
 %build
 %pyproject_wheel
 
 %install
 %pyproject_install
-%pyproject_save_files -l sigstore_rekor_types
+%pyproject_save_files -l rekor_types
 
 %files -n python3-sigstore-rekor-types -f %{pyproject_files}
 

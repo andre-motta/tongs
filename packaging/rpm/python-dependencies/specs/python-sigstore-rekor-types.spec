@@ -6,7 +6,9 @@ License:        Apache-2.0
 URL:            https://github.com/trailofbits/sigstore-rekor-types
 Source0:        sigstore_rekor_types-%{version}.tar.gz
 BuildArch:      noarch
+BuildRequires:  pyproject-rpm-macros
 BuildRequires:  python3-devel
+BuildRequires:  python3-pip
 BuildRequires:  python3dist(setuptools) >= 75
 
 %description

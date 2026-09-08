@@ -6,7 +6,9 @@ License:        Apache-2.0 OR MIT
 URL:            https://github.com/theupdateframework/python-tuf
 Source0:        tuf-%{version}.tar.gz
 BuildArch:      noarch
+BuildRequires:  pyproject-rpm-macros
 BuildRequires:  python3-devel
+BuildRequires:  python3-pip
 BuildRequires:  python3dist(hatchling) >= 1.31
 
 %description

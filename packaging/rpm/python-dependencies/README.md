@@ -11,12 +11,16 @@ checks their byte counts and SHA-256 hashes, and prepares the Cargo inputs for
 `rfc3161-client`. The Rust preparation preserves its upstream `Cargo.lock`,
 records every package source/checksum/license, and creates a deterministic vendor
 archive. The RPM spec removes the upstream vendored-OpenSSL feature so the build
-links Fedora's OpenSSL provider.
+links Fedora's OpenSSL provider. Target-resolved Cargo packages must have license
+metadata and actual license text. Their inventory and texts ship in the binary
+RPM, while the complete vendored source archive remains in the source RPM.
 
 The GitHub Actions workflow is the supported execution environment. It uses a
-disposable Fedora 44 container on a GitHub-hosted runner to refresh `repoquery`,
-prepare sources, build RPMs and SRPMs offline, and install the result with DNF in
-a clean Fedora container. No install step uses pip or a private Python runtime.
+disposable Fedora 44 container on a GitHub-hosted runner to refresh `repoquery`
+and prepare sources. It creates SRPMs offline, provisions one clean Fedora image
+per SRPM with `dnf builddep`, rebuilds each SRPM with networking disabled, and
+installs the result with DNF in another clean Fedora container. No install step
+uses pip or a private Python runtime.
 The retained artifact includes provider resolution, source and Cargo inventories,
 RPM metadata, DNF logs, smoke results, and SHA-256 sums.
 

@@ -5,12 +5,14 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlparse
 
 
 def _sha256(path: Path) -> str:
@@ -31,13 +33,10 @@ def _download(source: dict[str, Any], output: Path) -> None:
         urllib.request.urlopen(request, timeout=60) as response,
         output.open("wb") as dest,
     ):
-        if response.geturl().split("/", 3)[:3] != [
-            "https:",
-            "",
-            "files.pythonhosted.org",
-        ]:
+        expected_host = urlparse(source["url"]).hostname
+        if urlparse(response.geturl()).hostname != expected_host:
             raise RuntimeError(
-                f"source redirected outside files.pythonhosted.org: {response.geturl()}"
+                f"source redirected outside {expected_host}: {response.geturl()}"
             )
         while block := response.read(1024 * 1024):
             read_bytes += len(block)
@@ -76,9 +75,33 @@ def _relativize_vendor_config(config: str, vendor: Path) -> str:
     return relative
 
 
+def _use_system_openssl(source_root: Path) -> None:
+    manifest = source_root / "rust" / "Cargo.toml"
+    text = manifest.read_text()
+    old = 'openssl = { version = "0.10.80", features = ["vendored"] }'
+    new = 'openssl = "0.10.80"'
+    if text.count(old) != 1:
+        raise RuntimeError("unexpected rfc3161-client OpenSSL dependency declaration")
+    manifest.write_text(text.replace(old, new))
+
+
+def _license_candidates(package_dir: Path) -> list[Path]:
+    prefixes = ("LICENSE", "COPYING", "NOTICE", "COPYRIGHT")
+    return sorted(
+        path
+        for path in package_dir.iterdir()
+        if path.is_file() and path.name.upper().startswith(prefixes)
+    )
+
+
 def _prepare_cargo(
     companion: dict[str, Any], source_archive: Path, output: Path
 ) -> dict[str, Any]:
+    external_licenses = []
+    for source in companion["cargo"]["license_sources"]:
+        destination = output / source["filename"]
+        _download(source, destination)
+        external_licenses.append(destination)
     with tempfile.TemporaryDirectory(prefix="tongs-rfc3161-") as temp_name:
         temp = Path(temp_name)
         _safe_extract(source_archive, temp)
@@ -87,6 +110,7 @@ def _prepare_cargo(
         lock_hash = _sha256(lock_path)
         if lock_hash != companion["cargo"]["lock_sha256"]:
             raise RuntimeError(f"Cargo.lock hash mismatch: {lock_hash}")
+        _use_system_openssl(source_root)
         vendor = source_root / "vendor"
         cargo_env = os.environ.copy()
         cargo_env["CARGO_HOME"] = str(temp / "cargo-home")
@@ -106,15 +130,28 @@ def _prepare_cargo(
             _relativize_vendor_config(result.stdout, vendor)
         )
         metadata = subprocess.run(
-            ["cargo", "metadata", "--locked", "--offline", "--format-version", "1"],
+            [
+                "cargo",
+                "metadata",
+                "--locked",
+                "--offline",
+                "--filter-platform",
+                "x86_64-unknown-linux-gnu",
+                "--format-version",
+                "1",
+            ],
             cwd=source_root,
             check=True,
             capture_output=True,
             env=cargo_env,
             text=True,
         )
+        metadata_report = json.loads(metadata.stdout)
+        resolved_ids = {node["id"] for node in metadata_report["resolve"]["nodes"]}
         packages = []
-        for package in json.loads(metadata.stdout)["packages"]:
+        license_root = source_root / "cargo-licenses"
+        license_root.mkdir()
+        for package in metadata_report["packages"]:
             license_value = package.get("license")
             license_file = package.get("license_file")
             if not license_value and package["name"] in {"rfc3161-client", "tsp-asn1"}:
@@ -124,6 +161,33 @@ def _prepare_cargo(
                 raise RuntimeError(
                     f"Cargo dependency lacks license metadata: {package['name']} {package['version']}"
                 )
+            resolved = package["id"] in resolved_ids
+            package_license_files = []
+            if resolved:
+                package_dir = Path(package["manifest_path"]).parent
+                candidates = _license_candidates(package_dir)
+                if package["name"] in {"rfc3161-client", "tsp-asn1"}:
+                    candidates = [source_root / "LICENSE"]
+                elif package["name"] == "cryptography-x509":
+                    candidates = external_licenses
+                if not candidates:
+                    raise RuntimeError(
+                        "resolved Cargo package lacks required license text: "
+                        f"{package['name']} {package['version']}"
+                    )
+                package_license_dir = (
+                    license_root / f"{package['name']}-{package['version']}"
+                )
+                package_license_dir.mkdir()
+                for candidate in candidates:
+                    destination = package_license_dir / candidate.name
+                    shutil.copyfile(candidate, destination)
+                    package_license_files.append(
+                        {
+                            "path": str(destination.relative_to(license_root)),
+                            "sha256": _sha256(destination),
+                        }
+                    )
             packages.append(
                 {
                     "name": package["name"],
@@ -131,6 +195,13 @@ def _prepare_cargo(
                     "source": package.get("source"),
                     "license": license_value,
                     "license_file": license_file,
+                    "resolved_for_fedora_x86_64": resolved,
+                    "disposition": (
+                        "binary-license-bundle"
+                        if resolved
+                        else "retained-vendor-source"
+                    ),
+                    "bundled_license_files": package_license_files,
                 }
             )
         packages.sort(
@@ -143,7 +214,9 @@ def _prepare_cargo(
             )
             + "\n"
         )
+        shutil.copyfile(inventory_path, license_root / "cargo-inventory.json")
         archive_path = output / "rfc3161-client-1.0.8-cargo-vendor.tar.gz"
+        license_archive_path = output / "rfc3161-client-1.0.8-cargo-licenses.tar.gz"
         env = os.environ.copy()
         env["GZIP"] = "-n"
         subprocess.run(
@@ -163,6 +236,27 @@ def _prepare_cargo(
             env=env,
             check=True,
         )
+        subprocess.run(
+            [
+                "tar",
+                "--sort=name",
+                "--mtime=@0",
+                "--owner=0",
+                "--group=0",
+                "--numeric-owner",
+                "-czf",
+                str(license_archive_path),
+                "cargo-licenses",
+            ],
+            cwd=source_root,
+            env=env,
+            check=True,
+        )
+        if any(
+            package["name"] == "openssl-src" and package["resolved_for_fedora_x86_64"]
+            for package in packages
+        ):
+            raise RuntimeError("vendored OpenSSL remains in the Fedora resolved graph")
         return {
             "cargo_lock_sha256": lock_hash,
             "cargo_packages": len(packages),
@@ -170,6 +264,19 @@ def _prepare_cargo(
             "vendor_archive_sha256": _sha256(archive_path),
             "inventory": inventory_path.name,
             "inventory_sha256": _sha256(inventory_path),
+            "resolved_packages": sum(
+                package["resolved_for_fedora_x86_64"] for package in packages
+            ),
+            "license_archive": license_archive_path.name,
+            "license_archive_sha256": _sha256(license_archive_path),
+            "license_sources": [
+                {
+                    "filename": path.name,
+                    "sha256": _sha256(path),
+                    "bytes": path.stat().st_size,
+                }
+                for path in external_licenses
+            ],
         }
 
 

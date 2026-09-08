@@ -48,6 +48,21 @@ def validate(manifest: dict[str, Any]) -> None:
         )
     if not _SHA256.fullmatch(rust["cargo"]["lock_sha256"]):
         raise ValueError("invalid Cargo.lock hash")
+    commit = rust["cargo"]["git_dependency"].rsplit("#", 1)[1]
+    license_prefix = (
+        f"https://raw.githubusercontent.com/pyca/cryptography/{commit}/LICENSE"
+    )
+    for source in rust["cargo"]["license_sources"]:
+        if not source["url"].startswith(license_prefix):
+            raise ValueError("unapproved Cargo license source")
+        if Path(urlparse(source["url"]).path).name != source["filename"].removeprefix(
+            "cryptography-"
+        ):
+            raise ValueError("Cargo license source filename mismatch")
+        if not _SHA256.fullmatch(source["sha256"]):
+            raise ValueError("invalid Cargo license source hash")
+        if not isinstance(source["bytes"], int) or source["bytes"] <= 0:
+            raise ValueError("invalid Cargo license source size")
 
 
 def main() -> int:

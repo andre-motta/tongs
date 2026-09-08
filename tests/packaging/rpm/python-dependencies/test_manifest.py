@@ -67,6 +67,32 @@ def test_rekor_distribution_records_its_actual_import_package() -> None:
     assert rekor["module"] == "rekor_types"
 
 
+def test_rust_license_sources_are_pinned_to_locked_git_commit() -> None:
+    manifest = json.loads(MANIFEST.read_text())
+    rust = next(
+        item
+        for item in manifest["companions"]
+        if item["distribution"] == "rfc3161-client"
+    )
+
+    commit = rust["cargo"]["git_dependency"].rsplit("#", 1)[1]
+    for source in rust["cargo"]["license_sources"]:
+        assert f"/{commit}/LICENSE" in source["url"]
+        assert len(source["sha256"]) == 64
+        assert source["bytes"] > 0
+
+
+def test_nested_and_linked_licenses_are_declared() -> None:
+    manifest = json.loads(MANIFEST.read_text())
+    licenses = {
+        item["distribution"]: item["license"] for item in manifest["companions"]
+    }
+
+    assert licenses["securesystemslib"] == "MIT AND CC0-1.0"
+    assert "BSD-3-Clause" in licenses["rfc3161-client"]
+    assert "Unicode-3.0" in licenses["rfc3161-client"]
+
+
 def test_manifest_rejects_unapproved_source_host() -> None:
     manifest = json.loads(MANIFEST.read_text())
     manifest["companions"][0]["source"]["url"] = "https://example.com/source.tar.gz"

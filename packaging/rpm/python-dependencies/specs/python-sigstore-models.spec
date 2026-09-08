@@ -6,7 +6,9 @@ License:        MIT
 URL:            https://github.com/astral-sh/sigstore-models
 Source0:        sigstore_models-%{version}.tar.gz
 BuildArch:      noarch
+BuildRequires:  pyproject-rpm-macros
 BuildRequires:  python3-devel
+BuildRequires:  python3-pip
 BuildRequires:  python3dist(hatchling) >= 1.31
 
 %description

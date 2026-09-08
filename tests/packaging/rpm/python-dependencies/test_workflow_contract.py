@@ -27,6 +27,15 @@ def test_hosted_harness_separates_networked_preparation_and_offline_build() -> N
     assert "pip install" not in installer
     assert "dnf-python-bootstrap.log" in installer
     assert "! -name '*-debuginfo-*'" in installer
+
+
+def test_clean_install_retains_container_package_capabilities() -> None:
+    harness = (PACKAGING / "run_hosted.sh").read_text()
+    install_invocation = harness[harness.index('"$script_dir/rebuild_srpms.sh"') :]
+
+    assert '"$base_image"' in install_invocation
+    assert "--cap-drop=all" not in install_invocation
+    assert "--security-opt=no-new-privileges" in install_invocation
     assert "! -name ALL-SHA256SUMS" in harness
 
 
@@ -37,6 +46,9 @@ def test_rust_spec_uses_locked_sources_and_fedora_openssl() -> None:
     assert "OPENSSL_NO_VENDOR=1" in spec
     assert 'openssl = "0.10.80"' in spec
     assert "CARGO_NET_OFFLINE=true" in spec
+    assert "rfc3161-cargo-inventory.json" in spec
+    assert "cargo-licenses.tar.gz" in spec
+    assert "%license %{_licensedir}/python3-rfc3161-client" in spec
 
 
 def test_rekor_spec_maps_python_extra_to_fedora_providers() -> None:
@@ -54,12 +66,46 @@ def test_builder_uses_only_fedora_packaged_python_build_tools() -> None:
     assert "rustup" not in containerfile
 
 
-def test_offline_build_keeps_tool_caches_in_disposable_topdir() -> None:
-    builder = (PACKAGING / "build_rpms.sh").read_text()
+def test_specs_declare_python_rpm_macro_and_frontend_build_requirements() -> None:
+    for spec_path in (PACKAGING / "specs").glob("*.spec"):
+        spec = spec_path.read_text()
+        assert "BuildRequires:  pyproject-rpm-macros" in spec
+        assert "BuildRequires:  python3-pip" in spec
 
-    assert 'export HOME="$topdir/home"' in builder
+
+def test_securesystemslib_marks_nested_vendor_license() -> None:
+    spec = (PACKAGING / "specs" / "python-securesystemslib.spec").read_text()
+
+    assert "License:        MIT AND CC0-1.0" in spec
+    assert (
+        "%license %{python3_sitelib}/securesystemslib/_vendor/ed25519/LICENSE" in spec
+    )
+
+
+def test_clean_install_verifies_license_file_flags_and_inventory() -> None:
+    installer = (PACKAGING / "install_and_verify.sh").read_text()
+    verifier = (PACKAGING / "verify_install.py").read_text()
+
+    assert "license-file-flags.txt" in installer
+    assert "cargo-inventory.json" in verifier
+    assert "resolved Cargo package lacks bundled license" in verifier
+    assert "vendored OpenSSL appears" in verifier
+
+
+def test_offline_build_keeps_tool_caches_in_disposable_topdir() -> None:
+    builder = (PACKAGING / "rebuild_one_srpm.sh").read_text()
+
     assert 'export XDG_CACHE_HOME="$topdir/cache"' in builder
     assert 'export CARGO_HOME="$topdir/cargo-home"' in builder
+    assert "export HOME=" not in builder
+
+
+def test_each_srpm_gets_clean_builddep_environment_and_offline_rebuild() -> None:
+    rebuilder = (PACKAGING / "rebuild_srpms.sh").read_text()
+
+    assert "dnf builddep" in rebuilder
+    assert "--network=none" in rebuilder
+    assert rebuilder.index("dnf builddep") < rebuilder.index("--network=none")
 
 
 def test_workflow_has_minimal_permissions_and_retains_artifacts() -> None:

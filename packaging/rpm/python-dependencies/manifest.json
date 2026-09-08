@@ -81,7 +81,7 @@
       "version": "1.5.1",
       "rpm_source_name": "python-securesystemslib",
       "module": "securesystemslib",
-      "license": "MIT",
+      "license": "MIT AND CC0-1.0",
       "python_requires": "~=3.10",
       "build_backend": "hatchling",
       "source": {
@@ -111,7 +111,7 @@
       "version": "1.0.8",
       "rpm_source_name": "python-rfc3161-client",
       "module": "rfc3161_client",
-      "license": "Apache-2.0",
+      "license": "Apache-2.0 AND BSD-3-Clause AND MIT AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception)",
       "python_requires": ">=3.9",
       "build_backend": "maturin",
       "source": {
@@ -124,6 +124,26 @@
         "lock_sha256": "aaf11a5cd3d1624a1294ee03436760fb5678f9b63936c8a89ddcdae491ce665b",
         "locked_packages": 77,
         "git_dependency": "https://github.com/pyca/cryptography.git?tag=49.0.0#e300bbe2f1bec75e5ee7e0ab7b196958831b3db6",
+        "license_sources": [
+          {
+            "filename": "cryptography-LICENSE",
+            "url": "https://raw.githubusercontent.com/pyca/cryptography/e300bbe2f1bec75e5ee7e0ab7b196958831b3db6/LICENSE",
+            "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb",
+            "bytes": 197
+          },
+          {
+            "filename": "cryptography-LICENSE.APACHE",
+            "url": "https://raw.githubusercontent.com/pyca/cryptography/e300bbe2f1bec75e5ee7e0ab7b196958831b3db6/LICENSE.APACHE",
+            "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe",
+            "bytes": 11360
+          },
+          {
+            "filename": "cryptography-LICENSE.BSD",
+            "url": "https://raw.githubusercontent.com/pyca/cryptography/e300bbe2f1bec75e5ee7e0ab7b196958831b3db6/LICENSE.BSD",
+            "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb",
+            "bytes": 1532
+          }
+        ],
         "system_openssl_patch": true
       }
     },

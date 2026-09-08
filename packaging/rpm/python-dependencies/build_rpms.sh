@@ -37,13 +37,10 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p -- "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-export HOME="$topdir/home"
-export XDG_CACHE_HOME="$topdir/cache"
-export CARGO_HOME="$topdir/cargo-home"
-mkdir -p -- "$HOME" "$XDG_CACHE_HOME" "$CARGO_HOME"
 
 python3 "$script_dir/validate_manifest.py" "$script_dir/manifest.json"
 cp -- "$source_dir"/*.tar.gz "$topdir/SOURCES/"
+cp -- "$source_dir"/rfc3161-cargo-inventory.json "$topdir/SOURCES/"
 cp -- "$script_dir"/specs/*.spec "$topdir/SPECS/"
 
 python3 - "$script_dir/manifest.json" <<'PY' >"$output_dir/build-order.txt"
@@ -59,21 +56,10 @@ PY
 
 while IFS= read -r distribution; do
     spec="$topdir/SPECS/python-${distribution}.spec"
-    log="$output_dir/build-${distribution}.log"
+    log="$output_dir/srpm-${distribution}.log"
     [[ -f "$spec" ]] || { printf 'missing spec: %s\n' "$spec" >&2; exit 1; }
-    rpmbuild -ba --define "_topdir $topdir" "$spec" 2>&1 | tee "$log"
+    rpmbuild -bs --define "_topdir $topdir" "$spec" 2>&1 | tee "$log"
 done <"$output_dir/build-order.txt"
 
-cp -- "$topdir"/RPMS/*/*.rpm "$output_dir/"
 cp -- "$topdir"/SRPMS/*.rpm "$output_dir/"
-sha256sum "$output_dir"/*.rpm | sed "s#${output_dir}/##" >"$output_dir/SHA256SUMS"
-
-for rpm_path in "$output_dir"/*.rpm; do
-    rpm_name=$(basename -- "$rpm_path")
-    rpm -qp --queryformat '%{NEVRA}\nLicense: %{LICENSE}\n' "$rpm_path" \
-        >"$output_dir/${rpm_name}.metadata.txt"
-    rpm -qp --provides "$rpm_path" | sort \
-        >"$output_dir/${rpm_name}.provides.txt"
-    rpm -qp --requires "$rpm_path" | sort \
-        >"$output_dir/${rpm_name}.requires.txt"
-done
+sha256sum "$output_dir"/*.src.rpm | sed "s#${output_dir}/##" >"$output_dir/SHA256SUMS"

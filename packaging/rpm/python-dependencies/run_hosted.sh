@@ -50,9 +50,10 @@ esac
 base_image=registry.fedoraproject.org/fedora:44
 builder_image=localhost/tongs-python-rpms:issue-85
 prepared="$output_dir/prepared"
+srpms="$output_dir/srpms"
 rpms="$output_dir/rpms"
 install_evidence="$output_dir/install"
-mkdir -p -- "$prepared" "$rpms" "$install_evidence"
+mkdir -p -- "$prepared" "$srpms" "$rpms" "$install_evidence"
 {
     printf 'GITHUB_RUN_ATTEMPT=%s\n' "${GITHUB_RUN_ATTEMPT:-unknown}"
     printf 'GITHUB_RUN_ID=%s\n' "${GITHUB_RUN_ID:-unknown}"
@@ -99,14 +100,20 @@ podman run --rm \
     --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" \
     --volume "$prepared:/prepared:ro" \
-    --volume "$rpms:/rpms:rw" \
+    --volume "$srpms:/srpms:rw" \
     "$builder_image" \
     /checkout/packaging/rpm/python-dependencies/build_rpms.sh \
         --source-dir /prepared \
-        --output-dir /rpms
+        --output-dir /srpms
+
+"$script_dir/rebuild_srpms.sh" \
+    --base-image "$base_image" \
+    --checkout "$repo_root" \
+    --source-sha "$source_sha" \
+    --srpm-dir "$srpms" \
+    --output-dir "$rpms"
 
 podman run --rm \
-    --cap-drop=all \
     --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" \
     --volume "$rpms:/rpms:ro" \

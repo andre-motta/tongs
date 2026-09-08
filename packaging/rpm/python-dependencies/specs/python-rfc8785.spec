@@ -6,7 +6,9 @@ License:        Apache-2.0
 URL:            https://github.com/trailofbits/rfc8785.py
 Source0:        rfc8785-%{version}.tar.gz
 BuildArch:      noarch
+BuildRequires:  pyproject-rpm-macros
 BuildRequires:  python3-devel
+BuildRequires:  python3-pip
 BuildRequires:  python3dist(flit-core) >= 3.5
 
 %description

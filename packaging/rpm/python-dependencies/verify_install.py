@@ -38,6 +38,7 @@ REPOSITORY_OWNER_ID = "71096353"
 REF = "refs/tags/v4.5.0"
 BUILDER = f"{REPOSITORY_URL}/.github/workflows/release.yml@{REF}"
 ISSUER = "https://token.actions.githubusercontent.com"
+CARGO_LICENSE_ROOT = Path("/usr/share/licenses/python3-rfc3161-client")
 
 
 def _hash(path: Path) -> str:
@@ -65,6 +66,26 @@ def verify(manifest: dict[str, Any], fixture_dir: Path) -> dict[str, Any]:
     sigstore_version = Version(versions["sigstore"])
     if not Version("4.5") <= sigstore_version < Version("5"):
         raise RuntimeError(f"unsupported Sigstore version: {sigstore_version}")
+
+    cargo_inventory = json.loads(
+        (CARGO_LICENSE_ROOT / "cargo-inventory.json").read_text()
+    )
+    resolved_cargo = [
+        package
+        for package in cargo_inventory["packages"]
+        if package["resolved_for_fedora_x86_64"]
+    ]
+    for package in resolved_cargo:
+        if not package["bundled_license_files"]:
+            raise RuntimeError(
+                f"resolved Cargo package lacks bundled license: {package['name']}"
+            )
+        for license_file in package["bundled_license_files"]:
+            path = CARGO_LICENSE_ROOT / "cargo" / license_file["path"]
+            if not path.is_file() or _hash(path) != license_file["sha256"]:
+                raise RuntimeError(f"Cargo license file mismatch: {path}")
+    if any(package["name"] == "openssl-src" for package in resolved_cargo):
+        raise RuntimeError("vendored OpenSSL appears in installed Cargo inventory")
 
     fixture = fixture_dir / "sigstore-python-4.5.0.intoto.sigstore.json"
     trust = fixture_dir / "sigstore-production-client-trust-config.json"
@@ -108,6 +129,7 @@ def verify(manifest: dict[str, Any], fixture_dir: Path) -> dict[str, Any]:
         "imports": sorted(imports),
         "companion_versions": versions,
         "rfc3161_extension": rust.__file__,
+        "resolved_cargo_packages": len(resolved_cargo),
         "verified_payload_type": payload_type,
         "verified_subject": expected_subject,
     }

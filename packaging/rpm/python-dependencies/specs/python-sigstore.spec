@@ -6,7 +6,9 @@ License:        Apache-2.0
 URL:            https://github.com/sigstore/sigstore-python
 Source0:        sigstore-%{version}.tar.gz
 BuildArch:      noarch
+BuildRequires:  pyproject-rpm-macros
 BuildRequires:  python3-devel
+BuildRequires:  python3-pip
 BuildRequires:  python3dist(flit-core) >= 3.2
 
 %description

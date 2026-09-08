@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.metadata
 import os
@@ -11,6 +12,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import mock_open
 
 import pytest
 
@@ -67,10 +69,39 @@ def _payload(target_root: Path, launcher: Path) -> InstalledPayload:
 def _process_is_running(pid: int) -> bool:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
     state = stat[stat.rfind(")") + 2 :].split(maxsplit=1)[0]
     return state not in {"X", "Z"}
+
+
+def test_process_state_read_handles_disappearance_after_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_stat = mock_open()
+    proc_stat.return_value.read.side_effect = ProcessLookupError(
+        errno.ESRCH, "No such process"
+    )
+    monkeypatch.setattr(Path, "open", proc_stat)
+
+    assert not _process_is_running(12345)
+
+
+def test_process_state_read_does_not_hide_unrelated_io_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc_stat = mock_open()
+    proc_stat.return_value.read.side_effect = PermissionError(
+        errno.EACCES, "Permission denied"
+    )
+    monkeypatch.setattr(Path, "open", proc_stat)
+
+    with pytest.raises(PermissionError, match="Permission denied"):
+        _process_is_running(12345)
+
+
+def test_process_state_read_reports_live_process() -> None:
+    assert _process_is_running(os.getpid())
 
 
 def test_venv_binding_preserves_lexical_interpreter_symlink(tmp_path: Path) -> None:

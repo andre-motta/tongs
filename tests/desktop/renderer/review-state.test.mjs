@@ -10,6 +10,7 @@ import {
   beginSubmission,
   canStartSubmission,
   canCaptureDraftInline,
+  canSaveDraft,
   captureDraftAnchor,
   conflictDraftSave,
   contextFingerprint,
@@ -198,6 +199,33 @@ test("draft save results bind the same draft, revision, and version", () => {
   );
   assert.throws(() => finishDraftSave(state, draft(3, "local")), /pending version/);
   assert.throws(() => conflictDraftSave(state, draft(1, "server")), /pending version/);
+
+  state = beginDraftSave(editDraft(
+    adoptDraft(createReviewWorkflowState(review, revision), draft(3, "server")),
+    { body: "new local", verdict: null, comments: [] },
+  ));
+  assert.throws(() => conflictDraftSave(state, draft(2, "older")), /pending version/);
+});
+
+test("empty retained comments block saving until edited or deliberately removed", () => {
+  const comment = {
+    id: "33333333-3333-4333-8333-333333333333",
+    kind: "general",
+    body: "comment",
+  };
+  let state = adoptDraft(createReviewWorkflowState(review, revision), {
+    ...draft(1, "server"),
+    comments: [comment],
+  });
+  state = editDraft(state, {
+    body: "server",
+    verdict: null,
+    comments: [{ ...comment, body: "" }],
+  });
+  assert.equal(canSaveDraft(state), false);
+  assert.throws(() => beginDraftSave(state), /empty draft comments/);
+  state = editDraft(state, { body: "server", verdict: null, comments: [] });
+  assert.equal(canSaveDraft(state), true);
 });
 
 test("old-revision drafts load intact and stay blocked across either head-change order", () => {
@@ -317,6 +345,20 @@ test("submission recovery distinguishes confirmed, paused, and unknown steps", (
   assert.match(state.submission.message, /Reconcile before continuing/);
   assert.throws(() => beginSubmission(state, "resume"), /paused/);
   assert.doesNotThrow(() => beginSubmission(state, "reconcile"));
+});
+
+test("submission recovery cannot bind progress to another active draft", () => {
+  const state = adoptDraft(
+    createReviewWorkflowState(review, revision),
+    draft(2, "active"),
+  );
+  assert.throws(
+    () => recoverSubmission(state, {
+      ...progress("unknown", ["verdict"], ["comment:0"]),
+      draft_id: "44444444-4444-4444-8444-444444444444",
+    }),
+    /active draft/,
+  );
 });
 
 test("context fingerprint matches Python length-prefixed UTF-8 and rejects changed selection", async () => {

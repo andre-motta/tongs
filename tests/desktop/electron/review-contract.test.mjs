@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   REVIEW_OPERATIONS,
+  assertReviewBoundResult,
   assertReviewParams,
   assertReviewResult,
 } from "../../../desktop/dist/src/main/review.js";
@@ -262,6 +263,34 @@ test("review validators reject extra fields, byte overflow, and contradictory ou
       /selected side has no line/,
     );
   }
+  const otherRevision = { ...revision, head_sha: "other-head" };
+  assert.throws(
+    () => assertReviewParams("drafts.create", {
+      review,
+      revision,
+      content: {
+        ...content,
+        comments: [{
+          ...content.comments[0],
+          anchor: { ...draftAnchor, revision: otherRevision },
+        }],
+      },
+    }),
+    /inline anchor revision does not match/,
+  );
+  assert.throws(
+    () => assertReviewResult("drafts.get", {
+      ...draft,
+      comments: [{
+        ...draft.comments[0],
+        anchor: {
+          ...draft.comments[0].anchor,
+          revision: otherRevision,
+        },
+      }],
+    }),
+    /inline anchor revision does not match/,
+  );
   assert.throws(
     () => assertReviewResult("review_submissions.status", { ...submission, unknown_step_ids: ["comment:0"] }),
     /confirmed and unknown/,
@@ -337,6 +366,72 @@ test("request validation matches Python controls, bounds, canonical UUIDs, and s
     }),
     /Duplicate review draft comment ID/,
   );
+});
+
+test("draft content invariants stay identical for create requests and returned snapshots", () => {
+  const general = {
+    id: "44444444-4444-4444-8444-444444444444",
+    kind: "general",
+    body: "General note",
+  };
+  const reply = {
+    id: "55555555-5555-4555-8555-555555555555",
+    kind: "reply",
+    body: "Reply note",
+    thread_id: "thread-1",
+  };
+  const valid = { ...content, comments: [general, content.comments[0], reply] };
+  const validateBoth = (candidate) => {
+    assertReviewParams("drafts.create", { review, revision, content: candidate });
+    assertReviewResult("drafts.get", {
+      ...draft,
+      ...candidate,
+      comments: candidate.comments.map((comment) =>
+        comment.kind === "inline"
+          ? { ...comment, anchor: { ...comment.anchor, stale: false } }
+          : comment,
+      ),
+    });
+  };
+  assert.doesNotThrow(() => validateBoth(valid));
+
+  const invalid = [
+    { ...valid, comments: [general, { ...general }] },
+    {
+      ...valid,
+      comments: [{
+        ...content.comments[0],
+        anchor: {
+          ...draftAnchor,
+          revision: { ...revision, head_sha: "other-head" },
+        },
+      }],
+    },
+    { ...valid, comments: [{ ...general, body: "" }] },
+    {
+      ...valid,
+      comments: [{
+        ...content.comments[0],
+        anchor: { ...draftAnchor, side: "old", old_line: null },
+      }],
+    },
+  ];
+  for (const candidate of invalid) {
+    assert.throws(() =>
+      assertReviewParams("drafts.create", { review, revision, content: candidate }),
+    );
+    assert.throws(() =>
+      assertReviewResult("drafts.get", {
+        ...draft,
+        ...candidate,
+        comments: candidate.comments.map((comment) =>
+          comment.kind === "inline"
+            ? { ...comment, anchor: { ...comment.anchor, stale: false } }
+            : comment,
+        ),
+      }),
+    );
+  }
 });
 
 test("verdict and mutation outcomes enforce the Python service invariants", () => {
@@ -439,4 +534,44 @@ test("submission evidence is exact and permits valid planless submitted recovery
     }),
     /must equal receipt steps/,
   );
+});
+
+test("result binding rejects valid shapes from another operation, resource, or page", () => {
+  assert.throws(
+    () => assertReviewBoundResult(
+      "review_mutations.comment",
+      { operation_id: "expected:1", review, body: "Note" },
+      mutation,
+    ),
+    /does not match its request/,
+  );
+  assert.throws(
+    () => assertReviewBoundResult(
+      "drafts.get",
+      { review, draft_id: "44444444-4444-4444-8444-444444444444" },
+      draft,
+    ),
+    /does not match its request/,
+  );
+  assert.throws(
+    () => assertReviewBoundResult(
+      "review_submissions.status",
+      { review, attempt_id: "44444444-4444-4444-8444-444444444444" },
+      submission,
+    ),
+    /does not match its request/,
+  );
+  assert.throws(
+    () => assertReviewBoundResult(
+      "review_submissions.list",
+      { review, cursor: 4 },
+      { cursor: 0, next_cursor: null, attempts: [submission] },
+    ),
+    /does not match its request/,
+  );
+  assert.doesNotThrow(() => assertReviewBoundResult(
+    "review_submissions.start",
+    { review, draft_id: draftId, expected_version: 1 },
+    submission,
+  ));
 });

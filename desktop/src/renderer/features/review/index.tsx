@@ -42,6 +42,7 @@ import {
   beginQuickIntent,
   beginSubmission,
   canCaptureDraftInline,
+  canSaveDraft,
   canStartSubmission,
   captureDraftAnchor,
   conflictDraftSave,
@@ -260,7 +261,7 @@ function ReviewWorkflow({
       apply((current) => adoptDraft(current, draft));
       setDraftCandidates([draft]);
     } catch (reason) {
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -288,7 +289,7 @@ function ReviewWorkflow({
       } else {
         apply(failDraftSave);
       }
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -314,7 +315,7 @@ function ReviewWorkflow({
         ...items.filter((item) => item.id !== fresh.id),
       ]);
     } catch (reason) {
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -340,8 +341,8 @@ function ReviewWorkflow({
       if (isUncertainError(reason))
         apply((current) => markQuickIntentUncertain(current, operationId));
       else
-        apply((current) => rejectQuickIntent(current, operationId, safeError(reason)));
-      setError(safeError(reason));
+        apply((current) => rejectQuickIntent(current, operationId, reviewMutationError(reason)));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -386,7 +387,7 @@ function ReviewWorkflow({
       if (workflow?.draft.remote) await addDraftComment(body, anchor);
       else await quickComment(body, anchor);
     } catch (reason) {
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -425,9 +426,9 @@ function ReviewWorkflow({
       apply((current) =>
         isUncertainError(reason)
           ? markQuickIntentUncertain(current, operationId)
-          : rejectQuickIntent(current, operationId, safeError(reason)),
+          : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
       );
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -459,9 +460,9 @@ function ReviewWorkflow({
       apply((current) =>
         isUncertainError(reason)
           ? markQuickIntentUncertain(current, operationId)
-          : rejectQuickIntent(current, operationId, safeError(reason)),
+          : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
       );
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -490,9 +491,9 @@ function ReviewWorkflow({
         apply((state) => recoverSubmission(state, recovered));
         setRecoveries((items) => [recovered, ...items.filter((item) => item.attempt_id !== recovered.attempt_id)]);
       } else {
-        apply((state) => failSubmission(state, safeError(reason)));
+        apply((state) => failSubmission(state, reviewMutationError(reason)));
       }
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -531,7 +532,36 @@ function ReviewWorkflow({
         attempt.attempt_id,
       );
       if (recovered) apply((state) => recoverSubmission(state, recovered));
-      else apply((state) => failSubmission(state, safeError(reason)));
+      else apply((state) => failSubmission(state, reviewMutationError(reason)));
+      setError(reviewMutationError(reason));
+    }
+  };
+
+  const recoverDurableSubmission = async (
+    progress: SubmissionProgressDto,
+  ): Promise<void> => {
+    setError(null);
+    try {
+      const current = workflowRef.current;
+      const matching = current?.draft.remote?.id === progress.draft_id
+        ? current.draft.remote
+        : await bridge.getReviewDraft({
+            review,
+            draft_id: progress.draft_id,
+          }).result;
+      apply((state) =>
+        recoverSubmission(
+          state.draft.remote?.id === progress.draft_id
+            ? state
+            : adoptDraft(state, matching),
+          progress,
+        ),
+      );
+      setDraftCandidates((items) => [
+        matching,
+        ...items.filter((item) => item.id !== matching.id),
+      ]);
+    } catch (reason) {
       setError(safeError(reason));
     }
   };
@@ -570,9 +600,9 @@ function ReviewWorkflow({
       apply((current) =>
         isUncertainError(reason)
           ? markQuickIntentUncertain(current, operationId)
-          : rejectQuickIntent(current, operationId, safeError(reason)),
+          : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
       );
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -601,9 +631,9 @@ function ReviewWorkflow({
       apply((current) =>
         isUncertainError(reason)
           ? markQuickIntentUncertain(current, operationId)
-          : rejectQuickIntent(current, operationId, safeError(reason)),
+          : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
       );
-      setError(safeError(reason));
+      setError(reviewMutationError(reason));
     }
   };
 
@@ -679,7 +709,10 @@ function ReviewWorkflow({
           </Notice>
         )}
         {recoveries.length > 0 && !workflow?.submission.progress && (
-          <RecoveryList recoveries={recoveries} recover={(item) => apply((state) => recoverSubmission(state, item))} />
+          <RecoveryList
+            recoveries={recoveries}
+            recover={(item) => void recoverDurableSubmission(item)}
+          />
         )}
         {draftCandidates.length > 1 && !workflow?.draft.remote && (
           <DraftRecoveryList
@@ -950,6 +983,7 @@ function DraftEditor({
     workflow.submission.pending ||
       (workflow.submission.progress && workflow.submission.progress.outcome !== "editable"),
   );
+  const emptyComment = content.comments.some((comment) => comment.body.length === 0);
   return (
     <section className="review-workflow-draft">
       <h2>Draft review</h2>
@@ -1039,6 +1073,11 @@ function DraftEditor({
           </article>
         ))}
       </div>
+      {emptyComment && (
+        <small role="status">
+          Edit or remove empty draft comments before saving.
+        </small>
+      )}
       {workflow.draft.preservedStaleDrafts.map((draft) => (
         <section key={draft.id} className="review-workflow-preserved-draft">
           <strong>Preserved old draft {draft.id}</strong>
@@ -1056,7 +1095,7 @@ function DraftEditor({
       <div className="review-workflow-row">
         <button
           className="button button-secondary"
-          disabled={!workflow.draft.dirty || Boolean(workflow.draft.pendingSave) || Boolean(workflow.draft.conflict)}
+          disabled={!canSaveDraft(workflow)}
           onClick={save}
         >
           {workflow.draft.pendingSave ? "Saving…" : "Save draft"}
@@ -1455,21 +1494,35 @@ function capabilityReason(supported: boolean | undefined): string | null {
   return supported === true ? null : "General comments are unsupported for this review.";
 }
 
+function reviewMutationError(value: unknown): string {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    "message" in value &&
+    (value.message === "The review action result could not be confirmed." ||
+      value.message === "The review action was rejected with a known result.")
+  ) {
+    return value.message;
+  }
+  return safeError(value);
+}
+
 function isUncertainError(value: unknown): boolean {
   if (value === null || typeof value !== "object") return false;
   const code = "code" in value && typeof value.code === "string" ? value.code : "";
-  const serviceCode =
-    "service_code" in value && typeof value.service_code === "string"
-      ? value.service_code
-      : "";
-  return code === "mutation_timeout" || code === "connection_lost" || serviceCode === "request_cancelled";
+  return (
+    code === "invalid_response" ||
+    code === "mutation_timeout" ||
+    code === "request_cancelled" ||
+    code === "unexpected_eof" ||
+    code === "write_failed"
+  );
 }
 
 function isConflictError(value: unknown): boolean {
   if (value === null || typeof value !== "object") return false;
   return (
-    ("code" in value && value.code === "conflict") ||
-    ("service_code" in value && value.service_code === "conflict")
+    "code" in value && value.code === "conflict"
   );
 }
 

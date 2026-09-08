@@ -382,6 +382,8 @@ export function beginDraftSave(state: ReviewWorkflowState): ReviewWorkflowState 
     throw new Error("Draft is not ready to save");
   if (state.draft.pendingSave) throw new Error("A draft save is already pending");
   if (remote.state !== "editable") throw new Error("This draft is not editable");
+  if (hasEmptyDraftComment(state.draft.local))
+    throw new Error("Edit or remove empty draft comments before saving");
   return replace(state, {
     draft: Object.freeze({
       ...state.draft,
@@ -394,6 +396,16 @@ export function beginDraftSave(state: ReviewWorkflowState): ReviewWorkflowState 
       }),
     }),
   });
+}
+
+export function canSaveDraft(state: ReviewWorkflowState): boolean {
+  return Boolean(
+    state.draft.remote?.state === "editable" &&
+      state.draft.dirty &&
+      !state.draft.pendingSave &&
+      !state.draft.conflict &&
+      !hasEmptyDraftComment(state.draft.local),
+  );
 }
 
 export function finishDraftSave(
@@ -530,6 +542,12 @@ export function recoverSubmission(
 ): ReviewWorkflowState {
   if (progress.review !== state.displayed.review)
     throw new Error("Submission belongs to another review");
+  if (
+    state.draft.remote?.id !== progress.draft_id ||
+    state.draft.remote.version < progress.frozen_version
+  ) {
+    throw new Error("Submission does not match the active draft");
+  }
   if (state.submission.pending)
     assertSubmissionBinding(state.submission.pending, progress);
   return replace(state, {
@@ -696,7 +714,7 @@ function assertDraftSaveBinding(
     !sameRevision(remote.revision, pending.revision) ||
     (completed
       ? remote.version !== pending.expectedVersion + 1
-      : remote.version === pending.expectedVersion)
+      : remote.version <= pending.expectedVersion)
   ) {
     throw new Error("Draft save result does not match the pending version");
   }
@@ -800,6 +818,10 @@ function sameContent(
   right: DraftContentInputDto,
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function hasEmptyDraftComment(content: DraftContentInputDto): boolean {
+  return content.comments.some((comment) => comment.body.length === 0);
 }
 
 function sameSelection(

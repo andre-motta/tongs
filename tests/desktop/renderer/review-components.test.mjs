@@ -242,12 +242,13 @@ test("draft comments are reviewable, editable, and deliberately removable", asyn
   await view.findByText(/src\/example.py · new line 4/);
   await view.findByText(/Reply .* to discussion thread-1/);
   const inlineEditor = view.getByLabelText(`Edit draft comment ${comments[1].id}`);
-  fireEvent.change(inlineEditor, { target: { value: "Updated inline text" } });
-  assert.equal(inlineEditor.value, "Updated inline text");
+  fireEvent.change(inlineEditor, { target: { value: "" } });
+  await view.findByText("Edit or remove empty draft comments before saving.");
+  assert.equal(view.getByRole("button", { name: "Save draft" }).disabled, true);
   const removes = view.getAllByRole("button", { name: "Remove draft comment" });
-  fireEvent.click(removes[0]);
-  assert.equal(view.queryByText("General text"), null);
-  assert.ok(view.getByDisplayValue("Updated inline text"));
+  fireEvent.click(removes[1]);
+  assert.equal(view.queryByLabelText(`Edit draft comment ${comments[1].id}`), null);
+  assert.equal(view.getByRole("button", { name: "Save draft" }).disabled, false);
 });
 
 test("stale draft migration creates a separate draft and keeps inline and reply text recoverable", async () => {
@@ -299,6 +300,48 @@ test("stale draft migration creates a separate draft and keeps inline and reply 
   await view.findByText("Keep this inline text");
   await view.findByText("Keep this reply");
   await view.findByText(/Preserved old draft 11111111/);
+});
+
+test("durable recovery loads and binds the attempt draft instead of another candidate", async () => {
+  const review = "review-multi-draft-recovery";
+  const otherId = "66666666-6666-4666-8666-666666666666";
+  const first = draft(review, 3, "first draft");
+  const matching = {
+    ...draft(review, 2, "matching recovered draft"),
+    id: otherId,
+    state: "unknown",
+  };
+  const attempt = {
+    ...submission(review, "unknown"),
+    draft_id: otherId,
+    frozen_version: 1,
+  };
+  const loads = [];
+  const bridge = reviewBridge(review, {
+    listReviewDrafts: () => read({
+      cursor: 0,
+      next_cursor: null,
+      drafts: [first, matching],
+    }),
+    listReviewSubmissions: () => read({
+      cursor: 0,
+      next_cursor: null,
+      attempts: [attempt],
+    }),
+    getReviewDraft: (params) => {
+      loads.push(params);
+      return read(matching);
+    },
+  });
+  const view = renderFeature(bridge, review);
+  fireEvent.click(await view.findByRole("button", {
+    name: "Recover unknown attempt with 0 confirmed step(s)",
+  }));
+  await waitFor(() => assert.equal(loads.length, 1));
+  assert.equal(loads[0].draft_id, otherId);
+  assert.equal(view.getByLabelText("Review body").value, "matching recovered draft");
+  await view.findByText(/Remote status is unknown/);
+  assert.equal(view.queryByDisplayValue("first draft"), null);
 });
 
 test("composer buffers survive panel navigation and remain bound to review and anchor", async () => {

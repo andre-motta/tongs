@@ -21,6 +21,13 @@ import type {
   CIMutationIPCResult,
   CIMutationReceipt,
 } from "../shared/ci.js";
+import type { ReviewMutationIPCResult } from "../shared/review.js";
+import {
+  assertReviewBoundResult,
+  assertReviewParams,
+  REVIEW_OPERATIONS,
+  type ReviewOperation,
+} from "./review.js";
 import {
   assertAuthorizedSender,
   assertHttpsExternalUrl,
@@ -86,6 +93,13 @@ export class DesktopIpcController {
             ),
       );
     }
+    for (const operation of REVIEW_OPERATIONS) {
+      ipcMain.handle(operation.channel, (event, value) =>
+        operation.mutation
+          ? this.mutateReview(event, operation, value)
+          : this.readReview(event, operation, value),
+      );
+    }
     ipcMain.handle(IPC_CHANNELS.listAssets, (event, invocation) =>
       this.listAssets(event, invocation),
     );
@@ -115,6 +129,7 @@ export class DesktopIpcController {
     for (const channel of [
       ...OPERATIONS.keys(),
       ...CI_OPERATIONS.map((operation) => operation.channel),
+      ...REVIEW_OPERATIONS.map((operation) => operation.channel),
       IPC_CHANNELS.listAssets,
       IPC_CHANNELS.setLocation,
       IPC_CHANNELS.cancelRead,
@@ -177,6 +192,56 @@ export class DesktopIpcController {
         error: safeMutationError(error),
       } satisfies CIMutationIPCResult;
       return response as unknown as JsonValue;
+    }
+  }
+
+  private async readReview(
+    event: IpcMainInvokeEvent,
+    operation: ReviewOperation,
+    value: unknown,
+  ): Promise<JsonValue> {
+    assertAuthorizedSender(event, this.window.webContents);
+    const invocation = parseInvocation(value);
+    assertReviewParams(operation.method, invocation.params);
+    if (this.bindings.has(invocation.requestToken)) {
+      throw new Error("Duplicate desktop request token");
+    }
+    const request = this.transport.requestRead(
+      operation.method,
+      invocation.params,
+    );
+    const binding = this.bindingFor(event, request.requestId);
+    this.bindings.set(invocation.requestToken, binding);
+    try {
+      const result = await request.result;
+      assertReviewBoundResult(operation.method, invocation.params, result);
+      return result;
+    } finally {
+      this.deleteBinding(invocation.requestToken, binding);
+    }
+  }
+
+  private async mutateReview(
+    event: IpcMainInvokeEvent,
+    operation: ReviewOperation,
+    value: unknown,
+  ): Promise<JsonValue> {
+    assertAuthorizedSender(event, this.window.webContents);
+    assertReviewParams(operation.method, value);
+    try {
+      const result = await this.transport.requestMutation(
+        operation.method,
+        value,
+      ).result;
+      assertReviewBoundResult(operation.method, value, result);
+      const response = { result, error: null } satisfies ReviewMutationIPCResult<JsonValue>;
+      return response as JsonValue;
+    } catch (error) {
+      const response = {
+        result: null,
+        error: safeReviewMutationError(error),
+      } satisfies ReviewMutationIPCResult<JsonValue>;
+      return response as JsonValue;
     }
   }
 
@@ -276,6 +341,67 @@ function safeMutationError(error: unknown): {
         ? "The CI action result could not be confirmed."
         : "The CI action was rejected with a known result.",
     retryable,
+  };
+}
+
+const SAFE_REVIEW_ERROR_CODES = new Set([
+  "authentication_failed",
+  "closed",
+  "configuration_invalid",
+  "conflict",
+  "internal",
+  "invalid_input",
+  "invalid_response",
+  "mutation_timeout",
+  "network_unavailable",
+  "not_found",
+  "not_running",
+  "not_started",
+  "permission_denied",
+  "rate_limited",
+  "request_cancelled",
+  "resource_not_issued",
+  "revision_changed",
+  "revision_unavailable",
+  "shutting_down",
+  "shutdown_failed",
+  "unexpected_eof",
+  "unsupported",
+  "write_failed",
+]);
+const UNCERTAIN_REVIEW_ERROR_CODES = new Set([
+  "invalid_response",
+  "mutation_timeout",
+  "request_cancelled",
+  "unexpected_eof",
+  "write_failed",
+]);
+
+function safeReviewMutationError(error: unknown): {
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+} {
+  const candidate =
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+      ? error.code
+      : "invalid_response";
+  const code = SAFE_REVIEW_ERROR_CODES.has(candidate)
+    ? candidate
+    : "invalid_response";
+  return {
+    code,
+    message: UNCERTAIN_REVIEW_ERROR_CODES.has(code)
+      ? "The review action result could not be confirmed."
+      : "The review action was rejected with a known result.",
+    retryable:
+      error !== null &&
+      typeof error === "object" &&
+      "retryable" in error &&
+      error.retryable === true,
   };
 }
 

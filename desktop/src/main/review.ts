@@ -137,7 +137,8 @@ export function assertReviewParams<M extends ReviewRpcMethod>(
       keys(params, ["review", "revision"], ["content"]);
       handle(params.review);
       revision(params.revision);
-      if (Object.hasOwn(params, "content")) draftContent(params.content, false);
+      if (Object.hasOwn(params, "content"))
+        draftContent(params.content, false, params.revision);
       return;
     case "drafts.get":
       keys(params, ["review", "draft_id"]);
@@ -250,6 +251,79 @@ export function assertReviewResult<M extends ReviewRpcMethod>(
   }
 }
 
+export function assertReviewBoundResult<M extends ReviewRpcMethod>(
+  method: M,
+  paramsValue: ReviewRpcParams<M> & JsonObject,
+  resultValue: unknown,
+): asserts resultValue is ReviewRpcResult<M> & JsonValue {
+  assertReviewResult(method, resultValue);
+  const params = paramsValue as Record<string, unknown>;
+  const result = record(resultValue);
+  if (
+    method === "review_mutations.capabilities" ||
+    method === "review_actions.capabilities"
+  ) {
+    assertEqual(result.review, params.review, "Review capability result");
+    return;
+  }
+  if (method.startsWith("review_mutations.") && method !== "review_mutations.capabilities") {
+    assertEqual(result.operation_id, params.operation_id, "Review mutation result");
+    return;
+  }
+  if (method.startsWith("review_actions.") && method !== "review_actions.capabilities") {
+    const receipt =
+      method === "review_actions.receipt" ? result.receipt : result;
+    if (receipt === null) return;
+    const actionResult = record(receipt);
+    assertEqual(actionResult.operation_id, params.operation_id, "Review action result");
+    assertEqual(actionResult.review, params.review, "Review action result");
+    assertRevisionEqual(actionResult.revision, params.revision, "Review action result");
+    if (method === "review_actions.receipt")
+      assertEqual(actionResult.action, params.action, "Review action result");
+    return;
+  }
+  if (method === "drafts.create") {
+    assertEqual(result.review, params.review, "Review draft result");
+    assertRevisionEqual(result.revision, params.revision, "Review draft result");
+    return;
+  }
+  if (method === "drafts.get" || method === "drafts.save") {
+    assertEqual(result.review, params.review, "Review draft result");
+    assertEqual(result.id, params.draft_id, "Review draft result");
+    if (method === "drafts.save")
+      assertEqual(result.version, (params.expected_version as number) + 1, "Review draft result");
+    return;
+  }
+  if (method === "drafts.discard") {
+    const discarded = record(result.discarded);
+    assertEqual(discarded.review, params.review, "Discarded review draft");
+    assertEqual(discarded.id, params.draft_id, "Discarded review draft");
+    assertEqual(discarded.version, params.expected_version, "Discarded review draft");
+    return;
+  }
+  if (method === "drafts.list") {
+    assertPageCursor(result, params);
+    for (const item of result.drafts as readonly unknown[])
+      assertEqual(record(item).review, params.review, "Listed review draft");
+    return;
+  }
+  if (method === "review_submissions.list") {
+    assertPageCursor(result, params);
+    for (const item of result.attempts as readonly unknown[])
+      assertEqual(record(item).review, params.review, "Listed review submission");
+    return;
+  }
+  if (method.startsWith("review_submissions.")) {
+    assertEqual(result.review, params.review, "Review submission result");
+    if (method === "review_submissions.start") {
+      assertEqual(result.draft_id, params.draft_id, "Review submission result");
+      assertEqual(result.frozen_version, params.expected_version, "Review submission result");
+    } else {
+      assertEqual(result.attempt_id, params.attempt_id, "Review submission result");
+    }
+  }
+}
+
 function operation(
   channel: string,
   method: ReviewRpcMethod,
@@ -351,9 +425,21 @@ function verdictComment(value: unknown): void {
   body(comment.body, false);
 }
 
-function draftContent(value: unknown, output: boolean): void {
+function draftContent(
+  value: unknown,
+  output: boolean,
+  expectedRevision?: unknown,
+): void {
   const content = record(value);
   keys(content, output ? ["body", "verdict", "comments"] : [], output ? [] : ["body", "verdict", "comments"]);
+  draftContentFields(content, output, expectedRevision);
+}
+
+function draftContentFields(
+  content: Record<string, unknown>,
+  output: boolean,
+  expectedRevision?: unknown,
+): void {
   if (Object.hasOwn(content, "body")) body(content.body, true);
   if (Object.hasOwn(content, "verdict") && content.verdict !== null)
     verdict(content.verdict);
@@ -365,6 +451,13 @@ function draftContent(value: unknown, output: boolean): void {
       if (commentIds.has(comment.id as string))
         throw new Error("Duplicate review draft comment ID");
       commentIds.add(comment.id as string);
+      if (expectedRevision !== undefined && comment.kind === "inline") {
+        assertRevisionEqual(
+          record(comment.anchor).revision,
+          expectedRevision,
+          "Review draft inline anchor",
+        );
+      }
     }
   }
 }
@@ -465,9 +558,7 @@ function draftSnapshot(value: unknown): void {
   handle(draft.review);
   revision(draft.revision);
   positiveInteger(draft.version);
-  body(draft.body, true);
-  if (draft.verdict !== null) verdict(draft.verdict);
-  array(draft.comments, MAX_COMMENTS).forEach((comment) => draftComment(comment, true));
+  draftContentFields(draft, true, draft.revision);
   draftState(draft.state);
   timestamp(draft.created_at);
   timestamp(draft.updated_at);
@@ -795,4 +886,32 @@ function hasInvalidUnicode(value: string): boolean {
 
 function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
   return left.size === right.size && [...left].every((item) => right.has(item));
+}
+
+function assertEqual(left: unknown, right: unknown, subject: string): void {
+  if (left !== right) throw new Error(`${subject} does not match its request`);
+}
+
+function assertRevisionEqual(
+  leftValue: unknown,
+  rightValue: unknown,
+  subject: string,
+): void {
+  const left = record(leftValue);
+  const right = record(rightValue);
+  if (
+    left.head_sha !== right.head_sha ||
+    left.base_sha !== right.base_sha ||
+    left.start_sha !== right.start_sha
+  ) {
+    throw new Error(`${subject} revision does not match its request`);
+  }
+}
+
+function assertPageCursor(
+  result: Record<string, unknown>,
+  params: Record<string, unknown>,
+): void {
+  const requested = Object.hasOwn(params, "cursor") ? params.cursor : 0;
+  assertEqual(result.cursor, requested, "Review page result");
 }

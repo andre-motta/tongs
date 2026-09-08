@@ -20,6 +20,7 @@ import { QueryCoordinator } from "./core/query.js";
 import { createDiffFeature } from "./features/diff/index.js";
 import { createInboxFeature } from "./features/inbox/index.js";
 import { createPipelinesFeature } from "./features/pipelines/index.js";
+import { createReviewFeature } from "./features/review/index.js";
 import { RepositoryNavigation } from "./features/repositories/index.js";
 import {
   createCommitsFeature,
@@ -36,6 +37,7 @@ registry.register(createReviewOverviewFeature());
 registry.register(createCommitsFeature());
 registry.register(createDiffFeature());
 registry.register(createPipelinesFeature());
+registry.register(createReviewFeature(bridge));
 
 function App(): ReactNode {
   const [route, setRoute] = useState<AppRoute>(navigator.route);

@@ -416,7 +416,7 @@ export type ReviewMutationIPCResult<T> =
   | { readonly result: T; readonly error: null }
   | {
       readonly result: null;
-      readonly error: ServiceErrorDto & { readonly service_code?: string };
+      readonly error: ServiceErrorDto;
     };
 
 export interface ReviewDesktopBridge {

@@ -6,7 +6,9 @@ desktop RPM.
 
 `manifest.json` records the Fedora target, Python 3.12 minimum, expected Fedora
 providers, source-built companion frontier, source hashes, licenses, and build
-order. `prepare_sources.py` downloads only those exact source distributions,
+order. Each companion also declares its exact binary RPM name, epoch, version,
+release, and architecture for the issue 52 consumer allowlist.
+`prepare_sources.py` downloads only those exact source distributions,
 checks their byte counts and SHA-256 hashes, and prepares the Cargo inputs for
 `rfc3161-client`. The Rust preparation preserves its upstream `Cargo.lock`,
 records every package source/checksum/license, and creates a deterministic vendor

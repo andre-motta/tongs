@@ -4,8 +4,13 @@
 
 Defined in `src/tongs/forges/base.py`. All forge backends implement this interface:
 
+`ApplicationSession` is the UI-facing owner of this abstraction. Terminal views
+call `TUIServiceAdapter`, and desktop requests call the sidecar protocol; neither
+frontend imports a concrete forge client. Direct `ForgeRegistry` access remains
+an internal service, MCP, and supported terminal-plugin interface.
+
 **MR operations:**
-- `list_mrs(repo_path, state, per_page, page)` -- list MRs for a repo
+- `list_mrs(repo_path, state, per_page)` -- list MRs for a repo
 - `list_my_reviews()` -- MRs where current user is reviewer (host-scoped)
 - `list_my_mrs()` -- MRs authored by current user (host-scoped)
 - `get_mr(repo_path, number)` -- full MR detail
@@ -14,7 +19,7 @@ Defined in `src/tongs/forges/base.py`. All forge backends implement this interfa
 
 **Comment operations:**
 - `get_mr_discussions(repo_path, number)` -- threaded discussions
-- `create_inline_comment(repo_path, number, file_path, line, side, body, start_line=None, start_side=None)` -- new inline comment; `start_line`/`start_side` enable multi-line ranges (GitHub uses REST payload params, GitLab encodes range in suggestion fence syntax)
+- `create_inline_comment(repo_path, number, file_path, line, side, body, start_line=None, start_side=None, ...)` -- new inline comment; both clients use `start_line`/`start_side` to transport an optional multi-line API range. The ABC also declares keyword-only revision and old/new path fields; consult it rather than copying this abbreviated signature. Suggestion-fence syntax separately describes replacement content.
 - `reply_to_discussion(repo_path, number, discussion_id, body)` -- reply to thread
 - `resolve_discussion(repo_path, number, discussion_id, resolved)` -- resolve/unresolve
 
@@ -37,7 +42,7 @@ Defined in `src/tongs/forges/base.py`. All forge backends implement this interfa
 **Capability queries** (properties, override in subclasses):
 - `supports_batched_review` -- GitHub batches comments into a review; GitLab does not
 - `supports_thread_resolution` -- GitLab has first-class resolution; GitHub uses GraphQL
-- `supports_draft_notes` -- GitLab-only feature
+- `supports_draft_notes` -- reserved capability; currently false for both implemented clients
 - `supports_unapprove` -- GitLab returns `True` (uses `/unapprove` endpoint); GitHub returns `False` (default). TUI checks this before calling `unapprove_mr()`
 - `supports_job_cancel` -- GitLab returns `True`; base returns `False` (default). TUI checks this before showing job cancel actions.
 
@@ -76,7 +81,7 @@ class MRDetail(MRSummary):
 - `get_host(hostname)` resolves `ForgeHost` with correct API base URL
 - `_detect_type(hostname)` uses explicit host sets + substring heuristic
 - `active_hostnames()` returns all known hosts (defaults + configured)
-- `close_all()` closes all cached httpx clients (called from `TongsApp.on_unmount`)
+- `close_all()` closes all cached httpx clients (owned by `ApplicationSession.close()`)
 
 API base URL patterns:
 - GitLab: `https://{hostname}/api/v4`
@@ -86,9 +91,12 @@ API base URL patterns:
 
 `src/tongs/forges/auth.py:resolve_token(hostname, forge_type)`:
 
-1. **CLI credential store** -- `glab auth token --hostname {host}` or `gh auth token [--hostname {host}]`. Single subprocess call per host at startup.
+1. **CLI credential store** -- `glab auth token --hostname {host}` or `gh auth token [--hostname {host}]`. Single subprocess call on lazy credential resolution for a host.
 2. **~/.netrc** -- reads with `netrc` stdlib. Enforces 0o600 permissions on POSIX, raises `AuthError` otherwise.
-3. **Error** -- raises `AuthError` with setup instructions specific to the forge type.
+3. **System keyring** -- optional `keyring.get_password("tongs", hostname)`
+   lookup; absence or backend failure falls through safely.
+4. **Error** -- raises `AuthError` with setup instructions specific to the forge
+   type.
 
 Key details:
 - `gh auth token` omits `--hostname` for `github.com` (default), adds it for enterprise
@@ -105,11 +113,14 @@ Key details:
 - **URL encoding:** `_encode_project(repo_path)` encodes `/` as `%2F` for API paths. Called on every API method.
 - **State mapping:** GitLab uses `"opened"` where the ABC uses `"open"`. `_parse_mr_state()` handles the translation.
 - **CI status mapping:** `_parse_ci_status()` maps `"created"`, `"manual"`, `"waiting_for_resource"`, `"preparing"`, `"scheduled"` all to `CIStatus.PENDING`.
-- **Diff refs for inline comments:** `create_inline_comment()` fetches the MR first to get `diff_refs` (base_sha, start_sha, head_sha), then posts with position object.
+- **Diff refs for inline comments:** `create_inline_comment()` uses the caller's
+  complete `base_sha`/`start_sha`/`head_sha` triple for revision-bound writes.
+  When all three are absent it fetches current MR `diff_refs`; a partial triple
+  is rejected. It then posts the resolved revision in the position object.
 - **approved_by unwrapping:** GitLab wraps approved users as `{"user": {...}}`. `_parse_mr_detail()` calls `a.get("user", a)` to unwrap.
 - **Repo path extraction:** `_extract_repo_path()` gets repo path from MR data returned by global endpoints (used by `list_my_reviews`/`list_my_mrs`). Tries `references.full` first, falls back to parsing `web_url`.
 
-**list_my_reviews fix (Phase 3):** Previously used `reviewer_id=self` which relied on GitLab interpreting "self". Now fetches the actual username via `GET /user` and passes `reviewer_username={username}` with `scope=all`. This is more reliable across GitLab versions.
+**Review lookup:** Previously used `reviewer_id=self` which relied on GitLab interpreting "self". Now fetches the actual username via `GET /user` and passes `reviewer_username={username}` with `scope=all`. This is more reliable across GitLab versions.
 
 **Unapprove:** `unapprove_mr()` POSTs to `/projects/{project}/merge_requests/{number}/unapprove`. `supports_unapprove` returns `True`. This is a GitLab-only feature; the ABC default raises `NotImplementedError`.
 
@@ -117,7 +128,7 @@ Key details:
 
 **Thread resolution:** `supports_thread_resolution` returns `True`. The `resolve_discussion()` method PUTs `{"resolved": true/false}` to the discussion endpoint.
 
-**MR-scoped pipelines (Phase 5):** `list_mr_pipelines()` GETs `/projects/{project}/merge_requests/{number}/pipelines` to return only pipelines associated with the specific MR. `retry_pipeline()` POSTs to `/pipelines/{id}/retry`. `cancel_job()` POSTs to `/jobs/{id}/cancel`. `supports_job_cancel` returns `True`.
+**MR-scoped pipelines:** `list_mr_pipelines()` GETs `/projects/{project}/merge_requests/{number}/pipelines` to return only pipelines associated with the specific MR. `retry_pipeline()` POSTs to `/pipelines/{id}/retry`. `cancel_job()` POSTs to `/jobs/{id}/cancel`. `supports_job_cancel` returns `True`.
 
 ## GitHub Client
 
@@ -135,11 +146,15 @@ Key details:
 
 **submit_review implementation:** GitHub natively supports batched reviews. `submit_review()` posts to `/repos/{owner}/{repo}/pulls/{number}/reviews` with event (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`), body, and optional inline comments in a single API call. `supports_batched_review` returns `True`.
 
-**Thread resolution (Phase 7):** `resolve_discussion()` uses GraphQL mutations to resolve/unresolve review threads. The `_graphql()` helper method handles GraphQL requests (POST to `/graphql` or `/api/graphql` for enterprise). `_find_thread_node_id()` queries `pullRequest.reviewThreads` to find the thread containing a given comment by `databaseId`, then `resolveReviewThread`/`unresolveReviewThread` mutations toggle resolution. `supports_thread_resolution` returns `True`.
+**Thread resolution:** `resolve_discussion()` uses GraphQL mutations to resolve/unresolve review threads. The `_graphql()` helper method handles GraphQL requests (POST to `/graphql` or `/api/graphql` for enterprise). `_find_thread_node_id()` queries `pullRequest.reviewThreads` to find the thread containing a given comment by `databaseId`, then `resolveReviewThread`/`unresolveReviewThread` mutations toggle resolution. `supports_thread_resolution` returns `True`.
 
 **GraphQL helper:** `_graphql(query, variables)` is a private method on `GitHubClient` that POSTs to the GraphQL endpoint. It handles timeouts, transport errors, and GraphQL-level errors (from the `errors` key in the response). The endpoint URL is `https://api.github.com/graphql` for `github.com` or `https://{hostname}/api/graphql` for enterprise instances.
 
-**Multi-line comment support:** `create_inline_comment()` accepts optional `start_line` and `start_side` parameters. When provided, these are included in the REST payload to create multi-line review comments. GitLab does not use these parameters; its multi-line range is encoded in the suggestion fence syntax instead.
+**Multi-line comment support:** `create_inline_comment()` accepts optional
+`start_line` and `start_side` parameters. GitHub includes them in the REST
+payload. GitLab resolves old/new sides and emits a `position.line_range` start
+and end. GitLab suggestion fences still describe the replacement content and
+are separate from API position transport.
 
 **Branch deletion safety:** `merge_mr()` with `delete_branch=True` verifies that `head.repo.full_name` matches the target `repo_path` before deleting the branch. This prevents accidental deletion of branches on fork repositories in cross-fork PRs.
 
@@ -147,7 +162,7 @@ Key details:
 
 **Concurrent detail fetches:** `get_mr()` fires three concurrent tasks: the PR detail fetch, `_fetch_ci_status()`, and `_fetch_approvals()`. CI status and approvals are merged into the `MRDetail` after all three complete.
 
-**PR-scoped workflow runs (Phase 5):** `list_mr_pipelines()` first fetches the PR to get the head branch ref, then GETs `/repos/{owner}/{repo}/actions/runs?branch={branch}`. `retry_pipeline()` POSTs to `/actions/runs/{id}/rerun-failed-jobs`. `cancel_job` and `supports_job_cancel` are not overridden (GitHub Actions jobs are canceled at the run level via `cancel_pipeline`).
+**PR-scoped workflow runs:** `list_mr_pipelines()` first fetches the PR to get the head branch ref, then GETs `/repos/{owner}/{repo}/actions/runs?branch={branch}`. `retry_pipeline()` POSTs to `/actions/runs/{id}/rerun-failed-jobs`. `cancel_job` and `supports_job_cancel` are not overridden (GitHub Actions jobs are canceled at the run level via `cancel_pipeline`).
 
 **Capability summary:** `supports_batched_review = True`, `supports_thread_resolution = True` (via GraphQL), `supports_unapprove = False`, `supports_job_cancel = False`.
 
@@ -183,7 +198,7 @@ Key details:
 |---|---|
 | ForgeClient ABC | Complete (includes list_mr_commits, list_mr_pipelines, retry_pipeline, cancel_job) |
 | Shared data models | Complete (includes Commit, Pipeline, PipelineJob) |
-| Auth cascade (CLI + .netrc) | Complete |
+| Auth cascade (CLI + `.netrc` + optional keyring) | Complete |
 | HTTP transport + error mapping | Complete |
 | ForgeRegistry | Complete (GitHub + GitLab wired) |
 | GitLabClient | Complete (all ABC methods) |

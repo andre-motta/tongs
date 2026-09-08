@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.andre_motta.tongs</id>
+  <name>Tongs</name>
+  <summary>Review GitHub and GitLab changes</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>Tongs provides a desktop interface for its multi-forge review and CI tools.</p>
+  </description>
+  <launchable type="desktop-id">tongs.desktop</launchable>
+  <url type="homepage">https://tongs.tools</url>
+  <releases>
+    <release version="@DESKTOP_VERSION@" date="2026-09-08"/>
+  </releases>
+</component>

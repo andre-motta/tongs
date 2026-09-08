@@ -35,6 +35,12 @@
       "distribution": "sigstore-models",
       "version": "0.0.6",
       "rpm_source_name": "python-sigstore-models",
+      "binary_rpm": {
+        "name": "python3-sigstore-models",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
       "module": "sigstore_models",
       "license": "MIT",
       "python_requires": ">=3.10",
@@ -50,6 +56,12 @@
       "distribution": "sigstore-rekor-types",
       "version": "0.0.18",
       "rpm_source_name": "python-sigstore-rekor-types",
+      "binary_rpm": {
+        "name": "python3-sigstore-rekor-types",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
       "module": "rekor_types",
       "license": "Apache-2.0",
       "python_requires": ">=3.8",
@@ -65,6 +77,12 @@
       "distribution": "rfc8785",
       "version": "0.1.4",
       "rpm_source_name": "python-rfc8785",
+      "binary_rpm": {
+        "name": "python3-rfc8785",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
       "module": "rfc8785",
       "license": "Apache-2.0",
       "python_requires": ">=3.8",
@@ -80,6 +98,12 @@
       "distribution": "securesystemslib",
       "version": "1.5.1",
       "rpm_source_name": "python-securesystemslib",
+      "binary_rpm": {
+        "name": "python3-securesystemslib",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
       "module": "securesystemslib",
       "license": "MIT AND CC0-1.0",
       "python_requires": "~=3.10",
@@ -95,6 +119,12 @@
       "distribution": "tuf",
       "version": "7.0.1",
       "rpm_source_name": "python-tuf",
+      "binary_rpm": {
+        "name": "python3-tuf",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
       "module": "tuf",
       "license": "Apache-2.0 OR MIT",
       "python_requires": ">=3.10",
@@ -110,6 +140,12 @@
       "distribution": "rfc3161-client",
       "version": "1.0.8",
       "rpm_source_name": "python-rfc3161-client",
+      "binary_rpm": {
+        "name": "python3-rfc3161-client",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "x86_64"
+      },
       "module": "rfc3161_client",
       "license": "Apache-2.0 AND BSD-3-Clause AND MIT AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception)",
       "python_requires": ">=3.9",
@@ -151,6 +187,12 @@
       "distribution": "sigstore",
       "version": "4.5.0",
       "rpm_source_name": "python-sigstore",
+      "binary_rpm": {
+        "name": "python3-sigstore",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
       "module": "sigstore",
       "license": "Apache-2.0",
       "python_requires": ">=3.10",

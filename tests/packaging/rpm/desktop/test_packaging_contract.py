@@ -30,8 +30,10 @@ def test_desktop_retains_runtime_and_has_no_scriptlets() -> None:
     spec = (PACKAGING / "templates" / "tongs-desktop.spec.in").read_text()
 
     assert "cp -a payload/runtime/." in spec
+    assert "BuildRequires:  diffutils" in spec
     assert "%{_libexecdir}/tongs-desktop" in spec
     assert "chrome-sandbox" in spec and "test ! -u" in spec
+    assert "cmp %{SOURCE11} %{buildroot}%{_bindir}/tongs-desktop" in spec
     for scriptlet in ("%pre\n", "%post\n", "%preun\n", "%postun\n"):
         assert scriptlet not in spec
 
@@ -39,6 +41,7 @@ def test_desktop_retains_runtime_and_has_no_scriptlets() -> None:
 def test_system_launcher_uses_fixed_system_contract() -> None:
     launcher = (PACKAGING / "templates" / "tongs-desktop.in").read_text()
 
+    assert launcher.startswith("#!/usr/bin/sh\n")
     assert 'if [ "$#" -ne 0 ]' in launcher
     assert "--ozone-platform=x11" in launcher
     assert "--tongs-python-executable /usr/bin/python3" in launcher

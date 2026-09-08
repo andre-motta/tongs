@@ -32,6 +32,7 @@ ExclusiveArch:  x86_64
 BuildRequires:  appstream
 BuildRequires:  coreutils
 BuildRequires:  desktop-file-utils
+BuildRequires:  diffutils
 BuildRequires:  python3 >= 3.12
 BuildRequires:  python3dist(packaging)
 BuildRequires:  tar
@@ -78,6 +79,7 @@ appstreamcli validate --no-net %{buildroot}%{_metainfodir}/io.github.andre_motta
 test "$(stat -c '%%a' %{buildroot}%{_libexecdir}/tongs-desktop/chrome-sandbox)" = 755
 test ! -u %{buildroot}%{_libexecdir}/tongs-desktop/chrome-sandbox
 cmp %{SOURCE9} %{buildroot}%{_datadir}/pixmaps/tongs.png
+cmp %{SOURCE11} %{buildroot}%{_bindir}/tongs-desktop
 grep -Fx 'Exec=/usr/bin/tongs-desktop' %{buildroot}%{_datadir}/applications/tongs.desktop
 grep -F -- '--tongs-python-executable /usr/bin/python3' %{SOURCE11}
 grep -F -- '--tongs-core-version @CORE_PEP440_VERSION@' %{SOURCE11}

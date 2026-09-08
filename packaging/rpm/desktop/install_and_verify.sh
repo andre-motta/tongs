@@ -418,7 +418,7 @@ run_desktop_smoke() {
             "$name" >&2
         exit 1
     fi
-    if grep -Eiq 'Traceback|ModuleNotFoundError|sidecar failed|(^|[^[:alnum:]_])FATAL([:[:space:]]|$)|ERR_FILE_NOT_FOUND' \
+    if grep -Eiq 'Traceback|ModuleNotFoundError|sidecar failed|(^|[^[:alnum:]_])FATAL([:[:space:]]|$)|ERR_FILE_NOT_FOUND|ERR_MODULE_NOT_FOUND' \
         "$evidence_dir/$name.stdout" "$evidence_dir/$name.stderr"; then
         printf 'lifecycle-stage: desktop-smoke-%s: fatal output classified\n' \
             "$name" >&2
@@ -554,7 +554,8 @@ snapshot after-corrupt-failure
 cmp "$evidence_dir/installed-previous.json" "$evidence_dir/after-corrupt-failure.json"
 
 set +e
-dnf upgrade "${dnf_transaction_options[@]}" --disablerepo='*' "$final_desktop" \
+dnf upgrade --best "${dnf_transaction_options[@]}" \
+    --disablerepo='*' "$final_desktop" \
     >"$evidence_dir/dnf-failed-upgrade.log" 2>&1
 failed_upgrade_status=$?
 set -e

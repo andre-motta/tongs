@@ -263,6 +263,74 @@ retain_verifier_python
     assert changed_nevra.returncode == 1
 
 
+def test_dependency_negative_forces_dnf5_to_reject_retained_broken_update(
+    tmp_path: Path,
+) -> None:
+    installer = (PACKAGING / "install_and_verify.sh").read_text()
+    marker = '"$evidence_dir/dnf-failed-upgrade.log"'
+    marker_index = installer.index(marker)
+    stage_start = installer.rindex("set +e\n", 0, marker_index)
+    stage_end = installer.index("\nassert_sentinels dependency-failure", marker_index)
+    stage = installer[stage_start:stage_end]
+    retained = (
+        Path(__file__).with_name("fixtures") / "dnf-failed-upgrade-807d29e.log"
+    ).read_bytes()
+    assert hashlib.sha256(retained).hexdigest() == (
+        "f64d7a16871df211625950a3e3fe8a6767455cb9151396af284c2d6fe7d4223f"
+    )
+    assert b"nothing provides python3-tongs = " in retained
+    assert b"Skipping packages with broken dependencies:" in retained
+    assert retained.endswith(b"Nothing to do.\n")
+
+    script = (
+        """
+set -e
+evidence_dir=$EVIDENCE_DIR
+final_desktop=/final-tongs-desktop.rpm
+dnf_transaction_options=(
+    --assumeyes
+    --setopt=install_weak_deps=False
+    --setopt=tsflags=
+)
+dnf() {
+    if [[ $# -eq 7 && $1 == upgrade && $2 == --best \
+        && $3 == --assumeyes && $4 == --setopt=install_weak_deps=False \
+        && $5 == --setopt=tsflags= && $6 == '--disablerepo=*' \
+        && $7 == "$final_desktop" ]]; then
+        cat -- "$RETAINED_LOG"
+        return 1
+    fi
+    printf 'unexpected dependency-negative DNF argv\n' >&2
+    return 2
+}
+rpm() {
+    [[ $# -eq 2 && $1 == -K && $2 == "$final_desktop" ]]
+    printf 'digests signatures OK\n'
+}
+"""
+        + stage
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "EVIDENCE_DIR": str(tmp_path),
+            "RETAINED_LOG": str(
+                Path(__file__).with_name("fixtures") / "dnf-failed-upgrade-807d29e.log"
+            ),
+        },
+        text=True,
+        check=False,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "dnf-failed-upgrade.log").read_bytes() == retained
+    assert (tmp_path / "exact-dependency-negative-classification.txt").read_text() == (
+        "rpm -K: candidate integrity accepted\ndnf: exact core dependency rejection\n"
+    )
+
+
 def test_hosted_smoke_executes_complete_retained_validation_path(
     tmp_path: Path,
 ) -> None:
@@ -361,6 +429,18 @@ run_desktop_smoke candidate
     )
     assert fatal_result.returncode == 1
     assert "fatal output classified" in fatal_result.stderr
+
+    module_not_found = (
+        b"Uncaught Exception:\n"
+        b"Error [ERR_MODULE_NOT_FOUND]: Cannot find module "
+        b"'.../runtime/resources/app.asar/dist/src/shared/utilities.js' imported "
+        b"from .../runtime/resources/app.asar/dist/src/main/ipc.js\n"
+    )
+    module_not_found_result = run_case(
+        "module-not-found", retained, module_not_found, 124
+    )
+    assert module_not_found_result.returncode == 1
+    assert "fatal output classified" in module_not_found_result.stderr
 
 
 def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:

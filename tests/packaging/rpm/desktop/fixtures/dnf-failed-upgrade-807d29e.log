@@ -1,0 +1,10 @@
+Updating and loading repositories:
+Repositories loaded.
+Problem: cannot install the best update candidate for package tongs-desktop-0.4.9-0.1.20260908git807d29e.fc44~previous.x86_64
+  - nothing provides python3-tongs = 0.4.2~dev274-0.1.20260908git807d29e.fc44 needed by tongs-desktop-0.5.0-0.1.20260908git807d29e.fc44.x86_64 from @commandline
+
+Package        Arch   Version                           Repository        Size
+Skipping packages with broken dependencies:
+ tongs-desktop x86_64 0.5.0-0.1.20260908git807d29e.fc44 @commandline 314.3 MiB
+
+Nothing to do.

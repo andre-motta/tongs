@@ -72,6 +72,37 @@ export interface DiscussionDiffTarget {
   readonly line: number;
 }
 
+export interface DiscoveryRouteReconciliation {
+  readonly route: AppRoute;
+  readonly removed: boolean;
+}
+
+export function reconcileDiscoveryRoute(
+  route: AppRoute,
+  repositories: readonly RepositoryDto[],
+): DiscoveryRouteReconciliation {
+  if (route.kind === "plugin")
+    return Object.freeze({ route, removed: false });
+  const selected =
+    route.kind === "review" ? route.item.repository : route.repository;
+  if (selected === null)
+    return Object.freeze({ route, removed: false });
+  const handle = typeof selected === "string" ? selected : selected.handle;
+  const repository = repositories.find((item) => item.handle === handle);
+  if (!repository)
+    return Object.freeze({
+      route: Object.freeze({ kind: "inbox", repository: null }),
+      removed: true,
+    });
+  return Object.freeze({
+    route:
+      route.kind === "inbox"
+        ? Object.freeze({ kind: "inbox", repository })
+        : route,
+    removed: false,
+  });
+}
+
 export interface ReviewPanelContribution {
   readonly id: ReviewPanel;
   readonly label: string;

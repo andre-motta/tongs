@@ -43,6 +43,7 @@ _MAX_STATE_BYTES = 512 * 1024
 _LOCK_POLL_SECONDS = 0.05
 _TARGET_TOKEN = re.compile(r"^[0-9a-f]{12}$")
 _STABLE_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+_DESKTOP_ICON_PATH = "runtime/share/pixmaps/tongs.png"
 
 
 class EnvironmentKind(StrEnum):
@@ -409,11 +410,14 @@ def activate_staged_artifact(
         _fsync_directory(transaction.paths.staging_root)
         _fsync_directory(transaction.paths.versions_root)
         candidate_menu_digest = hashlib.sha256(
-            render_desktop_entry(environment.console_path)
+            render_desktop_entry(
+                environment.console_path, icon_path=_payload_icon_path(target.payload)
+            )
         ).hexdigest()
         menu_digest = install_user_menu(
             transaction.paths.menu_path,
             environment.console_path,
+            icon_path=_payload_icon_path(target.payload),
             replace_digest=current.menu_sha256 if current is not None else None,
         )
         if menu_digest != candidate_menu_digest:
@@ -481,6 +485,7 @@ def recover_interrupted_activation(
     digest = install_user_menu(
         transaction.paths.menu_path,
         journal.target.environment.console_path,
+        icon_path=_payload_icon_path(journal.target.payload),
         replace_digest=_menu_replacement_digest(transaction, current, journal),
     )
     previous = current.active if current is not None else None
@@ -713,6 +718,7 @@ def repair_activation(
     digest = install_user_menu(
         transaction.paths.menu_path,
         environment.console_path,
+        icon_path=_payload_icon_path(current.active.payload),
         replace_digest=current.menu_sha256,
     )
     replacement = DesktopInstallationState(
@@ -1034,9 +1040,11 @@ def _restore_previous_menu(
                 transaction.paths.menu_path, expected_digest=candidate_digest
             )
         else:
+            icon_path = _recorded_menu_icon_path(current.active, current.menu_sha256)
             install_user_menu(
                 transaction.paths.menu_path,
                 current.active.environment.console_path,
+                icon_path=icon_path,
                 replace_digest=candidate_digest,
             )
     except (InstallerError, OSError):
@@ -1070,7 +1078,10 @@ def _repair_journal_menu(
     journal: _ActivationJournal,
 ) -> None:
     desired = hashlib.sha256(
-        render_desktop_entry(journal.target.environment.console_path)
+        render_desktop_entry(
+            journal.target.environment.console_path,
+            icon_path=_payload_icon_path(journal.target.payload),
+        )
     ).hexdigest()
     observed = desktop_entry_digest(transaction.paths.menu_path)
     if observed == desired:
@@ -1078,11 +1089,37 @@ def _repair_journal_menu(
     install_user_menu(
         transaction.paths.menu_path,
         journal.target.environment.console_path,
+        icon_path=_payload_icon_path(journal.target.payload),
         replace_digest=(
             journal.prior_menu_sha256
             if observed == journal.prior_menu_sha256
             else current.menu_sha256
         ),
+    )
+
+
+def _payload_icon_path(payload: InstalledPayload) -> Path | None:
+    """Return the immutable packaged icon path when the archive declares it."""
+    if any(declared.path == _DESKTOP_ICON_PATH for declared in payload.files):
+        return payload.target_path / _DESKTOP_ICON_PATH
+    return None
+
+
+def _recorded_menu_icon_path(
+    target: InstallationTarget, expected_digest: str | None
+) -> Path | None:
+    """Select the icon form whose bytes are owned by the persisted menu digest."""
+    icon_path = _payload_icon_path(target.payload)
+    candidates = (icon_path, None) if icon_path is not None else (None,)
+    for candidate in candidates:
+        document = render_desktop_entry(
+            target.environment.console_path, icon_path=candidate
+        )
+        if hashlib.sha256(document).hexdigest() == expected_digest:
+            return candidate
+    raise InstallerError(
+        InstallerErrorCode.STATE_CONFLICT,
+        "The recorded desktop menu identity is inconsistent.",
     )
 
 

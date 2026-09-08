@@ -11,6 +11,7 @@ import tempfile
 from contextlib import suppress
 from dataclasses import replace
 from typing import ClassVar
+from uuid import UUID
 
 from rich.markup import escape
 from textual.app import ComposeResult
@@ -47,6 +48,15 @@ class ReplySubmitted(Message):
     def __init__(self, discussion_id: str, body: str) -> None:
         super().__init__()
         self.discussion_id = discussion_id
+        self.body = body
+
+
+class DraftCommentEdited(Message):
+    """Fired when an existing durable draft comment is edited."""
+
+    def __init__(self, comment_id: UUID, body: str) -> None:
+        super().__init__()
+        self.comment_id = comment_id
         self.body = body
 
 
@@ -97,6 +107,9 @@ class CommentEditor(Widget):
         self._position: DiffPosition | None = None
         self._discussion_id: str | None = None
         self._previous_focus: Widget | None = None
+        self._defer_close = False
+        self._submission_pending = False
+        self._draft_comment_id: UUID | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="editor-header", classes="editor-header")
@@ -114,7 +127,9 @@ class CommentEditor(Widget):
             self._previous_focus.focus()
             self._previous_focus = None
 
-    def open_general(self) -> None:
+    def open_general(
+        self, *, initial_body: str = "", defer_close: bool = False
+    ) -> None:
         """Open for a general MR comment."""
         self._save_focus_and_open()
         self._cancel_pending = False
@@ -122,10 +137,12 @@ class CommentEditor(Widget):
         self._file = None
         self._line = None
         self._position = None
+        self._configure_submission(defer_close)
+        self._draft_comment_id = None
         header = self.query_one("#editor-header", Static)
         header.update("[bold]Add comment[/]")
         text_area = self.query_one("#comment-input", TextArea)
-        text_area.clear()
+        self._replace_text(initial_body)
         self.display = True
         text_area.focus()
 
@@ -135,6 +152,8 @@ class CommentEditor(Widget):
         line: DiffLine,
         *,
         side: DiffSide | None = None,
+        initial_body: str = "",
+        defer_close: bool = False,
     ) -> None:
         """Open for an inline comment on a specific diff line."""
         self._save_focus_and_open()
@@ -159,15 +178,24 @@ class CommentEditor(Widget):
             display_path = file.new_path
             display_line = line.new_lineno or line.old_lineno or ""
         self._position = position
+        self._configure_submission(defer_close)
+        self._draft_comment_id = None
         header = self.query_one("#editor-header", Static)
         header.update(f"[bold]Comment on {escape(display_path)}:{display_line}[/]")
         text_area = self.query_one("#comment-input", TextArea)
-        text_area.clear()
+        self._replace_text(initial_body)
         self.display = True
         text_area.focus()
 
     def open_reply(
-        self, discussion_id: str, file: DiffFile, line: DiffLine, author: str = ""
+        self,
+        discussion_id: str,
+        file: DiffFile,
+        line: DiffLine,
+        author: str = "",
+        *,
+        initial_body: str = "",
+        defer_close: bool = False,
     ) -> None:
         """Open for replying to an existing discussion thread."""
         self._save_focus_and_open()
@@ -177,16 +205,25 @@ class CommentEditor(Widget):
         self._line = line
         self._discussion_id = discussion_id
         self._position = None
+        self._configure_submission(defer_close)
+        self._draft_comment_id = None
         line_num = line.new_lineno or line.old_lineno or ""
         who = f"@{author} on " if author else ""
         header = self.query_one("#editor-header", Static)
         header.update(f"[bold]Reply to {who}{file.new_path}:{line_num}[/]")
         text_area = self.query_one("#comment-input", TextArea)
-        text_area.clear()
+        self._replace_text(initial_body)
         self.display = True
         text_area.focus()
 
-    def open_reply_general(self, discussion_id: str, author: str = "") -> None:
+    def open_reply_general(
+        self,
+        discussion_id: str,
+        author: str = "",
+        *,
+        initial_body: str = "",
+        defer_close: bool = False,
+    ) -> None:
         """Open for replying to a general (non-inline) discussion."""
         self._save_focus_and_open()
         self._cancel_pending = False
@@ -195,28 +232,72 @@ class CommentEditor(Widget):
         self._line = None
         self._discussion_id = discussion_id
         self._position = None
+        self._configure_submission(defer_close)
+        self._draft_comment_id = None
         who = f"@{author}" if author else "thread"
         header = self.query_one("#editor-header", Static)
         header.update(f"[bold]Reply to {who}[/]")
         text_area = self.query_one("#comment-input", TextArea)
-        text_area.clear()
+        self._replace_text(initial_body)
         self.display = True
         text_area.focus()
 
+    def open_draft_comment(self, comment_id: UUID, body: str, target: str) -> None:
+        """Edit an existing draft body while its immutable target stays unchanged."""
+        self._save_focus_and_open()
+        self._cancel_pending = False
+        self._mode = "draft_edit"
+        self._file = None
+        self._line = None
+        self._position = None
+        self._discussion_id = None
+        self._draft_comment_id = comment_id
+        self._configure_submission(True)
+        self.query_one("#editor-header", Static).update(
+            f"[bold]Edit draft: {escape(target)}[/]"
+        )
+        self._replace_text(body)
+        self.display = True
+        self.query_one("#comment-input", TextArea).focus()
+
     def action_submit(self) -> None:
+        if self._submission_pending:
+            self.app.notify("Draft save is already in progress", severity="warning")
+            return
         text_area = self.query_one("#comment-input", TextArea)
-        body = text_area.text.strip()
-        if not body:
+        body = text_area.text
+        if not body.strip():
             self.app.notify("Comment cannot be empty")
             return
-        if self._mode == "reply" and self._discussion_id:
+        if not self._defer_close:
+            body = body.strip()
+        if self._mode == "draft_edit" and self._draft_comment_id is not None:
+            self.post_message(DraftCommentEdited(self._draft_comment_id, body))
+        elif self._mode == "reply" and self._discussion_id:
             self.post_message(ReplySubmitted(self._discussion_id, body))
         elif self._mode == "inline" and self._position:
             self.post_message(CommentSubmitted(body, self._position))
         else:
             self.post_message(GeneralCommentSubmitted(body))
-        self.display = False
-        self._restore_focus()
+        if self._defer_close:
+            self._submission_pending = True
+            text_area.disabled = True
+        else:
+            self._close()
+
+    def acknowledge_submission(self) -> None:
+        """Close only after the controller confirms durable persistence."""
+        self._submission_pending = False
+        self.query_one("#comment-input", TextArea).disabled = False
+        self._close()
+
+    def reject_submission(self, message: str) -> None:
+        """Keep caller text visible and editable after failure or cancellation."""
+        self._submission_pending = False
+        text_area = self.query_one("#comment-input", TextArea)
+        text_area.disabled = False
+        text_area.focus()
+        self.app.notify(message, severity="warning")
 
     _cancel_pending: bool = False
 
@@ -227,8 +308,7 @@ class CommentEditor(Widget):
             self.app.notify("Press Esc again to discard comment", severity="warning")
             return
         self._cancel_pending = False
-        self.display = False
-        self._restore_focus()
+        self._close()
 
     def action_external_editor(self) -> None:
         if platform.system() == "Windows":
@@ -274,3 +354,20 @@ class CommentEditor(Widget):
             if shutil.which(cmd):
                 return cmd
         return None
+
+    def _configure_submission(self, defer_close: bool) -> None:
+        self._defer_close = defer_close
+        self._submission_pending = False
+        self.query_one("#comment-input", TextArea).disabled = False
+
+    def _replace_text(self, body: str) -> None:
+        text_area = self.query_one("#comment-input", TextArea)
+        text_area.clear()
+        if body:
+            text_area.insert(body)
+
+    def _close(self) -> None:
+        self.display = False
+        self._submission_pending = False
+        self.query_one("#comment-input", TextArea).disabled = False
+        self._restore_focus()

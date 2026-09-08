@@ -234,6 +234,7 @@ class _FixtureSession:
     def __init__(self, evidence_root: Path) -> None:
         self._events: asyncio.Queue[ServiceEvent | None] = asyncio.Queue()
         self._sequence = 0
+        self._discovery_control = evidence_root / "discovery-state.txt"
         self._store = DraftStore(evidence_root / "drafts.db")
         self.drafts = self._store
         self._client = _MockForgeClient(evidence_root / "mock-forge-actions.jsonl")
@@ -268,6 +269,11 @@ class _FixtureSession:
         self._events.put_nowait(None)
 
     async def discover_repositories(self) -> tuple[RepositorySnapshot, ...]:
+        state = self._discovery_control.read_text(encoding="utf-8").strip()
+        if state == "removed":
+            return ()
+        if state != "present":
+            raise ValueError("invalid controlled discovery state")
         return (
             RepositorySnapshot(REPOSITORY, REPOSITORY.project_path, ForgeType.GITHUB),
         )

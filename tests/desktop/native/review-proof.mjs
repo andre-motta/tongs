@@ -49,6 +49,7 @@ const coreVersion = execFileSync(
 ).trim();
 const sourceCommit = process.env.TONGS_REVIEW_PROOF_COMMIT ?? null;
 const wheelPath = process.env.TONGS_REVIEW_PROOF_WHEEL ?? null;
+const discoveryControl = path.join(evidenceRoot, "discovery-state.txt");
 
 let controller = null;
 let transport = null;
@@ -65,9 +66,11 @@ async function runProof() {
       "drafts.db",
       "drafts.db-shm",
       "drafts.db-wal",
+      "discovery-state.txt",
       "mock-forge-actions.jsonl",
       "native-review-proof.json",
     ]) await rm(path.join(evidenceRoot, name), { force: true });
+    await writeFile(discoveryControl, "present\n", { mode: 0o600 });
     const sourceBinding = await verifySourceBinding();
 
     mark("wait for Electron");
@@ -151,6 +154,58 @@ async function runProof() {
       return snapshot();
     `);
     const navigationScreenshot = await capture("00-unsent-buffer-after-navigation.png");
+
+    mark("exercise controlled discovery removal and restoration");
+    await evaluate(`
+      setValue(labelled("Quick comment"), "kept across discovery removal");
+      return true;
+    `);
+    await writeFile(discoveryControl, "removed\n", { mode: 0o600 });
+    const discoveryRemoval = await evaluate(`
+      button("Refresh local repositories").click();
+      await waitFor("removed repository fallback", () =>
+        document.querySelector(".view-title")?.textContent === "All reviews");
+      const repositoryVisible = [...document.querySelectorAll(".nav-item")].some(
+        (item) => item.textContent.includes("proof/desktop-review"),
+      );
+      if (repositoryVisible)
+        throw new Error("removed repository remains in native navigation");
+      const notice = [...document.querySelectorAll("main > .notice")].find((item) =>
+        item.textContent.includes("no longer in the local workspace"),
+      );
+      if (!notice)
+        throw new Error("native route fallback did not explain repository removal");
+      return { ...snapshot(), notice: notice.textContent, repositoryVisible };
+    `);
+    const discoveryRemovalScreenshot = await capture(
+      "01-controlled-discovery-removal.png",
+    );
+    await writeFile(discoveryControl, "present\n", { mode: 0o600 });
+    await evaluate(`
+      const refresh = await waitFor("repository refresh", () => {
+        const candidate = button("Refresh local repositories");
+        return candidate && !candidate.disabled ? candidate : null;
+      });
+      refresh.click();
+      await waitFor("restored repository", () =>
+        [...document.querySelectorAll(".nav-item")].find((item) =>
+          item.textContent.includes("proof/desktop-review")));
+      return true;
+    `);
+    await navigateToReview();
+    const discoveryRestoration = await evaluate(`
+      const composer = await waitFor("restored discovery buffer", () =>
+        labelled("Quick comment"));
+      if (composer.value !== "kept across discovery removal")
+        throw new Error("discovery reconciliation lost the unsent review buffer");
+      if ([...document.querySelectorAll("main > .notice")].some((item) =>
+        item.textContent.includes("no longer in the local workspace")))
+        throw new Error("repository removal notice remained after restoration");
+      return snapshot();
+    `);
+    const discoveryRestorationScreenshot = await capture(
+      "02-controlled-discovery-restoration.png",
+    );
     await evaluate(`setValue(labelled("Quick comment"), ""); return true;`);
 
     mark("author and post a controlled multiline GitHub suggestion");
@@ -185,7 +240,7 @@ async function runProof() {
       return snapshot();
     `);
     await waitForAction("create_inline_comment", 1);
-    const suggestionScreenshot = await capture("01-suggestion-posted.png");
+    const suggestionScreenshot = await capture("03-suggestion-posted.png");
 
     mark("resolve the discussion jump against the current loaded diff");
     const discussionJump = await evaluate(`
@@ -195,7 +250,7 @@ async function runProof() {
         document.querySelector('button[aria-label="Select new line 4"][aria-pressed="true"]'));
       return snapshot();
     `);
-    const discussionJumpScreenshot = await capture("02-discussion-jump.png");
+    const discussionJumpScreenshot = await capture("04-discussion-jump.png");
     await evaluate(`
       button("Discussions").click();
       await waitFor("review workflow", () => document.querySelector(".review-workflow-shell"));
@@ -214,7 +269,7 @@ async function runProof() {
         document.body.innerText.includes("remote result is unknown"));
       return snapshot();
     `);
-    const unknownScreenshot = await capture("03-quick-unknown-dark.png");
+    const unknownScreenshot = await capture("05-quick-unknown-dark.png");
     await clickButton("I inspected the forge; acknowledge uncertainty");
     await evaluate(`
       await waitFor("uncertainty acknowledgment", () =>
@@ -257,7 +312,7 @@ async function runProof() {
       await waitFor("saved draft", () => button("Save draft")?.disabled === true);
       return true;
     `);
-    const draftScreenshot = await capture("04-draft-review-dark.png");
+    const draftScreenshot = await capture("06-draft-review-dark.png");
 
     mark("restart sidecar and renderer, then recover persisted draft");
     controller.reset();
@@ -280,7 +335,7 @@ async function runProof() {
         throw new Error("durable suggestion was not recovered");
       return snapshot();
     `);
-    const recoveredScreenshot = await capture("05-draft-recovered-after-restart.png");
+    const recoveredScreenshot = await capture("07-draft-recovered-after-restart.png");
 
     mark("submit persisted draft through production submission service");
     await clickButton("Submit review");
@@ -290,7 +345,7 @@ async function runProof() {
         document.body.innerText.includes("Review submitted."), 15000);
       return snapshot();
     `);
-    const submittedScreenshot = await capture("06-submitted-review.png");
+    const submittedScreenshot = await capture("08-submitted-review.png");
 
     mark("exercise known conflict and merge action");
     await clickButton("Close");
@@ -300,7 +355,7 @@ async function runProof() {
         document.body.innerText.includes("review changed remotely"));
       return snapshot();
     `);
-    const conflictScreenshot = await capture("07-known-conflict.png");
+    const conflictScreenshot = await capture("09-known-conflict.png");
 
     nativeTheme.themeSource = "light";
     window.setSize(900, 720);
@@ -345,7 +400,7 @@ async function runProof() {
         contrastRatio,
       };
     `);
-    const finalScreenshot = await capture("08-review-light-narrow.png");
+    const finalScreenshot = await capture("10-review-light-narrow.png");
     await clickButton("Merge");
     await clickButton("Confirm Merge");
     await waitForAction("merge", 1);
@@ -450,6 +505,8 @@ async function runProof() {
       sessionGeneration: transport.sessionGeneration,
       initial,
       demonstrations: {
+        discoveryRemoval,
+        discoveryRestoration,
         suggestion,
         discussionJump,
         unknown,
@@ -462,6 +519,8 @@ async function runProof() {
       mockForgeActions: actions,
       screenshots: [
         navigationScreenshot,
+        discoveryRemovalScreenshot,
+        discoveryRestorationScreenshot,
         suggestionScreenshot,
         discussionJumpScreenshot,
         unknownScreenshot,

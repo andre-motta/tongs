@@ -29,7 +29,7 @@ export function assertParams(method: string, value: unknown): asserts value is J
     "reviews.list": { required: ["scope"], optional: ["repository", "state", "per_page"] },
     "reviews.get": { required: ["review"] }, "discussions.list": { required: ["review"] },
     "commits.list": { required: ["review"] }, "jobs.list": { required: ["pipeline"] },
-    "diff.open": { required: ["review"], optional: ["max_items"] },
+    "diff.open": { required: ["review"], optional: ["layout", "max_items"] },
     "logs.open": { required: ["job"], optional: ["max_items"] },
     "diff.page": { required: ["snapshot", "resource", "cursor"], optional: ["max_items"] },
     "logs.page": { required: ["snapshot", "resource", "cursor"], optional: ["max_items"] },
@@ -55,6 +55,7 @@ export function assertParams(method: string, value: unknown): asserts value is J
     }
   }
   if (method === "reviews.list" && !["all_open", "my_reviews", "my_mrs"].includes(String(value.scope))) throw new Error("Invalid review scope");
+  if (value.layout !== undefined && value.layout !== "unified" && value.layout !== "split") throw new Error("Invalid diff layout");
   if (value.state !== undefined && !["open", "closed", "merged"].includes(String(value.state))) throw new Error("Invalid review state");
 }
 
@@ -127,7 +128,10 @@ function bool(value: unknown): asserts value is boolean { if (typeof value !== "
 function integer(value: unknown, minimum = 0): asserts value is number { if (!Number.isSafeInteger(value) || Number(value) < minimum) throw new Error("Invalid desktop result integer"); }
 function numberOrNull(value: unknown): void { if (value !== null && (typeof value !== "number" || !Number.isFinite(value))) throw new Error("Invalid desktop result number"); }
 function digest(value: unknown): void { if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new Error("Invalid desktop result digest"); }
-function assertUser(value: unknown): void { assertKeys(value, ["username", "display_name"]); text(value.username); text(value.display_name); }
+function assertUser(value: unknown): void {
+  assertKeys(value, ["username", "display_name"]); text(value.username);
+  if (typeof value.display_name !== "string" || value.display_name.length > MAX_TEXT) throw new Error("Invalid desktop user display name");
+}
 function assertRepository(value: unknown): void { assertKeys(value, ["handle", "display_name", "forge_type"]); text(value.handle); text(value.display_name); if (value.forge_type !== "github" && value.forge_type !== "gitlab") throw new Error("Invalid forge type"); }
 function assertRevision(value: unknown): void { assertKeys(value, ["head_sha", "base_sha", "start_sha"]); text(value.head_sha); text(value.base_sha); nullableText(value.start_sha); }
 function assertServiceError(value: unknown): void { assertKeys(value, ["code", "message", "retryable"]); text(value.code); text(value.message); bool(value.retryable); }
@@ -141,7 +145,8 @@ function assertReviewDetail(value: unknown): void {
   const extra = ["description", "merge_status", "approvals", "reviewers", "assignees", "changes_count", "detailed_merge_status", "draft_notes_count", "status_check_rollup"] as const;
   assertKeys(value, [...SUMMARY_KEYS, ...extra]);
   const summary = Object.fromEntries(SUMMARY_KEYS.map((key) => [key, value[key]])); assertReviewSummary(summary);
-  text(value.description, MAX_IPC_BYTES); text(value.merge_status); for (const key of ["approvals", "reviewers", "assignees"] as const) assertArray(value[key], assertUser, 1000);
+  if (typeof value.description !== "string" || value.description.length > MAX_IPC_BYTES) throw new Error("Invalid review description");
+  text(value.merge_status); for (const key of ["approvals", "reviewers", "assignees"] as const) assertArray(value[key], assertUser, 1000);
   integer(value.changes_count); nullableText(value.detailed_merge_status); numberOrNull(value.draft_notes_count); nullableText(value.status_check_rollup);
 }
 function assertSnapshot(value: unknown, entry: (item: unknown) => void, revision: (item: unknown) => void): void {
@@ -153,7 +158,22 @@ function assertDiffRow(value: unknown): void {
   if (value.kind === "file") { assertKeys(value, [...common, "old_path", "new_path", "status", "additions", "deletions", "is_binary", "language", "is_truncated", "is_empty", "is_mode_only", "is_unavailable"]); integer(value.file_index); for (const key of ["old_path", "new_path", "status"] as const) text(value[key]); integer(value.additions); integer(value.deletions); for (const key of ["is_binary", "is_truncated", "is_empty", "is_mode_only", "is_unavailable"] as const) bool(value[key]); nullableText(value.language); return; }
   if (value.kind === "hunk") { assertKeys(value, [...common, "hunk_index", "header", "old_start", "old_count", "new_start", "new_count", "context_text"]); for (const key of ["file_index", "hunk_index", "old_start", "old_count", "new_start", "new_count"] as const) integer(value[key]); text(value.header); if (typeof value.context_text !== "string") throw new Error("Invalid hunk context"); return; }
   if (value.kind === "line") { assertKeys(value, [...common, "hunk_index", "old_line", "new_line", "content", "line_type"]); integer(value.file_index); integer(value.hunk_index); numberOrNull(value.old_line); numberOrNull(value.new_line); if (typeof value.content !== "string") throw new Error("Invalid diff content"); text(value.line_type); return; }
+  if (value.kind === "split") {
+    assertKeys(value, [...common, "hunk_index", "row_index", "old", "new"]);
+    integer(value.file_index); integer(value.hunk_index); integer(value.row_index);
+    if (value.old !== null) assertSplitCell(value.old);
+    if (value.new !== null) assertSplitCell(value.new);
+    if (value.old === null && value.new === null) throw new Error("Invalid empty split row");
+    return;
+  }
   throw new Error("Invalid diff row kind");
+}
+function assertSplitCell(value: unknown): void {
+  assertKeys(value, ["old_line", "new_line", "content", "line_type", "anchor_side"]);
+  numberOrNull(value.old_line); numberOrNull(value.new_line);
+  if (typeof value.content !== "string") throw new Error("Invalid diff content");
+  text(value.line_type);
+  if (value.anchor_side !== null && value.anchor_side !== "old" && value.anchor_side !== "new") throw new Error("Invalid diff anchor side");
 }
 function assertDiscussion(value: unknown): void { assertKeys(value, ["id", "is_inline", "root_comment", "is_resolved", "resolvable"]); text(value.id); bool(value.is_inline); assertComment(value.root_comment); bool(value.is_resolved); bool(value.resolvable); }
 function assertComment(value: unknown, depth = 0): void { if (depth > 16) throw new Error("Discussion replies are too deep"); assertKeys(value, ["id", "author", "body", "created_at", "file_path", "old_line", "new_line", "is_resolved", "replies"]); text(value.id); assertUser(value.author); text(value.body, MAX_IPC_BYTES); text(value.created_at); text(value.file_path); numberOrNull(value.old_line); numberOrNull(value.new_line); bool(value.is_resolved); assertArray(value.replies, (reply) => assertComment(reply, depth + 1), 1000); }

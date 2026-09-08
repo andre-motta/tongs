@@ -141,8 +141,8 @@ confirmation has **Cancel** and **Confirm _action_** controls. After
 confirmation, the workspace shows the action's operation identifier and one of
 these outcomes:
 
-- **CI action accepted** means the service returned a bound accepted receipt.
-- **CI action rejected** means the service reported a known rejection.
+- **CI action accepted** means Tongs received a receipt confirming acceptance.
+- **CI action rejected** means Tongs received a known rejection.
 - **Remote outcome unknown** means the response did not establish the remote
   result. Refresh status or choose **Check retained receipt**; do not start a
   second action until the current outcome is reviewed.

@@ -11,9 +11,12 @@ import re
 import stat
 import struct
 import subprocess
+import sys
 import sysconfig
 from pathlib import Path
 from typing import Any
+
+_RPM_PURELIB_SCHEME = "rpm_prefix"
 
 
 def _run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -161,6 +164,25 @@ def _package_file_records(name: str) -> list[dict[str, str]]:
     return records
 
 
+def _rpm_purelib() -> str:
+    if _RPM_PURELIB_SCHEME not in sysconfig.get_scheme_names():
+        raise RuntimeError("system Python does not provide the Fedora RPM path scheme")
+    value = sysconfig.get_path("purelib", scheme=_RPM_PURELIB_SCHEME)
+    if not isinstance(value, str):
+        raise TypeError("Fedora RPM purelib path is unavailable")
+    path = Path(value)
+    expected_abi = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    if (
+        not path.is_absolute()
+        or path.parts[:2] != ("/", "usr")
+        or "local" in path.parts[2:]
+        or path.parent.name != expected_abi
+        or path.name != "site-packages"
+    ):
+        raise RuntimeError(f"invalid Fedora RPM purelib path: {path}")
+    return os.fspath(path)
+
+
 def _allowed_path(package: str, path: str, purelib: str) -> bool:
     if package == "python3-tongs":
         return (
@@ -245,7 +267,7 @@ def verify_metadata(
     package_reports = []
     license_files = []
     owned_paths: dict[str, str] = {}
-    purelib = sysconfig.get_path("purelib")
+    purelib = _rpm_purelib()
     manifest = json.loads(install_manifest.read_text())
     runtime_modes = {
         f"{libexec_dir}/{Path(item['path']).relative_to('runtime').as_posix()}": (
@@ -376,6 +398,7 @@ def verify_metadata(
             "license_files": sorted(license_files),
             "packages": package_reports,
             "purelib": purelib,
+            "purelib_scheme": _RPM_PURELIB_SCHEME,
         },
     )
 
@@ -400,7 +423,7 @@ def _package_specific_directory(path: str, purelib: str) -> bool:
 
 
 def write_inventory(packages: list[str], output: Path) -> None:
-    purelib = sysconfig.get_path("purelib")
+    purelib = _rpm_purelib()
     paths = []
     for name in packages:
         for record in _package_file_records(name):
@@ -410,7 +433,15 @@ def write_inventory(packages: list[str], output: Path) -> None:
                     paths.append({"package": name, "path": path, "type": "directory"})
             else:
                 paths.append({"package": name, "path": path, "type": "file"})
-    _write(output, {"schema_version": 1, "paths": paths})
+    _write(
+        output,
+        {
+            "schema_version": 1,
+            "paths": paths,
+            "purelib": purelib,
+            "purelib_scheme": _RPM_PURELIB_SCHEME,
+        },
+    )
 
 
 def assert_absent(inventory: Path, packages: list[str], output: Path) -> None:

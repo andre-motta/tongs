@@ -87,6 +87,7 @@ class WorkspaceUtilityService:
                 "The current review identity could not be confirmed.",
             )
         url = snapshot.detail.web_url
+        url_bytes = _utf8_length(url) if isinstance(url, str) else None
         parsed = None
         try:
             parsed = urlsplit(url)
@@ -97,8 +98,9 @@ class WorkspaceUtilityService:
         if (
             not isinstance(url, str)
             or not url
-            or len(url.encode("utf-8")) > MAX_REVIEW_URL_BYTES
-            or any(ord(character) < 32 for character in url)
+            or url_bytes is None
+            or url_bytes > MAX_REVIEW_URL_BYTES
+            or any(ord(character) < 32 or ord(character) == 127 for character in url)
             or parsed is None
             or parsed.scheme != "https"
             or parsed.username is not None
@@ -185,8 +187,11 @@ class WorkspaceUtilityService:
             )
         if (
             not isinstance(command, str)
-            or len(command.encode("utf-8")) > MAX_EDITOR_COMMAND_BYTES
-            or any(ord(character) < 32 for character in command)
+            or (_command_bytes := _utf8_length(command)) is None
+            or _command_bytes > MAX_EDITOR_COMMAND_BYTES
+            or any(
+                ord(character) < 32 or ord(character) == 127 for character in command
+            )
         ):
             return (
                 EditorPlanStatus.MALFORMED,
@@ -202,8 +207,12 @@ class WorkspaceUtilityService:
             or len(argv) > MAX_EDITOR_ARGUMENTS
             or any(
                 not argument
-                or len(argument.encode("utf-8")) > MAX_EDITOR_ARGUMENT_BYTES
-                or any(ord(character) < 32 for character in argument)
+                or (_argument_bytes := _utf8_length(argument)) is None
+                or _argument_bytes > MAX_EDITOR_ARGUMENT_BYTES
+                or any(
+                    ord(character) < 32 or ord(character) == 127
+                    for character in argument
+                )
                 for argument in argv
             )
         ):
@@ -229,6 +238,13 @@ class WorkspaceUtilityService:
             "The configured editor launch plan is ready.",
             argv,
         )
+
+
+def _utf8_length(value: str) -> int | None:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
 
 
 __all__ = [

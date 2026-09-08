@@ -113,6 +113,8 @@ async def test_review_url_is_fetched_for_exact_admitted_review() -> None:
         "http://github.com/acme/widgets/pull/7",
         "https://token@github.com/acme/widgets/pull/7",
         "https://example.com/acme/widgets/pull/7",
+        "https://github.com/acme/widgets/\udcff",
+        "https://github.com/acme/widgets/\x7f",
     ],
 )
 async def test_review_url_rejects_non_forge_or_credentialed_urls(url: str) -> None:
@@ -140,6 +142,7 @@ async def test_clear_cache_uses_only_supplied_shared_cache_authority() -> None:
         (Config(external_editor_enabled=False), {}, EditorPlanStatus.DISABLED),
         (Config(), {}, EditorPlanStatus.MISSING),
         (Config(editor_command="'unterminated"), {}, EditorPlanStatus.MALFORMED),
+        (Config(editor_command="code\udcff --wait"), {}, EditorPlanStatus.MALFORMED),
         (Config(editor_command="nvim"), {}, EditorPlanStatus.TERMINAL_UNSUPPORTED),
         (Config(), {"VISUAL": "code --wait"}, EditorPlanStatus.READY),
         (Config(), {"EDITOR": "kate --block"}, EditorPlanStatus.READY),

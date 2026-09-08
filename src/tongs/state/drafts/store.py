@@ -152,6 +152,17 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
             recorded_at TEXT NOT NULL
         )
         """,
+        """
+        CREATE TABLE submission_receipt_resync (
+            attempt_id TEXT NOT NULL,
+            step_id TEXT NOT NULL,
+            resync_required INTEGER NOT NULL CHECK(resync_required IN (0, 1)),
+            PRIMARY KEY(attempt_id, step_id),
+            FOREIGN KEY(attempt_id, step_id)
+                REFERENCES submission_receipts(attempt_id, step_id)
+                ON DELETE CASCADE
+        )
+        """,
     ),
 }
 
@@ -535,6 +546,11 @@ class DraftStore:
                 "atomic",
                 "steps_json",
                 "recorded_at",
+            },
+            "submission_receipt_resync": {
+                "attempt_id",
+                "step_id",
+                "resync_required",
             },
         }
         for table, expected_columns in required.items():
@@ -1009,10 +1025,13 @@ class DraftStore:
         remote_id: str,
         *,
         operation_id: str | None = None,
+        resync_required: bool = False,
     ) -> SubmissionAttempt:
         """Persist a confirmed remote step once under the live attempt lock."""
         if not step_id or not remote_id or operation_id == "":
             raise ValueError("step_id and remote_id are required")
+        if not isinstance(resync_required, bool):
+            raise TypeError("resync_required must be a boolean")
         self._require_owned(attempt_id)
         db = self._connection()
         try:
@@ -1033,6 +1052,17 @@ class DraftStore:
                     raise DraftReceiptConflictError(
                         "submission step already has a different remote receipt"
                     )
+                if resync_required:
+                    await db.execute(
+                        """
+                        INSERT INTO submission_receipt_resync
+                            (attempt_id, step_id, resync_required) VALUES (?, ?, 1)
+                        ON CONFLICT(attempt_id, step_id) DO UPDATE SET
+                            resync_required = MAX(resync_required, 1)
+                        """,
+                        (str(attempt_id), step_id),
+                    )
+                    attempt = await self._attempt_in_transaction(db, attempt_id)
                 await db.execute("COMMIT")
                 return attempt
             pending = attempt.pending_dispatch
@@ -1046,6 +1076,17 @@ class DraftStore:
             await db.execute(
                 "INSERT INTO submission_receipts VALUES (?, ?, ?, ?)",
                 (str(attempt_id), step_id, remote_id, _format_time(now)),
+            )
+            if resync_required:
+                receipt_resync = 1
+            else:
+                receipt_resync = 0
+            await db.execute(
+                """
+                INSERT INTO submission_receipt_resync
+                    (attempt_id, step_id, resync_required) VALUES (?, ?, ?)
+                """,
+                (str(attempt_id), step_id, receipt_resync),
             )
             if operation_id is not None:
                 await db.execute(
@@ -1187,10 +1228,14 @@ class DraftStore:
     async def complete_submission(self, attempt_id: UUID) -> SubmissionAttempt:
         """Mark an owned attempt and its draft submitted, then release ownership."""
         self._require_owned(attempt_id)
+        completed = False
         try:
-            return await self._transition_owned(attempt_id, DraftState.SUBMITTED)
+            result = await self._transition_owned(attempt_id, DraftState.SUBMITTED)
+            completed = True
+            return result
         finally:
-            self._release_owned(attempt_id)
+            if completed:
+                self._release_owned(attempt_id)
 
     @_serialized
     async def mark_attempt_unknown(
@@ -1590,7 +1635,16 @@ class DraftStore:
             attempt_id = UUID(row["id"])
             receipt_rows = await (
                 await db.execute(
-                    "SELECT step_id, remote_id, recorded_at FROM submission_receipts WHERE attempt_id = ? ORDER BY rowid",
+                    """
+                    SELECT receipt.step_id, receipt.remote_id, receipt.recorded_at,
+                           CASE WHEN resync.step_id IS NULL THEN 1
+                                ELSE resync.resync_required END
+                    FROM submission_receipts AS receipt
+                    LEFT JOIN submission_receipt_resync AS resync
+                      ON resync.attempt_id = receipt.attempt_id
+                     AND resync.step_id = receipt.step_id
+                    WHERE receipt.attempt_id = ? ORDER BY receipt.rowid
+                    """,
                     (str(attempt_id),),
                 )
             ).fetchall()
@@ -1645,7 +1699,7 @@ class DraftStore:
                 _snapshot_from_json(row["snapshot_json"]),
                 DraftState(row["state"]),
                 tuple(
-                    StepReceipt(item[0], item[1], _parse_time(item[2]))
+                    StepReceipt(item[0], item[1], _parse_time(item[2]), bool(item[3]))
                     for item in receipt_rows
                 ),
                 tuple(

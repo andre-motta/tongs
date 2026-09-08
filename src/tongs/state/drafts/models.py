@@ -212,6 +212,7 @@ class StepReceipt:
     step_id: str
     remote_id: str
     recorded_at: datetime
+    resync_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)

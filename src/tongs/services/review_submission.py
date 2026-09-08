@@ -529,6 +529,7 @@ class ReviewSubmissionService:
                         step.id,
                         self._remote_id(outcome),
                         operation_id=command.operation_id,
+                        resync_required=outcome.resync_required,
                     )
                 )
                 if cancelled:
@@ -769,7 +770,9 @@ class ReviewSubmissionService:
             completed,
             tuple(marker.step_id for marker in attempt.unknown_outcomes),
             plan.atomic if plan is not None else False,
-            resync_required or bool(attempt.unknown_outcomes),
+            resync_required
+            or any(receipt.resync_required for receipt in attempt.receipts)
+            or bool(attempt.unknown_outcomes),
             failure,
             plan is not None,
         )

@@ -102,6 +102,7 @@ async def test_v1_database_migrates_without_losing_attempt_or_receipt(
 
     with sqlite3.connect(db_path) as db:
         db.execute("DROP TABLE submission_plans")
+        db.execute("DROP TABLE submission_receipt_resync")
         db.execute("DROP TABLE submission_pending_dispatches")
         db.execute("DROP TABLE submission_unknown_outcomes")
         db.execute("DROP TABLE submission_retry_authorizations")
@@ -112,7 +113,10 @@ async def test_v1_database_migrates_without_losing_attempt_or_receipt(
     migrated = await second.get_attempt(attempt.id)
 
     assert migrated.snapshot == attempt.snapshot
-    assert migrated.receipts == attempt.receipts
+    assert migrated.receipts[0].step_id == attempt.receipts[0].step_id
+    assert migrated.receipts[0].remote_id == attempt.receipts[0].remote_id
+    assert migrated.receipts[0].recorded_at == attempt.receipts[0].recorded_at
+    assert migrated.receipts[0].resync_required is True
     assert migrated.retry_authorizations == ()
     assert migrated.unknown_outcomes == ()
     assert migrated.pending_dispatch is None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +34,7 @@ from tongs.services import (
     ReviewRef,
     ReviewRevision,
     ReviewSnapshot,
+    ServiceEventKind,
 )
 from tongs.services.errors import ServiceError, ServiceErrorCode
 from tongs.services.review_mutations import (
@@ -168,6 +170,8 @@ def _mutation_service(
     snapshot: ReviewSnapshot,
     *,
     timeout: float = 0.1,
+    emit_change: Callable[[ServiceEventKind, ReviewRef, ReviewRevision | None], None]
+    | None = None,
 ) -> ReviewMutationService:
     if snapshot.detail.forge_host.forge_type is ForgeType.GITHUB:
         change = {
@@ -185,7 +189,7 @@ def _mutation_service(
             return_value=RawDiffSnapshot(snapshot.ref, REVISION, (change,))
         ),
         get_discussions=AsyncMock(return_value=(_discussion(),)),
-        emit_change=Mock(),
+        emit_change=emit_change or Mock(),
         timeout=timeout,
     )
 
@@ -197,6 +201,8 @@ async def _services(
     forge: ForgeType = ForgeType.GITHUB,
     client: SimpleNamespace | None = None,
     snapshot: ReviewSnapshot | None = None,
+    emit_change: Callable[[ServiceEventKind, ReviewRef, ReviewRevision | None], None]
+    | None = None,
 ) -> tuple[
     DraftStore,
     ReviewSubmissionService,
@@ -209,7 +215,7 @@ async def _services(
     store = DraftStore(db_path)
     await store.open()
     draft = await store.create_draft(current.ref, REVISION, content)
-    mutations = _mutation_service(actual_client, current)
+    mutations = _mutation_service(actual_client, current, emit_change=emit_change)
     service = ReviewSubmissionService(
         store=store,
         mutations=mutations,
@@ -620,6 +626,172 @@ async def test_confirmed_remote_result_with_receipt_write_failure_becomes_unknow
     assert progress.unknown_step_ids == (progress.steps[0].id,)
     client.add_comment.assert_awaited_once()
     await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_failure", ["cache", "event"])
+async def test_known_resync_requirement_survives_completion_get_and_reopen(
+    tmp_path: Path, refresh_failure: str
+) -> None:
+    path = tmp_path / "drafts.db"
+    result = ForgeMutationResult(
+        "general-remote",
+        "general-remote",
+        cache_invalidated=refresh_failure != "cache",
+    )
+    client = _client(add_comment=AsyncMock(return_value=result))
+    emit_change = (
+        Mock(side_effect=RuntimeError("event delivery failed"))
+        if refresh_failure == "event"
+        else Mock()
+    )
+    store, service, _, snapshot, draft = await _services(
+        path,
+        _content(GeneralDraftComment(uuid4(), "comment")),
+        client=client,
+        emit_change=emit_change,
+    )
+
+    submitted = await service.start(draft.id, draft.version)
+    current = await service.get(submitted.attempt_id)
+
+    assert submitted.outcome is SubmissionOutcome.SUBMITTED
+    assert submitted.resync_required is True
+    assert current.resync_required is True
+    assert current.receipts[0].resync_required is True
+    await store.close()
+
+    reopened_store = DraftStore(path)
+    await reopened_store.open()
+    reopened_service = ReviewSubmissionService(
+        store=reopened_store,
+        mutations=_mutation_service(_client(), snapshot),
+        get_review=AsyncMock(side_effect=AssertionError("unexpected network read")),
+    )
+
+    reopened = await reopened_service.get(submitted.attempt_id)
+
+    assert reopened.outcome is SubmissionOutcome.SUBMITTED
+    assert reopened.resync_required is True
+    assert reopened.receipts[0].resync_required is True
+    reopened_service._get_review.assert_not_awaited()
+    await reopened_store.close()
+
+
+@pytest.mark.asyncio
+async def test_known_resync_requirement_survives_later_rejection(
+    tmp_path: Path,
+) -> None:
+    first = GeneralDraftComment(uuid4(), "first")
+    second = GeneralDraftComment(uuid4(), "second")
+    client = _client(
+        add_comment=AsyncMock(
+            side_effect=[
+                ForgeMutationResult(
+                    "first-remote", "first-remote", cache_invalidated=False
+                ),
+                AuthError("rejected"),
+            ]
+        )
+    )
+    store, service, _, _, draft = await _services(
+        tmp_path / "drafts.db", _content(first, second), client=client
+    )
+
+    paused = await service.start(draft.id, draft.version)
+    current = await service.get(paused.attempt_id)
+
+    assert paused.outcome is SubmissionOutcome.PAUSED
+    assert paused.failure and paused.failure.code == "authentication_failed"
+    assert paused.resync_required is True
+    assert current.resync_required is True
+    assert current.receipts[0].resync_required is True
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_final_transition_retains_ownership_for_same_session_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client()
+    store, service, _, _, draft = await _services(
+        tmp_path / "drafts.db",
+        _content(GeneralDraftComment(uuid4(), "comment")),
+        client=client,
+    )
+    original = store._transition_owned
+    failed = False
+
+    async def fail_first_completion(
+        attempt_id: object, target: DraftState, **kwargs: object
+    ) -> object:
+        nonlocal failed
+        if target is DraftState.SUBMITTED and not failed:
+            failed = True
+            raise DraftStoreError("temporary final write failure")
+        return await original(attempt_id, target, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "_transition_owned", fail_first_completion)
+
+    paused = await service.start(draft.id, draft.version)
+
+    assert paused.outcome is SubmissionOutcome.PAUSED
+    assert paused.failure and paused.failure.retryable is True
+    assert paused.attempt_id in store._held_attempt_locks
+
+    submitted = await service.resume(paused.attempt_id)
+
+    assert submitted.outcome is SubmissionOutcome.SUBMITTED
+    client.add_comment.assert_awaited_once()
+    assert paused.attempt_id not in store._held_attempt_locks
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_failed_final_transition_without_remote_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "drafts.db"
+    client = _client()
+    store, service, _, snapshot, draft = await _services(
+        path,
+        _content(GeneralDraftComment(uuid4(), "comment")),
+        client=client,
+    )
+    original = store._transition_owned
+    failed = False
+
+    async def fail_first_completion(
+        attempt_id: object, target: DraftState, **kwargs: object
+    ) -> object:
+        nonlocal failed
+        if target is DraftState.SUBMITTED and not failed:
+            failed = True
+            raise DraftStoreError("temporary final write failure")
+        return await original(attempt_id, target, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "_transition_owned", fail_first_completion)
+    paused = await service.start(draft.id, draft.version)
+    await store.close()
+
+    restarted_store = DraftStore(path)
+    await restarted_store.open()
+    recovered = await restarted_store.recover_incomplete_attempts()
+    restarted_service = ReviewSubmissionService(
+        store=restarted_store,
+        mutations=_mutation_service(client, snapshot),
+        get_review=AsyncMock(return_value=snapshot),
+    )
+
+    assert recovered[0].id == paused.attempt_id
+    assert recovered[0].state is DraftState.UNKNOWN
+    submitted = await restarted_service.reconcile(
+        paused.attempt_id, ReconciliationResolution.RETRY_REMAINING
+    )
+
+    assert submitted.outcome is SubmissionOutcome.SUBMITTED
+    client.add_comment.assert_awaited_once()
+    await restarted_store.close()
 
 
 @pytest.mark.asyncio

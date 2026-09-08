@@ -300,11 +300,16 @@ async def test_submission_freezes_version_and_receipts_are_insert_once(
     assert attempt.snapshot == draft
     assert (await store.get_draft(draft.id)).version == draft.version + 1
     first = await store.record_receipt(attempt.id, "comment:1", "remote-1")
-    duplicate = await store.record_receipt(attempt.id, "comment:1", "remote-1")
-    assert duplicate.receipts == first.receipts
+    duplicate = await store.record_receipt(
+        attempt.id, "comment:1", "remote-1", resync_required=True
+    )
+    repeated = await store.record_receipt(attempt.id, "comment:1", "remote-1")
+    assert first.receipts[0].resync_required is False
+    assert duplicate.receipts[0].resync_required is True
+    assert repeated.receipts == duplicate.receipts
     with pytest.raises(DraftReceiptConflictError):
         await store.record_receipt(attempt.id, "comment:1", "different")
-    assert (await store.get_attempt(attempt.id)).receipts == first.receipts
+    assert (await store.get_attempt(attempt.id)).receipts == duplicate.receipts
     await store.close()
 
 
@@ -621,6 +626,7 @@ async def test_v1_to_v2_migration_preserves_drafts_attempts_and_receipts(
     with sqlite3.connect(db_path) as db:
         for table in (
             "submission_plans",
+            "submission_receipt_resync",
             "submission_pending_dispatches",
             "submission_unknown_outcomes",
             "submission_retry_authorizations",
@@ -634,7 +640,10 @@ async def test_v1_to_v2_migration_preserves_drafts_attempts_and_receipts(
     assert await migrated.get_draft(draft.id)
     recovered = await migrated.get_attempt(attempt.id)
     assert recovered.snapshot == saved.snapshot
-    assert recovered.receipts == saved.receipts
+    assert recovered.receipts[0].step_id == saved.receipts[0].step_id
+    assert recovered.receipts[0].remote_id == saved.receipts[0].remote_id
+    assert recovered.receipts[0].recorded_at == saved.receipts[0].recorded_at
+    assert recovered.receipts[0].resync_required is True
     assert recovered.plan is None
     await migrated.close()
 

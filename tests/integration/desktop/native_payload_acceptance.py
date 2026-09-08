@@ -63,6 +63,11 @@ COMPACTED_PROCESS_ROLE_TYPES = {
 # canonical argv[0] that differs from its resolved executable. See
 # ``.worktrees/desktop-125-chromium-process-title-audit.md``.
 CHROMIUM_ZYGOTE_ARGV0 = "/proc/self/exe"
+# POSIX switch prefixes and terminator, exactly as Chromium 152 defines them in
+# ``base/command_line.cc`` lines 44 and 60 to 65. Longer prefixes are matched
+# first, mirroring ``GetSwitchPrefixLength``.
+CHROMIUM_SWITCH_PREFIXES = ("--", "-")
+CHROMIUM_SWITCH_TERMINATOR = "--"
 SOFTWARE_RENDERERS = (
     "swiftshader",
     "llvmpipe",
@@ -1550,6 +1555,68 @@ def _verify_renderer_probe(probe: Mapping[str, Any], gpu: GpuPolicy) -> str:
     return renderer
 
 
+def chromium_argv_title(executable: str, argv: Sequence[str]) -> str:
+    """The compact title when the parsed command line keeps the argv order."""
+
+    return " ".join((executable, *argv[1:]))
+
+
+def chromium_command_line_title(executable: str, argv: Sequence[str]) -> str:
+    """The compact title Chromium builds from its parsed command line.
+
+    ``SetProcessTitleFromCommandLine`` builds the tail from
+    ``base::CommandLine::ForCurrentProcess()->argv()``
+    (``set_process_title.cc`` lines 96 to 103), not from the raw ``main_argv``.
+    ``CommandLine`` stores each switch by inserting it at the switch and
+    argument divider (``command_line.cc`` lines 462 to 464) while each
+    positional argument is pushed to the back (``command_line.cc`` line 557).
+    ``argv()`` is therefore a permutation of the canonical argv: the program,
+    then the switches in their original relative order, then the arguments in
+    their original relative order. A bare ``--`` terminator stops switch parsing
+    and is itself stored as an argument.
+
+    Tokens are only rearranged, never rewritten, so the result has the same
+    token multiset and the same byte length as ``chromium_argv_title``. That is
+    why admitting both renderings adds no content: each is a deterministic
+    function of the already validated canonical argv, and neither can contain a
+    token the canonical argv does not have. See
+    ``.worktrees/desktop-125-attempt8-analysis.md``.
+    """
+
+    switches: list[str] = []
+    arguments: list[str] = []
+    parse_switches = True
+    for token in argv[1:]:
+        parse_switches &= token != CHROMIUM_SWITCH_TERMINATOR
+        prefix = next(
+            (value for value in CHROMIUM_SWITCH_PREFIXES if token.startswith(value)),
+            "",
+        )
+        if parse_switches and prefix and prefix != token:
+            switches.append(token)
+        else:
+            arguments.append(token)
+    return " ".join((executable, *switches, *arguments))
+
+
+def accepted_compact_titles(
+    role: str, executable: str, argv: Sequence[str]
+) -> tuple[str, ...]:
+    """Every compact title Chromium can write for this canonical argv.
+
+    The browser is exec-started with positional arguments interleaved between
+    its valueless application switches, so its parsed command line permutes
+    them. A zygote-forked child carries only ``--switch=value`` tokens, so the
+    permutation is the identity there and its rule stays the plain join.
+    """
+
+    plain = chromium_argv_title(executable, argv)
+    if role != "browser":
+        return (plain,)
+    permuted = chromium_command_line_title(executable, argv)
+    return (plain,) if permuted == plain else (plain, permuted)
+
+
 def _verify_raw_process_argv(process: ProcessObservation) -> None:
     raw = process.raw_argv
     if raw is None:
@@ -1589,8 +1656,18 @@ def _verify_raw_process_argv(process: ProcessObservation) -> None:
         )
     if raw == process.argv:
         return
-    expected_raw = (" ".join((process.executable, *process.argv[1:])),)
-    if (expected_type is None and not is_browser) or raw != expected_raw:
+    # The browser additionally admits the parsed-command-line permutation, which
+    # is the failed native attempt 9 observation. Both accepted titles are
+    # deterministic functions of the canonical argv above, so neither can carry
+    # a token the canonical argv lacks, and a first-observed compact field is
+    # still rejected by the canonical checks because one joined field is never a
+    # valid canonical argv[0].
+    accepted = accepted_compact_titles(process.role, process.executable, process.argv)
+    if (
+        (expected_type is None and not is_browser)
+        or len(raw) != 1
+        or raw[0] not in accepted
+    ):
         raise NativeAcceptanceError(
             "raw process arguments differ from canonical arguments"
         )

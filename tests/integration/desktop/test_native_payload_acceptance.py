@@ -2103,42 +2103,230 @@ def _command_line_permuted_title(process: ProcessObservation) -> str:
     return " ".join((process.executable, *switches, *arguments))
 
 
-def test_refresh_rejection_reports_the_attempt_eight_permuted_browser_title(
+def test_process_refresh_accepts_the_attempt_nine_permuted_browser_title(
     tmp_path: Path,
 ) -> None:
-    """Failed native attempt 8: the difference hid past the 253 character bound."""
+    """Confirmed native attempt 9: switches first, then positional arguments."""
 
     fixture = _fixture(tmp_path)
     browser = fixture["observations"][0].processes[0]
     permuted = (_command_line_permuted_title(browser),)
-    expected = " ".join((browser.executable, *browser.argv[1:]))
-    assert permuted[0] != expected
-    assert len(permuted[0]) == len(expected)
-    index = next(
-        position
-        for position, (one, other) in enumerate(zip(permuted[0], expected, strict=True))
-        if one != other
+    plain = " ".join((browser.executable, *browser.argv[1:]))
+    assert permuted[0] != plain
+    assert len(permuted[0]) == len(plain)
+    assert sorted(permuted[0].split(" ")) == sorted(plain.split(" "))
+
+    normalized = launcher_module._validate_process_refresh(
+        browser,
+        replace(browser, argv=permuted, raw_argv=permuted),
+        {},
     )
 
-    with pytest.raises(NativeAcceptanceError) as raised:
+    assert normalized.role == "browser"
+    assert normalized.argv == browser.argv
+    assert normalized.raw_argv == permuted
+
+
+def test_final_verifier_accepts_the_attempt_nine_permuted_browser_title(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    first, second = fixture["observations"]
+    processes = tuple(
+        replace(process, raw_argv=(_command_line_permuted_title(process),))
+        if process.role == "browser"
+        else process
+        for process in second.processes
+    )
+    fixture["observations"] = (first, replace(second, processes=processes))
+
+    assert _verify(fixture).validation == "controlled-fixture-structural-only"
+
+
+def test_process_refresh_accepts_the_identity_permutation_for_a_switch_only_argv(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    canonical = (browser.executable, "--ozone-platform=x11", "--user-data-dir=/tmp/p")
+    previous = replace(browser, argv=canonical, raw_argv=canonical)
+    plain = (" ".join(canonical),)
+    assert _command_line_permuted_title(previous) == plain[0]
+
+    normalized = launcher_module._validate_process_refresh(
+        previous, replace(previous, argv=plain, raw_argv=plain), {}
+    )
+
+    assert normalized.argv == canonical
+    assert normalized.raw_argv == plain
+
+
+def test_process_refresh_accepts_either_deterministic_browser_title(
+    tmp_path: Path,
+) -> None:
+    """Both titles are functions of the same validated canonical argv."""
+
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    for title in (
+        " ".join((browser.executable, *browser.argv[1:])),
+        _command_line_permuted_title(browser),
+    ):
+        claimed = (title,)
+        normalized = launcher_module._validate_process_refresh(
+            browser, replace(browser, argv=claimed, raw_argv=claimed), {}
+        )
+        assert normalized.argv == browser.argv
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        "swap_switches",
+        "swap_arguments",
+        "drop_switch",
+        "drop_argument",
+        "duplicate_switch",
+        "alter_argument",
+        "arguments_before_switches",
+    ],
+)
+def test_process_refresh_rejects_a_mistaken_browser_permutation(
+    tmp_path: Path, mutate: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    switches = [token for token in browser.argv[1:] if token.startswith("--")]
+    arguments = [token for token in browser.argv[1:] if not token.startswith("--")]
+    if mutate == "swap_switches":
+        switches[0], switches[1] = switches[1], switches[0]
+    elif mutate == "swap_arguments":
+        arguments[0], arguments[1] = arguments[1], arguments[0]
+    elif mutate == "drop_switch":
+        switches.pop()
+    elif mutate == "drop_argument":
+        arguments.pop()
+    elif mutate == "duplicate_switch":
+        switches.append(switches[0])
+    elif mutate == "alter_argument":
+        arguments[0] = f"{arguments[0]}x"
+    else:
+        switches, arguments = arguments, switches
+    claimed = (" ".join((browser.executable, *switches, *arguments)),)
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
         launcher_module._validate_process_refresh(
-            browser,
-            replace(browser, argv=permuted, raw_argv=permuted),
+            browser, replace(browser, argv=claimed, raw_argv=claimed), {}
+        )
+
+
+def test_process_refresh_keeps_tokens_after_a_switch_terminator_as_arguments(
+    tmp_path: Path,
+) -> None:
+    """A bare ``--`` stops switch parsing, mirroring command_line.cc 640-660."""
+
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    canonical = (browser.executable, "argument", "--switch", "--", "--after")
+    previous = replace(browser, argv=canonical, raw_argv=canonical)
+    accepted = (f"{browser.executable} --switch argument -- --after",)
+    hoisted = (f"{browser.executable} --switch --after argument --",)
+
+    normalized = launcher_module._validate_process_refresh(
+        previous, replace(previous, argv=accepted, raw_argv=accepted), {}
+    )
+    assert normalized.argv == canonical
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(
+            previous, replace(previous, argv=hoisted, raw_argv=hoisted), {}
+        )
+
+
+@pytest.mark.parametrize(
+    ("canonical_tail", "title_tail"),
+    [
+        (("argument", "-x"), ("-x", "argument")),
+        (("argument", "-"), ("argument", "-")),
+    ],
+)
+def test_process_refresh_mirrors_the_posix_switch_prefixes(
+    tmp_path: Path,
+    canonical_tail: tuple[str, ...],
+    title_tail: tuple[str, ...],
+) -> None:
+    """``-x`` is a switch and a bare ``-`` is not, per command_line.cc 60-65."""
+
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    canonical = (browser.executable, *canonical_tail)
+    previous = replace(browser, argv=canonical, raw_argv=canonical)
+    claimed = (" ".join((browser.executable, *title_tail)),)
+
+    normalized = launcher_module._validate_process_refresh(
+        previous, replace(previous, argv=claimed, raw_argv=claimed), {}
+    )
+
+    assert normalized.argv == canonical
+
+
+def test_child_roles_do_not_accept_the_permutation(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    zygote = fixture["observations"][0].processes[1]
+    canonical = (zygote.executable, "argument", "--type=zygote")
+    previous = replace(zygote, argv=canonical, raw_argv=canonical)
+    permuted = (f"{zygote.executable} --type=zygote argument",)
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(
+            previous,
+            replace(previous, role="helper", argv=permuted, raw_argv=permuted),
             {},
         )
 
+
+def test_final_verifier_rejects_a_compact_first_permuted_browser_title(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    permuted = (_command_line_permuted_title(browser),)
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="process role differs from canonical type arguments",
+    ):
+        acceptance_module._verify_raw_process_argv(
+            replace(browser, argv=permuted, raw_argv=permuted)
+        )
+
+
+def test_refresh_rejection_reports_both_expected_browser_titles(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    permuted = _command_line_permuted_title(browser)
+    plain = " ".join((browser.executable, *browser.argv[1:]))
+    claimed = (f"{permuted}x",)
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        launcher_module._validate_process_refresh(
+            browser, replace(browser, argv=claimed, raw_argv=claimed), {}
+        )
+
     message = str(raised.value)
-    assert "owned process PID identity changed" in message
     assert "precondition='argv join equality'" in message
     assert "current_fields=1" in message
-    assert f"compact_len={len(expected.encode())}" in message
-    assert f"expected_len={len(expected.encode())}" in message
-    assert f"first_difference={index}" in message
-    assert "compact_window=" in message
-    assert "expected_window=" in message
-    assert permuted[0] in message
-    assert expected in message
-    assert "--tongs-core-version" in message
+    assert f"compact_len={len(claimed[0].encode())}" in message
+    assert f"expected_len={len(plain.encode())}" in message
+    assert f"command_line_expected_len={len(permuted.encode())}" in message
+    assert "expected_command_line=" in message
+    assert "command_line_first_difference=" in message
+    assert "command_line_compact_window=" in message
+    assert "command_line_expected_window=" in message
+    assert plain in message
+    assert permuted in message
 
 
 @pytest.mark.parametrize(

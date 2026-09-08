@@ -39,9 +39,11 @@ from tests.integration.desktop.native_payload_acceptance import (
     ProcessObservation,
     RunPolicy,
     SandboxStatus,
+    accepted_compact_titles,
     capture_core_snapshot,
     capture_expected_outputs,
     capture_payload_snapshot,
+    chromium_argv_title,
     parse_bound_manifests,
     validate_policy,
     verify_core_observation,
@@ -640,7 +642,16 @@ def _is_exact_argv_storage_compaction(
             return False
         if type_arguments != (f"--type={process_type}",):
             return False
-    return current[0] == " ".join((executable, *previous[1:]))
+    # For the browser, Chromium builds the title from its parsed command line,
+    # which inserts switches at the switch and argument divider
+    # (``command_line.cc`` lines 462 to 464) and pushes positional arguments to
+    # the back (``command_line.cc`` line 557), while the title tail itself is
+    # read from ``CommandLine::argv()`` (``set_process_title.cc`` lines 96 to
+    # 103). Both accepted titles are deterministic renderings of the canonical
+    # argv with an identical token multiset, so admitting the permutation adds
+    # no content. A compact field still cannot yield a canonical argv[0], so a
+    # first-observed compact title remains unacceptable.
+    return current[0] in accepted_compact_titles(role, executable, previous)
 
 
 def _refresh_rejection_message(
@@ -708,30 +719,49 @@ def _compaction_debug_detail(
     """Bounded byte-level evidence for a rejected candidate compaction."""
 
     compact = current.argv[0] if current.argv else ""
-    expected = " ".join((previous.executable, *previous.argv[1:]))
     compact_bytes = compact.encode("utf-8", errors="replace")
-    expected_bytes = expected.encode("utf-8", errors="replace")
-    index = _first_difference(compact_bytes, expected_bytes)
+    titles = accepted_compact_titles(
+        previous.role, previous.executable, previous.argv
+    ) or (chromium_argv_title(previous.executable, previous.argv),)
+    labels = (("expected", ""), ("expected_command_line", "command_line_"))
+    details = [
+        f"precondition={precondition!r}",
+        f"current_fields={len(current.argv)}",
+        f"compact_len={len(compact_bytes)}",
+        f"compact={_bounded_debug_value(compact_bytes)}",
+    ]
+    for (label, prefix), title in zip(labels, titles, strict=False):
+        details.extend(_expected_title_detail(label, prefix, compact_bytes, title))
+    details.append(f"previous_raw_argv={_bounded_debug_raw(previous.raw_argv)}")
+    details.append(f"current_raw_argv={_bounded_debug_raw(current.raw_argv)}")
+    return ",".join(details)
+
+
+def _expected_title_detail(
+    label: str, prefix: str, compact: bytes, title: str
+) -> list[str]:
+    """Compare the compact field against one accepted title, bounded."""
+
+    expected = title.encode("utf-8", errors="replace")
+    details = [
+        f"{prefix}expected_len={len(expected)}",
+        f"{label}={_bounded_debug_value(expected)}",
+    ]
+    index = _first_difference(compact, expected)
     if index is None:
-        difference = "first_difference=none"
-    else:
-        start = max(0, index - 40)
-        difference = (
-            f"first_difference={index},"
-            f"compact_window={_bounded_debug_value(compact_bytes[start : index + 40])},"
-            f"expected_window={_bounded_debug_value(expected_bytes[start : index + 40])}"
+        details.append(f"{prefix}first_difference=none")
+        return details
+    start = max(0, index - 40)
+    compact_window = _bounded_debug_value(compact[start : index + 40])
+    expected_window = _bounded_debug_value(expected[start : index + 40])
+    details.extend(
+        (
+            f"{prefix}first_difference={index}",
+            f"{prefix}compact_window={compact_window}",
+            f"{prefix}expected_window={expected_window}",
         )
-    return (
-        f"precondition={precondition!r},"
-        f"current_fields={len(current.argv)},"
-        f"compact_len={len(compact_bytes)},"
-        f"expected_len={len(expected_bytes)},"
-        f"compact={_bounded_debug_value(compact_bytes)},"
-        f"expected={_bounded_debug_value(expected_bytes)},"
-        f"{difference},"
-        f"previous_raw_argv={_bounded_debug_raw(previous.raw_argv)},"
-        f"current_raw_argv={_bounded_debug_raw(current.raw_argv)}"
     )
+    return details
 
 
 def _first_difference(left: bytes, right: bytes) -> int | None:

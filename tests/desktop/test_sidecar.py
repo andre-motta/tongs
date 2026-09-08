@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator
-from importlib.metadata import version
+from importlib.metadata import entry_points, version
 from pathlib import Path
 from typing import cast
 
@@ -471,6 +471,19 @@ raise SystemExit(sidecar.main())
 async def test_actual_sidecar_handshake_read_shutdown_and_hostile_frame(
     tmp_path: Path,
 ) -> None:
+    # This protocol fixture deliberately requests an empty plugin catalog even
+    # when the developer has installed desktop plugins in the test environment.
+    isolated_config = tmp_path / "config" / "tongs"
+    isolated_config.mkdir(parents=True)
+    plugin_names = sorted(
+        {entry.name for entry in entry_points(group="tongs.desktop_plugins")}
+    )
+    (isolated_config / "config.toml").write_text(
+        "".join(
+            f"[plugins.{json.dumps(name)}]\nenabled = false\n" for name in plugin_names
+        ),
+        encoding="utf-8",
+    )
     environment = os.environ.copy()
     environment.update(
         XDG_CACHE_HOME=str(tmp_path / "cache"),

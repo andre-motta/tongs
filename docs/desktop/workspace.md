@@ -63,6 +63,7 @@ Review tabs are contributed by the installed workspace features:
   below.
 - **Commits** lists commit subjects, short SHAs, authors, and timestamps. An
   empty history shows **This review has no commits.**
+- **Discussions** shows review threads and the commenting and review controls.
 - **Pipelines** opens the CI view described below.
 
 Each read view has a refresh control. If a refresh fails after data was already

@@ -608,7 +608,13 @@ async function waitForAction(action, count) {
 }
 
 async function readActions() {
-  const text = await readFile(path.join(evidenceRoot, "mock-forge-actions.jsonl"), "utf8");
+  let text;
+  try {
+    text = await readFile(path.join(evidenceRoot, "mock-forge-actions.jsonl"), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
   return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 

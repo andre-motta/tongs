@@ -135,6 +135,8 @@ class ApplicationSession:
         self._configured_hosts: frozenset[str] = frozenset()
         self._issued_repositories: set[RepositoryRef] = set()
         self._repositories: dict[RepositoryRef, RepositorySnapshot] = {}
+        self._local_repositories: tuple[Repo, ...] = ()
+        self._discovery_generation = 0
         self._subscribers: set[asyncio.Queue[ServiceEvent | object]] = set()
         self._sequence = 0
         self._state = _SessionState.NEW
@@ -190,6 +192,28 @@ class ApplicationSession:
         """Return the loaded configuration after startup."""
         self._require_started()
         return cast(Config, self._config)
+
+    @property
+    def cache(self) -> CacheResource:
+        """Return the session-owned cache after startup."""
+        self._require_started()
+        return cast(CacheResource, self._cache)
+
+    @property
+    def forge_registry(self) -> ForgeRegistryResource:
+        """Return the session-owned forge registry after startup."""
+        self._require_started()
+        return cast(ForgeRegistryResource, self._registry)
+
+    @property
+    def local_repositories(self) -> tuple[Repo, ...]:
+        """Return the latest actual local repositories from discovery.
+
+        Local paths and remotes stay in this trusted in-process view. They are not
+        added to renderer-safe ``RepositorySnapshot`` values.
+        """
+        self._require_started()
+        return self._local_repositories
 
     @property
     def shutdown_error(self) -> ServiceError | None:
@@ -420,6 +444,8 @@ class ApplicationSession:
                 self._close_event_streams()
                 self._issued_repositories.clear()
                 self._repositories.clear()
+                self._local_repositories = ()
+                self._discovery_generation += 1
                 self._state = _SessionState.CLOSED
         if failures:
             self._shutdown_error = ServiceError(
@@ -448,6 +474,8 @@ class ApplicationSession:
     async def discover_repositories(self) -> tuple[RepositorySnapshot, ...]:
         """Discover local repositories and issue their semantic references."""
         self._require_started()
+        self._discovery_generation += 1
+        generation = self._discovery_generation
         config = cast(Config, self._config)
         try:
             repos = await asyncio.to_thread(
@@ -476,8 +504,16 @@ class ApplicationSession:
                 self._require_started()
             raise translate_error(error, operation="discover_repositories") from None
 
+        if generation != self._discovery_generation:
+            return tuple(
+                sorted(
+                    self._repositories.values(),
+                    key=lambda item: item.display_name.lower(),
+                )
+            )
         changed = snapshots != self._repositories
         self._repositories = snapshots
+        self._local_repositories = tuple(repos)
         self._issued_repositories.update(snapshots)
         if changed:
             self._emit(ServiceEventKind.REPOSITORIES_CHANGED)

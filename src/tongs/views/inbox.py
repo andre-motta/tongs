@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
+from contextlib import suppress
 from typing import ClassVar
 
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.dom import NoScreen
 from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane
 
 from tongs.scanner.repo import Repo
+from tongs.services.errors import ServiceError
+from tongs.services.models import ReviewScope
 from tongs.widgets.mr_table import MRTable
 
 
@@ -89,13 +92,6 @@ class InboxScreen(Screen):
         tab_id = event.pane.id
         if tab_id and tab_id not in self._loaded_tabs:
             self._loaded_tabs.add(tab_id)
-            table_id = {
-                "reviews": "#reviews-table",
-                "my-mrs": "#my-mrs-table",
-                "all-open": "#all-open-table",
-            }.get(tab_id)
-            if table_id:
-                self.query_one(table_id, MRTable).clear()
             if tab_id == "reviews":
                 self.load_reviews()
             elif tab_id == "my-mrs":
@@ -109,13 +105,6 @@ class InboxScreen(Screen):
         if tab_id in self._loaded_tabs:
             return
         self._loaded_tabs.add(tab_id)
-        table_id = {
-            "reviews": "#reviews-table",
-            "my-mrs": "#my-mrs-table",
-            "all-open": "#all-open-table",
-        }.get(tab_id)
-        if table_id:
-            self.query_one(table_id, MRTable).clear()
         if tab_id == "reviews":
             self.load_reviews()
         elif tab_id == "my-mrs":
@@ -141,44 +130,20 @@ class InboxScreen(Screen):
 
                 self.app.push_screen(MRDetailScreen(mr))
 
-    def _get_hostnames(self) -> list[str]:
-        if self.scoped_repo and self.scoped_repo.hostname:
-            return [self.scoped_repo.hostname]
-        return self.app.get_repo_hostnames()
-
-    def _filter_by_repo(self, mrs: list) -> list:
-        if not self.scoped_repo or not self.scoped_repo.primary_remote:
-            return mrs
-        target = self.scoped_repo.primary_remote.repo_path
-        return [mr for mr in mrs if mr.repo_path == target]
-
     @work(exclusive=True, group="reviews")
     async def load_reviews(self) -> None:
         self.loading_reviews = True
         table = self.query_one("#reviews-table", MRTable)
         table.loading = True
         try:
-            hostnames = self._get_hostnames()
-            if not hostnames:
+            if not self.scoped_repo and not self.app.repos:
                 self.notify("[dim]No forges discovered yet[/]")
                 return
-            registry = self.app.forge_registry
-            for hostname in hostnames:
-                try:
-                    client = await registry.get_client(hostname)
-                    mrs = self._filter_by_repo(await client.list_my_reviews())
-                    for mr in mrs:
-                        table.add_mr_row(mr, self.app.config.ascii_mode)
-                except NotImplementedError:
-                    pass
-                except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-                    self.notify(
-                        f"[dim]Reviews {hostname}:[/] {exc}",
-                        severity="warning",
-                    )
+            await self._load_page(table, ReviewScope.MY_REVIEWS, "Reviews")
         finally:
             self.loading_reviews = False
-            table.loading = False
+            with suppress(NoScreen):
+                table.loading = False
 
     @work(exclusive=True, group="my-mrs")
     async def load_my_mrs(self) -> None:
@@ -186,26 +151,13 @@ class InboxScreen(Screen):
         table = self.query_one("#my-mrs-table", MRTable)
         table.loading = True
         try:
-            hostnames = self._get_hostnames()
-            if not hostnames:
+            if not self.scoped_repo and not self.app.repos:
                 return
-            registry = self.app.forge_registry
-            for hostname in hostnames:
-                try:
-                    client = await registry.get_client(hostname)
-                    mrs = self._filter_by_repo(await client.list_my_mrs())
-                    for mr in mrs:
-                        table.add_mr_row(mr, self.app.config.ascii_mode)
-                except NotImplementedError:
-                    pass
-                except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-                    self.notify(
-                        f"[dim]My MRs {hostname}:[/] {exc}",
-                        severity="warning",
-                    )
+            await self._load_page(table, ReviewScope.MY_MRS, "My MRs")
         finally:
             self.loading_my_mrs = False
-            table.loading = False
+            with suppress(NoScreen):
+                table.loading = False
 
     @work(exclusive=True, group="all-open")
     async def load_all_open(self) -> None:
@@ -213,43 +165,35 @@ class InboxScreen(Screen):
         table = self.query_one("#all-open-table", MRTable)
         table.loading = True
         try:
-            if self.scoped_repo:
-                repos = [self.scoped_repo]
-            else:
-                repos = self.app.repos
-            if not repos:
+            if not self.scoped_repo and not self.app.repos:
                 return
-            registry = self.app.forge_registry
-            semaphore = asyncio.Semaphore(self.app.config.max_parallel)
-            failed_hosts: dict[str, str] = {}
-
-            async def fetch_repo(repo):
-                async with semaphore:
-                    if not repo.hostname or not repo.primary_remote:
-                        return
-                    if repo.hostname in failed_hosts:
-                        return
-                    try:
-                        client = await registry.get_client(repo.hostname)
-                        mrs = await client.list_mrs(repo.primary_remote.repo_path)
-                        for mr in mrs:
-                            table.add_mr_row(mr, self.app.config.ascii_mode)
-                    except NotImplementedError:
-                        failed_hosts[repo.hostname] = "not supported"
-                    except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-                        failed_hosts[repo.hostname] = str(exc)
-
-            await asyncio.gather(*(fetch_repo(r) for r in repos))
-
-            if failed_hosts:
-                details = "; ".join(f"{h}: {e}" for h, e in failed_hosts.items())
-                self.notify(
-                    f"[dim]Skipped host(s): {details}[/]",
-                    severity="warning",
-                )
+            await self._load_page(table, ReviewScope.ALL_OPEN, "All Open")
         finally:
             self.loading_all_open = False
-            table.loading = False
+            with suppress(NoScreen):
+                table.loading = False
+
+    async def _load_page(self, table: MRTable, scope: ReviewScope, label: str) -> None:
+        try:
+            page = await self.app.services.list_reviews(
+                scope, repository=self.scoped_repo
+            )
+        except ServiceError as error:
+            self.notify(f"{label}: {error.message}", severity="warning")
+            return
+
+        if page.items or not page.failures:
+            table.clear()
+            for item in page.items:
+                table.add_mr_row(item.summary, self.app.config.ascii_mode)
+        if page.failures:
+            details = "; ".join(
+                f"{failure.hostname}: {failure.message}" for failure in page.failures
+            )
+            self.notify(
+                f"[dim]{label} skipped: {details}[/]",
+                severity="warning",
+            )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self.action_select_mr()

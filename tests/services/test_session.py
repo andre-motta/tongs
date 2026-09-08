@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -985,6 +986,37 @@ class TestLifecycle:
 
 
 class TestResourceIssuance:
+    def test_owned_resource_accessors_require_started_session(self) -> None:
+        session = ApplicationSession(
+            config=Config(),
+            cache=FakeCache(),
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
+            forge_registry=FakeRegistry(),
+        )
+
+        for accessor in ("cache", "forge_registry", "local_repositories"):
+            with pytest.raises(ServiceError) as caught:
+                getattr(session, accessor)
+            assert caught.value.code is ServiceErrorCode.NOT_STARTED
+
+    @pytest.mark.asyncio
+    async def test_owned_resource_accessors_return_exact_session_objects(
+        self,
+    ) -> None:
+        cache = FakeCache()
+        registry = FakeRegistry()
+        session = await start_session(registry, cache=cache)
+
+        assert session.cache is cache
+        assert session.forge_registry is registry
+        assert session.local_repositories == ()
+
+        await session.close()
+        for accessor in ("cache", "forge_registry", "local_repositories"):
+            with pytest.raises(ServiceError) as caught:
+                getattr(session, accessor)
+            assert caught.value.code is ServiceErrorCode.CLOSED
+
     @pytest.mark.asyncio
     async def test_well_formed_unissued_same_host_fails_before_forge_call(self) -> None:
         registry = FakeRegistry()
@@ -1011,6 +1043,64 @@ class TestResourceIssuance:
         assert snapshots[0].ref == RepositoryRef("github.com", "acme/widgets")
         assert not hasattr(snapshots[0], "local_path")
         assert snapshots[0].ref in session.issued_repositories
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_discovery_preserves_actual_local_inventory_without_admitting_unknown_host(
+        self, tmp_path: Path
+    ) -> None:
+        admitted = make_repo(tmp_path)
+        local_only = make_repo(
+            tmp_path,
+            hostname="code.example.test",
+            project="internal/tools",
+            forge_type=ForgeType.GITLAB,
+        )
+
+        session = await start_session(
+            FakeRegistry(), discoverer=lambda *args, **kwargs: [local_only, admitted]
+        )
+        snapshots = await session.discover_repositories()
+
+        assert session.local_repositories == (local_only, admitted)
+        assert session.local_repositories[0] is local_only
+        assert session.local_repositories[1] is admitted
+        assert [snapshot.ref for snapshot in snapshots] == [
+            RepositoryRef("github.com", "acme/widgets")
+        ]
+        assert not hasattr(snapshots[0], "local_path")
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_late_discovery_cannot_replace_newer_inventory(
+        self, tmp_path: Path
+    ) -> None:
+        old_repo = make_repo(tmp_path, project="acme/old")
+        new_repo = make_repo(tmp_path, project="acme/new")
+        first_started = threading.Event()
+        release_first = threading.Event()
+        calls = 0
+
+        def discoverer(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_started.set()
+                assert release_first.wait(timeout=2)
+                return [old_repo]
+            return [new_repo]
+
+        session = await start_session(FakeRegistry(), discoverer=discoverer)
+        first = asyncio.create_task(session.discover_repositories())
+        assert await asyncio.to_thread(first_started.wait, 2)
+        second_result = await session.discover_repositories()
+        release_first.set()
+        first_result = await first
+
+        expected = RepositoryRef("github.com", "acme/new")
+        assert [snapshot.ref for snapshot in second_result] == [expected]
+        assert [snapshot.ref for snapshot in first_result] == [expected]
+        assert session.local_repositories == (new_repo,)
         await session.close()
 
     @pytest.mark.asyncio

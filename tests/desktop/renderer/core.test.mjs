@@ -4,6 +4,7 @@ import { parseInertMarkdown } from "../../../desktop/dist/src/renderer/core/mark
 import {
   FeatureRegistry,
   Navigator,
+  reconcileDiscoveryRoute,
 } from "../../../desktop/dist/src/renderer/core/navigation.js";
 import {
   QueryCoordinator,
@@ -141,6 +142,51 @@ test("navigator publishes typed route changes", () => {
   navigator.navigate({ kind: "inbox", repository: null });
   assert.equal(routes.length, 1);
   assert.equal(routes[0].repository.handle, "r1");
+});
+
+test("successful discovery reconciles only local repository routes", () => {
+  const oldRepository = {
+    handle: "repo-a",
+    display_name: "Old name",
+    forge_type: "github",
+  };
+  const updatedRepository = {
+    ...oldRepository,
+    display_name: "Updated name",
+  };
+  const repositories = [
+    { handle: "repo-b", display_name: "B", forge_type: "gitlab" },
+    updatedRepository,
+  ];
+  const inbox = { kind: "inbox", repository: oldRepository };
+  const reconciled = reconcileDiscoveryRoute(inbox, repositories);
+  assert.equal(reconciled.removed, false);
+  assert.equal(reconciled.route.repository, updatedRepository);
+
+  const review = {
+    kind: "review",
+    item: { handle: "review-a", repository: "repo-a", summary: {} },
+    panel: "overview",
+  };
+  assert.equal(reconcileDiscoveryRoute(review, repositories).route, review);
+  assert.deepEqual(reconcileDiscoveryRoute(review, repositories.slice(0, 1)), {
+    route: { kind: "inbox", repository: null },
+    removed: true,
+  });
+  assert.deepEqual(reconcileDiscoveryRoute(inbox, []), {
+    route: { kind: "inbox", repository: null },
+    removed: true,
+  });
+
+  const all = { kind: "inbox", repository: null };
+  const plugin = {
+    kind: "plugin",
+    pluginId: "plugin",
+    navigationId: "home",
+    moduleId: "main",
+  };
+  assert.equal(reconcileDiscoveryRoute(all, []).route, all);
+  assert.equal(reconcileDiscoveryRoute(plugin, []).route, plugin);
 });
 
 test("query coordinator cancels prior owned read and rejects its stale result", async () => {

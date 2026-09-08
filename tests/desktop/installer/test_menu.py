@@ -28,6 +28,33 @@ def test_exec_escapes_hostile_reserved_characters_and_percent_fields() -> None:
     assert text.endswith("StartupNotify=true\n")
 
 
+def test_icon_uses_an_absolute_utf8_desktop_entry_value() -> None:
+    entry = render_desktop_entry(
+        Path("/opt/tongs/bin/tongs"),
+        icon_path=Path("/opt/Tongs Icons/Δ\\tongs.png"),
+    )
+
+    assert "Icon=/opt/Tongs\\sIcons/Δ\\\\tongs.png\n" in entry.decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "relative/tongs.png",
+        "/tmp/newline\nicon.png",
+        "/tmp/tab\ticon.png",
+        "/tmp/control\x01icon.png",
+        "/tmp/delete\x7ficon.png",
+        "/tmp/surrogate\udcfficon.png",
+    ],
+)
+def test_unrepresentable_icon_path_is_rejected(value: str) -> None:
+    with pytest.raises(InstallerError) as raised:
+        render_desktop_entry(Path("/opt/tongs/bin/tongs"), icon_path=Path(value))
+
+    assert raised.value.code is InstallerErrorCode.INCOMPATIBLE
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -75,3 +102,18 @@ def test_owned_entry_can_be_replaced_and_uninstall_is_idempotent(
     assert second != first
     assert remove_user_menu(path, expected_digest=second) is True
     assert remove_user_menu(path, expected_digest=second) is False
+
+
+def test_owned_entry_can_replace_its_packaged_icon_binding(tmp_path: Path) -> None:
+    path = tmp_path / "applications" / "tongs.desktop"
+    console = Path("/opt/tongs/bin/tongs")
+    first_icon = Path("/opt/tongs/versions/one/icon.png")
+    second_icon = Path("/opt/tongs/versions/two/icon.png")
+
+    first = install_user_menu(path, console, icon_path=first_icon, replace_digest=None)
+    second = install_user_menu(
+        path, console, icon_path=second_icon, replace_digest=first
+    )
+
+    assert second != first
+    assert f"Icon={second_icon}\n" in path.read_text()

@@ -24,7 +24,7 @@ from tongs.services.session import (
     CacheResource,
     ForgeRegistryResource,
 )
-from tongs.state.app_state import MRFilter, ReviewDraft
+from tongs.state.app_state import MRFilter
 from tongs.tui_services import TUIServiceAdapter
 from tongs.views.inbox import InboxScreen
 from tongs.views.repo_list import RepoListScreen
@@ -83,7 +83,6 @@ class TongsApp(App):
     current_repo: reactive[Repo | None] = reactive(None)
     current_mr_number: reactive[int | None] = reactive(None)
     mr_filter: reactive[MRFilter] = reactive(MRFilter)
-    pending_review: reactive[ReviewDraft | None] = reactive(None)
     offline: reactive[bool] = reactive(False)
 
     def __init__(

@@ -16,6 +16,7 @@ def _make_provider(screen_name: str = "UnknownScreen") -> TongsCommandProvider:
     provider = TongsCommandProvider.__new__(TongsCommandProvider)
     mock_screen = MagicMock()
     type(mock_screen).__name__ = screen_name
+    mock_screen._review_draft = None
     mock_app = MagicMock()
     # Provider stores screen/app as private mangled attrs internally,
     # but _get_commands accesses self.screen / self.app which are properties
@@ -101,7 +102,9 @@ class TestMRDetailCommands:
         assert "Close" in names
         assert "Copy URL" in names
         assert "Refresh" in names
-        assert len(commands) == 13
+        assert "Submit Review" in names
+        assert "Next Review Draft" in names
+        assert len(commands) == 15
 
 
 # ===================================================================
@@ -123,11 +126,11 @@ class TestGetCommandsDispatch:
         provider = _make_provider("MRDetailScreen")
         commands = provider._get_commands()
         names = [c[0] for c in commands]
-        # Globals (4) + detail (13) = 16
-        assert len(commands) == 17
+        assert len(commands) == 19
         assert "Approve" in names
         assert "Merge" in names
         assert "Help" in names
+        assert "Start Review" in names
 
     def test_repo_list_screen_includes_repo_commands(self):
         provider = _make_provider("RepoListScreen")

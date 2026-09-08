@@ -59,6 +59,16 @@ ELECTRON_CONFIGURATION_DIRECTORY = "packaging/desktop/archive"
 #: Reviewed SPDX generator version recorded in the SBOM creator field.
 SBOM_GENERATOR_VERSION = "1.0.0"
 
+#: Reviewed release manifest artifact identifier for the per-user archive.  This
+#: is the contract identifier the release manifest declares, not the numeric ID
+#: GitHub assigns to an uploaded workflow artifact.  It is caller-owned policy
+#: and must be changed deliberately alongside the reviewed producer.
+USER_ARCHIVE_ARTIFACT_ID = "fedora-44-x86_64-user-archive"
+
+#: Reviewed desktop release version.  The producer declares the same value, so
+#: this constant is what makes the consumer expectation independent of it.
+DESKTOP_RELEASE_VERSION = "0.5.0"
+
 MAX_PROGRAM_BYTES = 8 * 1024 * 1024
 MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024
 MAX_RECEIPT_BYTES = 256 * 1024
@@ -237,11 +247,11 @@ def archive_evidence_argv(arguments: argparse.Namespace) -> list[str]:
         "--expected-archive-name",
         _release_manifest_archive_name(Path(arguments.transfer_root)),
         "--expected-archive-artifact-id",
-        arguments.archive_artifact_id,
+        USER_ARCHIVE_ARTIFACT_ID,
         "--expected-archive-sha256",
         arguments.archive_sha256,
         "--expected-release-version",
-        arguments.release_version,
+        DESKTOP_RELEASE_VERSION,
         "--expected-release-manifest-sha256",
         arguments.release_manifest_sha256,
         "--expected-install-manifest-sha256",
@@ -371,8 +381,6 @@ def _parser() -> argparse.ArgumentParser:
         "archive-evidence", help="run the issue #139 archive lifecycle adapter"
     )
     _add_common(archive)
-    archive.add_argument("--archive-artifact-id", required=True)
-    archive.add_argument("--release-version", required=True)
     archive.add_argument("--release-manifest-sha256", required=True)
     archive.add_argument("--install-manifest-sha256", required=True)
     archive.add_argument("--license-inventory-sha256", required=True)

@@ -17,10 +17,12 @@ import pytest
 from tests.ci.desktop_production_expectations import (
     ARCHIVE,
     ARCHIVE_ADAPTER_PROGRAM,
+    DESKTOP_RELEASE_VERSION,
     RECEIPT_READER_PROGRAM,
     ROOT,
     SBOM,
     SBOM_GENERATOR_VERSION,
+    USER_ARCHIVE_ARTIFACT_ID,
     ExpectationError,
     archive_evidence_argv,
     artifact_contract_digest,
@@ -80,8 +82,6 @@ def _namespace(transfer_root: Path, tmp_path: Path, **overrides: object):
         "environment": "github-hosted-ubuntu-24.04",
         "provenance": "hosted",
         "check_id": "desktop-archive-lifecycle",
-        "archive_artifact_id": "10076121963",
-        "release_version": "0.5.0",
         "release_manifest_sha256": RELEASE_MANIFEST,
         "install_manifest_sha256": INSTALL_MANIFEST,
         "license_inventory_sha256": LICENSE_INVENTORY,
@@ -103,6 +103,8 @@ def test_archive_arguments_parse_with_the_adapter_parser(
     assert parsed.expected_source_commit == COMMIT
     assert parsed.expected_source_tree == TREE
     assert parsed.expected_archive_name == ARCHIVE.ARCHIVE_NAME
+    assert parsed.expected_archive_artifact_id == USER_ARCHIVE_ARTIFACT_ID
+    assert parsed.expected_release_version == DESKTOP_RELEASE_VERSION
     assert parsed.expected_transfer_event == "pull_request"
     assert parsed.expected_transfer_ref == "refs/pull/149/merge"
     assert parsed.check_id == "desktop-archive-lifecycle"

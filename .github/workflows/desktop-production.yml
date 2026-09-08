@@ -238,7 +238,6 @@ jobs:
       release-manifest-sha256: ${{ steps.observe.outputs.release_manifest_sha256 }}
       install-manifest-sha256: ${{ steps.observe.outputs.install_manifest_sha256 }}
       license-inventory-sha256: ${{ steps.observe.outputs.license_inventory_sha256 }}
-      release-version: ${{ steps.observe.outputs.release_version }}
     steps:
       - name: Check out the exact head without persisted credentials
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -298,12 +297,9 @@ jobs:
         run: |
           set -euo pipefail
           archive_dir="$RUNNER_TEMP/tongs-desktop-archive/archive"
-          version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release_version"])' \
-            "$archive_dir/desktop-manifest-v1.json")
           name=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"][0]["name"])' \
             "$archive_dir/desktop-manifest-v1.json")
           {
-            printf 'release_version=%s\n' "$version"
             printf 'archive_sha256=%s\n' \
               "$(sha256sum "$archive_dir/$name" | cut -d' ' -f1)"
             printf 'release_manifest_sha256=%s\n' \
@@ -321,6 +317,20 @@ jobs:
           path: ${{ runner.temp }}/tongs-desktop-archive
           if-no-files-found: error
           retention-days: 14
+
+      - name: Record the server artifact identity for the evidence index
+        run: |
+          set -euo pipefail
+          {
+            printf 'Transfer artifact: %s\n\n' \
+              "${{ steps.names.outputs.transfer_artifact }}"
+            printf 'Server artifact ID: %s\n\n' \
+              "${{ steps.upload.outputs.artifact-id }}"
+            printf 'Server artifact digest: %s\n\n' \
+              "${{ steps.upload.outputs.artifact-digest }}"
+            printf 'Desktop archive sha256: %s\n' \
+              "${{ steps.observe.outputs.archive_sha256 }}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   archive-evidence:
     name: Archive lifecycle receipt
@@ -365,8 +375,6 @@ jobs:
           "${{ needs.source-identity.outputs.source-archive-sha256 }}"
           --source-date-epoch "${{ needs.source-identity.outputs.epoch }}"
           --archive-sha256 "${{ needs.archive.outputs.archive-sha256 }}"
-          --archive-artifact-id "${{ needs.archive.outputs.artifact-id }}"
-          --release-version "${{ needs.archive.outputs.release-version }}"
           --release-manifest-sha256
           "${{ needs.archive.outputs.release-manifest-sha256 }}"
           --install-manifest-sha256

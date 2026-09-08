@@ -23,5 +23,8 @@ resolutions. Astra records the final current-head review and integration decisio
 Changed commits invalidate affected checks and reviews. Contributors must not
 merge this PR or push the shared integration branch.
 
-Update the linked issue with handoff and next actions through Astra. Feature-branch
-integration does not close the issue or constitute CTO acceptance/main delivery.
+Update the linked issue with handoff and next actions through Astra. Do not close
+issues automatically. Astra or an explicitly delegated tracker agent may close a
+completed scoped item after verifying its full acceptance, independent review,
+feature merge and required post-merge checks. Record the accepted head, merge and
+evidence; this does not constitute final CTO acceptance or main delivery.

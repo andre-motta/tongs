@@ -425,9 +425,14 @@ def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
     workflow = (
         Path(__file__).parents[3] / ".github/workflows/release-desktop.yml"
     ).read_text(encoding="utf-8")
+    workflow_env = workflow.split("env:\n", 1)[1].split("\njobs:\n", 1)[0]
 
     assert "pull_request_target" not in workflow
     assert "workflow_dispatch" not in workflow
+    assert "runner.temp" not in workflow_env
+    assert "CANDIDATE_ROOT=%s/tongs-desktop-candidate" in workflow
+    assert '>> "$GITHUB_ENV"' in workflow
+    assert "${{ runner.temp }}/tongs-desktop-candidate" in workflow
     assert "push-to-registry: false" in workflow
     assert "create-storage-record: false" in workflow
     assert "persist-credentials: false" in workflow

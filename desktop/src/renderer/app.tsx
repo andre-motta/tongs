@@ -12,6 +12,7 @@ import type { RepositoryDto } from "../shared/bridge.js";
 import {
   FeatureRegistry,
   Navigator,
+  reconcileDiscoveryRoute,
   type AppRoute,
   type FeatureContext,
   type InlineAnchorSelection,
@@ -60,6 +61,7 @@ function App(): ReactNode {
     "Connecting to the local service…",
   );
   const [serviceClass, setServiceClass] = useState("service-status");
+  const [routeNotice, setRouteNotice] = useState<string | null>(null);
   const plugins = usePluginSnapshot(pluginsFeature.runtime);
   useEffect(() => navigator.subscribe(setRoute), []);
   useEffect(
@@ -98,6 +100,7 @@ function App(): ReactNode {
     void publishNativeProbe(setServiceStatus, setServiceClass);
   }, []);
   const navigation = useCallback((next: AppRoute) => {
+    setRouteNotice(null);
     setInlineAnchor((current) =>
       next.kind === "review" && current?.review === next.item.handle
         ? current
@@ -106,10 +109,21 @@ function App(): ReactNode {
     navigator.navigate(next);
   }, []);
   const onDiscovery = useCallback((next: readonly RepositoryDto[]) => {
+    const reconciliation = reconcileDiscoveryRoute(navigator.route, next);
     setRepositories(next);
     setRepositoriesReady(true);
     setRepositoryGeneration((current) => current + 1);
-  }, []);
+    if (reconciliation.removed) {
+      navigation(reconciliation.route);
+      setRouteNotice(
+        "The selected repository is no longer in the local workspace. Showing All reviews. Unsaved review text and saved drafts were preserved.",
+      );
+    } else if (reconciliation.route !== navigator.route) {
+      navigation(reconciliation.route);
+    } else {
+      setRouteNotice(null);
+    }
+  }, [navigation]);
   const feature = useMemo(() => registry.find(route), [route]);
   const selected = route.kind === "inbox" ? route.repository : undefined;
   const featureContext: FeatureContext = {
@@ -174,6 +188,11 @@ function App(): ReactNode {
           )}
         />
         <main id="content" className="content" tabIndex={-1}>
+          {routeNotice && (
+            <div className="notice notice-warning" role="status">
+              {routeNotice}
+            </div>
+          )}
           <ErrorBoundary
             key={`${route.kind}:${
               route.kind === "review"

@@ -49,6 +49,7 @@ const coreVersion = execFileSync(
 ).trim();
 const sourceCommit = process.env.TONGS_REVIEW_PROOF_COMMIT ?? null;
 const wheelPath = process.env.TONGS_REVIEW_PROOF_WHEEL ?? null;
+const discoveryControl = path.join(evidenceRoot, "discovery-state.txt");
 
 let controller = null;
 let transport = null;
@@ -65,8 +66,10 @@ async function runProof() {
       "drafts.db",
       "drafts.db-shm",
       "drafts.db-wal",
+      "discovery-state.txt",
       "mock-forge-actions.jsonl",
     ]) await rm(path.join(evidenceRoot, name), { force: true });
+    await writeFile(discoveryControl, "present\n", { mode: 0o600 });
     const sourceBinding = await verifySourceBinding();
 
     mark("wait for Electron");
@@ -150,6 +153,58 @@ async function runProof() {
       return snapshot();
     `);
     const navigationScreenshot = await capture("00-unsent-buffer-after-navigation.png");
+
+    mark("exercise controlled discovery removal and restoration");
+    await evaluate(`
+      setValue(labelled("Quick comment"), "kept across discovery removal");
+      return true;
+    `);
+    await writeFile(discoveryControl, "removed\n", { mode: 0o600 });
+    const discoveryRemoval = await evaluate(`
+      button("Refresh local repositories").click();
+      await waitFor("removed repository fallback", () =>
+        document.querySelector(".view-title")?.textContent === "All reviews");
+      const repositoryVisible = [...document.querySelectorAll(".nav-item")].some(
+        (item) => item.textContent.includes("proof/desktop-review"),
+      );
+      if (repositoryVisible)
+        throw new Error("removed repository remains in native navigation");
+      const notice = [...document.querySelectorAll("main > .notice")].find((item) =>
+        item.textContent.includes("no longer in the local workspace"),
+      );
+      if (!notice)
+        throw new Error("native route fallback did not explain repository removal");
+      return { ...snapshot(), notice: notice.textContent, repositoryVisible };
+    `);
+    const discoveryRemovalScreenshot = await capture(
+      "01-controlled-discovery-removal.png",
+    );
+    await writeFile(discoveryControl, "present\n", { mode: 0o600 });
+    await evaluate(`
+      const refresh = await waitFor("repository refresh", () => {
+        const candidate = button("Refresh local repositories");
+        return candidate && !candidate.disabled ? candidate : null;
+      });
+      refresh.click();
+      await waitFor("restored repository", () =>
+        [...document.querySelectorAll(".nav-item")].find((item) =>
+          item.textContent.includes("proof/desktop-review")));
+      return true;
+    `);
+    await navigateToReview();
+    const discoveryRestoration = await evaluate(`
+      const composer = await waitFor("restored discovery buffer", () =>
+        labelled("Quick comment"));
+      if (composer.value !== "kept across discovery removal")
+        throw new Error("discovery reconciliation lost the unsent review buffer");
+      if ([...document.querySelectorAll("main > .notice")].some((item) =>
+        item.textContent.includes("no longer in the local workspace")))
+        throw new Error("repository removal notice remained after restoration");
+      return snapshot();
+    `);
+    const discoveryRestorationScreenshot = await capture(
+      "02-controlled-discovery-restoration.png",
+    );
     await evaluate(`setValue(labelled("Quick comment"), ""); return true;`);
 
     mark("exercise known and unknown quick comments without replay");
@@ -330,12 +385,21 @@ async function runProof() {
       childLaunches,
       sessionGeneration: transport.sessionGeneration,
       initial,
-      demonstrations: { unknown, recoveredDraft, submitted, conflict },
+      demonstrations: {
+        discoveryRemoval,
+        discoveryRestoration,
+        unknown,
+        recoveredDraft,
+        submitted,
+        conflict,
+      },
       lightConflictNotice,
       finalUi,
       mockForgeActions: actions,
       screenshots: [
         navigationScreenshot,
+        discoveryRemovalScreenshot,
+        discoveryRestorationScreenshot,
         unknownScreenshot,
         draftScreenshot,
         recoveredScreenshot,

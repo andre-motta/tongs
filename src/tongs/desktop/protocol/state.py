@@ -117,6 +117,7 @@ class SnapshotPage:
     cursor: int
     next_cursor: int | None
     entries: tuple[JsonObject, ...]
+    projection: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +128,7 @@ class _Snapshot:
     entries: tuple[bytes, ...]
     byte_count: int
     created_at: float
+    projection: str | None
 
 
 class SnapshotStore:
@@ -164,6 +166,8 @@ class SnapshotStore:
         resource_handle: str,
         revision: Mapping[str, JsonValue],
         entries: Sequence[Mapping[str, JsonValue]],
+        *,
+        projection: str | None = None,
     ) -> str:
         self.prune()
         encoded_revision = _encode_object(revision)
@@ -202,6 +206,7 @@ class SnapshotStore:
             encoded_entries,
             byte_count,
             self._clock(),
+            projection,
         )
         self._snapshots[snapshot_id] = snapshot
         self._order.append(snapshot_id)
@@ -253,6 +258,7 @@ class SnapshotStore:
             cursor,
             next_cursor,
             tuple(selected),
+            snapshot.projection,
         )
 
     def expire_for_resource(self, resource_handle: str) -> None:

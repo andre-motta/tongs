@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from tongs.forges.models import (
     Commit,
     Discussion,
+    ForgeMergeResult,
     ForgeMutationResult,
     MRDetail,
     MRSummary,
@@ -120,7 +121,7 @@ class ForgeClient(ABC):
         self, repo_path: str, number: int, *, head_sha: str | None = None
     ) -> ForgeMutationResult: ...
 
-    async def unapprove_mr(self, repo_path: str, number: int) -> None:
+    async def unapprove_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         raise NotImplementedError("This forge does not support unapprove")
 
     @abstractmethod
@@ -130,13 +131,18 @@ class ForgeClient(ABC):
         number: int,
         squash: bool = False,
         delete_branch: bool = True,
-    ) -> None: ...
+        *,
+        head_sha: str | None = None,
+        expected_source_repository: str | None = None,
+        expected_source_branch: str | None = None,
+        expected_target_branch: str | None = None,
+    ) -> ForgeMergeResult: ...
 
     @abstractmethod
-    async def close_mr(self, repo_path: str, number: int) -> None: ...
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult: ...
 
     @abstractmethod
-    async def reopen_mr(self, repo_path: str, number: int) -> None: ...
+    async def reopen_mr(self, repo_path: str, number: int) -> ForgeMutationResult: ...
 
     @abstractmethod
     async def add_comment(

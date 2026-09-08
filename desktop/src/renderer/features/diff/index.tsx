@@ -768,6 +768,7 @@ function anchorForLine(
   row: Extract<DiffRow, { readonly kind: "line" }>,
   side: "old" | "new",
 ): InlineAnchorSelection {
+  const context = unifiedSourceContext(loaded, file, row, side);
   return Object.freeze({
     review,
     snapshotId: loaded.snapshotId,
@@ -782,6 +783,8 @@ function anchorForLine(
     oldLine: row.old_line,
     newLine: row.new_line,
     lineType: row.line_type,
+    contextLines: context.lines,
+    contextComplete: context.complete,
   });
 }
 
@@ -794,6 +797,7 @@ function anchorForSplitCell(
 ): InlineAnchorSelection {
   const side = cell.anchor_side;
   if (!side) throw new Error("Cannot select an unanchored split cell");
+  const context = splitSourceContext(loaded, file, row, side);
   return Object.freeze({
     review,
     snapshotId: loaded.snapshotId,
@@ -808,7 +812,82 @@ function anchorForSplitCell(
     oldLine: cell.old_line,
     newLine: cell.new_line,
     lineType: cell.line_type,
+    contextLines: context.lines,
+    contextComplete: context.complete,
   });
+}
+
+export interface SourceContext {
+  readonly lines: readonly string[];
+  readonly complete: boolean;
+}
+
+export function unifiedSourceContext(
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+  target: Extract<DiffRow, { readonly kind: "line" }>,
+  side: "old" | "new",
+): SourceContext {
+  const candidates = loaded.rows.filter(
+    (row): row is Extract<DiffRow, { readonly kind: "line" }> =>
+      row.kind === "line" &&
+      row.file_index === file.file_index &&
+      row.hunk_index === target.hunk_index &&
+      row.line_type !== "no_newline" &&
+      (side === "old" ? row.old_line !== null : row.new_line !== null),
+  );
+  const index = candidates.indexOf(target);
+  if (index < 0) return Object.freeze({ lines: Object.freeze([]), complete: false });
+  return Object.freeze({
+    lines: Object.freeze(
+      candidates
+        .slice(Math.max(0, index - 2), index + 3)
+        .map((row) => row.content),
+    ),
+    complete: contextIsComplete(loaded, file),
+  });
+}
+
+export function splitSourceContext(
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+  target: SplitDiffRow,
+  side: "old" | "new",
+): SourceContext {
+  const candidates = loaded.rows
+    .filter(
+      (row): row is SplitDiffRow =>
+        row.kind === "split" &&
+        row.file_index === file.file_index &&
+        row.hunk_index === target.hunk_index,
+    )
+    .map((row) => ({ row, cell: row[side] }))
+    .filter(
+      (item): item is { readonly row: SplitDiffRow; readonly cell: SplitDiffCell } =>
+        item.cell !== null &&
+        item.cell.line_type !== "no_newline" &&
+        (side === "old"
+          ? item.cell.old_line !== null
+          : item.cell.new_line !== null),
+    );
+  const index = candidates.findIndex((item) => item.row === target);
+  if (index < 0) return Object.freeze({ lines: Object.freeze([]), complete: false });
+  return Object.freeze({
+    lines: Object.freeze(
+      candidates
+        .slice(Math.max(0, index - 2), index + 3)
+        .map((item) => item.cell.content),
+    ),
+    complete: contextIsComplete(loaded, file),
+  });
+}
+
+function contextIsComplete(loaded: LoadedDiff, file: DiffFileRow): boolean {
+  return (
+    loaded.partialError === null &&
+    !file.is_truncated &&
+    !file.is_unavailable
+  );
 }
 
 export function rebindInlineAnchor(
@@ -908,7 +987,10 @@ function sameAnchorIdentity(
     left.side === right.side &&
     left.oldLine === right.oldLine &&
     left.newLine === right.newLine &&
-    left.lineType === right.lineType
+    left.lineType === right.lineType &&
+    left.contextComplete === right.contextComplete &&
+    left.contextLines.length === right.contextLines.length &&
+    left.contextLines.every((line, index) => line === right.contextLines[index])
   );
 }
 function marker(type: string): string {

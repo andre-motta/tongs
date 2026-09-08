@@ -9,6 +9,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "../shared/bridge.js";
+import { REVIEW_OPERATIONS } from "./review.js";
 import {
   SIDECAR_ARGUMENTS,
   type DesktopLaunchConfig,
@@ -492,7 +493,8 @@ const REQUIRED_METHODS = Object.freeze([
   "jobs.cancel", "jobs.retry", "pipelines.cancel", "pipelines.list", "pipelines.retry",
   "plugins.invoke", "plugins.list", "repositories.discover",
   "repositories.open", "review_pipelines.list", "reviews.get", "reviews.list", "shutdown",
-]);
+  ...REVIEW_OPERATIONS.map((operation) => operation.method),
+].sort());
 
 function validResponse(value: Record<string, unknown>): value is Record<string, JsonValue> & { id: string } {
   return (

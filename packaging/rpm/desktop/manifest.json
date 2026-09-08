@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "target": {
+    "architecture": "x86_64",
+    "distribution": "fedora",
+    "release": "44",
+    "python_minimum": "3.12"
+  },
+  "accepted_desktop": {
+    "artifact_id": 10052790521,
+    "artifact_name": "desktop-archive-825a4217c5b5e64fc8908c3444f1bd89fd469b2e",
+    "run_id": 34218466755,
+    "source_commit": "825a4217c5b5e64fc8908c3444f1bd89fd469b2e",
+    "reviewed_fixture": {
+      "purpose": "initial issue 52 contract evidence only",
+      "review_report": ".worktrees/review-pr51-825a421-final.md",
+      "review_report_sha256": "25cc9ffac4d81ac8bebad8d3f0aa2fcabd81484b1b0eee8da009e577c36e94fb"
+    },
+    "archive": {
+      "filename": "tongs-desktop-0.5.0-fedora44-x86_64.tar.gz",
+      "bytes": 129334969,
+      "sha256": "4593c1585b46e5b48181815307c29b0380bc5f14714b2c12df464dd66d365900"
+    },
+    "evidence": {
+      "SHA256SUMS": "fb9594f65d476ab2fad55d620bcce1ddaac5610c4e08969e9a716f5a56e74366",
+      "app-asar-inventory.json": "dc9c1d4eebd12a2e3bb8a228a022f3a38eb57c919d5a9e438f903960e20a8fa0",
+      "build-provenance.json": "9273edec65b7df36613e25be7ef7319a194e0821ebf9d473696b7df790b5e0c7",
+      "desktop-install.json": "0c28df804d5f21dfe46e4d143546267082d8bcdc96b02ce1b0baa0769225235e",
+      "desktop-manifest-v1.json": "31d35befbb0de27d3a90eeec79bcb6a83b633a9c67e59c1ce6669857d8ae1e8d",
+      "license-inventory.json": "fd53d30a5c4f6bbed3be8e51328d184e37daa0b3e7568df6a304237da7b06d6d",
+      "prepared-source-inventory.json": "e1ea59298c9d76c76d5ec244b5b181698f9d1eb6323c3bee36cc267ab6effd5c",
+      "runtime-inventory.json": "528b576554b10510be385a0ad9f80d2b57a0c5c24e49f53245a92a6e979d7d63"
+    },
+    "electron_version": "44.2.0",
+    "release_version": "0.5.0",
+    "compatibility": {
+      "core_minimum": "0.4.2-dev.183",
+      "core_maximum_exclusive": "0.5.0",
+      "plugin_api_major": 1,
+      "rpc_api_major": 1
+    }
+  },
+  "core_runtime_requirements": [
+    "python(abi) >= 3.12",
+    "python3dist(aiosqlite) >= 0.20",
+    "python3dist(httpx) >= 0.27",
+    "python3dist(packaging) >= 24",
+    "python3dist(platformdirs) >= 4",
+    "python3dist(pyperclip) >= 1.8",
+    "(python3dist(sigstore) >= 4.5 with python3dist(sigstore) < 5)",
+    "python3dist(textual) >= 1"
+  ],
+  "mcp_requirement": "(python3dist(mcp[cli]) >= 1 with python3dist(mcp[cli]) < 2)",
+  "desktop_runtime_requirements": [
+    "xorg-x11-server-Xwayland"
+  ],
+  "companion_binary_count": 7
+}

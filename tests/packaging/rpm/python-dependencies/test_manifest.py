@@ -32,6 +32,17 @@ def test_manifest_is_valid_and_build_order_is_explicit() -> None:
     assert manifest["target"]["python_minimum"] == "3.12"
     assert manifest["build_order"][-1] == "sigstore"
     assert len(manifest["companions"]) == 7
+    binary_identities = {
+        (
+            item["binary_rpm"]["name"],
+            item["version"],
+            item["binary_rpm"]["release"],
+            item["binary_rpm"]["architecture"],
+        )
+        for item in manifest["companions"]
+    }
+    assert len(binary_identities) == 7
+    assert all(item["binary_rpm"]["epoch"] == 0 for item in manifest["companions"])
 
 
 def test_manifest_uses_only_hash_pinned_pypi_sources() -> None:
@@ -43,6 +54,24 @@ def test_manifest_uses_only_hash_pinned_pypi_sources() -> None:
         assert len(source["sha256"]) == 64
         assert source["bytes"] > 0
         assert companion["license"]
+
+
+def test_manifest_binary_identities_match_reviewed_specs() -> None:
+    manifest = json.loads(MANIFEST.read_text())
+
+    for companion in manifest["companions"]:
+        spec = (
+            PACKAGING / "specs" / f"python-{companion['distribution']}.spec"
+        ).read_text()
+        binary = companion["binary_rpm"]
+        assert f"Name:           {companion['rpm_source_name']}" in spec
+        assert f"Version:        {companion['version']}" in spec
+        assert f"%package -n {binary['name']}" in spec
+        assert "Release:        1%{?dist}" in spec
+        if binary["architecture"] == "noarch":
+            assert "BuildArch:      noarch" in spec
+        else:
+            assert "BuildArch:      noarch" not in spec
 
 
 def test_manifest_requires_system_python_and_fedora_providers() -> None:

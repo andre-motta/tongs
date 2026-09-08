@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,11 +23,10 @@ def _render(source: Path, destination: Path, values: dict[str, str]) -> None:
     contents = source.read_text()
     for key, value in values.items():
         marker = f"@{key}@"
-        if marker not in contents:
-            raise RuntimeError(f"template {source.name} lacks {marker}")
         contents = contents.replace(marker, value)
-    if "@" in contents:
-        raise RuntimeError(f"unexpanded marker in {source.name}")
+    remaining = re.findall(r"@[A-Z][A-Z0-9_]+@", contents)
+    if remaining:
+        raise RuntimeError(f"unexpanded marker in {source.name}: {remaining[0]}")
     destination.write_text(contents)
 
 

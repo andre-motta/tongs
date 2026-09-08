@@ -283,7 +283,28 @@ PY
     --output "$evidence_dir/package-file-metadata.json"
 /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" elf \
     --package tongs-desktop --output "$evidence_dir/elf-provider-map.json"
-timeout --signal=TERM 20s /usr/bin/python3 -E -P "$packaging_dir/verify_sidecar_plugin.py" \
+run_bounded_check() {
+    local label=$1
+    local duration=$2
+    local status
+    shift 2
+    printf 'lifecycle-stage: %s: start\n' "$label"
+    if timeout --signal=TERM "$duration" "$@"; then
+        status=0
+    else
+        status=$?
+    fi
+    printf '%s\n' "$status" >"$evidence_dir/$label.exit-status"
+    printf 'lifecycle-stage: %s: command-status=%s\n' "$label" "$status"
+    if [[ $status -ne 0 ]]; then
+        printf 'lifecycle-stage: %s: failed with command status %s\n' \
+            "$label" "$status" >&2
+        return "$status"
+    fi
+    printf 'lifecycle-stage: %s: passed\n' "$label"
+}
+run_bounded_check sidecar-plugin 20s \
+    /usr/bin/python3 -E -P "$packaging_dir/verify_sidecar_plugin.py" \
     --expected-version "$core_version" \
     --expected-module "$packaging_dir/test-plugin/module.mjs" \
     --output "$evidence_dir/sidecar-plugin.ndjson"
@@ -300,8 +321,11 @@ set -e
 useradd --create-home --shell /bin/bash tongs-rpm-test
 install -d -m 0700 -o tongs-rpm-test -g tongs-rpm-test /tmp/tongs-rpm-runtime
 run_desktop_smoke() {
+    local expected_exec_vector
     local name=$1
     local status
+    expected_exec_vector="+ exec /usr/libexec/tongs-desktop/tongs-desktop --ozone-platform=x11 --tongs-python-executable /usr/bin/python3 --tongs-core-version $core_version --tongs-safe-cwd /usr/libexec/tongs-desktop"
+    printf 'lifecycle-stage: desktop-smoke-%s: start\n' "$name"
     set +e
     runuser -u tongs-rpm-test -- env XDG_RUNTIME_DIR=/tmp/tongs-rpm-runtime \
         timeout --signal=TERM 12s xvfb-run -a sh -x /usr/bin/tongs-desktop \
@@ -309,15 +333,25 @@ run_desktop_smoke() {
     status=$?
     set -e
     printf '%s\n' "$status" >"$evidence_dir/$name.exit-status"
+    printf 'lifecycle-stage: desktop-smoke-%s: command-status=%s\n' "$name" "$status"
     [[ $status -eq 124 ]] || {
-        printf 'desktop launch did not remain live for the bounded X11 window: %s\n' \
-            "$status" >&2
+        printf 'lifecycle-stage: desktop-smoke-%s: launch did not remain live: %s\n' \
+            "$name" "$status" >&2
         exit 1
     }
-    grep -F -- 'exec /usr/libexec/tongs-desktop/tongs-desktop --ozone-platform=x11' \
-        "$evidence_dir/$name.stderr"
-    ! grep -Eiq 'Traceback|ModuleNotFoundError|sidecar failed|(^|[^[:alnum:]_])FATAL([:[:space:]]|$)|ERR_FILE_NOT_FOUND' \
-        "$evidence_dir/$name.stdout" "$evidence_dir/$name.stderr"
+    if ! grep -Fx -- "$expected_exec_vector" \
+        "$evidence_dir/$name.stdout" "$evidence_dir/$name.stderr"; then
+        printf 'lifecycle-stage: desktop-smoke-%s: launcher exec vector missing\n' \
+            "$name" >&2
+        exit 1
+    fi
+    if grep -Eiq 'Traceback|ModuleNotFoundError|sidecar failed|(^|[^[:alnum:]_])FATAL([:[:space:]]|$)|ERR_FILE_NOT_FOUND' \
+        "$evidence_dir/$name.stdout" "$evidence_dir/$name.stderr"; then
+        printf 'lifecycle-stage: desktop-smoke-%s: fatal output classified\n' \
+            "$name" >&2
+        exit 1
+    fi
+    printf 'lifecycle-stage: desktop-smoke-%s: passed\n' "$name"
 }
 run_desktop_smoke hosted-launch
 printf 'This hosted Xvfb smoke proves launcher/runtime liveness only; it makes no hardware GPU claim.\n' \
@@ -337,7 +371,8 @@ installed_closure "$evidence_dir/mcp-closure-after.txt"
     --output "$evidence_dir/mcp-provider-install.json"
 [[ $(rpm -qf /usr/bin/tongs-mcp --queryformat '%{NAME}') == 'python3-tongs+mcp' ]]
 command -v tongs-mcp >"$evidence_dir/tongs-mcp-path.txt"
-timeout --signal=TERM 20s /usr/bin/python3 -E -P "$packaging_dir/verify_mcp_command.py" \
+run_bounded_check mcp-command 20s \
+    /usr/bin/python3 -E -P "$packaging_dir/verify_mcp_command.py" \
     --output "$evidence_dir/mcp-command.json"
 /usr/bin/python3 -E -P - <<'PY' >"$evidence_dir/mcp-plugin.txt"
 import mcp.server.fastmcp
@@ -366,7 +401,8 @@ assert_final_state after-mcp-removal no
 /usr/bin/tongs --help >"$evidence_dir/post-mcp-tongs-help.txt"
 grep -F 'Terminal code review inbox for GitHub and GitLab' \
     "$evidence_dir/post-mcp-tongs-help.txt"
-timeout --signal=TERM 20s /usr/bin/python3 -E -P "$packaging_dir/verify_sidecar_plugin.py" \
+run_bounded_check post-mcp-sidecar-plugin 20s \
+    /usr/bin/python3 -E -P "$packaging_dir/verify_sidecar_plugin.py" \
     --expected-version "$core_version" \
     --expected-module "$packaging_dir/test-plugin/module.mjs" \
     --output "$evidence_dir/post-mcp-sidecar-plugin.ndjson"

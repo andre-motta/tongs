@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -104,6 +106,9 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert "dnf_transaction_options=(" in installer
     assert "--setopt=tsflags=" in installer
     assert "dnf-lifecycle-policy.txt" in installer
+    assert '"$evidence_dir/$label.exit-status"' in installer
+    for label in ("sidecar-plugin", "mcp-command", "post-mcp-sidecar-plugin"):
+        assert f"run_bounded_check {label} 20s" in installer
     transactions = re.findall(
         r"^dnf (?:install|reinstall|upgrade|remove) [^\n]+$", installer, re.MULTILINE
     )
@@ -111,43 +116,102 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert all('"${dnf_transaction_options[@]}"' in line for line in transactions)
 
 
-def test_hosted_smoke_distinguishes_expected_headless_warnings_from_failures() -> None:
+def test_hosted_smoke_executes_complete_retained_validation_path(
+    tmp_path: Path,
+) -> None:
     installer = (PACKAGING / "install_and_verify.sh").read_text()
-    match = re.search(r"! grep -Eiq '([^']+)'", installer)
-    assert match is not None
-    fatal_pattern = match.group(1)
+    function_start = installer.index("run_desktop_smoke() {")
+    function_end = installer.index("\nrun_desktop_smoke hosted-launch", function_start)
+    function_source = installer[function_start:function_end]
+    assert '"$evidence_dir/$name.stdout" "$evidence_dir/$name.stderr"' in (
+        function_source
+    )
 
-    def matches(value: str) -> bool:
+    retained = (
+        Path(__file__).with_name("fixtures") / "hosted-launch-079059e.stdout"
+    ).read_bytes()
+    assert hashlib.sha256(retained).hexdigest() == (
+        "4c8ac97b098c0d80ada5632acb062b7d5d8dafb5482ea64d6516f11019d955ea"
+    )
+
+    def run_case(
+        name: str, stdout: bytes, stderr: bytes, status: int
+    ) -> subprocess.CompletedProcess[str]:
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        source_stdout = case_dir / "source.stdout"
+        source_stderr = case_dir / "source.stderr"
+        source_stdout.write_bytes(stdout)
+        source_stderr.write_bytes(stderr)
+        script = f"""
+set -e
+evidence_dir=$EVIDENCE_DIR
+core_version=$CORE_VERSION
+runuser() {{
+    cat -- "$SMOKE_STDOUT"
+    cat -- "$SMOKE_STDERR" >&2
+    return "$SMOKE_STATUS"
+}}
+{function_source}
+run_desktop_smoke candidate
+"""
         result = subprocess.run(
-            ["grep", "-Eiq", fatal_pattern],
-            input=f"{value}\n",
+            ["bash", "-c", script],
+            env={
+                **os.environ,
+                "CORE_VERSION": "0.4.2.dev267+g079059eb96",
+                "EVIDENCE_DIR": str(case_dir),
+                "SMOKE_STDOUT": str(source_stdout),
+                "SMOKE_STDERR": str(source_stderr),
+                "SMOKE_STATUS": str(status),
+            },
             text=True,
             check=False,
+            capture_output=True,
         )
-        assert result.returncode in {0, 1}
-        return result.returncode == 0
+        assert (case_dir / "candidate.exit-status").read_text() == f"{status}\n"
+        return result
 
-    for expected_warning in (
-        (
-            "Failed to connect to socket /run/dbus/system_bus_socket: "
-            "No such file or directory"
-        ),
-        (
-            "[628:0908/175812.000000:ERROR:gpu/command_buffer/service/context_group.cc:140] "
-            "ContextResult::kFatalFailure: WebGL1 blocklisted"
-        ),
-    ):
-        assert not matches(expected_warning)
+    retained_result = run_case("retained", retained, b"", 124)
+    assert retained_result.returncode == 0, retained_result.stderr
+    assert "desktop-smoke-candidate: passed" in retained_result.stdout
 
-    for failure in (
-        "Traceback (most recent call last)",
-        "ModuleNotFoundError: No module named 'tongs'",
-        "sidecar failed to start",
-        "[598:0908/175812.000000:FATAL:zygote_host_impl_linux.cc(201)] crashed",
-        "FATAL: desktop runtime failed",
-        "net::ERR_FILE_NOT_FOUND",
-    ):
-        assert matches(failure)
+    reverse_result = run_case("reverse", b"", retained, 124)
+    assert reverse_result.returncode == 0, reverse_result.stderr
+
+    exec_line = next(
+        line
+        for line in retained.splitlines(keepends=True)
+        if line.startswith(b"+ exec ")
+    )
+    missing_result = run_case("missing", retained.replace(exec_line, b""), b"", 124)
+    assert missing_result.returncode == 1
+    assert "launcher exec vector missing" in missing_result.stderr
+
+    wrong_argv_result = run_case(
+        "wrong-argv",
+        retained.replace(
+            b"--tongs-python-executable /usr/bin/python3",
+            b"--tongs-python-executable /usr/bin/python",
+        ),
+        b"",
+        124,
+    )
+    assert wrong_argv_result.returncode == 1
+    assert "launcher exec vector missing" in wrong_argv_result.stderr
+
+    early_exit_result = run_case("early-exit", retained, b"", 1)
+    assert early_exit_result.returncode == 1
+    assert "launch did not remain live: 1" in early_exit_result.stderr
+
+    fatal_result = run_case(
+        "fatal",
+        retained + b"[598:0908/183151.000000:FATAL:zygote.cc(201)] crashed\n",
+        b"",
+        124,
+    )
+    assert fatal_result.returncode == 1
+    assert "fatal output classified" in fatal_result.stderr
 
 
 def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:

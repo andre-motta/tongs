@@ -20,7 +20,7 @@
     {"requirement": "python3dist(platformdirs) >= 4.2", "import": "platformdirs"},
     {"requirement": "python3dist(pyasn1) >= 0.6", "import": "pyasn1"},
     {"requirement": "python3dist(pydantic) >= 2.12", "import": "pydantic"},
-    {"requirement": "python3dist(pydantic[email]) >= 2", "import": "email_validator"},
+    {"requirement": "python3dist(email-validator) >= 2", "import": "email_validator"},
     {"requirement": "python3dist(pyjwt) >= 2.1", "import": "jwt"},
     {"requirement": "python3dist(pyopenssl) >= 23", "import": "OpenSSL"},
     {"requirement": "python3dist(pyperclip) >= 1.8", "import": "pyperclip"},

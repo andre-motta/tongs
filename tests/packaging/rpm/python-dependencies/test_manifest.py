@@ -51,6 +51,7 @@ def test_manifest_requires_system_python_and_fedora_providers() -> None:
 
     assert "python(abi) >= 3.12" in requirements
     assert "python3dist(cryptography) >= 43" in requirements
+    assert "python3dist(email-validator) >= 2" in requirements
     assert "python3dist(id) >= 1.1" in requirements
     assert not any("sigstore" in requirement for requirement in requirements)
 

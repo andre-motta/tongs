@@ -4,6 +4,7 @@ import test, { afterEach } from "node:test";
 
 import { QueryCoordinator } from "../../../desktop/dist/src/renderer/core/query.js";
 import {
+  allocateDiscussionMarkdown,
   createReviewFeature,
   discussionDiffTarget,
 } from "../../../desktop/dist/src/renderer/features/review/index.js";
@@ -352,6 +353,110 @@ test("discussion diff targets use only actual path and side line data", () => {
       root_comment: { ...inline.root_comment, new_line: null, old_line: null },
     }),
     null,
+  );
+});
+
+test("discussion roots and replies use shared safe Markdown without changing source", async () => {
+  const review = "review-markdown-discussion";
+  const opened = [];
+  const suggestion = "```suggestion\nreplacement(`value`)\n```";
+  const markdownDiscussion = {
+    ...discussion(),
+    root_comment: {
+      ...discussion().root_comment,
+      body:
+        "## Requested change\n\nUse **care** and [docs](HTTPS://Example.COM/help). ![remote](https://bad.invalid/x.png) <script>bad()</script>",
+      replies: [
+        {
+          id: "reply-1",
+          author: { username: "author", display_name: "Author" },
+          body: suggestion,
+          created_at: "2026-09-08T00:01:00Z",
+        },
+      ],
+    },
+  };
+  const bridge = reviewBridge(review, {
+    listDiscussions: () => read({ discussions: [markdownDiscussion] }),
+    openExternal: async (url) => {
+      opened.push(url);
+      return true;
+    },
+  });
+  const view = renderFeature(bridge, review);
+
+  assert.equal(
+    (await view.findByRole("heading", { name: "Requested change" })).tagName,
+    "H2",
+  );
+  assert.equal(view.container.querySelector("strong")?.textContent, "care");
+  assert.equal(view.container.querySelector("img, script"), null);
+  assert.match(view.container.textContent, /\[Image: remote\]/);
+  assert.match(view.container.textContent, /<script>bad\(\)<\/script>/);
+  assert.equal(
+    view.container.querySelector("blockquote pre code")?.textContent,
+    "replacement(`value`)\n",
+  );
+  assert.equal(suggestion, "```suggestion\nreplacement(`value`)\n```");
+  assert.deepEqual(opened, []);
+  fireEvent.click(view.getByRole("link", { name: "docs" }));
+  await waitFor(() => assert.deepEqual(opened, ["https://example.com/help"]));
+});
+
+test("discussion Markdown aggregate allocation is deterministic in source order", () => {
+  const expensive = "😀".repeat(4096);
+  const item = {
+    ...discussion(),
+    root_comment: {
+      ...discussion().root_comment,
+      body: expensive,
+      replies: Array.from({ length: 17 }, (_, index) => ({
+        id: `reply-${index}`,
+        author: { username: "author", display_name: "Author" },
+        body: index === 16 ? "small later reply" : expensive,
+        created_at: "2026-09-08T00:01:00Z",
+      })),
+    },
+  };
+
+  const allocation = allocateDiscussionMarkdown([item]);
+
+  assert.equal(allocation[0].root, true);
+  assert.deepEqual(allocation[0].replies.slice(0, 15), Array(15).fill(true));
+  assert.equal(allocation[0].replies[15], false);
+  assert.equal(allocation[0].replies[16], false);
+  assert.equal(Object.isFrozen(allocation), true);
+  assert.equal(Object.isFrozen(allocation[0].replies), true);
+});
+
+test("discussion callsite stops rendering bodies after its aggregate budget", async () => {
+  const review = "review-markdown-budget";
+  const expensive = "😀".repeat(4096);
+  const discussions = Array.from({ length: 17 }, (_, index) => ({
+    ...discussion(),
+    id: `thread-${index}`,
+    root_comment: {
+      ...discussion().root_comment,
+      id: `comment-${index}`,
+      body: expensive,
+      replies: [],
+    },
+  }));
+  const bridge = reviewBridge(review, {
+    listDiscussions: () => read({ discussions }),
+  });
+  const view = renderFeature(bridge, review);
+
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll(".safe-markdown-aggregate-omission")
+        .length,
+      1,
+    ),
+  );
+  assert.equal(
+    view.container.querySelectorAll(".safe-markdown-fallback").length,
+    16,
   );
 });
 

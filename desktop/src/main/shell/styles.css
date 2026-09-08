@@ -512,14 +512,81 @@ button {
   margin: 0 0 14px;
   font-size: 16px;
 }
-.panel pre {
+.panel pre,
+.safe-markdown pre {
   overflow: auto;
   padding: 12px;
   background: var(--bg);
   white-space: pre-wrap;
 }
-.panel li {
+.panel li,
+.safe-markdown li {
   margin-left: 18px;
+}
+.safe-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.safe-markdown > :first-child {
+  margin-top: 0;
+}
+.safe-markdown > :last-child {
+  margin-bottom: 0;
+}
+.safe-markdown blockquote {
+  margin-left: 0;
+  border-left: 3px solid var(--border);
+  padding-left: 12px;
+  color: var(--muted);
+}
+.safe-markdown code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.safe-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.safe-markdown th,
+.safe-markdown td {
+  border: 1px solid var(--border);
+  padding: 6px 9px;
+  text-align: left;
+}
+.safe-markdown input[type="checkbox"] {
+  margin-right: 6px;
+}
+.safe-markdown-link {
+  display: inline;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.safe-markdown-link:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+.safe-markdown-link-inert,
+.safe-markdown-image-placeholder,
+.safe-markdown-link-error {
+  color: var(--muted);
+}
+.safe-markdown-link-error {
+  margin-left: 5px;
+  font-size: 12px;
+}
+.safe-markdown-fallback pre {
+  max-height: 260px;
+}
+.safe-markdown-aggregate-omission {
+  color: var(--muted);
+  font-style: italic;
 }
 .fact {
   display: flex;

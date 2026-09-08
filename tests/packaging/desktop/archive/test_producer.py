@@ -382,3 +382,196 @@ def test_unsafe_prepared_paths_are_rejected(path: str) -> None:
 
     with pytest.raises(ArchiveBuildError, match="path is invalid"):
         build_contract_documents(payload, PARAMETERS, _contract())
+
+
+def _write_npm_package(
+    desktop: Path,
+    lock_path: str,
+    *,
+    name: str,
+    version: str,
+    license_expression: object = "MIT",
+    license_name: str | None = "license",
+    notice: bytes | None = None,
+) -> None:
+    root = desktop / lock_path
+    root.mkdir(parents=True)
+    (root / "package.json").write_text(
+        json.dumps({"name": name, "version": version, "license": license_expression}),
+        encoding="utf-8",
+    )
+    if license_name is not None:
+        (root / license_name).write_bytes(f"license for {name}\n".encode())
+    if notice is not None:
+        (root / "NOTICE.txt").write_bytes(notice)
+
+
+def _write_npm_fixture(desktop: Path) -> None:
+    dependencies = {
+        "@scope/gamma": "3.0.0",
+        "alpha": "1.0.0",
+        "react": "19.2.8",
+    }
+    (desktop / "package.json").write_text(
+        json.dumps({"dependencies": dependencies}), encoding="utf-8"
+    )
+    packages = {
+        "": {"dependencies": dependencies},
+        "node_modules/@scope/gamma": {"version": "3.0.0", "license": "ISC"},
+        "node_modules/alpha": {
+            "version": "1.0.0",
+            "license": "MIT",
+            "dependencies": {"beta": "2.0.0"},
+            "optionalDependencies": {"missing-optional": "1.0.0"},
+        },
+        "node_modules/alpha/node_modules/beta": {
+            "version": "2.0.0",
+            "license": "Apache-2.0",
+        },
+        "node_modules/react": {"version": "19.2.8", "license": "MIT"},
+        "node_modules/dev-only": {
+            "version": "9.0.0",
+            "license": "MIT",
+            "dev": True,
+        },
+    }
+    (desktop / "package-lock.json").write_text(
+        json.dumps({"lockfileVersion": 3, "packages": packages}), encoding="utf-8"
+    )
+    _write_npm_package(
+        desktop,
+        "node_modules/@scope/gamma",
+        name="@scope/gamma",
+        version="3.0.0",
+        license_expression="ISC",
+        license_name="LICENSE.md",
+    )
+    _write_npm_package(
+        desktop,
+        "node_modules/alpha",
+        name="alpha",
+        version="1.0.0",
+        license_name="LICENSE",
+        notice=b"required notice\n",
+    )
+    _write_npm_package(
+        desktop,
+        "node_modules/alpha/node_modules/beta",
+        name="beta",
+        version="2.0.0",
+        license_expression="Apache-2.0",
+        license_name="license.txt",
+    )
+    _write_npm_package(
+        desktop,
+        "node_modules/react",
+        name="react",
+        version="19.2.8",
+        license_name="LICENSE",
+    )
+
+
+def test_production_npm_licenses_follow_exact_lock_graph_and_include_notices(
+    tmp_path: Path,
+) -> None:
+    desktop = tmp_path / "desktop"
+    desktop.mkdir()
+    _write_npm_fixture(desktop)
+
+    files, components = producer._production_npm_licenses(desktop)
+
+    assert set(files) == {
+        "runtime/licenses/npm/THIRD_PARTY_NOTICES.txt",
+        "runtime/licenses/react/LICENSE",
+    }
+    notice = files["runtime/licenses/npm/THIRD_PARTY_NOTICES.txt"][0]
+    assert [component["name"] for component in components] == [
+        "@scope/gamma",
+        "alpha",
+        "beta",
+        "react",
+    ]
+    assert components[-1]["license_paths"] == ["runtime/licenses/react/LICENSE"]
+    assert files["runtime/licenses/react/LICENSE"][0] == b"license for react\n"
+    assert all(
+        component["license_paths"] == ["runtime/licenses/npm/THIRD_PARTY_NOTICES.txt"]
+        for component in components[:-1]
+    )
+    assert b"Package: alpha\nVersion: 1.0.0\nSPDX license: MIT" in notice
+    assert b"--- BEGIN LICENSE ---\nlicense for alpha\n--- END LICENSE ---" in notice
+    assert (
+        b"--- BEGIN NOTICE.txt ---\nrequired notice\n--- END NOTICE.txt ---" in notice
+    )
+    assert b"dev-only" not in notice
+    assert (
+        notice
+        == producer._production_npm_licenses(desktop)[0][
+            "runtime/licenses/npm/THIRD_PARTY_NOTICES.txt"
+        ][0]
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("version", "version disagrees"),
+        ("missing_license", "no applicable license text"),
+        ("license_metadata", "license is not a string"),
+        ("dev", "development-only"),
+    ],
+)
+def test_production_npm_licenses_reject_inconsistent_installed_inputs(
+    tmp_path: Path, mutation: str, message: str
+) -> None:
+    desktop = tmp_path / "desktop"
+    desktop.mkdir()
+    _write_npm_fixture(desktop)
+    alpha = desktop / "node_modules/alpha"
+    if mutation == "version":
+        metadata = json.loads((alpha / "package.json").read_text())
+        metadata["version"] = "1.0.1"
+        (alpha / "package.json").write_text(json.dumps(metadata), encoding="utf-8")
+    elif mutation == "missing_license":
+        (alpha / "LICENSE").unlink()
+    elif mutation == "license_metadata":
+        metadata = json.loads((alpha / "package.json").read_text())
+        metadata["license"] = {"type": "MIT"}
+        (alpha / "package.json").write_text(json.dumps(metadata), encoding="utf-8")
+    else:
+        lock = json.loads((desktop / "package-lock.json").read_text())
+        lock["packages"]["node_modules/alpha"]["dev"] = True
+        (desktop / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+
+    with pytest.raises(ArchiveBuildError, match=message):
+        producer._production_npm_licenses(desktop)
+
+
+def test_production_npm_licenses_reject_unsafe_dependency_names(
+    tmp_path: Path,
+) -> None:
+    desktop = tmp_path / "desktop"
+    desktop.mkdir()
+    dependencies = {"../escape": "1.0.0"}
+    (desktop / "package.json").write_text(
+        json.dumps({"dependencies": dependencies}), encoding="utf-8"
+    )
+    (desktop / "package-lock.json").write_text(
+        json.dumps({"packages": {"": {"dependencies": dependencies}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ArchiveBuildError, match="package name is invalid"):
+        producer._production_npm_licenses(desktop)
+
+
+def test_production_npm_licenses_reject_linked_package_paths(tmp_path: Path) -> None:
+    desktop = tmp_path / "desktop"
+    desktop.mkdir()
+    _write_npm_fixture(desktop)
+    alpha = desktop / "node_modules/alpha"
+    moved = tmp_path / "moved-alpha"
+    alpha.rename(moved)
+    alpha.symlink_to(moved, target_is_directory=True)
+
+    with pytest.raises(ArchiveBuildError, match="path is not a directory"):
+        producer._production_npm_licenses(desktop)

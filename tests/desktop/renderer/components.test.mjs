@@ -362,6 +362,45 @@ test("overview and commits expose refresh and retry after retained failures", as
   assert.ok(commitView.getByText("Refresh again"));
 });
 
+test("overview renders its real description through restricted Markdown", async () => {
+  const opened = [];
+  const bridge = baseBridge({
+    getReview: () =>
+      read({
+        ...reviewSnapshot(),
+        detail: {
+          ...reviewSnapshot().detail,
+          description:
+            "## Rendered description\n\n| State | Value |\n| - | - |\n| Safe | **yes** |\n\n[Docs](HTTPS://Example.COM/docs) ![remote](https://bad.invalid/x.png)",
+        },
+      }),
+    openExternal: async (url) => {
+      opened.push(url);
+      return true;
+    },
+  });
+  const overview = createReviewOverviewFeature();
+  const view = render(
+    overview.render(featureContext(bridge), {
+      kind: "review",
+      item: reviewItem(),
+      panel: "overview",
+    }),
+  );
+
+  assert.equal(
+    (await view.findByRole("heading", { level: 2, name: "Rendered description" }))
+      .textContent,
+    "Rendered description",
+  );
+  assert.equal(view.container.querySelector("table strong")?.textContent, "yes");
+  assert.equal(view.container.querySelector("img"), null);
+  assert.match(view.container.textContent, /\[Image: remote\]/);
+  assert.deepEqual(opened, []);
+  fireEvent.click(view.getByRole("link", { name: "Docs" }));
+  await waitFor(() => assert.deepEqual(opened, ["https://example.com/docs"]));
+});
+
 function featureContext(bridge, navigate = () => {}) {
   return {
     bridge,

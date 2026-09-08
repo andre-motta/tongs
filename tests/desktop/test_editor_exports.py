@@ -114,6 +114,33 @@ async def test_stale_empty_reservation_is_recoverable(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_only_live_expiry_is_reclaimed_after_stale_lease(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "exports"
+    ledger = EditorExportLedger(root)
+    try:
+        reservation = await ledger.reserve(1, _token(1), now=0)
+        assert reservation is not None
+        export = _write_export(root, reservation.export_name, modified_at=0)
+
+        before_expiry = await ledger.reserve(
+            2, _token(2), now=STALE_EDITOR_EXPORT_SECONDS - 1
+        )
+        assert before_expiry is not None
+        assert export.exists()
+
+        after_expiry = await ledger.reserve(
+            3, _token(3), now=STALE_EDITOR_EXPORT_SECONDS + 1
+        )
+        assert after_expiry is not None
+        assert after_expiry.slot == reservation.slot
+        assert not export.exists()
+    finally:
+        await ledger.close()
+
+
+@pytest.mark.asyncio
 async def test_fresh_legacy_or_orphan_export_blocks_new_slots(
     tmp_path: Path,
 ) -> None:

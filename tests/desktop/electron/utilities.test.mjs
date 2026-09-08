@@ -131,6 +131,19 @@ test("clear cache has no renderer-selected target", async (t) => {
 
 test("editor export uses exact job, private file, safe argv, and exit cleanup", async (t) => {
   const { utility, transport, root, launches, children } = await fixture(t);
+  let allowRelease;
+  let descriptorsAtRelease;
+  const releaseGate = new Promise((resolve) => {
+    allowRelease = resolve;
+  });
+  transport.requestMutation = (method, params) => {
+    transport.mutations.push([method, params]);
+    if (method !== "utilities.job_log_release") {
+      return { result: Promise.resolve({ cleared: true }) };
+    }
+    descriptorsAtRelease = exportDescriptors(root);
+    return { result: releaseGate.then(() => ({ released: true })) };
+  };
 
   const result = await utility.openJobLogInEditor("job-handle");
 
@@ -152,6 +165,11 @@ test("editor export uses exact job, private file, safe argv, and exit cleanup", 
   assert.equal(children[0].unrefCalls, 1);
 
   children[0].emit("exit", 0);
+  while (descriptorsAtRelease === undefined) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(await descriptorsAtRelease, []);
+  allowRelease();
   await waitForEmptyDirectory(root);
   assert.deepEqual(await readdir(root), []);
   assert.deepEqual(transport.mutations, [[
@@ -341,6 +359,81 @@ test("exit cleanup preserves a replacement inode and its reservation", async (t)
   assert.equal(await readFile(exported, "utf8"), "replacement");
   assert.deepEqual(transport.mutations, []);
   await waitForNoExportDescriptors(root);
+});
+
+test("completion resolved during cleanup handoff is replayed exactly once", async (t) => {
+  const { root, transport, clipboard } = await fixture(t);
+  let child;
+  let cancellations = 0;
+  const launch = () => {
+    child = new FakeChild();
+    queueMicrotask(() => child.emit("spawn"));
+    return child;
+  };
+  const scheduleExpiry = () => {
+    child.emit("exit", 0);
+    return () => {
+      cancellations += 1;
+    };
+  };
+  const utility = new WorkspaceUtilities(
+    transport,
+    clipboard,
+    root,
+    launch,
+    scheduleExpiry,
+  );
+
+  assert.equal((await utility.openJobLogInEditor("job-handle")).outcome, "started");
+  await waitForEmptyDirectory(root);
+  await waitForNoExportDescriptors(root);
+
+  assert.equal(cancellations, 1);
+  assert.deepEqual(transport.mutations, [[
+    "utilities.job_log_release",
+    { slot: 1, token: "a".repeat(32) },
+  ]]);
+  child.emit("exit", 9);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(transport.mutations.length, 1);
+});
+
+test("live export deadline closes only the descriptor and ignores late exit", async (t) => {
+  const { root, transport, clipboard } = await fixture(t);
+  let child;
+  let expire;
+  const launch = () => {
+    child = new FakeChild();
+    queueMicrotask(() => child.emit("spawn"));
+    return child;
+  };
+  const utility = new WorkspaceUtilities(
+    transport,
+    clipboard,
+    root,
+    launch,
+    (scheduled) => {
+      expire = scheduled;
+      return () => undefined;
+    },
+  );
+
+  assert.equal((await utility.openJobLogInEditor("job-handle")).outcome, "started");
+  const [exportName] = await readdir(root);
+  const exportPath = path.join(root, exportName);
+  assert.equal(await readFile(exportPath, "utf8"), "safe log\n");
+
+  expire();
+  await waitForNoExportDescriptors(root);
+
+  assert.equal(await readFile(exportPath, "utf8"), "safe log\n");
+  assert.deepEqual(transport.mutations, []);
+  assert.equal(child.listenerCount("exit"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+  child.emit("exit", 0);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(await readFile(exportPath, "utf8"), "safe log\n");
+  assert.deepEqual(transport.mutations, []);
 });
 
 test("early nonzero editor exit is distinct and removes the export", async (t) => {

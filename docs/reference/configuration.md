@@ -60,6 +60,13 @@ commands must themselves start a suitable graphical editor and wait for it. If t
 editor process starts, Tongs reports that start separately from confirmation that
 the editor read the file.
 
+While the editor process runs, Tongs keeps the private export descriptor open so
+live cleanup can remove only that exact file. After 23 hours, the desktop process
+closes its descriptor and leaves the export and reservation in place. A later
+editor export attempt can reclaim the exact private tokenized export once its
+24-hour stale lease has elapsed. This scheduling assumes the desktop event loop
+resumes normally after system sleep. Closing Tongs never terminates the editor.
+
 ## `[ui]`
 
 | Key | Type | Default | Description |

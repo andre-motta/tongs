@@ -22,6 +22,7 @@ const MAX_EDITOR_ARGUMENTS = 64;
 const MAX_EDITOR_ARGUMENT_BYTES = 4096;
 const LAUNCH_TIMEOUT_MILLISECONDS = 5_000;
 const EARLY_EXIT_MILLISECONDS = 250;
+const LIVE_EXPORT_LEASE_MILLISECONDS = 23 * 60 * 60 * 1_000;
 const EXPORT_NAME = /^tongs-slot-([1-8])-job-([1-9][0-9]{0,18})-([0-9a-f]{32})\.log$/;
 
 interface UtilityTransport {
@@ -86,6 +87,8 @@ type SpawnEditor = (
   args: readonly string[],
 ) => ChildProcess;
 
+type ScheduleExportExpiry = (expire: () => void) => () => void;
+
 export class WorkspaceUtilities {
   private openingEditor = false;
   private readonly exportRoot: string;
@@ -95,6 +98,8 @@ export class WorkspaceUtilities {
     private readonly clipboard: ClipboardWriter,
     exportRoot: string,
     private readonly spawnEditor: SpawnEditor = defaultSpawnEditor,
+    private readonly scheduleExportExpiry: ScheduleExportExpiry =
+      defaultScheduleExportExpiry,
   ) {
     if (!path.isAbsolute(exportRoot))
       throw new Error("The editor export root must be absolute");
@@ -205,13 +210,17 @@ export class WorkspaceUtilities {
               retainedReservation,
             );
           } else {
-            attachCleanup(started.child, () =>
-              this.scheduleCleanup(
+            attachBoundedCleanup(
+              started.completion,
+              started.cancelCompletion,
+              () => this.scheduleCleanup(
                 retainedPath,
                 retainedFile,
                 retainedIdentity,
                 retainedReservation,
               ),
+              () => this.scheduleExpiry(retainedFile),
+              this.scheduleExportExpiry,
             );
             started.child.unref();
           }
@@ -249,13 +258,17 @@ export class WorkspaceUtilities {
           "Editor process started and exited. Tongs cannot confirm that the exported log was opened.",
         );
       }
-      attachCleanup(started.child, () =>
-        this.scheduleCleanup(
+      attachBoundedCleanup(
+        started.completion,
+        started.cancelCompletion,
+        () => this.scheduleCleanup(
           retainedPath,
           retainedFile,
           retainedIdentity,
           retainedReservation,
         ),
+        () => this.scheduleExpiry(retainedFile),
+        this.scheduleExportExpiry,
       );
       started.child.unref();
       return utilityResult(
@@ -306,6 +319,10 @@ export class WorkspaceUtilities {
     void this.cleanupExport(exportPath, exportFile, identity, reservation);
   }
 
+  private scheduleExpiry(exportFile: FileHandle): void {
+    void exportFile.close().catch(() => undefined);
+  }
+
   private async cleanupExport(
     exportPath: string | null,
     exportFile: FileHandle | null,
@@ -322,6 +339,14 @@ export class WorkspaceUtilities {
               identity,
             ).catch(() => false);
       if (!absent) return;
+      if (exportFile !== null) {
+        try {
+          await exportFile.close();
+        } catch {
+          return;
+        }
+        exportFile = null;
+      }
       try {
         const result = await this.transport.requestMutation(
           "utilities.job_log_release",
@@ -347,15 +372,35 @@ function defaultSpawnEditor(command: string, args: readonly string[]): ChildProc
   });
 }
 
-function attachCleanup(child: ChildProcess, cleanup: () => void): void {
-  let scheduled = false;
-  const once = () => {
-    if (scheduled) return;
-    scheduled = true;
+function defaultScheduleExportExpiry(expire: () => void): () => void {
+  const timer = setTimeout(expire, LIVE_EXPORT_LEASE_MILLISECONDS);
+  timer.unref();
+  return () => clearTimeout(timer);
+}
+
+function attachBoundedCleanup(
+  completion: Promise<number | null | "error">,
+  cancelCompletion: () => void,
+  cleanup: () => void,
+  expire: () => void,
+  scheduleExpiry: ScheduleExportExpiry,
+): void {
+  let settled = false;
+  let cancelExpiry: () => void = () => undefined;
+  const completeOnce = () => {
+    if (settled) return;
+    settled = true;
+    cancelExpiry();
     cleanup();
   };
-  child.once("exit", once);
-  child.once("error", once);
+  const expireOnce = () => {
+    if (settled) return;
+    settled = true;
+    cancelCompletion();
+    expire();
+  };
+  cancelExpiry = scheduleExpiry(expireOnce);
+  void completion.then(completeOnce);
 }
 
 async function startEditor(
@@ -363,7 +408,13 @@ async function startEditor(
   argv: readonly string[],
   exportPath: string,
 ): Promise<
-  | { readonly ok: true; readonly child: ChildProcess; readonly exited: boolean }
+  | {
+      readonly ok: true;
+      readonly child: ChildProcess;
+      readonly completion: Promise<number | null | "error">;
+      readonly cancelCompletion: () => void;
+      readonly exited: boolean;
+    }
   | {
       readonly ok: false;
       readonly message: string;
@@ -374,6 +425,8 @@ async function startEditor(
       readonly message: string;
       readonly retain: true;
       readonly child: ChildProcess;
+      readonly completion: Promise<number | null | "error">;
+      readonly cancelCompletion: () => void;
       readonly exited: boolean;
     }
 > {
@@ -383,32 +436,34 @@ async function startEditor(
   let exitObserved = false;
   let observedExitCode: number | null = null;
   let errorObserved = false;
-  const exit = new Promise<number | null>((resolve) => {
-    child.once("exit", (code) => {
-      exitObserved = true;
-      observedExitCode = code;
-      resolve(code);
-    });
+  let completionSettled = false;
+  let resolveCompletion: (value: number | null | "error") => void = () =>
+    undefined;
+  const completion = new Promise<number | null | "error">((resolve) => {
+    resolveCompletion = resolve;
   });
-  const processError = new Promise<"error">((resolve) => {
-    child.once("error", () => {
-      errorObserved = true;
-      resolve("error");
-    });
-  });
-  const launchOutcome = await new Promise<"spawn" | "error" | "timeout">(
-    (resolve) => {
-      const timer = setTimeout(() => resolve("timeout"), LAUNCH_TIMEOUT_MILLISECONDS);
-      child.once("spawn", () => {
-        clearTimeout(timer);
-        resolve("spawn");
-      });
-      child.once("error", () => {
-        clearTimeout(timer);
-        resolve("error");
-      });
-    },
-  );
+  const cancelCompletion = () => {
+    child.off("exit", onExit);
+    child.off("error", onError);
+  };
+  const onExit = (code: number | null) => {
+    if (completionSettled) return;
+    completionSettled = true;
+    exitObserved = true;
+    observedExitCode = code;
+    cancelCompletion();
+    resolveCompletion(code);
+  };
+  const onError = () => {
+    if (completionSettled) return;
+    completionSettled = true;
+    errorObserved = true;
+    cancelCompletion();
+    resolveCompletion("error");
+  };
+  child.once("exit", onExit);
+  child.once("error", onError);
+  const launchOutcome = await waitForEditorLaunch(child);
   if (launchOutcome === "error") {
     return {
       ok: false,
@@ -422,6 +477,8 @@ async function startEditor(
       message: "The editor did not report starting within five seconds.",
       retain: true,
       child,
+      completion,
+      cancelCompletion,
       exited: exitObserved,
     };
   }
@@ -430,8 +487,7 @@ async function startEditor(
     : exitObserved
     ? observedExitCode
     : await Promise.race<number | null | "error" | "running">([
-        exit,
-        processError,
+        completion,
         new Promise<"running">((resolve) =>
           setTimeout(() => resolve("running"), EARLY_EXIT_MILLISECONDS),
         ),
@@ -450,7 +506,37 @@ async function startEditor(
       retain: false,
     };
   }
-  return { ok: true, child, exited: earlyExit !== "running" };
+  return {
+    ok: true,
+    child,
+    completion,
+    cancelCompletion,
+    exited: earlyExit !== "running",
+  };
+}
+
+function waitForEditorLaunch(
+  child: ChildProcess,
+): Promise<"spawn" | "error" | "timeout"> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (outcome: "spawn" | "error" | "timeout") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("spawn", onSpawn);
+      child.off("error", onError);
+      resolve(outcome);
+    };
+    const onSpawn = () => settle("spawn");
+    const onError = () => settle("error");
+    const timer = setTimeout(
+      () => settle("timeout"),
+      LAUNCH_TIMEOUT_MILLISECONDS,
+    );
+    child.once("spawn", onSpawn);
+    child.once("error", onError);
+  });
 }
 
 async function createPrivateExport(filePath: string): Promise<PrivateExport> {

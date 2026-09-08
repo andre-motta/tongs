@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[4]
@@ -147,7 +148,14 @@ def test_verifier_python_reason_stage_replays_retained_dnf5_output(
     )
     assert retained_before == b"Dependency\n"
 
-    def run_case(name: str, after: bytes) -> subprocess.CompletedProcess[str]:
+    expected_nevra = "python3|0|3.14.7|1.fc44|x86_64"
+
+    def run_case(
+        name: str,
+        after: bytes,
+        *,
+        after_nevra: str = expected_nevra,
+    ) -> subprocess.CompletedProcess[str]:
         case_dir = tmp_path / name
         case_dir.mkdir()
         before_path = case_dir / "reason-before.txt"
@@ -160,7 +168,17 @@ set -e
 evidence_dir=$EVIDENCE_DIR
 rpm() {{
     [[ $1 == -q && $2 == python3 ]]
-    printf 'python3|0|3.14.7|1.fc44|x86_64\n'
+    if [[ -e $MARK_STATE ]]; then
+        printf '%s\n' "$RPM_AFTER"
+    else
+        printf '%s\n' "$RPM_BEFORE"
+    fi
+}}
+cmp() {{
+    [[ $# -eq 2 ]]
+    "$TEST_PYTHON" -E -P -c \
+        'from pathlib import Path; import sys; raise SystemExit(Path(sys.argv[1]).read_bytes() != Path(sys.argv[2]).read_bytes())' \
+        "$1" "$2"
 }}
 dnf() {{
     if [[ $1 == repoquery ]]; then
@@ -190,6 +208,9 @@ retain_verifier_python
                 "MARK_STATE": str(mark_state),
                 "REASON_AFTER": str(after_path),
                 "REASON_BEFORE": str(before_path),
+                "RPM_AFTER": after_nevra,
+                "RPM_BEFORE": expected_nevra,
+                "TEST_PYTHON": sys.executable,
             },
             text=True,
             check=False,
@@ -223,6 +244,13 @@ retain_verifier_python
         result = run_case(name, after)
         assert result.returncode == 1
         assert "verifier Python reason" in result.stderr
+
+    changed_nevra = run_case(
+        "changed-nevra",
+        b"User\n",
+        after_nevra="python3|0|3.14.8|1.fc44|x86_64",
+    )
+    assert changed_nevra.returncode == 1
 
 
 def test_hosted_smoke_executes_complete_retained_validation_path(

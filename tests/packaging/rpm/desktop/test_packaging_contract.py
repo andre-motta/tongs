@@ -111,11 +111,14 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert '"$evidence_dir/$label.exit-status"' in installer
     for label in ("sidecar-plugin", "mcp-command", "post-mcp-sidecar-plugin"):
         assert f"run_bounded_check {label} 20s" in installer
-    mark_index = installer.index("dnf mark user python3")
-    assert installer.index("run_desktop_smoke hosted-launch") < mark_index
-    assert mark_index < installer.index("snapshot before-mcp")
-    assert "grep -Fx dependency" in installer
-    assert "grep -Fx user" in installer
+    retain_index = installer.index(
+        "\nretain_verifier_python\n",
+        installer.index("run_desktop_smoke hosted-launch"),
+    )
+    assert installer.index("run_desktop_smoke hosted-launch") < retain_index
+    assert retain_index < installer.index("snapshot before-mcp")
+    assert "grep -Fx dependency" not in installer
+    assert "assert_verifier_python_user_reason" in installer
     assert "assert_verifier_python final-cycle-remove" in installer
     assert "assert_verifier_python final-uninstall" in installer
     assert "assert_tongs_import_absent final-cycle-remove" in installer
@@ -126,6 +129,100 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     )
     assert transactions
     assert all('"${dnf_transaction_options[@]}"' in line for line in transactions)
+
+
+def test_verifier_python_reason_stage_replays_retained_dnf5_output(
+    tmp_path: Path,
+) -> None:
+    installer = (PACKAGING / "install_and_verify.sh").read_text()
+    function_start = installer.index("record_verifier_python_reason() {")
+    function_end = installer.index("\nassert_tongs_import_absent() {", function_start)
+    function_source = installer[function_start:function_end]
+    retained_before = (
+        Path(__file__).with_name("fixtures")
+        / "verifier-python-reason-before-6e109a8.txt"
+    ).read_bytes()
+    assert hashlib.sha256(retained_before).hexdigest() == (
+        "902790265bb6626c5aa77f04db75cf8a8a491da92fa48e7362f4b157b4865f5a"
+    )
+    assert retained_before == b"Dependency\n"
+
+    def run_case(name: str, after: bytes) -> subprocess.CompletedProcess[str]:
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        before_path = case_dir / "reason-before.txt"
+        after_path = case_dir / "reason-after.txt"
+        mark_state = case_dir / "marked"
+        before_path.write_bytes(retained_before)
+        after_path.write_bytes(after)
+        script = f"""
+set -e
+evidence_dir=$EVIDENCE_DIR
+rpm() {{
+    [[ $1 == -q && $2 == python3 ]]
+    printf 'python3|0|3.14.7|1.fc44|x86_64\n'
+}}
+dnf() {{
+    if [[ $1 == repoquery ]]; then
+        if [[ -e $MARK_STATE ]]; then
+            cat -- "$REASON_AFTER"
+        else
+            cat -- "$REASON_BEFORE"
+        fi
+    elif [[ $1 == mark && $2 == user && $3 == python3 ]]; then
+        : >"$MARK_STATE"
+        printf 'Package python3 marked as user installed.\n'
+    else
+        return 2
+    fi
+}}
+assert_sentinels() {{
+    [[ $1 == verifier-python-mark ]]
+}}
+{function_source}
+retain_verifier_python
+"""
+        return subprocess.run(
+            ["bash", "-c", script],
+            env={
+                **os.environ,
+                "EVIDENCE_DIR": str(case_dir),
+                "MARK_STATE": str(mark_state),
+                "REASON_AFTER": str(after_path),
+                "REASON_BEFORE": str(before_path),
+            },
+            text=True,
+            check=False,
+            capture_output=True,
+        )
+
+    for name, after in (("title-user", b"User\n"), ("lower-user", b"user\n")):
+        result = run_case(name, after)
+        assert result.returncode == 0, result.stderr
+        case_dir = tmp_path / name
+        assert (case_dir / "verifier-python-reason-before.txt").read_bytes() == (
+            retained_before
+        )
+        assert (case_dir / "after-mark-verifier-python-reason.txt").read_bytes() == (
+            after
+        )
+        assert (
+            case_dir / "after-mark-verifier-python-reason-normalized.txt"
+        ).read_text() == "user\n"
+        assert (case_dir / "verifier-python-nevra.txt").read_bytes() == (
+            case_dir / "after-mark-verifier-python-nevra.txt"
+        ).read_bytes()
+
+    for name, after in (
+        ("dependency", b"Dependency\n"),
+        ("substring", b"Superuser\n"),
+        ("nonword", b"User account\n"),
+        ("empty", b"\n"),
+        ("hidden-trailing", b"User\ntrailing"),
+    ):
+        result = run_case(name, after)
+        assert result.returncode == 1
+        assert "verifier Python reason" in result.stderr
 
 
 def test_hosted_smoke_executes_complete_retained_validation_path(

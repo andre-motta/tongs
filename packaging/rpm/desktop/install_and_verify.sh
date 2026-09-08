@@ -174,6 +174,38 @@ installed_closure() {
         --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{from_repo}\n' \
         | sort >"$1"
 }
+record_verifier_python_reason() {
+    local output=$1
+    local reasons=()
+    dnf repoquery --installed --queryformat '%{reason}\n' python3 >"$output"
+    mapfile -t reasons <"$output"
+    [[ ${#reasons[@]} -eq 1 && -n ${reasons[0]} ]] || {
+        printf 'expected one nonempty lifecycle verifier Python reason\n' >&2
+        return 1
+    }
+}
+assert_verifier_python_user_reason() {
+    local input=$1
+    local normalized_output=$2
+    local reasons=()
+    local normalized
+    mapfile -t reasons <"$input"
+    [[ ${#reasons[@]} -eq 1 && -n ${reasons[0]} ]] || {
+        printf 'expected one nonempty lifecycle verifier Python reason\n' >&2
+        return 1
+    }
+    [[ ${reasons[0]} =~ ^[A-Za-z]+$ ]] || {
+        printf 'lifecycle verifier Python reason is not an ASCII word\n' >&2
+        return 1
+    }
+    local LC_ALL=C
+    normalized=${reasons[0],,}
+    printf '%s\n' "$normalized" >"$normalized_output"
+    [[ $normalized == user ]] || {
+        printf 'lifecycle verifier Python reason is not user\n' >&2
+        return 1
+    }
+}
 assert_verifier_python() {
     local name=$1
     [[ -x /usr/bin/python3 ]] || {
@@ -185,9 +217,21 @@ assert_verifier_python() {
         >"$evidence_dir/$name-verifier-python-nevra.txt"
     cmp "$evidence_dir/verifier-python-nevra.txt" \
         "$evidence_dir/$name-verifier-python-nevra.txt"
-    dnf repoquery --installed --queryformat '%{reason}\n' python3 \
-        >"$evidence_dir/$name-verifier-python-reason.txt"
-    grep -Fx user "$evidence_dir/$name-verifier-python-reason.txt"
+    record_verifier_python_reason \
+        "$evidence_dir/$name-verifier-python-reason.txt"
+    assert_verifier_python_user_reason \
+        "$evidence_dir/$name-verifier-python-reason.txt" \
+        "$evidence_dir/$name-verifier-python-reason-normalized.txt"
+}
+retain_verifier_python() {
+    rpm -q python3 \
+        --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
+        >"$evidence_dir/verifier-python-nevra.txt"
+    record_verifier_python_reason \
+        "$evidence_dir/verifier-python-reason-before.txt"
+    dnf mark user python3 2>&1 | tee "$evidence_dir/dnf-mark-verifier-python.log"
+    assert_sentinels verifier-python-mark
+    assert_verifier_python after-mark
 }
 assert_tongs_import_absent() {
     local name=$1
@@ -385,15 +429,7 @@ run_desktop_smoke hosted-launch
 printf 'This hosted Xvfb smoke proves launcher/runtime liveness only; it makes no hardware GPU claim.\n' \
     >"$evidence_dir/hosted-launch-scope.txt"
 
-rpm -q python3 \
-    --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
-    >"$evidence_dir/verifier-python-nevra.txt"
-dnf repoquery --installed --queryformat '%{reason}\n' python3 \
-    >"$evidence_dir/verifier-python-reason-before.txt"
-grep -Fx dependency "$evidence_dir/verifier-python-reason-before.txt"
-dnf mark user python3 2>&1 | tee "$evidence_dir/dnf-mark-verifier-python.log"
-assert_sentinels verifier-python-mark
-assert_verifier_python after-mark
+retain_verifier_python
 
 snapshot before-mcp
 installed_closure "$evidence_dir/mcp-closure-before.txt"

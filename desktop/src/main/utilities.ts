@@ -153,6 +153,7 @@ export class WorkspaceUtilities {
     }
     this.openingEditor = true;
     let exportPath: string | null = null;
+    let exportFile: FileHandle | null = null;
     let reservation: EditorReservation | null = null;
     let identity: FileIdentity | null = null;
     try {
@@ -178,12 +179,9 @@ export class WorkspaceUtilities {
         throw new Error("Editor log exceeds the accepted bound");
       exportPath = path.join(this.exportRoot, reservation.exportName);
       const created = await createPrivateExport(exportPath);
+      exportFile = created.file;
       identity = created.identity;
-      try {
-        await created.file.writeFile(content, { encoding: "utf8" });
-      } finally {
-        await created.file.close();
-      }
+      await exportFile.writeFile(content, { encoding: "utf8" });
       const started = await startEditor(
         this.spawnEditor,
         plan.argv,
@@ -192,14 +190,17 @@ export class WorkspaceUtilities {
       if (!started.ok) {
         if (started.retain) {
           const retainedPath = exportPath;
+          const retainedFile = exportFile;
           const retainedReservation = reservation;
           const retainedIdentity = identity;
           exportPath = null;
+          exportFile = null;
           reservation = null;
           identity = null;
           if (started.exited) {
             await this.cleanupExport(
               retainedPath,
+              retainedFile,
               retainedIdentity,
               retainedReservation,
             );
@@ -207,6 +208,7 @@ export class WorkspaceUtilities {
             attachCleanup(started.child, () =>
               this.scheduleCleanup(
                 retainedPath,
+                retainedFile,
                 retainedIdentity,
                 retainedReservation,
               ),
@@ -214,22 +216,31 @@ export class WorkspaceUtilities {
             started.child.unref();
           }
         } else {
-          await this.cleanupExport(exportPath, identity, reservation);
+          await this.cleanupExport(
+            exportPath,
+            exportFile,
+            identity,
+            reservation,
+          );
           exportPath = null;
+          exportFile = null;
           reservation = null;
           identity = null;
         }
         return utilityResult("failed", started.message);
       }
       const retainedPath = exportPath;
+      const retainedFile = exportFile;
       const retainedReservation = reservation;
       const retainedIdentity = identity;
       exportPath = null;
+      exportFile = null;
       reservation = null;
       identity = null;
       if (started.exited) {
         await this.cleanupExport(
           retainedPath,
+          retainedFile,
           retainedIdentity,
           retainedReservation,
         );
@@ -241,6 +252,7 @@ export class WorkspaceUtilities {
       attachCleanup(started.child, () =>
         this.scheduleCleanup(
           retainedPath,
+          retainedFile,
           retainedIdentity,
           retainedReservation,
         ),
@@ -252,7 +264,12 @@ export class WorkspaceUtilities {
       );
     } catch {
       if (reservation !== null) {
-        await this.cleanupExport(exportPath, identity, reservation);
+        await this.cleanupExport(
+          exportPath,
+          exportFile,
+          identity,
+          reservation,
+        );
       }
       return utilityResult(
         "failed",
@@ -282,36 +299,42 @@ export class WorkspaceUtilities {
 
   private scheduleCleanup(
     exportPath: string,
+    exportFile: FileHandle,
     identity: FileIdentity,
     reservation: EditorReservation,
   ): void {
-    void this.cleanupExport(exportPath, identity, reservation);
+    void this.cleanupExport(exportPath, exportFile, identity, reservation);
   }
 
   private async cleanupExport(
     exportPath: string | null,
+    exportFile: FileHandle | null,
     identity: FileIdentity | null,
     reservation: EditorReservation,
   ): Promise<void> {
-    const absent =
-      exportPath === null
-        ? true
-        : await removeExport(
-            this.exportRoot,
-            exportPath,
-            identity,
-          ).catch(() => false);
-    if (!absent) return;
     try {
-      const result = await this.transport.requestMutation(
-        "utilities.job_log_release",
-        { slot: reservation.slot, token: reservation.token },
-      ).result;
-      exactKeys(result, ["released"]);
-      if (typeof result.released !== "boolean")
-        throw new Error("Invalid editor reservation release result");
-    } catch {
-      // The retained ledger row is reclaimed by a later explicit operation.
+      const absent =
+        exportPath === null
+          ? true
+          : await removeExport(
+              this.exportRoot,
+              exportPath,
+              identity,
+            ).catch(() => false);
+      if (!absent) return;
+      try {
+        const result = await this.transport.requestMutation(
+          "utilities.job_log_release",
+          { slot: reservation.slot, token: reservation.token },
+        ).result;
+        exactKeys(result, ["released"]);
+        if (typeof result.released !== "boolean")
+          throw new Error("Invalid editor reservation release result");
+      } catch {
+        // The retained ledger row is reclaimed by a later explicit operation.
+      }
+    } finally {
+      await exportFile?.close().catch(() => undefined);
     }
   }
 }

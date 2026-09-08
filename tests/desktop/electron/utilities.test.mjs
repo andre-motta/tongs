@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -158,6 +158,7 @@ test("editor export uses exact job, private file, safe argv, and exit cleanup", 
     "utilities.job_log_release",
     { slot: 1, token: "a".repeat(32) },
   ]]);
+  await waitForNoExportDescriptors(root);
 });
 
 async function waitForEmptyDirectory(directory) {
@@ -167,8 +168,27 @@ async function waitForEmptyDirectory(directory) {
   }
 }
 
+async function exportDescriptors(directory) {
+  if (process.platform !== "linux") return [];
+  const descriptors = await readdir("/proc/self/fd");
+  const targets = await Promise.all(
+    descriptors.map(async (descriptor) =>
+      readlink(`/proc/self/fd/${descriptor}`).catch(() => "")
+    ),
+  );
+  return targets.filter((target) => target.startsWith(directory));
+}
+
+async function waitForNoExportDescriptors(directory) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if ((await exportDescriptors(directory)).length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`export descriptor remained open for ${directory}`);
+}
+
 test("duplicate editor launch returns busy without replaying the job read", async (t) => {
-  const { utility, transport } = await fixture(t);
+  const { utility, transport, root, children } = await fixture(t);
   let release;
   transport.requestRead = (method, params) => {
     transport.reads.push([method, params]);
@@ -181,6 +201,9 @@ test("duplicate editor launch returns busy without replaying the job read", asyn
   assert.equal(transport.reads.length, 1);
   release();
   await first;
+  children[0].emit("exit", 0);
+  await waitForEmptyDirectory(root);
+  await waitForNoExportDescriptors(root);
 });
 
 test("disabled editor outcome does not create a file or launch", async (t) => {
@@ -218,6 +241,7 @@ test("missing editor executable has an actionable failure and cleans the export"
   assert.equal(result.outcome, "failed");
   assert.match(result.message, /executable is unavailable/);
   assert.deepEqual(await readdir(root), []);
+  await waitForNoExportDescriptors(root);
 });
 
 test("editor root rejects a symlink without requesting a reservation", async (t) => {
@@ -307,11 +331,16 @@ test("exit cleanup preserves a replacement inode and its reservation", async (t)
   await rm(exported);
   await writeFile(exported, "replacement", { mode: 0o600 });
 
+  if (process.platform === "linux") {
+    assert.deepEqual(await exportDescriptors(root), [`${exported} (deleted)`]);
+  }
+
   children[0].emit("exit", 0);
   await new Promise((resolve) => setTimeout(resolve, 25));
 
   assert.equal(await readFile(exported, "utf8"), "replacement");
   assert.deepEqual(transport.mutations, []);
+  await waitForNoExportDescriptors(root);
 });
 
 test("early nonzero editor exit is distinct and removes the export", async (t) => {
@@ -331,6 +360,7 @@ test("early nonzero editor exit is distinct and removes the export", async (t) =
   assert.equal(result.outcome, "failed");
   assert.match(result.message, /exited with an error/);
   assert.deepEqual(await readdir(root), []);
+  await waitForNoExportDescriptors(root);
 });
 
 test("editor error after spawn is distinct and removes the export", async (t) => {
@@ -350,4 +380,5 @@ test("editor error after spawn is distinct and removes the export", async (t) =>
   assert.equal(result.outcome, "failed");
   assert.match(result.message, /reported an error/);
   assert.deepEqual(await readdir(root), []);
+  await waitForNoExportDescriptors(root);
 });

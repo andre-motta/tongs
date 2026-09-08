@@ -147,9 +147,10 @@ async function runProof() {
       const restored = labelled("Quick comment");
       if (restored.value !== "kept across panel navigation")
         throw new Error("ordinary panel navigation lost the composer buffer");
-      setValue(restored, "");
       return snapshot();
     `);
+    const navigationScreenshot = await capture("00-unsent-buffer-after-navigation.png");
+    await evaluate(`setValue(labelled("Quick comment"), ""); return true;`);
 
     mark("exercise known and unknown quick comments without replay");
     await sendComposer("Quick comment", "controlled known quick comment");
@@ -224,7 +225,7 @@ async function runProof() {
     await clickButton("Confirm Close");
     const conflict = await evaluate(`
       await waitFor("known conflict", () =>
-        document.body.innerText.includes("review action was rejected with a known result"));
+        document.body.innerText.includes("review changed remotely"));
       return snapshot();
     `);
     const conflictScreenshot = await capture("05-known-conflict.png");
@@ -235,6 +236,40 @@ async function runProof() {
     nativeTheme.themeSource = "light";
     window.setSize(900, 720);
     await waitForFrames(3);
+    const lightConflictNotice = await evaluate(`
+      const alerts = [
+        ...document.querySelectorAll('.review-workflow-shell [role="alert"]'),
+      ];
+      if (alerts.length !== 1) throw new Error("known conflict must render one alert");
+      const alert = alerts[0];
+      if (!alert.textContent.includes("The review changed remotely."))
+        throw new Error("known conflict alert is not actionable");
+      const style = getComputedStyle(alert);
+      const channels = (value) => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
+      const luminance = (value) => {
+        const linear = channels(value).map((channel) => {
+          const normalized = channel / 255;
+          return normalized <= 0.04045
+            ? normalized / 12.92
+            : ((normalized + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+      };
+      const foreground = luminance(style.color);
+      const background = luminance(style.backgroundColor);
+      const contrastRatio =
+        (Math.max(foreground, background) + 0.05) /
+        (Math.min(foreground, background) + 0.05);
+      if (contrastRatio < 4.5)
+        throw new Error("light conflict notice contrast is below 4.5:1");
+      return {
+        alertCount: alerts.length,
+        text: alert.textContent,
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        contrastRatio,
+      };
+    `);
     const finalScreenshot = await capture("06-review-light-narrow.png");
     const finalUi = await evaluate("return snapshot();");
     const actions = await readActions();
@@ -290,9 +325,11 @@ async function runProof() {
       sessionGeneration: transport.sessionGeneration,
       initial,
       demonstrations: { unknown, recoveredDraft, submitted, conflict },
+      lightConflictNotice,
       finalUi,
       mockForgeActions: actions,
       screenshots: [
+        navigationScreenshot,
         unknownScreenshot,
         draftScreenshot,
         recoveredScreenshot,

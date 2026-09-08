@@ -218,6 +218,28 @@ test("quick verdict and merge cleanup require explicit confirmation with immutab
   assert.deepEqual(merges[0].source_cleanup, { branch: "feature" });
 });
 
+test("known quick rejection renders one actionable alert", async () => {
+  const review = "review-known-rejection";
+  const bridge = reviewBridge(review, {
+    getReviewActionCapabilities: () =>
+      read({ review, capabilities: { merge: false, close: true, reopen: false, unapprove: false } }),
+    closeReview: async () => {
+      throw {
+        code: "conflict",
+        message: "raw backend text that must stay hidden",
+        retryable: false,
+      };
+    },
+  });
+  const view = renderFeature(bridge, review);
+  fireEvent.click(await view.findByRole("button", { name: "Close" }));
+  fireEvent.click(view.getByRole("button", { name: "Confirm Close" }));
+  const message = "The review changed remotely. Refresh it before choosing another action.";
+  assert.equal((await view.findAllByText(message)).length, 1);
+  assert.equal(view.getAllByRole("alert").length, 1);
+  assert.equal(view.queryByText(/raw backend text/), null);
+});
+
 test("draft comments are reviewable, editable, and deliberately removable", async () => {
   const review = "review-draft-comments";
   const comments = [

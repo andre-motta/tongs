@@ -35,6 +35,40 @@ export type SourceCleanupOutcome =
   | "rejected"
   | "unknown";
 
+const REVIEW_MUTATION_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  authentication_failed: "Sign in to the forge again, then retry the review action.",
+  closed: "This review session is closed. Reopen it before continuing.",
+  configuration_invalid:
+    "Review actions are unavailable because the local service configuration is invalid.",
+  conflict: "The review changed remotely. Refresh it before choosing another action.",
+  invalid_input: "Check the review action input and the current remote state.",
+  invalid_response: "The review action result could not be confirmed.",
+  mutation_timeout: "The review action result could not be confirmed.",
+  network_unavailable:
+    "The forge could not be reached. Refresh remote state before deciding whether to retry.",
+  not_found: "The review or selected target no longer exists. Refresh the review.",
+  not_running: "Restart the local review service, then refresh the review.",
+  not_started: "This review operation has not started. Refresh its status before continuing.",
+  permission_denied: "You do not have permission to perform this review action.",
+  rate_limited: "The forge rate limit blocked this action. Wait, then refresh before retrying.",
+  request_cancelled: "The review action result could not be confirmed.",
+  resource_not_issued: "Reload the review before performing this action.",
+  revision_changed: "The review revision changed. Reload the latest revision before continuing.",
+  revision_unavailable: "The selected review revision is unavailable. Reload the review.",
+  shutting_down: "The local review service is shutting down. Restart it and refresh the review.",
+  shutdown_failed: "Restart the local review service, then refresh the review.",
+  unexpected_eof: "The review action result could not be confirmed.",
+  unsupported: "This forge does not support the selected review action.",
+  write_failed: "The review action result could not be confirmed.",
+});
+
+export function reviewMutationMessage(code: string): string {
+  return (
+    REVIEW_MUTATION_MESSAGES[code] ??
+    "The review action could not be completed. Refresh the review before deciding whether to retry."
+  );
+}
+
 export interface ReviewMutationCapabilitiesDto {
   readonly general_comment: boolean;
   readonly inline_comment: boolean;

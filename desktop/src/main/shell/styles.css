@@ -313,8 +313,8 @@ button {
   color: var(--muted);
 }
 .notice-error {
-  border-color: #73333a;
-  color: #ffb4b9;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 .notice-loading {
   border-color: var(--accent-2);

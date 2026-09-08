@@ -7,6 +7,7 @@ import {
   assertReviewParams,
   assertReviewResult,
 } from "../../../desktop/dist/src/main/review.js";
+import { reviewMutationMessage } from "../../../desktop/dist/src/shared/review.js";
 
 const revision = { head_sha: "head", base_sha: "base", start_sha: null };
 const operation = "review:1";
@@ -122,6 +123,24 @@ test("review operation inventory is fixed, unique, and classifies all 22 RPC met
     ],
   );
   assert.equal(REVIEW_OPERATIONS.filter((item) => item.mutation).length, 15);
+});
+
+test("review mutation errors use fixed actionable copy without forwarding service text", () => {
+  assert.equal(
+    reviewMutationMessage("conflict"),
+    "The review changed remotely. Refresh it before choosing another action.",
+  );
+  assert.match(reviewMutationMessage("revision_changed"), /Reload the latest revision/);
+  assert.match(reviewMutationMessage("authentication_failed"), /Sign in/);
+  assert.match(reviewMutationMessage("permission_denied"), /permission/);
+  assert.match(reviewMutationMessage("rate_limited"), /rate limit/);
+  assert.match(reviewMutationMessage("unsupported"), /does not support/);
+  assert.match(reviewMutationMessage("not_found"), /no longer exists/);
+  assert.match(reviewMutationMessage("invalid_input"), /Check the review action input/);
+  assert.equal(
+    reviewMutationMessage("raw backend exception with /secret/path"),
+    "The review action could not be completed. Refresh the review before deciding whether to retry.",
+  );
 });
 
 test("review parameter validators accept each fixed method and exact wire shape", () => {

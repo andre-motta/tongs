@@ -21,7 +21,10 @@ import type {
   CIMutationIPCResult,
   CIMutationReceipt,
 } from "../shared/ci.js";
-import type { ReviewMutationIPCResult } from "../shared/review.js";
+import {
+  reviewMutationMessage,
+  type ReviewMutationIPCResult,
+} from "../shared/review.js";
 import {
   assertReviewBoundResult,
   assertReviewParams,
@@ -394,9 +397,7 @@ function safeReviewMutationError(error: unknown): {
     : "invalid_response";
   return {
     code,
-    message: UNCERTAIN_REVIEW_ERROR_CODES.has(code)
-      ? "The review action result could not be confirmed."
-      : "The review action was rejected with a known result.",
+    message: reviewMutationMessage(code),
     retryable:
       error !== null &&
       typeof error === "object" &&

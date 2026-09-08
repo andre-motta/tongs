@@ -27,6 +27,7 @@ import type {
   ReviewVerdict,
   SubmissionProgressDto,
 } from "../../../shared/review.js";
+import { reviewMutationMessage } from "../../../shared/review.js";
 import type {
   AppRoute,
   FeatureContribution,
@@ -342,7 +343,6 @@ function ReviewWorkflow({
         apply((current) => markQuickIntentUncertain(current, operationId));
       else
         apply((current) => rejectQuickIntent(current, operationId, reviewMutationError(reason)));
-      setError(reviewMutationError(reason));
     }
   };
 
@@ -428,7 +428,6 @@ function ReviewWorkflow({
           ? markQuickIntentUncertain(current, operationId)
           : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
       );
-      setError(reviewMutationError(reason));
     }
   };
 
@@ -462,7 +461,6 @@ function ReviewWorkflow({
           ? markQuickIntentUncertain(current, operationId)
           : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
       );
-      setError(reviewMutationError(reason));
     }
   };
 
@@ -602,7 +600,6 @@ function ReviewWorkflow({
           ? markQuickIntentUncertain(current, operationId)
           : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
       );
-      setError(reviewMutationError(reason));
     }
   };
 
@@ -633,7 +630,6 @@ function ReviewWorkflow({
           ? markQuickIntentUncertain(current, operationId)
           : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
       );
-      setError(reviewMutationError(reason));
     }
   };
 
@@ -685,7 +681,7 @@ function ReviewWorkflow({
         </div>
         {error && <Notice kind="error">{error}</Notice>}
         {workflow?.quick?.message && (
-          <Notice kind="warning">
+          <Notice kind={workflow.quick.status === "rejected" ? "error" : "warning"}>
             <span>{workflow.quick.message}</span>
             {workflow.quick.status === "unknown" && (
               <span className="review-workflow-row">
@@ -1498,11 +1494,10 @@ function reviewMutationError(value: unknown): string {
   if (
     value !== null &&
     typeof value === "object" &&
-    "message" in value &&
-    (value.message === "The review action result could not be confirmed." ||
-      value.message === "The review action was rejected with a known result.")
+    "code" in value &&
+    typeof value.code === "string"
   ) {
-    return value.message;
+    return reviewMutationMessage(value.code);
   }
   return safeError(value);
 }

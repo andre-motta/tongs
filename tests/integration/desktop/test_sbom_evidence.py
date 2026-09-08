@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -28,6 +29,13 @@ def _load_adapter() -> ModuleType:
 
 
 ADAPTER = _load_adapter()
+
+_TOOL_FILES = (
+    ADAPTER.ADAPTER_PROGRAM,
+    ADAPTER.GENERATOR_PROGRAM,
+    ADAPTER.RECEIPT_READER_PROGRAM,
+    ADAPTER.GENERATOR_SCHEMA,
+)
 
 
 def _canonical(value: object) -> bytes:
@@ -93,6 +101,34 @@ def _source_checkout(tmp_path: Path) -> Path:
     return source
 
 
+def _tool_checkout(tmp_path: Path) -> Path:
+    tool = tmp_path / "tool"
+    tool.mkdir()
+    _git(tool, "init", "-q")
+    _git(tool, "config", "user.name", "SBOM Test")
+    _git(tool, "config", "user.email", "sbom@example.invalid")
+    for relative in _TOOL_FILES:
+        destination = tool / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, destination)
+    _git(tool, "add", ".")
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(tool),
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ),
+        check=True,
+    )
+    return tool
+
+
 def _spdx(version: str = "1.0.0") -> bytes:
     return _canonical(
         {
@@ -120,6 +156,8 @@ def _spdx(version: str = "1.0.0") -> bytes:
 
 def _case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     source = _source_checkout(tmp_path)
+    tool = _tool_checkout(tmp_path)
+    monkeypatch.setattr(ADAPTER, "ROOT", tool)
     observed = ADAPTER._derive_source_identity(source)
     archive_receipt = _canonical({"schema_version": 1, "result": "success"})
     transfer_root = tmp_path / "transfer"
@@ -146,8 +184,8 @@ def _case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         }
     )
     (transfer_root / "candidate-attestation-transfer-v1.json").write_bytes(transfer)
-    tool_commit = _git(ROOT, "rev-parse", "HEAD")
-    tool_tree = _git(ROOT, "rev-parse", "HEAD^{tree}")
+    tool_commit = _git(tool, "rev-parse", "HEAD")
+    tool_tree = _git(tool, "rev-parse", "HEAD^{tree}")
     electron_configuration = (
         source / "packaging/desktop/archive/electron-runtime-44.2.0-linux-x64.json"
     ).read_bytes()
@@ -161,14 +199,14 @@ def _case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         generator_version="1.0.0",
         tool_commit=tool_commit,
         tool_tree=tool_tree,
-        adapter_program_sha256=_digest((ROOT / ADAPTER.ADAPTER_PROGRAM).read_bytes()),
+        adapter_program_sha256=_digest((tool / ADAPTER.ADAPTER_PROGRAM).read_bytes()),
         generator_program_sha256=_digest(
-            (ROOT / ADAPTER.GENERATOR_PROGRAM).read_bytes()
+            (tool / ADAPTER.GENERATOR_PROGRAM).read_bytes()
         ),
         receipt_reader_program_sha256=_digest(
-            (ROOT / ADAPTER.RECEIPT_READER_PROGRAM).read_bytes()
+            (tool / ADAPTER.RECEIPT_READER_PROGRAM).read_bytes()
         ),
-        schema_sha256=_digest(ADAPTER.DEFAULT_SCHEMA.read_bytes()),
+        schema_sha256=_digest((tool / ADAPTER.GENERATOR_SCHEMA).read_bytes()),
         electron_configuration_sha256=_digest(electron_configuration),
         transfer_repository="andre-motta/tongs",
         transfer_repository_id="1305350434",
@@ -200,6 +238,7 @@ def _case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         "input": transfer_root,
         "output": tmp_path / "output",
         "archive_receipt": archive_receipt,
+        "schema": tool / ADAPTER.GENERATOR_SCHEMA,
         "expectations": expectations,
         "policy": policy,
     }
@@ -213,6 +252,7 @@ def _produce(case: dict[str, object]):
         archive_receipt_bytes=case["archive_receipt"],
         receipt_policy=case["policy"],
         expectations=case["expectations"],
+        schema_path=case["schema"],
     )
 
 
@@ -224,6 +264,7 @@ def _consume(case: dict[str, object]):
         receipt_policy=case["policy"],
         expectations=case["expectations"],
         input_root=case["input"],
+        schema_path=case["schema"],
     )
 
 
@@ -520,6 +561,8 @@ def test_cli_failure_is_nonzero_and_leaves_no_final_output(
         str(case["output"]),
         "--archive-receipt",
         str(tmp_path / "missing-receipt.json"),
+        "--schema",
+        str(case["schema"]),
         "--expected-source-commit",
         case["expectations"].source_commit,
         "--expected-source-tree",

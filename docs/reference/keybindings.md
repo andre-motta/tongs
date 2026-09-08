@@ -51,7 +51,7 @@ These bindings work everywhere in the application.
 | ++m+shift++ | Merge (double-press to confirm) |
 | ++x+shift++ | Close (double-press to confirm) |
 | ++ctrl+y++ | Copy MR URL to clipboard |
-| ++ctrl+g++ | Open the review draft screen |
+| ++ctrl+g++ | Start review mode, or open the review draft screen once a draft exists |
 | ++alt+close-bracket++ | Cycle to the next recovered review draft for this MR |
 
 ## Diff viewer
@@ -85,13 +85,14 @@ columns.
 
 ## Review draft
 
-Opened with ++ctrl+g++ from MR detail. Inspects the local review draft for the
-current MR and submits, edits, or discards it.
+Press ++ctrl+g++ from MR detail to start review mode or, once a draft exists,
+to open the review draft screen and inspect it. It submits, edits, or
+discards the local review draft for the current MR.
 
 | Key | Action |
 |-----|--------|
 | ++escape++ | Close (double-press to discard unsaved summary or verdict changes) |
-| ++v++ | Cycle verdict (Comment / Approve / Request changes) |
+| ++v++ | Cycle verdict (Comment / Approve, plus Request changes on GitHub) |
 | ++ctrl+s++ | Submit the review |
 | ++e++ | Edit the selected draft comment |
 | ++x++ | Remove the selected draft comment (double-press to confirm) |

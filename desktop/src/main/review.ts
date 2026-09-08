@@ -310,13 +310,19 @@ function draftAnchor(value: unknown, output: boolean): void {
   path(anchor.new_path);
   nullablePositiveInteger(anchor.old_line);
   nullablePositiveInteger(anchor.new_line);
-  oneOf(anchor.side, ["old", "new"]);
+  const selectedSide = oneOf(anchor.side, ["old", "new"]);
   if (typeof anchor.context_fingerprint !== "string" || !FINGERPRINT.test(anchor.context_fingerprint))
     throw new Error("Invalid review context fingerprint");
   nullablePositiveInteger(anchor.start_line);
   if (anchor.start_side !== null) oneOf(anchor.start_side, ["old", "new"]);
   if ((anchor.start_line === null) !== (anchor.start_side === null))
     throw new Error("Review draft multiline anchor is incomplete");
+  if (
+    (selectedSide === "old" && anchor.old_line === null) ||
+    (selectedSide === "new" && anchor.new_line === null)
+  ) {
+    throw new Error("Review draft selected side has no line");
+  }
   if (output) bool(anchor.stale);
 }
 
@@ -389,10 +395,26 @@ function actionReceipt(value: unknown, expected?: ReviewAction): void {
   oneOf(receipt.source_cleanup, ["not_requested", "confirmed", "rejected", "unknown"]);
   if (receipt.error !== null) serviceError(receipt.error);
   bool(receipt.resync_required);
-  if ((receipt.outcome === "known") !== (receipt.error === null && receipt.remote_id !== null))
-    throw new Error("Invalid review action receipt state");
-  if (actual !== "merge" && (receipt.merge_sha !== null || receipt.source_cleanup !== "not_requested"))
-    throw new Error("Invalid non-merge review receipt details");
+  if (receipt.outcome === "known") {
+    if (receipt.error !== null || receipt.remote_id === null)
+      throw new Error("Invalid known review action receipt state");
+    if (actual === "merge" && receipt.merge_sha === null)
+      throw new Error("Known merge receipt requires a merge SHA");
+    if (
+      actual !== "merge" &&
+      (receipt.merge_sha !== null || receipt.source_cleanup !== "not_requested")
+    ) {
+      throw new Error("Invalid non-merge review receipt details");
+    }
+  } else if (
+    receipt.error === null ||
+    receipt.remote_id !== null ||
+    receipt.merge_sha !== null ||
+    receipt.source_cleanup !== "not_requested" ||
+    receipt.resync_required !== true
+  ) {
+    throw new Error("Unknown review action receipt cannot claim remote results");
+  }
 }
 
 function draftSnapshot(value: unknown): void {
@@ -619,4 +641,3 @@ function record(value: unknown): Record<string, unknown> {
     throw new Error("Review value must be an object");
   return value as Record<string, unknown>;
 }
-

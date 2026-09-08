@@ -206,6 +206,63 @@ test("review validators reject extra fields, byte overflow, stale inputs, and co
     /does not match/,
   );
   assert.throws(
+    () => assertReviewResult("review_actions.merge", {
+      ...actionReceipt,
+      action: "merge",
+      merge_sha: null,
+    }),
+    /requires a merge SHA/,
+  );
+  for (const change of [
+    { remote_id: "claimed" },
+    { merge_sha: "claimed" },
+    { source_cleanup: "confirmed" },
+    { resync_required: false },
+    { error: null },
+  ]) {
+    assert.throws(
+      () => assertReviewResult("review_actions.close", {
+        ...actionReceipt,
+        outcome: "unknown",
+        remote_id: null,
+        error: { code: "network", message: "Unknown.", retryable: true },
+        resync_required: true,
+        ...change,
+      }),
+      /Unknown review action receipt/,
+    );
+  }
+  for (const impossibleAnchor of [
+    { ...draftAnchor, side: "old", old_line: null, new_line: 4 },
+    { ...draftAnchor, side: "new", old_line: 3, new_line: null },
+  ]) {
+    assert.throws(
+      () => assertReviewParams("drafts.create", {
+        review,
+        revision,
+        content: {
+          ...content,
+          comments: [
+            { ...content.comments[0], anchor: impossibleAnchor },
+          ],
+        },
+      }),
+      /selected side has no line/,
+    );
+    assert.throws(
+      () => assertReviewResult("drafts.get", {
+        ...draft,
+        comments: [
+          {
+            ...draft.comments[0],
+            anchor: { ...impossibleAnchor, stale: false },
+          },
+        ],
+      }),
+      /selected side has no line/,
+    );
+  }
+  assert.throws(
     () => assertReviewResult("review_submissions.status", { ...submission, unknown_step_ids: ["comment:0"] }),
     /confirmed and unknown/,
   );

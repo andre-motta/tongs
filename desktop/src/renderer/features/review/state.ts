@@ -17,7 +17,12 @@ export interface DisplayedReviewState {
 export interface QuickIntent<T> {
   readonly operationId: string;
   readonly command: T;
-  readonly status: "sending" | "known" | "unknown" | "rejected";
+  readonly status:
+    | "sending"
+    | "known"
+    | "unknown"
+    | "acknowledged_unknown"
+    | "rejected";
   readonly outcome: MutationOutcomeDto | ReviewActionReceiptDto | null;
   readonly message: string | null;
 }
@@ -181,6 +186,56 @@ export function markQuickIntentUncertain(
       outcome: null,
       message:
         "The connection ended after dispatch. The action may have completed remotely.",
+    }),
+  });
+}
+
+export function recoverQuickIntent(
+  state: ReviewWorkflowState,
+  operationId: string,
+  outcome: MutationOutcomeDto | ReviewActionReceiptDto,
+): ReviewWorkflowState {
+  const current = state.quick;
+  if (
+    !current ||
+    current.operationId !== operationId ||
+    current.status !== "unknown"
+  ) {
+    throw new Error("No matching uncertain quick action exists");
+  }
+  if (outcome.operation_id !== operationId)
+    throw new Error("Recovered action has a different operation ID");
+  return replace(state, {
+    quick: Object.freeze({
+      ...current,
+      status: outcome.outcome,
+      outcome,
+      message:
+        outcome.outcome === "unknown"
+          ? "The retained result is still unknown. Inspect remote state or acknowledge the uncertainty."
+          : null,
+    }),
+  });
+}
+
+export function acknowledgeQuickUncertainty(
+  state: ReviewWorkflowState,
+  operationId: string,
+): ReviewWorkflowState {
+  const current = state.quick;
+  if (
+    !current ||
+    current.operationId !== operationId ||
+    current.status !== "unknown"
+  ) {
+    throw new Error("No matching uncertain quick action exists");
+  }
+  return replace(state, {
+    quick: Object.freeze({
+      ...current,
+      status: "acknowledged_unknown",
+      message:
+        "Remote outcome remains unknown. This intent was acknowledged without replay.",
     }),
   });
 }

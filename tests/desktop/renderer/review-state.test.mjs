@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  acknowledgeQuickUncertainty,
   adoptDisplayedRevision,
   adoptDraft,
   beginDraftSave,
@@ -19,6 +20,7 @@ import {
   markQuickIntentUncertain,
   observeReviewRevision,
   recoverSubmission,
+  recoverQuickIntent,
   settleQuickIntent,
 } from "../../../desktop/dist/src/renderer/features/review/state.js";
 
@@ -84,6 +86,55 @@ test("known quick outcome is bound to its original operation ID", () => {
   });
   assert.equal(state.quick.status, "known");
   assert.doesNotThrow(() => beginQuickIntent(state, "quick:2", { body: "second" }));
+});
+
+test("unknown quick intent survives refresh until explicit same-operation resolution", () => {
+  let state = adoptDraft(createReviewWorkflowState(review, revision), draft(1, "server"));
+  state = recoverSubmission(state, progress("unknown", ["verdict"], ["comment:0"]));
+  state = beginQuickIntent(state, "close:1", {
+    action: "close",
+    operation_id: "close:1",
+    review,
+    revision,
+  });
+  state = markQuickIntentUncertain(state, "close:1");
+  const refreshed = observeReviewRevision(state, revision);
+  assert.equal(refreshed.quick.status, "unknown");
+  assert.equal(refreshed.draft.remote.id, draftId);
+  assert.equal(refreshed.submission.progress.attempt_id, attemptId);
+  assert.throws(
+    () => recoverQuickIntent(refreshed, "other:1", actionOutcome("other:1", "known")),
+    /matching uncertain/,
+  );
+  const recovered = recoverQuickIntent(
+    refreshed,
+    "close:1",
+    actionOutcome("close:1", "known"),
+  );
+  assert.equal(recovered.quick.status, "known");
+  assert.equal(recovered.quick.operationId, "close:1");
+  assert.equal(recovered.quick.command.operation_id, "close:1");
+  assert.equal(recovered.draft.remote.id, draftId);
+  assert.equal(recovered.submission.progress.attempt_id, attemptId);
+});
+
+test("explicit uncertainty acknowledgment retains frozen intent without generating a write", () => {
+  const command = {
+    operation_id: "comment:1",
+    review,
+    body: "possibly delivered",
+  };
+  let state = beginQuickIntent(createReviewWorkflowState(review, revision), "comment:1", command);
+  state = markQuickIntentUncertain(state, "comment:1");
+  const originalCommand = state.quick.command;
+  const acknowledged = acknowledgeQuickUncertainty(state, "comment:1");
+  assert.equal(acknowledged.quick.status, "acknowledged_unknown");
+  assert.equal(acknowledged.quick.operationId, "comment:1");
+  assert.equal(acknowledged.quick.command, originalCommand);
+  assert.equal(acknowledged.quick.outcome, null);
+  assert.match(acknowledged.quick.message, /without replay/);
+  const next = beginQuickIntent(acknowledged, "comment:2", { body: "deliberate new intent" });
+  assert.equal(next.quick.operationId, "comment:2");
 });
 
 test("draft conflict and edit-during-save preserve unsaved local text", () => {
@@ -194,3 +245,18 @@ function progress(outcome, unknown, completed) {
   };
 }
 
+function actionOutcome(operationId, outcome) {
+  return {
+    operation_id: operationId,
+    action: "close",
+    review,
+    revision,
+    expected_state: "open",
+    outcome,
+    remote_id: outcome === "known" ? "remote" : null,
+    merge_sha: null,
+    source_cleanup: "not_requested",
+    error: outcome === "known" ? null : { code: "network", message: "Unknown.", retryable: true },
+    resync_required: true,
+  };
+}

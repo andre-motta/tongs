@@ -19,6 +19,102 @@
   --addition: #123626;
   --deletion: #3e1d25;
 }
+
+.review-workflow-shell {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.review-workflow-toolbar,
+.review-workflow-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.review-workflow-toolbar {
+  justify-content: space-between;
+}
+
+.review-workflow-actions,
+.review-workflow-verdicts {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.review-workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(18rem, 1fr) minmax(20rem, 0.8fr);
+  gap: 1rem;
+  min-width: 0;
+}
+
+.review-workflow-discussions,
+.review-workflow-compose,
+.review-workflow-composer,
+.review-workflow-draft,
+.review-workflow-progress,
+.review-workflow-recovery {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.review-workflow-thread-list {
+  display: grid;
+  gap: 0.75rem;
+  max-height: min(68vh, 54rem);
+  overflow: auto;
+}
+
+.review-workflow-thread,
+.review-workflow-composer,
+.review-workflow-draft,
+.review-workflow-progress,
+.review-workflow-recovery {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--panel);
+}
+
+.review-workflow-thread:focus-within {
+  border-color: var(--accent);
+}
+
+.review-workflow-thread-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.review-workflow-reply,
+.review-workflow-composer label,
+.review-workflow-draft label {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.review-workflow-reply textarea,
+.review-workflow-composer textarea,
+.review-workflow-draft textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 6rem;
+  resize: vertical;
+}
+
+@media (max-width: 880px) {
+  .review-workflow-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-workflow-thread-list {
+    max-height: none;
+  }
+}
 * {
   box-sizing: border-box;
 }

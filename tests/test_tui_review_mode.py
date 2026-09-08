@@ -53,13 +53,18 @@ async def _open_detail(app, pilot) -> MRDetailScreen:
 async def _wait_for_verdict_submission(app, screen: MRDetailScreen, forge) -> None:
     """Wait for the submission worker itself, not only the forge call it makes.
 
-    ``MRDetailScreen._draft_busy`` is set synchronously before
-    ``_do_submit_review_draft`` starts and is cleared in that worker's ``finally``
-    after its last ``await``. The forge verdict call lands earlier, inside
-    ``start_draft_submission``, so a barrier that watches ``forge.calls`` alone can
-    return while the worker is still suspended. Teardown then unmounts the screen
-    before the worker's final ``_refresh_draft_ui`` runs its ``#review-draft-bar``
-    query. Requiring both conditions makes the barrier the worker's own completion.
+    The forge verdict call lands early, inside ``start_draft_submission``, so a
+    barrier that watches ``forge.calls`` alone can return while
+    ``_do_submit_review_draft`` is still suspended. Ending the ``run_test`` block
+    then cancels that worker, and its ``except asyncio.CancelledError`` handler
+    awaits ``_recover_submission_state`` on the already unmounted screen, which
+    reaches ``_refresh_draft_ui`` through ``_replace_review_draft`` and
+    ``_select_review_draft`` and fails the ``#review-draft-bar`` query.
+
+    ``MRDetailScreen._draft_busy`` is set synchronously before the worker starts
+    and is cleared in its ``finally`` after the last ``await``, so requiring both
+    conditions waits for the worker to complete. That covers the cancellation
+    path above and the ``finally`` path alike.
     """
     await _wait_until(
         app,
@@ -455,11 +460,14 @@ async def test_partial_submission_resumes_remaining_step_without_replaying_recei
         await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
         await pilot.press("v")
         await pilot.press("ctrl+s")
+        # ``_continue_review_submission`` early-returns while ``_draft_busy`` is
+        # set, so the resume below is dropped unless this waits for the worker.
         await _wait_until(
             app,
             lambda: (
                 screen._review_progress is not None
                 and screen._review_progress.outcome.value == "paused"
+                and not screen._draft_busy
             ),
         )
         assert len([call for call in forge.calls if call[0] == "comment"]) == 1

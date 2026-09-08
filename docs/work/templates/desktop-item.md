@@ -49,5 +49,8 @@ Astra integration result/merge SHA and verified checks: <record>.
 Resume notes, pending work and next-ready dependents: <record>.
 
 Keep issue progress current at assignment, review/rejection, correction,
-integration and gate changes. Use Refs in intermediate PRs and keep the issue
-open until the accepted feature lands in main.
+integration and gate changes. Use Refs in intermediate PRs. Astra or an explicitly
+delegated tracker agent may close a completed scoped item after its full acceptance,
+independent review, feature merge and required post-merge checks are verified under
+the [project SDLC profile](../../SDLC.md). Record the accepted head, merge and
+evidence. Issue closure does not imply final CTO acceptance or main delivery.

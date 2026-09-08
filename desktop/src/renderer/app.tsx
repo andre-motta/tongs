@@ -25,6 +25,7 @@ import {
 } from "./features/plugins/index.js";
 import { PluginLocationPublisher } from "./features/plugins/runtime.js";
 import { createPipelinesFeature } from "./features/pipelines/index.js";
+import { createReviewFeature } from "./features/review/index.js";
 import { RepositoryNavigation } from "./features/repositories/index.js";
 import {
   createCommitsFeature,
@@ -44,6 +45,7 @@ registry.register(createCommitsFeature());
 registry.register(createDiffFeature());
 registry.register(pluginsFeature);
 registry.register(createPipelinesFeature());
+registry.register(createReviewFeature(bridge));
 
 function App(): ReactNode {
   const [route, setRoute] = useState<AppRoute>(navigator.route);

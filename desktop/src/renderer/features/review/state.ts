@@ -1,0 +1,846 @@
+import type { ReviewRevisionDto } from "../../../shared/bridge.js";
+import type {
+  DraftContentInputDto,
+  DraftInlineAnchorInputDto,
+  DraftSnapshotDto,
+  MutationOutcomeDto,
+  ReviewActionReceiptDto,
+  SubmissionProgressDto,
+} from "../../../shared/review.js";
+
+export interface DisplayedReviewState {
+  readonly review: string;
+  readonly revision: ReviewRevisionDto;
+  readonly latestObservedRevision: ReviewRevisionDto;
+}
+
+export interface QuickIntent<T> {
+  readonly operationId: string;
+  readonly command: T;
+  readonly status:
+    | "sending"
+    | "known"
+    | "unknown"
+    | "acknowledged_unknown"
+    | "rejected";
+  readonly outcome: MutationOutcomeDto | ReviewActionReceiptDto | null;
+  readonly message: string | null;
+}
+
+export interface DraftEditorState {
+  readonly remote: DraftSnapshotDto | null;
+  readonly local: DraftContentInputDto;
+  readonly dirty: boolean;
+  readonly conflict: DraftSnapshotDto | null;
+  readonly preservedStaleDrafts: readonly DraftSnapshotDto[];
+  readonly pendingSave: {
+    readonly review: string;
+    readonly draftId: string;
+    readonly revision: ReviewRevisionDto;
+    readonly expectedVersion: number;
+    readonly content: DraftContentInputDto;
+  } | null;
+}
+
+export type PendingSubmission =
+  | {
+      readonly kind: "start";
+      readonly review: string;
+      readonly draftId: string;
+      readonly frozenVersion: number;
+      readonly revision: ReviewRevisionDto;
+    }
+  | {
+      readonly kind: "resume" | "reconcile";
+      readonly review: string;
+      readonly attemptId: string;
+      readonly draftId: string;
+      readonly frozenVersion: number;
+    };
+
+export interface SubmissionState {
+  readonly progress: SubmissionProgressDto | null;
+  readonly pending: PendingSubmission | null;
+  readonly message: string | null;
+}
+
+export interface ReviewWorkflowState {
+  readonly displayed: DisplayedReviewState;
+  readonly quick: QuickIntent<unknown> | null;
+  readonly draft: DraftEditorState;
+  readonly submission: SubmissionState;
+}
+
+export interface DraftAnchorSelection {
+  readonly review: string;
+  readonly revision: ReviewRevisionDto;
+  readonly oldPath: string;
+  readonly newPath: string;
+  readonly side: "old" | "new";
+  readonly oldLine: number | null;
+  readonly newLine: number | null;
+  readonly startLine: number | null;
+  readonly startSide: "old" | "new" | null;
+  readonly contextLines: readonly string[];
+  readonly contextComplete: boolean;
+}
+
+const EMPTY_CONTENT: DraftContentInputDto = Object.freeze({
+  body: "",
+  verdict: null,
+  comments: Object.freeze([]),
+});
+
+export function createReviewWorkflowState(
+  review: string,
+  revision: ReviewRevisionDto,
+): ReviewWorkflowState {
+  const captured = freezeRevision(revision);
+  return Object.freeze({
+    displayed: Object.freeze({
+      review,
+      revision: captured,
+      latestObservedRevision: captured,
+    }),
+    quick: null,
+    draft: Object.freeze({
+      remote: null,
+      local: EMPTY_CONTENT,
+      dirty: false,
+      conflict: null,
+      preservedStaleDrafts: Object.freeze([]),
+      pendingSave: null,
+    }),
+    submission: Object.freeze({ progress: null, pending: null, message: null }),
+  });
+}
+
+export function observeReviewRevision(
+  state: ReviewWorkflowState,
+  revision: ReviewRevisionDto,
+): ReviewWorkflowState {
+  return replace(state, {
+    displayed: Object.freeze({
+      ...state.displayed,
+      latestObservedRevision: freezeRevision(revision),
+    }),
+  });
+}
+
+export function adoptDisplayedRevision(
+  state: ReviewWorkflowState,
+): ReviewWorkflowState {
+  if (state.draft.dirty || state.draft.pendingSave)
+    throw new Error("Save or resolve local draft edits before changing revision");
+  return replace(state, {
+    displayed: Object.freeze({
+      ...state.displayed,
+      revision: state.displayed.latestObservedRevision,
+    }),
+  });
+}
+
+export function beginQuickIntent<T extends object>(
+  state: ReviewWorkflowState,
+  operationId: string,
+  command: T,
+): ReviewWorkflowState {
+  if (state.quick?.status === "sending" || state.quick?.status === "unknown")
+    throw new Error("Resolve the previous uncertain action before starting another");
+  return replace(state, {
+    quick: Object.freeze({
+      operationId,
+      command: immutableCopy(command),
+      status: "sending",
+      outcome: null,
+      message: null,
+    }),
+  });
+}
+
+export function settleQuickIntent(
+  state: ReviewWorkflowState,
+  operationId: string,
+  outcome: MutationOutcomeDto | ReviewActionReceiptDto,
+): ReviewWorkflowState {
+  const current = requireQuick(state, operationId);
+  if (outcome.operation_id !== operationId)
+    throw new Error("Quick action response has a different operation ID");
+  assertQuickOutcomeBinding(current.command, outcome);
+  return replace(state, {
+    quick: Object.freeze({
+      ...current,
+      status: outcome.outcome,
+      outcome,
+      message:
+        outcome.outcome === "unknown"
+          ? "The remote result is unknown. Refresh or reconcile before a new action."
+          : null,
+    }),
+  });
+}
+
+export function rejectQuickIntent(
+  state: ReviewWorkflowState,
+  operationId: string,
+  message: string,
+): ReviewWorkflowState {
+  const current = requireQuick(state, operationId);
+  return replace(state, {
+    quick: Object.freeze({
+      ...current,
+      status: "rejected",
+      outcome: null,
+      message,
+    }),
+  });
+}
+
+export function markQuickIntentUncertain(
+  state: ReviewWorkflowState,
+  operationId: string,
+): ReviewWorkflowState {
+  const current = requireQuick(state, operationId);
+  return replace(state, {
+    quick: Object.freeze({
+      ...current,
+      status: "unknown",
+      outcome: null,
+      message:
+        "The connection ended after dispatch. The action may have completed remotely.",
+    }),
+  });
+}
+
+export function recoverQuickIntent(
+  state: ReviewWorkflowState,
+  operationId: string,
+  outcome: MutationOutcomeDto | ReviewActionReceiptDto,
+): ReviewWorkflowState {
+  const current = state.quick;
+  if (
+    !current ||
+    current.operationId !== operationId ||
+    current.status !== "unknown"
+  ) {
+    throw new Error("No matching uncertain quick action exists");
+  }
+  if (outcome.operation_id !== operationId)
+    throw new Error("Recovered action has a different operation ID");
+  assertQuickOutcomeBinding(current.command, outcome);
+  return replace(state, {
+    quick: Object.freeze({
+      ...current,
+      status: outcome.outcome,
+      outcome,
+      message:
+        outcome.outcome === "unknown"
+          ? "The retained result is still unknown. Inspect remote state or acknowledge the uncertainty."
+          : null,
+    }),
+  });
+}
+
+export function acknowledgeQuickUncertainty(
+  state: ReviewWorkflowState,
+  operationId: string,
+): ReviewWorkflowState {
+  const current = state.quick;
+  if (
+    !current ||
+    current.operationId !== operationId ||
+    current.status !== "unknown"
+  ) {
+    throw new Error("No matching uncertain quick action exists");
+  }
+  return replace(state, {
+    quick: Object.freeze({
+      ...current,
+      status: "acknowledged_unknown",
+      message:
+        "Remote outcome remains unknown. This intent was acknowledged without replay.",
+    }),
+  });
+}
+
+export function editDraft(
+  state: ReviewWorkflowState,
+  content: DraftContentInputDto,
+): ReviewWorkflowState {
+  if (state.draft.remote && state.draft.remote.state !== "editable")
+    throw new Error("This draft is not editable");
+  if (state.submission.progress && state.submission.progress.outcome !== "editable")
+    throw new Error("This draft is locked by its durable submission attempt");
+  return replace(state, {
+    draft: Object.freeze({
+      ...state.draft,
+      local: immutableContent(content),
+      dirty: true,
+    }),
+  });
+}
+
+export function adoptDraft(
+  state: ReviewWorkflowState,
+  remote: DraftSnapshotDto,
+): ReviewWorkflowState {
+  if (remote.review !== state.displayed.review)
+    throw new Error("Draft belongs to another review");
+  if (
+    state.draft.dirty &&
+    state.draft.remote !== null &&
+    remote.id !== state.draft.remote.id
+  ) {
+    throw new Error("Resolve local edits before choosing another draft");
+  }
+  if (
+    state.draft.dirty &&
+    state.draft.remote !== null &&
+    remote.version !== state.draft.remote.version
+  ) {
+    return replace(state, {
+      draft: Object.freeze({
+        ...state.draft,
+        remote,
+        conflict: remote,
+        pendingSave: null,
+      }),
+    });
+  }
+  return replace(state, {
+    draft: Object.freeze({
+      remote,
+      local: contentOf(remote),
+      dirty: false,
+      conflict: null,
+      preservedStaleDrafts: state.draft.preservedStaleDrafts,
+      pendingSave: null,
+    }),
+    submission:
+      state.submission.progress?.draft_id === remote.id &&
+      state.submission.progress.outcome === "editable" &&
+      remote.state === "editable" &&
+      remote.version >= state.submission.progress.frozen_version
+        ? Object.freeze({ progress: null, pending: null, message: null })
+        : state.submission,
+  });
+}
+
+export function forkDraftToCurrentRevision(
+  state: ReviewWorkflowState,
+  fresh: DraftSnapshotDto,
+): ReviewWorkflowState {
+  const stale = state.draft.remote;
+  if (!stale || !draftNeedsRevisionRecovery(state))
+    throw new Error("No stale draft is available to preserve");
+  if (state.draft.dirty || state.draft.pendingSave || state.draft.conflict)
+    throw new Error("Save or resolve the stale draft before creating a current draft");
+  if (
+    fresh.id === stale.id ||
+    fresh.review !== state.displayed.review ||
+    !sameRevision(fresh.revision, state.displayed.latestObservedRevision)
+  ) {
+    throw new Error("The new draft is not bound to the current review revision");
+  }
+  if (!sameContent(contentOf(fresh), portableDraftContent(stale)))
+    throw new Error("The new draft does not contain the approved portable content");
+  const preserved = state.draft.preservedStaleDrafts.some(
+    (item) => item.id === stale.id,
+  )
+    ? state.draft.preservedStaleDrafts
+    : Object.freeze([...state.draft.preservedStaleDrafts, stale]);
+  return replace(state, {
+    displayed: Object.freeze({
+      ...state.displayed,
+      revision: state.displayed.latestObservedRevision,
+    }),
+    draft: Object.freeze({
+      remote: fresh,
+      local: contentOf(fresh),
+      dirty: false,
+      conflict: null,
+      preservedStaleDrafts: preserved,
+      pendingSave: null,
+    }),
+    submission: Object.freeze({ progress: null, pending: null, message: null }),
+  });
+}
+
+export function portableDraftContent(
+  draft: DraftSnapshotDto,
+): DraftContentInputDto {
+  return immutableContent({
+    body: draft.body,
+    verdict: draft.verdict,
+    comments: draft.comments.filter((comment) => comment.kind === "general"),
+  });
+}
+
+export function beginDraftSave(state: ReviewWorkflowState): ReviewWorkflowState {
+  const remote = state.draft.remote;
+  if (!remote || !state.draft.dirty || state.draft.conflict)
+    throw new Error("Draft is not ready to save");
+  if (state.draft.pendingSave) throw new Error("A draft save is already pending");
+  if (remote.state !== "editable") throw new Error("This draft is not editable");
+  if (hasEmptyDraftComment(state.draft.local))
+    throw new Error("Edit or remove empty draft comments before saving");
+  return replace(state, {
+    draft: Object.freeze({
+      ...state.draft,
+      pendingSave: Object.freeze({
+        review: remote.review,
+        draftId: remote.id,
+        revision: freezeRevision(remote.revision),
+        expectedVersion: remote.version,
+        content: state.draft.local,
+      }),
+    }),
+  });
+}
+
+export function canSaveDraft(state: ReviewWorkflowState): boolean {
+  return Boolean(
+    state.draft.remote?.state === "editable" &&
+      state.draft.dirty &&
+      !state.draft.pendingSave &&
+      !state.draft.conflict &&
+      !hasEmptyDraftComment(state.draft.local),
+  );
+}
+
+export function finishDraftSave(
+  state: ReviewWorkflowState,
+  remote: DraftSnapshotDto,
+): ReviewWorkflowState {
+  const pending = state.draft.pendingSave;
+  if (!pending) throw new Error("No draft save is pending");
+  assertDraftSaveBinding(pending, remote, true);
+  const editedDuringSave = !sameContent(state.draft.local, pending.content);
+  return replace(state, {
+    draft: Object.freeze({
+      remote,
+      local: editedDuringSave ? state.draft.local : contentOf(remote),
+      dirty: editedDuringSave,
+      conflict: null,
+      preservedStaleDrafts: state.draft.preservedStaleDrafts,
+      pendingSave: null,
+    }),
+  });
+}
+
+export function conflictDraftSave(
+  state: ReviewWorkflowState,
+  remote: DraftSnapshotDto,
+): ReviewWorkflowState {
+  const pending = state.draft.pendingSave;
+  if (!pending) throw new Error("No draft save is pending");
+  assertDraftSaveBinding(pending, remote, false);
+  return replace(state, {
+    draft: Object.freeze({
+      ...state.draft,
+      remote,
+      conflict: remote,
+      pendingSave: null,
+      dirty: true,
+    }),
+  });
+}
+
+export function failDraftSave(state: ReviewWorkflowState): ReviewWorkflowState {
+  if (!state.draft.pendingSave) throw new Error("No draft save is pending");
+  return replace(state, {
+    draft: Object.freeze({
+      ...state.draft,
+      pendingSave: null,
+      dirty: true,
+    }),
+  });
+}
+
+export function chooseRemoteDraft(state: ReviewWorkflowState): ReviewWorkflowState {
+  const remote = state.draft.conflict;
+  if (!remote) throw new Error("No conflicting draft exists");
+  return replace(state, {
+    draft: Object.freeze({
+      remote,
+      local: contentOf(remote),
+      dirty: false,
+      conflict: null,
+      preservedStaleDrafts: state.draft.preservedStaleDrafts,
+      pendingSave: null,
+    }),
+  });
+}
+
+export function keepLocalDraft(state: ReviewWorkflowState): ReviewWorkflowState {
+  const remote = state.draft.conflict;
+  if (!remote) throw new Error("No conflicting draft exists");
+  return replace(state, {
+    draft: Object.freeze({
+      ...state.draft,
+      remote,
+      conflict: null,
+      dirty: true,
+      pendingSave: null,
+    }),
+  });
+}
+
+export function beginSubmission(
+  state: ReviewWorkflowState,
+  kind: PendingSubmission["kind"],
+): ReviewWorkflowState {
+  if (state.submission.pending) throw new Error("Submission operation is already pending");
+  if (kind === "start" && !canStartSubmission(state))
+    throw new Error("Save the editable draft before submitting it");
+  if (kind === "resume" && state.submission.progress?.outcome !== "paused")
+    throw new Error("Only paused submissions can resume");
+  if (kind === "reconcile" && state.submission.progress?.outcome !== "unknown")
+    throw new Error("Only unknown submissions can be reconciled");
+  const remote = state.draft.remote;
+  const progress = state.submission.progress;
+  const pending: PendingSubmission =
+    kind === "start"
+      ? Object.freeze({
+          kind,
+          review: state.displayed.review,
+          draftId: remote!.id,
+          frozenVersion: remote!.version,
+          revision: freezeRevision(remote!.revision),
+        })
+      : Object.freeze({
+          kind,
+          review: state.displayed.review,
+          attemptId: progress!.attempt_id,
+          draftId: progress!.draft_id,
+          frozenVersion: progress!.frozen_version,
+        });
+  return replace(state, {
+    submission: Object.freeze({ ...state.submission, pending, message: null }),
+  });
+}
+
+export function finishSubmission(
+  state: ReviewWorkflowState,
+  progress: SubmissionProgressDto,
+): ReviewWorkflowState {
+  const pending = state.submission.pending;
+  if (!pending) throw new Error("No submission operation is pending");
+  assertSubmissionBinding(pending, progress);
+  return replace(state, {
+    submission: Object.freeze({
+      progress,
+      pending: null,
+      message: submissionGuidance(progress),
+    }),
+  });
+}
+
+export function recoverSubmission(
+  state: ReviewWorkflowState,
+  progress: SubmissionProgressDto,
+): ReviewWorkflowState {
+  if (progress.review !== state.displayed.review)
+    throw new Error("Submission belongs to another review");
+  if (
+    state.draft.remote?.id !== progress.draft_id ||
+    state.draft.remote.version < progress.frozen_version
+  ) {
+    throw new Error("Submission does not match the active draft");
+  }
+  if (state.submission.pending)
+    assertSubmissionBinding(state.submission.pending, progress);
+  return replace(state, {
+    submission: Object.freeze({
+      progress,
+      pending: null,
+      message: submissionGuidance(progress),
+    }),
+  });
+}
+
+export function failSubmission(
+  state: ReviewWorkflowState,
+  message: string,
+): ReviewWorkflowState {
+  if (!state.submission.pending) throw new Error("No submission operation is pending");
+  return replace(state, {
+    submission: Object.freeze({
+      ...state.submission,
+      pending: null,
+      message,
+    }),
+  });
+}
+
+export function canStartSubmission(state: ReviewWorkflowState): boolean {
+  return Boolean(
+    state.draft.remote?.state === "editable" &&
+      sameRevision(
+        state.draft.remote.revision,
+        state.displayed.latestObservedRevision,
+      ) &&
+      !state.draft.remote.comments.some(
+        (comment) => comment.kind === "inline" && comment.anchor.stale,
+      ) &&
+      !state.draft.dirty &&
+      !state.draft.conflict &&
+      !state.draft.pendingSave &&
+      !state.submission.pending &&
+      !state.submission.progress,
+  );
+}
+
+export function draftNeedsRevisionRecovery(state: ReviewWorkflowState): boolean {
+  const draft = state.draft.remote;
+  return Boolean(
+    draft &&
+      (!sameRevision(draft.revision, state.displayed.latestObservedRevision) ||
+        draft.comments.some(
+          (comment) => comment.kind === "inline" && comment.anchor.stale,
+        )),
+  );
+}
+
+export function canCaptureDraftInline(state: ReviewWorkflowState): boolean {
+  return Boolean(
+    state.draft.remote?.state === "editable" &&
+      sameRevision(
+        state.draft.remote.revision,
+        state.displayed.latestObservedRevision,
+      ) &&
+      !state.submission.pending &&
+      !state.submission.progress,
+  );
+}
+
+export function submissionGuidance(progress: SubmissionProgressDto): string | null {
+  if (progress.outcome === "submitted") return "Review submitted.";
+  if (progress.outcome === "unknown")
+    return `Remote status is unknown for ${progress.unknown_step_ids.length} step(s). Reconcile before continuing.`;
+  if (progress.outcome === "paused")
+    return "Submission paused after confirmed steps. Resume uses the existing durable attempt.";
+  return "The draft is editable again.";
+}
+
+export async function captureDraftAnchor(
+  selection: DraftAnchorSelection,
+  current: () => DraftAnchorSelection | null,
+): Promise<DraftInlineAnchorInputDto> {
+  if (!selection.contextComplete)
+    throw new Error("The selected diff context is partial. Refresh before drafting inline feedback.");
+  const frozen = immutableSelection(selection);
+  const fingerprint = await contextFingerprint(frozen.contextLines);
+  if (!sameSelection(frozen, current()))
+    throw new Error("The inline selection changed while its context was captured");
+  return Object.freeze({
+    revision: frozen.revision,
+    old_path: frozen.oldPath,
+    new_path: frozen.newPath,
+    old_line: frozen.oldLine,
+    new_line: frozen.newLine,
+    side: frozen.side,
+    context_fingerprint: fingerprint,
+    start_line: frozen.startLine,
+    start_side: frozen.startSide,
+  });
+}
+
+export async function contextFingerprint(
+  contextLines: readonly string[],
+): Promise<string> {
+  const encoder = new TextEncoder();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (const line of contextLines) {
+    const encoded = encoder.encode(line);
+    const length = new Uint8Array(8);
+    new DataView(length.buffer).setBigUint64(0, BigInt(encoded.byteLength), false);
+    chunks.push(length, encoded);
+    size += length.byteLength + encoded.byteLength;
+  }
+  const input = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    input.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const digest = await crypto.subtle.digest("SHA-256", input);
+  return [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function requireQuick(
+  state: ReviewWorkflowState,
+  operationId: string,
+): QuickIntent<unknown> {
+  if (!state.quick || state.quick.operationId !== operationId)
+    throw new Error("Quick action response does not match the current intent");
+  if (state.quick.status !== "sending")
+    throw new Error("Quick action is no longer awaiting a response");
+  return state.quick;
+}
+
+function assertQuickOutcomeBinding(
+  command: unknown,
+  outcome: MutationOutcomeDto | ReviewActionReceiptDto,
+): void {
+  if (!("action" in outcome)) return;
+  if (command === null || typeof command !== "object")
+    throw new Error("Review action receipt has no matching frozen command");
+  const frozen = command as Record<string, unknown>;
+  const action = frozen.action;
+  const expectedState = action === "reopen" ? "closed" : "open";
+  if (
+    outcome.action !== action ||
+    outcome.review !== frozen.review ||
+    outcome.expected_state !== expectedState ||
+    !isRevision(frozen.revision) ||
+    !sameRevision(outcome.revision, frozen.revision)
+  ) {
+    throw new Error("Review action receipt does not match the frozen target");
+  }
+}
+
+function assertDraftSaveBinding(
+  pending: NonNullable<DraftEditorState["pendingSave"]>,
+  remote: DraftSnapshotDto,
+  completed: boolean,
+): void {
+  if (
+    remote.review !== pending.review ||
+    remote.id !== pending.draftId ||
+    !sameRevision(remote.revision, pending.revision) ||
+    (completed
+      ? remote.version !== pending.expectedVersion + 1
+      : remote.version <= pending.expectedVersion)
+  ) {
+    throw new Error("Draft save result does not match the pending version");
+  }
+}
+
+function assertSubmissionBinding(
+  pending: PendingSubmission,
+  progress: SubmissionProgressDto,
+): void {
+  if (
+    progress.review !== pending.review ||
+    progress.draft_id !== pending.draftId ||
+    progress.frozen_version !== pending.frozenVersion ||
+    (pending.kind !== "start" && progress.attempt_id !== pending.attemptId)
+  ) {
+    throw new Error("Submission result does not match the pending attempt");
+  }
+}
+
+function replace(
+  state: ReviewWorkflowState,
+  update: Partial<ReviewWorkflowState>,
+): ReviewWorkflowState {
+  return Object.freeze({ ...state, ...update });
+}
+
+function contentOf(draft: DraftSnapshotDto): DraftContentInputDto {
+  return immutableContent({
+    body: draft.body,
+    verdict: draft.verdict,
+    comments: draft.comments.map((comment) =>
+      comment.kind === "inline"
+        ? {
+            id: comment.id,
+            kind: comment.kind,
+            body: comment.body,
+            anchor: {
+              revision: comment.anchor.revision,
+              old_path: comment.anchor.old_path,
+              new_path: comment.anchor.new_path,
+              old_line: comment.anchor.old_line,
+              new_line: comment.anchor.new_line,
+              side: comment.anchor.side,
+              context_fingerprint: comment.anchor.context_fingerprint,
+              start_line: comment.anchor.start_line,
+              start_side: comment.anchor.start_side,
+            },
+          }
+        : comment,
+    ),
+  });
+}
+
+function immutableContent(content: DraftContentInputDto): DraftContentInputDto {
+  return immutableCopy(content);
+}
+
+function immutableSelection(selection: DraftAnchorSelection): DraftAnchorSelection {
+  return Object.freeze({
+    ...selection,
+    revision: freezeRevision(selection.revision),
+    contextLines: Object.freeze([...selection.contextLines]),
+  });
+}
+
+function immutableCopy<T>(value: T): T {
+  if (Array.isArray(value))
+    return Object.freeze(value.map((item) => immutableCopy(item))) as T;
+  if (value !== null && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) result[key] = immutableCopy(item);
+    return Object.freeze(result) as T;
+  }
+  return value;
+}
+
+function freezeRevision(revision: ReviewRevisionDto): ReviewRevisionDto {
+  return Object.freeze({ ...revision });
+}
+
+function sameRevision(left: ReviewRevisionDto, right: ReviewRevisionDto): boolean {
+  return (
+    left.head_sha === right.head_sha &&
+    left.base_sha === right.base_sha &&
+    left.start_sha === right.start_sha
+  );
+}
+
+function isRevision(value: unknown): value is ReviewRevisionDto {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "head_sha" in value &&
+    "base_sha" in value &&
+    "start_sha" in value
+  );
+}
+
+function sameContent(
+  left: DraftContentInputDto,
+  right: DraftContentInputDto,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function hasEmptyDraftComment(content: DraftContentInputDto): boolean {
+  return content.comments.some((comment) => comment.body.length === 0);
+}
+
+function sameSelection(
+  left: DraftAnchorSelection,
+  right: DraftAnchorSelection | null,
+): boolean {
+  return Boolean(
+    right &&
+      left.review === right.review &&
+      sameRevision(left.revision, right.revision) &&
+      left.oldPath === right.oldPath &&
+      left.newPath === right.newPath &&
+      left.side === right.side &&
+      left.oldLine === right.oldLine &&
+      left.newLine === right.newLine &&
+      left.startLine === right.startLine &&
+      left.startSide === right.startSide &&
+      left.contextComplete === right.contextComplete &&
+      left.contextLines.length === right.contextLines.length &&
+      left.contextLines.every((line, index) => line === right.contextLines[index]),
+  );
+}

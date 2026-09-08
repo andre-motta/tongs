@@ -55,6 +55,16 @@ def test_system_launcher_uses_fixed_system_contract() -> None:
     assert "--tongs-safe-cwd /usr/libexec/tongs-desktop" in launcher
 
 
+def test_installed_plugin_owns_its_build_generated_cache_directory() -> None:
+    spec = (PACKAGING / "test-plugin" / "tongs-desktop-test-plugin.spec").read_text()
+    cache_dir = "%dir %{python3_sitelib}/tongs_rpm_test_plugin_assets/__pycache__"
+
+    assert spec.count(cache_dir) == 1
+    assert spec.index(cache_dir) < spec.index(
+        "%pycached %{python3_sitelib}/tongs_rpm_test_plugin_assets/__init__.py"
+    )
+
+
 def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     harness = (PACKAGING / "run_hosted.sh").read_text()
     rebuilder = (PACKAGING / "rebuild_srpms.sh").read_text()

@@ -246,6 +246,15 @@ def _expected_mode(path: str, file_type: str, runtime_modes: dict[str, int]) -> 
     return 0o644
 
 
+def _required_owned_directories(packages: list[str], purelib: str) -> dict[str, str]:
+    required = {}
+    if "tongs-desktop-test-plugin" in packages:
+        required[f"{purelib}/tongs_rpm_test_plugin_assets/__pycache__"] = (
+            "tongs-desktop-test-plugin"
+        )
+    return required
+
+
 def _assert_tree_equal(source: Path, installed: Path, failures: list[str]) -> None:
     source_files = {
         path.relative_to(source).as_posix(): path
@@ -320,6 +329,12 @@ def verify_metadata(
             if file_type == "-" and "l" in record["flags"]:
                 license_files.append(path)
         package_reports.append({"name": name, "files": records})
+
+    for path, expected_owner in _required_owned_directories(packages, purelib).items():
+        if owned_paths.get(path) != expected_owner:
+            failures.append(
+                f"required package directory is not owned by {expected_owner}: {path}"
+            )
 
     expected_license_files = {
         "/usr/share/licenses/python3-tongs/LICENSE",

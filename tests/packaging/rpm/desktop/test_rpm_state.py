@@ -141,15 +141,17 @@ def test_test_plugin_rejects_unrelated_or_traversing_cache_paths(
     )
 
 
-def test_inventory_tracks_plugin_cache_files_but_not_shared_directory(
+def test_inventory_tracks_private_cache_directory_but_not_shared_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     abi = f"python{sys.version_info.major}.{sys.version_info.minor}"
     purelib = f"/usr/lib/{abi}/site-packages"
     cache_dir = f"{purelib}/__pycache__"
+    private_cache_dir = f"{purelib}/tongs_rpm_test_plugin_assets/__pycache__"
     cache_paths = sorted(verify_rpm_state._test_plugin_pyc_paths(purelib))
     records: list[dict[str, str]] = [
         {"path": cache_dir, "mode": "drwxr-xr-x"},
+        {"path": private_cache_dir, "mode": "drwxr-xr-x"},
         *({"path": path, "mode": "-rw-r--r--"} for path in cache_paths),
     ]
     monkeypatch.setattr(verify_rpm_state, "_rpm_purelib", lambda: purelib)
@@ -164,8 +166,31 @@ def test_inventory_tracks_plugin_cache_files_but_not_shared_directory(
     assert inventory["paths"] == [
         {
             "package": "tongs-desktop-test-plugin",
-            "path": path,
-            "type": "file",
-        }
-        for path in cache_paths
+            "path": private_cache_dir,
+            "type": "directory",
+        },
+        *[
+            {
+                "package": "tongs-desktop-test-plugin",
+                "path": path,
+                "type": "file",
+            }
+            for path in cache_paths
+        ],
     ]
+
+
+def test_metadata_requires_test_plugin_private_cache_directory() -> None:
+    abi = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    purelib = f"/usr/lib/{abi}/site-packages"
+
+    assert verify_rpm_state._required_owned_directories(
+        ["python3-tongs", "tongs-desktop-test-plugin"], purelib
+    ) == {
+        f"{purelib}/tongs_rpm_test_plugin_assets/__pycache__": (
+            "tongs-desktop-test-plugin"
+        )
+    }
+    assert (
+        verify_rpm_state._required_owned_directories(["python3-tongs"], purelib) == {}
+    )

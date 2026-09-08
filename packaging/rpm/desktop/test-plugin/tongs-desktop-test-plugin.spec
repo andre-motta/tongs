@@ -43,6 +43,7 @@ install -Dm 0644 %{SOURCE2} \
 %files
 %pycached %{python3_sitelib}/tongs_rpm_test_plugin.py
 %dir %{python3_sitelib}/tongs_rpm_test_plugin_assets
+%dir %{python3_sitelib}/tongs_rpm_test_plugin_assets/__pycache__
 %pycached %{python3_sitelib}/tongs_rpm_test_plugin_assets/__init__.py
 %dir %{python3_sitelib}/tongs_rpm_test_plugin_assets/assets
 %{python3_sitelib}/tongs_rpm_test_plugin_assets/assets/module.mjs

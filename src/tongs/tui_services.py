@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from tongs.diff.conversion import convert_forge_changes
 from tongs.diff.models import DiffFile
@@ -52,7 +52,6 @@ from tongs.services.mr_actions import (
 )
 from tongs.services.review_mutations import (
     DiffAnchor,
-    DiffSide,
     GeneralComment,
     InlineComment,
     MutationOutcome,
@@ -60,7 +59,16 @@ from tongs.services.review_mutations import (
     Resolve,
     ReviewVerdict,
 )
+from tongs.services.review_mutations import (
+    DiffSide as MutationDiffSide,
+)
+from tongs.services.review_submission import SubmissionProgress
 from tongs.services.session import ApplicationSession
+from tongs.state.drafts import (
+    DraftContent,
+    DraftSnapshot,
+    ReconciliationResolution,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +88,22 @@ class TUIDiffResult:
     revision: ReviewRevision
 
 
+@dataclass(frozen=True, slots=True)
+class TUIDraftTarget:
+    """A review and captured revision carried through one TUI draft action."""
+
+    review: ReviewRef
+    revision: ReviewRevision
+
+
+@dataclass(frozen=True, slots=True)
+class TUIDraftRecovery:
+    """An unresolved attempt paired with its actual frozen draft target."""
+
+    target: TUIDraftTarget
+    progress: SubmissionProgress
+
+
 class TUIServiceAdapter:
     """Preserve terminal models while routing reads through one session.
 
@@ -96,6 +120,7 @@ class TUIServiceAdapter:
         self._review_refs: dict[tuple[str, str, int], ReviewRef] = {}
         self._review_snapshots: dict[ReviewRef, ReviewSnapshot] = {}
         self._review_revisions: dict[ReviewRef, ReviewRevision] = {}
+        self._known_draft_attempts: dict[tuple[ReviewRef, UUID], UUID] = {}
 
     @property
     def discovery_generation(self) -> int:
@@ -215,6 +240,119 @@ class TUIServiceAdapter:
         """Expose the session event stream for future terminal view extensions."""
         return self.session.events()
 
+    def draft_target(
+        self, summary: MRSummary, revision: ReviewRevision
+    ) -> TUIDraftTarget:
+        """Bind a displayed revision to its admitted review identity."""
+        if not isinstance(revision, ReviewRevision):
+            raise TypeError("revision must be a ReviewRevision")
+        return TUIDraftTarget(self.review_ref(summary), revision)
+
+    async def list_drafts(self, target: TUIDraftTarget) -> tuple[DraftSnapshot, ...]:
+        """List review drafts assessed against the currently displayed revision."""
+        drafts = await self.session.drafts.list_drafts(review=target.review)
+        return tuple(draft.assessed_against(target.revision) for draft in drafts)
+
+    async def create_draft(
+        self, target: TUIDraftTarget, content: DraftContent | None = None
+    ) -> DraftSnapshot:
+        """Create an editable draft at the exact captured revision."""
+        return await self.session.drafts.create_draft(
+            target.review, target.revision, content
+        )
+
+    async def save_draft(
+        self,
+        target: TUIDraftTarget,
+        draft_id: UUID,
+        expected_version: int,
+        content: DraftContent,
+        *,
+        current_revision: ReviewRevision,
+    ) -> DraftSnapshot:
+        """Save text against its stored target while assessing current staleness."""
+        await self._require_draft_target(target, draft_id)
+        return await self.session.drafts.save_draft(
+            draft_id,
+            expected_version,
+            content,
+            current_revision=current_revision,
+        )
+
+    async def discard_draft(
+        self, target: TUIDraftTarget, draft_id: UUID, expected_version: int
+    ) -> DraftSnapshot:
+        """Discard one exact editable draft without remote work."""
+        await self._require_draft_target(target, draft_id)
+        return await self.session.drafts.discard_draft(draft_id, expected_version)
+
+    async def start_draft_submission(
+        self, target: TUIDraftTarget, draft_id: UUID, expected_version: int
+    ) -> SubmissionProgress:
+        """Start the shared durable submission for one exact draft version."""
+        await self._require_draft_target(target, draft_id)
+        progress = await self.session.review_submissions.start(
+            draft_id, expected_version
+        )
+        self._remember_draft_attempt(target, progress)
+        return progress
+
+    async def get_draft_submission(
+        self, target: TUIDraftTarget, attempt_id: UUID
+    ) -> SubmissionProgress:
+        """Read progress after validating its frozen review and revision."""
+        await self._require_attempt_target(target, attempt_id)
+        return await self.session.review_submissions.get(attempt_id)
+
+    async def list_draft_recoveries(
+        self, target: TUIDraftTarget
+    ) -> tuple[TUIDraftRecovery, ...]:
+        """List restarted unknown attempts for the review, including old revisions."""
+        attempts = await self.session.drafts.list_recovery_attempts()
+        attempt_ids = {
+            attempt.id
+            for attempt in attempts
+            if attempt.snapshot.review == target.review
+        }
+        attempt_ids.update(
+            attempt_id
+            for (review, _draft_id), attempt_id in self._known_draft_attempts.items()
+            if review == target.review
+        )
+        recoveries: list[TUIDraftRecovery] = []
+        for attempt_id in attempt_ids:
+            attempt = await self.session.drafts.get_attempt(attempt_id)
+            progress = await self.session.review_submissions.get(attempt_id)
+            actual_target = TUIDraftTarget(
+                attempt.snapshot.review, attempt.snapshot.revision
+            )
+            self._remember_draft_attempt(actual_target, progress)
+            recoveries.append(TUIDraftRecovery(actual_target, progress))
+        return tuple(recoveries)
+
+    async def resume_draft_submission(
+        self, target: TUIDraftTarget, attempt_id: UUID
+    ) -> SubmissionProgress:
+        """Resume only the remaining work in a known durable attempt."""
+        await self._require_attempt_target(target, attempt_id)
+        progress = await self.session.review_submissions.resume(attempt_id)
+        self._remember_draft_attempt(target, progress)
+        return progress
+
+    async def reconcile_draft_submission(
+        self,
+        target: TUIDraftTarget,
+        attempt_id: UUID,
+        resolution: ReconciliationResolution,
+    ) -> SubmissionProgress:
+        """Record an explicit resolution for an outcome-unknown attempt."""
+        await self._require_attempt_target(target, attempt_id)
+        progress = await self.session.review_submissions.reconcile(
+            attempt_id, resolution
+        )
+        self._remember_draft_attempt(target, progress)
+        return progress
+
     async def post_general_comment(
         self, summary: MRSummary, body: str, *, operation_id: str
     ) -> MutationOutcome:
@@ -235,8 +373,10 @@ class TUIServiceAdapter:
         operation_id: str,
     ) -> MutationOutcome:
         ref = self.review_ref(summary)
-        side = DiffSide(position.side)
-        line = position.new_line if side is DiffSide.RIGHT else position.old_line
+        side = MutationDiffSide(position.side)
+        line = (
+            position.new_line if side is MutationDiffSide.RIGHT else position.old_line
+        )
         if line is None:
             raise ServiceError(
                 ServiceErrorCode.INVALID_INPUT,
@@ -248,7 +388,9 @@ class TUIServiceAdapter:
             line=line,
             side=side,
             start_line=start_line,
-            start_side=DiffSide(start_side) if start_side is not None else None,
+            start_side=(
+                MutationDiffSide(start_side) if start_side is not None else None
+            ),
         )
         return await self.session.review_mutations.execute(
             InlineComment(
@@ -385,6 +527,39 @@ class TUIServiceAdapter:
         revision = await self._revision(summary)
         return ReviewActionTarget(ref, revision, snapshot.detail.state)
 
+    async def _require_draft_target(
+        self, target: TUIDraftTarget, draft_id: UUID
+    ) -> DraftSnapshot:
+        draft = await self.session.drafts.get_draft(draft_id)
+        if draft.review != target.review or draft.revision != target.revision:
+            raise ServiceError(
+                ServiceErrorCode.CONFLICT,
+                "The draft no longer matches the captured review target.",
+            )
+        return draft
+
+    async def _require_attempt_target(
+        self, target: TUIDraftTarget, attempt_id: UUID
+    ) -> None:
+        attempt = await self.session.drafts.get_attempt(attempt_id)
+        if (
+            attempt.snapshot.review != target.review
+            or attempt.snapshot.revision != target.revision
+        ):
+            raise ServiceError(
+                ServiceErrorCode.CONFLICT,
+                "The submission no longer matches the captured review target.",
+            )
+
+    def _remember_draft_attempt(
+        self, target: TUIDraftTarget, progress: SubmissionProgress
+    ) -> None:
+        key = (target.review, progress.draft_id)
+        if progress.outcome.value in {"submitted", "editable"}:
+            self._known_draft_attempts.pop(key, None)
+        else:
+            self._known_draft_attempts[key] = progress.attempt_id
+
     async def _revision(self, summary: MRSummary) -> ReviewRevision:
         ref = self.review_ref(summary)
         revision = self._review_revisions.get(ref)
@@ -464,4 +639,10 @@ class TUIServiceAdapter:
         return tuple(unique.values())
 
 
-__all__ = ["TUIDiffResult", "TUIDiscoveryResult", "TUIServiceAdapter"]
+__all__ = [
+    "TUIDiffResult",
+    "TUIDiscoveryResult",
+    "TUIDraftRecovery",
+    "TUIDraftTarget",
+    "TUIServiceAdapter",
+]

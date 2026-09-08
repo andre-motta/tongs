@@ -97,6 +97,7 @@ class _Forge:
         )
         self.job = PipelineJob(201, "test", "verify", CIStatus.FAILED)
         self.blocked_mutation: str | None = None
+        self.verdict_error: Exception | None = None
         self.mutation_started = asyncio.Event()
 
     async def _block_mutation(self, action: str) -> None:
@@ -224,6 +225,9 @@ class _Forge:
         head_sha: str | None = None,
     ) -> ForgeMutationResult:
         self.calls.append(("verdict", repo_path, number, verdict, head_sha))
+        await self._block_mutation("verdict")
+        if self.verdict_error is not None:
+            raise self.verdict_error
         return ForgeMutationResult("remote-verdict")
 
     async def reply_to_discussion(

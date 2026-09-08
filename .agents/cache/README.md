@@ -58,22 +58,48 @@ Keys starting with `_EXCLUDED_PREFIXES` (`"job_log:"`, `"stream_log:"`) are sile
 `src/tongs/cache/cached_client.py` wraps any `ForgeClient` with transparent SQLite caching. `ForgeRegistry.get_client()` automatically wraps every forge client in `CachedForgeClient` when a cache is configured.
 
 - **Cached reads:** `list_mrs` (keyed by repo_path + state, TTL = mr_list_ttl) and `get_mr_diff` (keyed by repo_path + MR number, TTL = diff_ttl). On cache hit, returns deserialized JSON without an API call.
-- **Mutation invalidation:** `approve_mr`, `unapprove_mr`, `close_mr`, `reopen_mr` invalidate MR list entries. `merge_mr` invalidates all entries for the repo (broader scope).
-- **Pass-through:** All other methods (comments, discussions, pipelines, etc.) forward directly to the inner client via `__getattr__`.
+- **Mutation coherence:** approve/unapprove, close/reopen, general and inline
+  comments, replies, discussion resolution, and review submission all call
+  `_finish_review_mutation()`. It marks the review and list prefixes dirty
+  before scheduling invalidation, so reads bypass stale cache while cleanup is
+  pending or has failed. Mutation receipts report cache invalidation
+  conservatively rather than claiming the background delete already completed.
+- **Merge coherence:** `merge_mr` marks the whole repository prefix dirty and
+  schedules the broader invalidation.
+- **Explicit invalidation:** `invalidate_review_reads()` uses the same generation
+  guard and clears a dirty prefix only after all matching invalidations succeed.
+- **Pass-through:** Operations without an explicit cache or coherence wrapper,
+  including pipeline reads/mutations and job logs, delegate through
+  `__getattr__`. Job logs remain excluded from storage.
 - **Serialization:** `_mr_summary_to_dict` / `_dict_to_mr_summary` handle MRSummary round-trip through JSON, including enum values (CIStatus, MRState, ForgeType) and datetime fields.
 
-## Clear Cache Command
+## Clear Cache operations
 
-The command palette includes a "Clear Cache" command that calls `cache.clear()` to delete all cached entries. Useful when cached data is stale or the user wants to force a fresh fetch.
+The terminal command palette clears the session-owned cache through
+`app.cache.clear()` and shows a notification. The production desktop invokes the
+exact `utilities.cache_clear` protocol method; its handler calls
+`ApplicationSession.clear_cache()` and then emits `RESYNC_REQUIRED` so desktop
+views refetch current data. Neither path deletes durable review drafts, editor
+exports, configuration, or arbitrary files.
+
+The desktop renderer has no generic cache-key or path API. The sidecar owns the
+clear authority and ignores renderer paths or keys.
 
 ## Integration
 
-- `TongsApp.__init__()` creates `CacheStore(max_size_mb=config.max_cache_size_mb)`.
-- `TongsApp.on_mount()` calls `cache.open()`.
-- `ForgeRegistry` receives the cache instance in its constructor and wraps clients in `CachedForgeClient`.
-- `TongsApp.on_unmount()` calls `cache.close()`.
-- Cache size is configurable via `[cache] max_size_mb` in `config.toml` (default 100).
-- TTL values are configurable: `mr_list_ttl` (default 60s), `diff_ttl` (default 300s).
+- `ApplicationSession.start()` creates or opens
+  `CacheStore(max_size_mb=config.max_cache_size_mb)` and passes it to
+  `ForgeRegistry`.
+- `ForgeRegistry` wraps clients in `CachedForgeClient` when a cache is present.
+- `TongsApp` and `TUIServiceAdapter` use the session; `cache` and
+  `forge_registry` properties on the app remain compatibility views of
+  session-owned resources.
+- The production sidecar creates its own session and closes it when the protocol
+  connection ends.
+- `ApplicationSession.close()` closes forge clients, drafts, and the cache with
+  bounded cleanup and retains a safe cleanup failure when necessary.
+- Cache size is configurable via `[cache] max_size_mb` (default 100). TTLs are
+  `mr_list_ttl` (default 60 seconds) and `diff_ttl` (default 300 seconds).
 
 ## Security
 
@@ -93,3 +119,7 @@ Tests in `tests/test_cache/test_store.py` cover:
 - Prefix invalidation
 - Excluded key prefixes
 - Size limit enforcement
+
+`tests/test_cache/test_cached_client.py` covers read caching, review and merge
+dirty-prefix coherence, invalidation failure, bounded background cleanup, close
+behavior, and delegation of uncached methods.

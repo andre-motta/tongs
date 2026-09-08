@@ -1,5 +1,19 @@
 # Diff
 
+## Frontend boundaries
+
+Forge clients return change dictionaries. `ApplicationSession.get_raw_diff()`
+binds those changes to a `ReviewRevision` without selecting a UI format. The
+terminal calls `TUIServiceAdapter.get_diff()`, which converts them through
+`src/tongs/diff/conversion.py` to the models below. The desktop protocol projects
+the same admitted snapshot through
+`src/tongs/desktop/protocol/diff_projection.py` into bounded unified or split
+rows and serves them from expiring connection-local paging snapshots.
+
+Inline mutations must retain the revision and service-issued review identity
+that produced the displayed lines. Neither frontend should reconstruct a forge
+mutation target from a path or line number alone.
+
 ## Parser Design
 
 `src/tongs/diff/parser.py` parses unified diff text into structured objects. It is forge-agnostic; both GitHub and GitLab produce standard unified diff format.
@@ -84,6 +98,10 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 - `additions`, `deletions` -- computed counts
 - `is_binary: bool`
 - `language: str` -- detected from file extension
+- `is_truncated`, `is_empty`, `is_mode_only`, `is_unavailable` -- explicit
+  reasons a forge-described file has incomplete or absent content hunks
+- `is_metadata_only` -- derived property for binary, empty, mode-only, or
+  unavailable files
 
 ## Language Detection
 
@@ -91,7 +109,7 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 
 Supported: python, javascript, typescript, rust, go, ruby, java, c, cpp, csharp, bash, yaml, json, toml, markdown, html, css, sql, xml, dockerfile, hcl, groovy, makefile.
 
-Used for syntax highlighting scoping (planned: viewport-scoped via `rich.syntax.Syntax`).
+Used by the terminal renderer to select Rich syntax highlighting.
 
 ## Known Edge Cases
 
@@ -163,7 +181,7 @@ The foreground/background split is intentional: `Strip.apply_style()` cannot rel
 
 The `create_inline_comment` ABC accepts optional `start_line`/`start_side` to support this.
 
-## Comment Anchors in Gutter (Phase 4)
+## Comment Anchors in Gutter
 
 The `DiffRenderer._gutter()` method renders a comment marker `*` in the gutter for lines that have discussions:
 - Yellow bold `*` for lines with unresolved discussions
@@ -171,7 +189,7 @@ The `DiffRenderer._gutter()` method renders a comment marker `*` in the gutter f
 
 The gutter lookup uses a `comment_lines: dict[tuple[int | None, int | None], bool]` map (built by `_build_comment_lines()`), where the bool indicates whether all discussions at that position are resolved. The key is `(old_lineno, new_lineno)` matching the DiffLine's line numbers.
 
-## Cross-Tab Navigation (Phase 4)
+## Cross-Tab Navigation
 
 `DiffPanel.jump_to_discussion(file_path, line, discussion_id)` supports cross-tab navigation from the Discussion tab to the Diff tab. When invoked:
 1. Finds the file by matching `new_path` or `old_path` against the file list
@@ -182,18 +200,27 @@ The gutter lookup uses a `comment_lines: dict[tuple[int | None, int | None], boo
 
 This enables the Discussion tab's `Enter` key (via `JumpToDiffDiscussion` message) to jump directly to the code location with the discussion expanded.
 
-## Truncated Diff Handling
+## Incomplete and metadata-only files
 
-When forge APIs truncate large diffs (returning no patch content), `MRDetailScreen._add_truncated_files()` creates placeholder `DiffFile` entries for the missing files. These placeholders have empty `hunks` but retain the file's `old_path`, `new_path`, `additions`, and `deletions` counts from the API metadata. In the diff viewer, files with empty hunks display a "Diff not available. May be too large for the API. Press o to view in browser." message. This ensures truncated files still appear in the file tree with their +/- stats.
+`TUIServiceAdapter.get_diff()` calls `convert_forge_changes()`. Its
+`_convert_change()` keeps forge metadata authoritative for paths, status, and
+aggregate counts, then classifies absent or incomplete patch text on each
+`DiffFile`:
 
-Detection logic: if a change entry has no `diff`/`patch` content, its `new_path` is not already in the parsed files, and it has nonzero additions/deletions or a `too_large` flag, a placeholder DiffFile is appended.
+- `is_truncated` covers explicit truncation flags, incomplete hunks, aggregate
+  count shortfalls, or positive change counts without a body.
+- `is_empty` covers an explicitly empty patch with no other reason.
+- `is_mode_only` covers a reported mode change without content hunks.
+- `is_unavailable` is the conservative fallback when content is absent without
+  enough metadata to classify it.
+
+Binary is independent of missing content; an absent patch alone is never binary
+evidence. The widget renders all of these files in the tree with paths and
+counts. It labels binary files separately and uses one generic unavailable-
+content message for other no-hunk states instead of inventing an empty diff.
 
 ## Bulk Pygments Highlighting
 
 `_build_highlight_map(file)` in `src/tongs/widgets/diff_panel.py` performs a single Pygments call per file rather than per-line. It concatenates all diff line contents, highlights the bulk string via `rich.syntax.Syntax`, then splits the highlighted `Text` back into per-line entries keyed by `id(DiffLine)`. The `DiffRenderer` receives this map and uses pre-highlighted text instead of re-highlighting each line individually.
 
 The batch `add_options()` call on `DiffOptionList` replaces the previous per-line `add_option()` loop, reducing Textual widget overhead for large files.
-
-## Planned Features
-
-- **Virtual scrolling:** only materialize visible lines as Rich Text objects

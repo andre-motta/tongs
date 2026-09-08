@@ -1,94 +1,98 @@
 # Contributing to tongs
 
-Thanks for considering a contribution. tongs is early stage, so your work will directly shape the architecture.
+Thanks for considering a contribution. Check
+[GitHub issues](https://github.com/andre-motta/tongs/issues) for current work
+and discuss a new direction in an issue before starting a large change.
 
 ## Development setup
 
+Tongs requires Python 3.12 or newer. Run commands from the checkout root and
+keep the virtual environment in that checkout:
+
 ```bash
-# Clone the repo
-git clone https://github.com/andre-motta/tongs.git
-cd tongs
-
-# Create a virtual environment (uv or plain venv)
-uv venv
+python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install -e ".[dev,mcp]" ruff
+```
 
-# Install in editable mode with development and MCP dependencies
-pip install -e ".[dev,mcp]"
+`uv venv --python 3.12` and `uv pip install` are valid equivalents. Activate the
+environment again in each new shell. Dependency installation can require
+network access; tests use mocked forge interactions.
 
-# Run tests
-pytest
+Building the production desktop shell additionally requires Node.js 22.12 or
+newer. Its locked dependency installation is:
 
-# Run linter
-ruff check src/ tests/
-ruff format --check src/ tests/
+```bash
+npm ci --prefix desktop
 ```
 
 ## Code style
 
-- **Formatter/linter:** ruff. Run `ruff check` and `ruff format` before submitting.
-- **Comments:** only when the "why" is non-obvious. No comments that restate what the code does.
-- **Imports:** module-level imports unless function-level is necessary (for example, to avoid circular dependencies or defer heavy imports).
-- **Type hints:** use them everywhere. `from __future__ import annotations` at the top of every module.
-- **Data models:** frozen dataclasses for immutable data, regular dataclasses for mutable state.
+- **Formatter and linter:** Run `ruff check src/ tests/` and
+  `ruff format --check src/ tests/` before submitting Python changes.
+- **Comments:** Explain non-obvious reasons; do not restate the code.
+- **Imports:** Use module-level imports unless a function-level import is needed,
+  such as to avoid a circular dependency.
+- **Type hints:** Type all parameters and return values. Put
+  `from __future__ import annotations` at the top of every module.
+- **Data models:** Use frozen dataclasses for immutable data and regular
+  dataclasses for mutable state.
+- **Commits:** Use a title, a blank line, a one-line description body, and
+  `git commit -s`. When adding a Codex co-author, use
+  `Co-Authored-By: Codex <model> <noreply@openai.com>` with the actual model
+  name and no context-window annotation. Do not use em dashes in prose or
+  commit messages.
 
 ## How the review process works
 
-Substantial initiatives follow the [project SDLC profile](docs/SDLC.md), using
-the reusable Agent SDLC guide and skill. It defines model roles, dependent work
-items, isolated worktrees, independent review, local integration, and CTO design
-and upstream gates. Small fixes use the relevant checks without requiring an
-epic or agent team.
+Substantial initiatives follow the [project SDLC profile](docs/SDLC.md). It
+defines model roles, dependent work items, isolated worktrees, independent
+review, local integration, and CTO design and upstream gates. Small fixes use
+the relevant checks without requiring an initiative or agent team.
 
-Desktop work uses issue-linked `feat/<work-item>` branches in isolated worktrees.
-Open PRs against `feat/desktop-app`; include dependencies, exact tested commits,
-checks and functional evidence. Independent Sol review precedes Astra
+Desktop work uses issue-linked `feat/<work-item>` branches in isolated
+worktrees. Open PRs against `feat/desktop-app` with dependencies, exact tested
+commits, checks, and functional evidence. Independent Sol review precedes Astra
 integration. Astra owns the feature branch and resolves integration conflicts.
 The complete feature is presented as one evidence-backed PR into `main` for CTO
-review. Hardware-accelerated Electron on the supported Fedora host is a required
-production/release gate. See the profile for the full project-specific rules.
+review.
 
-Every feature goes through a gate review covering four areas:
-
-1. **Architecture** -- does this fit the existing abstractions? Does it extend them cleanly?
-2. **Security** -- no token storage, no credential leaks, proper permission checks on `.netrc`
-3. **UX** -- does the TUI flow feel right? Are keybindings consistent? Does ASCII mode work?
-4. **QE** -- are there tests? Do they cover edge cases? Do they run without network access?
-
-Open a draft PR early if you want feedback on direction before investing in polish.
+Every change is reviewed for architecture, security, UX, and QE. Native
+hardware-accelerated Electron on the supported Fedora host is a separate
+production and release gate. A headless test result does not substitute for
+that evidence.
 
 ## Running tests
 
-```bash
-# All tests
-pytest
-
-# Specific test module
-pytest tests/test_forges/test_gitlab.py
-
-# With verbose output
-pytest -v
-
-# Tests run without network access -- all forge interactions are mocked
-```
-
-Pull requests to `main` and `feat/desktop-app` run the complete CI workflow for
-every change. The stable required check is `Desktop pre-merge aggregate`. It
-accepts a revision only when lint and formatting, Python 3.12 and 3.13 core and
-MCP tests, desktop fixture tests, and the hosted Fedora 44 Podman probe all
-succeed. A skipped, cancelled, missing, or failed required job makes the
-aggregate fail. A new commit supersedes earlier results, so review evidence must
-refer to the exact pull request head revision.
-
-Run the equivalent local checks with:
+Run Python tools through the checkout-local environment:
 
 ```bash
-ruff check src/ tests/
-ruff format --check src/ tests/
+source .venv/bin/activate
 pytest tests/ --ignore=tests/test_mcp -v
 pytest tests/test_mcp -v --junitxml=/tmp/tongs-mcp.junit.xml
 python tests/ci/verify_desktop_ci.py mcp-report \
   --path /tmp/tongs-mcp.junit.xml
+ruff check src/ tests/
+ruff format --check src/ tests/
+```
+
+The MCP extra is required so MCP tests execute rather than skip on import. Use a
+focused path during development, then run the checks appropriate to the changed
+source.
+
+Install, build, type-check, and test the production Electron/React shell with:
+
+```bash
+npm ci --prefix desktop
+npm run build --prefix desktop
+TONGS_TEST_PYTHON="$(command -v python)" npm test --prefix desktop
+```
+
+`npm run build --prefix desktop` prepares assets, runs TypeScript checking, and
+creates build output. The test command repeats that build before the Electron
+and renderer test suites. The historical comparison fixtures have separate checks:
+
+```bash
 PYTHONPATH=spikes/desktop pytest spikes/desktop/tests/test_backend.py -v
 npm ci --prefix spikes/desktop/frontend
 npm test --prefix spikes/desktop/frontend
@@ -99,82 +103,102 @@ TONGS_DESKTOP_PYTHON="$(command -v python)" \
   npm test --prefix spikes/desktop/electron
 ```
 
-Install the reference desktop plugin before the backend and Electron fixture
-checks with `python -m pip install ./spikes/desktop/reference-plugin`. The MCP
-extra is constrained below MCP 2 because tongs currently uses the MCP 1.x
-`mcp.server.fastmcp` interface. CI verifies that MCP tests actually run and
-rejects an import-error skip.
+Install `./spikes/desktop/reference-plugin` in the same Python environment before
+running fixture tests that discover it. The installable production provider example has focused Python and prebuilt ESM
+checks:
 
-The Podman job runs only on a disposable GitHub-hosted runner. Its public harness
-interface remains:
+```bash
+python -m pip install ./examples/desktop-plugin
+python -m pytest -q examples/desktop-plugin/tests/test_provider.py
+node --test examples/desktop-plugin/tests/test_dashboard_module.mjs
+```
+
+See the example [README](examples/desktop-plugin/README.md) for its declared
+modules, resources, and same-environment installation contract.
+
+Pull requests to `main` and `feat/desktop-app` run `.github/workflows/ci.yml`.
+Its required `Desktop pre-merge aggregate` accepts an exact revision only when
+Ruff, Python 3.12 and 3.13 core/MCP tests, desktop fixture and production shell
+tests, and the Fedora 44 Podman probe succeed. A skipped, cancelled, missing, or
+failed required job fails the aggregate. A new commit supersedes earlier
+results.
+
+The Fedora harness interface is:
 
 ```bash
 tests/containers/run-fedora-44.sh --output-dir <empty-directory-outside-checkout>
 ```
 
-The current desktop gate excludes the historical WebView experiment because it
-was not selected as the desktop shell. The Electron lane runs fixture checks; it
-does not claim native Fedora installation, KDE integration, or GPU acceptance.
-Those require the separate hardware-hosted desktop evidence gate.
+The production desktop release assembly gate is still separate from this
+pre-merge aggregate. Do not describe a fixture, Podman, or headless Node run as
+native Fedora, GPU, installer, signing, RPM, or release acceptance.
+
+For local Node work, bound the whole process tree, not only the V8 heap. Use a
+1 GiB memory limit, zero swap, a 64-task limit, `NODE_OPTIONS=--max-old-space-size=512`,
+one test worker, and an external deadline. Verify the guard before starting
+Node and fail on timeout or out-of-memory termination. See the
+[testing guide](.agents/testing/README.md) for the complete procedure and native
+evidence rules.
 
 ## How to add a plugin
 
-The plugin system is designed for extensibility. To create a new plugin:
+Tongs has two independent trusted-code entry-point groups:
 
-1. Create a new package under `src/tongs/plugins/your_plugin/`
-2. Implement a plugin class that integrates with the TUI
-3. Register it in `pyproject.toml` as an optional dependency group
-4. Add a `[plugins.your_plugin]` section to the config schema
+- `tongs.plugins` for terminal `TongsPlugin` implementations
+- `tongs.desktop_plugins` for production `DesktopPluginProvider`
+  implementations and their packaged ESM, CSS, and help resources
 
-See the fleet monitor plugin (`tongs[fleet]`) as the reference implementation.
+A plugin must be installed in the same Python environment as Tongs. The
+registries honor `[plugins.<name>].enabled`, but installed Python, ESM, and CSS
+plugins are trusted code rather than a sandboxed extension format. Use the
+[terminal plugin guide](docs/guides/plugins.md), the
+[desktop provider guide](docs/plugins/provider.md), and the installable
+[desktop example](examples/desktop-plugin/README.md) as the current contracts.
 
 ## How to add a new forge backend
 
-The forge abstraction makes this straightforward:
+1. Implement `ForgeClient` in `src/tongs/forges/your_forge.py`, returning shared
+   models from `src/tongs/forges/models.py`.
+2. Update remote detection in `src/tongs/scanner/remote.py` and client creation
+   in `src/tongs/forges/registry.py`.
+3. Extend the credential cascade in `src/tongs/forges/auth.py` with a CLI,
+   `.netrc`, or optional keyring source and a useful `AuthError`.
+4. Add mocked transport and service compatibility tests under
+   `tests/test_forges/` and `tests/services/` as appropriate.
 
-1. **Implement `ForgeClient`** -- create `src/tongs/forges/your_forge.py` implementing the abstract interface defined in `src/tongs/forges/base.py`. The interface covers MR listing, detail, diff, comments, reviews, and pipeline operations.
-
-2. **Add detection** -- update `src/tongs/scanner/remote.py` to recognize the new forge's URL patterns and `src/tongs/forges/registry.py` to instantiate your client.
-
-3. **Add auth** -- extend `src/tongs/forges/auth.py` with the token resolution cascade for your forge (CLI tool, `.netrc` fallback, helpful error message).
-
-4. **Write tests** -- mirror the structure in `tests/test_forges/`. All API calls should be mocked. See `tests/test_forges/test_gitlab.py` for the pattern.
-
-5. **Use shared models** -- return the data models from `src/tongs/forges/models.py`. The TUI works against these models, not forge-specific types. If a forge has unique concepts, add optional fields (like `review_decision` for GitHub).
-
-The key constraint: the TUI layer never imports a concrete forge client. Everything goes through `ForgeRegistry` and the `ForgeClient` ABC.
+UI code must not import a concrete forge client. `ApplicationSession` in
+`src/tongs/services/session.py` owns authenticated resources and exposes typed
+reads and mutations. The terminal consumes it through `TUIServiceAdapter`; the
+desktop consumes it through the bounded sidecar protocol.
 
 ## Project structure
 
-```
+```text
 src/tongs/
-  scanner/        # Filesystem walking, remote parsing
-  forges/         # ForgeClient ABC + implementations
-  views/          # Textual screens
-  widgets/        # Reusable TUI components
-  plugins/        # Plugin system
-  mcp/            # MCP server
-  cache/          # SQLite response cache
-  state/          # App state management
+  services/        # Shared application session, reads, mutations, drafts, CI
+  forges/          # ForgeClient ABC, GitHub/GitLab clients, auth, and HTTP
+  scanner/         # Local repository discovery and remote parsing
+  cache/           # SQLite response cache and cached forge wrapper
+  diff/, state/    # Diff conversion/models and review draft state
+  views/, widgets/ # Textual screens and reusable terminal widgets
+  desktop/         # Sidecar protocol, installer, artifacts, and assets
+  plugins/         # Terminal registry and desktop provider SDK
+  mcp/             # Separate FastMCP server
+desktop/src/
+  main/             # Electron lifecycle, IPC, sidecar, and local utilities
+  preload/          # Allowlisted context-isolated bridge
+  renderer/         # React application and feature modules
+  shared/           # Typed cross-process contracts
 tests/
-  test_scanner/   # Scanner tests
-  test_forges/    # Forge client tests
-  test_views/     # TUI screen tests
-  test_diff/      # Diff processing tests
+  desktop/          # Protocol, installer, Electron, renderer, and native fixtures
+  integration/desktop/ # Packaging, CI, artifact, and evidence integration
+  plugins/          # Desktop provider contract and lifecycle
 ```
 
-## What to work on
-
-Check [GitHub issues](https://github.com/andre-motta/tongs/issues) for open items. High-impact areas:
-
-- **GitHub client** -- the `ForgeClient` interface is defined, GitLab is implemented. GitHub is the biggest open item.
-- **Diff viewer** -- syntax-highlighted diff rendering with word-level highlighting (Phase 2).
-- **Inline comments** -- comment on specific diff lines, reply to threads (Phase 2).
-- **Pipeline viewer** -- job logs with ANSI rendering, retry/cancel actions (Phase 4).
-- **New plugins** -- the plugin system is ready for extensions.
-
-If you want to tackle something not on the list, open an issue first so we can discuss the approach.
+Read [AGENTS.md](AGENTS.md) and the relevant `.agents/*/README.md` subsystem
+guide before changing a subsystem.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions will be licensed under the
+MIT License.

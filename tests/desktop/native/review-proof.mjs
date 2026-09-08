@@ -162,7 +162,11 @@ async function runProof() {
       document.querySelector('button[aria-label="Select new line 5"]').dispatchEvent(
         new MouseEvent("click", { bubbles: true, shiftKey: true }),
       );
-      button("Suggest replacement").click();
+      const suggest = await waitFor("enabled suggestion action", () => {
+        const action = button("Suggest replacement");
+        return action && !action.disabled ? action : null;
+      });
+      suggest.click();
       const replacement = await waitFor("suggestion replacement", () =>
         labelled("Replacement code"));
       if (replacement.value !== "before\\nnew value\\nafter")
@@ -218,7 +222,11 @@ async function runProof() {
       const line = await waitFor("durable suggestion source", () =>
         document.querySelector('button[aria-label="Select new line 4"]'));
       line.click();
-      button("Suggest replacement").click();
+      const suggest = await waitFor("enabled durable suggestion action", () => {
+        const action = button("Suggest replacement");
+        return action && !action.disabled ? action : null;
+      });
+      suggest.click();
       const replacement = await waitFor("durable suggestion replacement", () =>
         labelled("Replacement code"));
       if (replacement.value !== "new value")

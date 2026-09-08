@@ -3,6 +3,17 @@ import type { JsonObject, JsonValue } from "../shared/bridge.js";
 
 export const APP_ORIGIN = "tongs://app";
 export const APP_DOCUMENT = `${APP_ORIGIN}/index.html`;
+export const APP_SCHEME_REGISTRATION = Object.freeze({
+  scheme: "tongs",
+  privileges: Object.freeze({
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+    bypassCSP: false,
+    allowServiceWorkers: false,
+    codeCache: true,
+  }),
+});
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'none'", "script-src 'self'", "style-src 'self'",
   "img-src 'self' data:", "font-src 'self'", "connect-src 'self'",

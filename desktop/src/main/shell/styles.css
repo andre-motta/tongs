@@ -97,11 +97,12 @@ button {
   font-size: 12px;
   color: var(--muted);
 }
-.repository-refresh {
+.button.repository-refresh {
   width: calc(100% - 16px);
   margin: 0 8px 10px;
   font-size: 12px;
   line-height: 1.25;
+  overflow-wrap: anywhere;
   white-space: normal;
 }
 .nav-item,

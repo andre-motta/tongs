@@ -118,15 +118,56 @@ or newly discovered dependency. A blocker is recorded separately from progress.
 For this initiative, track:
 `planned -> ready -> assigned -> review -> feature integrated -> CTO accepted -> main delivered`.
 Record local candidate integration and the actual remote merge SHA separately.
-A merge to the feature branch is not delivery to main. Keep implementation issues
-open until the final accepted change lands in main; use `Refs #...` in intermediate
-PRs rather than premature closing language. Preserve rejected/interrupted worktrees,
-review findings, assignments, evidence and next actions for safe resumption.
+A merge to the feature branch is not delivery to main. The CTO authorized closing
+completed scoped work items after independent review, feature integration and
+required post-merge checks are verified. Astra, or an explicitly delegated tracker
+agent, checks the item's full acceptance criteria before closing it and records the
+accepted PR head, merge commit and evidence. Closure means that scoped work is
+complete on `feat/desktop-app`; it does not imply CTO acceptance or main delivery.
+Keep the parent feature, incomplete work, deferred RFEs and outstanding production
+acceptance gates open. Readiness still depends on verified prerequisite commits.
+This exception is recorded in [issue #23](https://github.com/andre-motta/tongs/issues/23).
+
+Contributors continue using `Refs #...` in intermediate PRs and do not close issues
+automatically. Preserve rejected/interrupted worktrees, review findings,
+assignments, evidence and next actions for safe resumption.
 
 Use the [desktop PR template](https://github.com/andre-motta/tongs/blob/feat/desktop-app/.github/PULL_REQUEST_TEMPLATE/desktop.md)
 for intermediate work. Baseline CI/lint/dependency failures remain unmet; branch
 creation does not waive them. CI readiness and hardware GPU work are separate,
 issue-tracked items that can be investigated independently after bootstrap.
+
+### Periodic branch and worktree cleanup
+
+The CTO authorized periodic cleanup in
+[issue #23](https://github.com/andre-motta/tongs/issues/23#issuecomment-5577199044).
+After three verified integrations, or when storage pressure warrants it, Astra
+allocates a bounded cleanup pass to Luna at `xhigh`. Use available capacity and
+resume paused implementation promptly after the pass. This is maintenance within
+the initiative, not permission to clean unrelated projects.
+
+The agent first inventories exact branch tips, merged PRs, ancestry in the latest
+verified integration commit, checkout changes, ignored files and active users of
+each worktree. A separate Sol reviewer checks the proposed batch, and Astra
+authorizes the concrete list. Immediately before removal, recheck that those
+facts still hold. Skip any changed or uncertain candidate.
+
+Protect main and integration, active or dirty work, pending corrections, unmerged
+or failed investigations, and environments still borrowed by other contributors.
+Required evidence must remain available. Before retiring a worktree containing
+such artifacts, move them to a retained evidence location, verify their hashes
+and update references. Ignored files are not automatically disposable; remove
+only inventoried generated content. Do not run broad cleanup or prune commands
+that also affect unapproved worktrees.
+
+Remove only the approved worktrees and local task branches. Delete a remaining
+remote task branch only when it still names the approved merged tip, using an
+exact old-tip guard. Record removed paths and refs, source tips, merge proof,
+command outcomes, retained evidence and exclusions in a cleanup receipt. Verify
+the resulting Git inventory and preserve enough information to recreate a
+checkout from its retained merge history. Report storage savings as measured or
+estimated. The first pass is recorded in
+[issue #23](https://github.com/andre-motta/tongs/issues/23#issuecomment-5577309137).
 
 ## Hardware GPU production and release gate
 

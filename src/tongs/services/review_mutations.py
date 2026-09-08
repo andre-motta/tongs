@@ -239,6 +239,13 @@ class _ResolvedAnchor:
     start: DiffLine | None
 
 
+@dataclass(frozen=True, slots=True)
+class _ValidatedCommand:
+    snapshot: ReviewSnapshot | None = None
+    anchor: _ResolvedAnchor | None = None
+    discussion: Discussion | None = None
+
+
 class ReviewMutationService:
     """Validate and dispatch single forge mutations without automatic replay."""
 
@@ -275,6 +282,25 @@ class ReviewMutationService:
     async def capabilities(self, review: ReviewRef) -> ReviewMutationCapabilities:
         snapshot = await self._get_review(review)
         return _capabilities(snapshot)
+
+    async def validate(self, command: ReviewMutationCommand) -> None:
+        """Validate one command without reserving or dispatching a mutation."""
+        owner_task = await self._enter_validation()
+        try:
+            client = await self._get_client(command.review, "validate_review_mutation")
+            await self._validate(command, client)
+        except asyncio.CancelledError:
+            raise
+        except ServiceError:
+            raise
+        except Exception as error:  # noqa: BLE001 - Sanitize validation boundary.
+            raise translate_error(
+                error,
+                operation="validate_review_mutation",
+                hostname=command.review.repository.hostname,
+            ) from None
+        finally:
+            self._owner_tasks.discard(owner_task)
 
     async def execute(self, command: ReviewMutationCommand) -> MutationOutcome:
         prior = await self._reserve(command)
@@ -346,18 +372,14 @@ class ReviewMutationService:
     async def _prepare(
         self, command: ReviewMutationCommand, client: ForgeClient
     ) -> Awaitable[ForgeMutationResult]:
+        validated = await self._validate(command, client)
         path = command.review.repository.project_path
         number = command.review.number
         if isinstance(command, GeneralComment):
             return client.add_comment(path, number, command.body)
-
-        snapshot = await self._require_revision(command.review, command.revision)
-        capabilities = _capabilities(snapshot)
         if isinstance(command, InlineComment):
-            resolved = await self._validate_anchor(
-                command.review, command.revision, command.anchor
-            )
-            await self._require_revision(command.review, command.revision)
+            resolved = validated.anchor
+            assert resolved is not None
             return client.create_inline_comment(
                 path,
                 number,
@@ -377,14 +399,9 @@ class ReviewMutationService:
                 start_old_line=resolved.start.old_lineno if resolved.start else None,
                 start_new_line=resolved.start.new_lineno if resolved.start else None,
             )
-        discussions = (
-            await self._get_discussions(command.review)
-            if isinstance(command, (Reply, Resolve))
-            else ()
-        )
         if isinstance(command, Reply):
-            discussion = _find_discussion(discussions, command.discussion_id)
-            await self._require_revision(command.review, command.revision)
+            discussion = validated.discussion
+            assert discussion is not None
             return client.reply_to_discussion(
                 path,
                 number,
@@ -393,15 +410,55 @@ class ReviewMutationService:
                 root_comment_id=discussion.root_comment.id,
             )
         if isinstance(command, Resolve):
+            discussion = validated.discussion
+            assert discussion is not None
+            return client.resolve_discussion(
+                path, number, discussion.id, command.resolved
+            )
+        inline_payloads: list[dict] = []
+        for draft in command.inline_comments:
+            inline_payloads.append(_github_review_comment(draft))
+        return client.submit_review(
+            path,
+            number,
+            command.verdict,
+            command.body,
+            inline_payloads or None,
+            head_sha=command.revision.head_sha,
+        )
+
+    async def _validate(
+        self, command: ReviewMutationCommand, _client: ForgeClient
+    ) -> _ValidatedCommand:
+        if isinstance(command, GeneralComment):
+            return _ValidatedCommand()
+
+        snapshot = await self._require_revision(command.review, command.revision)
+        capabilities = _capabilities(snapshot)
+        if isinstance(command, InlineComment):
+            resolved = await self._validate_anchor(
+                command.review, command.revision, command.anchor
+            )
+            snapshot = await self._require_revision(command.review, command.revision)
+            return _ValidatedCommand(snapshot, resolved)
+
+        discussions = (
+            await self._get_discussions(command.review)
+            if isinstance(command, (Reply, Resolve))
+            else ()
+        )
+        if isinstance(command, Reply):
+            discussion = _find_discussion(discussions, command.discussion_id)
+            snapshot = await self._require_revision(command.review, command.revision)
+            return _ValidatedCommand(snapshot, discussion=discussion)
+        if isinstance(command, Resolve):
             if not capabilities.resolve:
                 raise _unsupported("This forge does not support thread resolution.")
             discussion = _find_discussion(discussions, command.discussion_id)
             if not discussion.resolvable:
                 raise _unsupported("This discussion cannot be resolved.")
-            await self._require_revision(command.review, command.revision)
-            return client.resolve_discussion(
-                path, number, discussion.id, command.resolved
-            )
+            snapshot = await self._require_revision(command.review, command.revision)
+            return _ValidatedCommand(snapshot, discussion=discussion)
 
         if snapshot.detail.forge_host.forge_type == ForgeType.GITLAB:
             if command.verdict == ReviewDecision.CHANGES_REQUESTED:
@@ -414,19 +471,10 @@ class ReviewMutationService:
                 raise _unsupported(
                     "GitLab approval and comment require separate operations."
                 )
-        inline_payloads: list[dict] = []
         for draft in command.inline_comments:
             await self._validate_anchor(command.review, command.revision, draft.anchor)
-            inline_payloads.append(_github_review_comment(draft))
-        await self._require_revision(command.review, command.revision)
-        return client.submit_review(
-            path,
-            number,
-            command.verdict,
-            command.body,
-            inline_payloads or None,
-            head_sha=command.revision.head_sha,
-        )
+        snapshot = await self._require_revision(command.review, command.revision)
+        return _ValidatedCommand(snapshot)
 
     async def _require_revision(
         self, review: ReviewRef, revision: ReviewRevision
@@ -503,6 +551,19 @@ class ReviewMutationService:
                 raise RuntimeError("review mutation execution requires an asyncio task")
             self._owner_tasks.add(owner_task)
         return None
+
+    async def _enter_validation(self) -> asyncio.Task[object]:
+        owner_task = asyncio.current_task()
+        if owner_task is None:
+            raise RuntimeError("review mutation validation requires an asyncio task")
+        async with self._lock:
+            if self._closed:
+                raise ServiceError(
+                    ServiceErrorCode.CLOSED,
+                    "The review mutation service is closed.",
+                )
+            self._owner_tasks.add(owner_task)
+        return owner_task
 
     def _remove_pending_now(self, operation_id: str) -> None:
         record = self._ledger.get(operation_id)

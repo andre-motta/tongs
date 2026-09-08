@@ -49,6 +49,8 @@ from tongs.services.models import (
     validate_hostname,
 )
 from tongs.services.review_mutations import ReviewMutationService
+from tongs.services.review_submission import ReviewSubmissionService
+from tongs.state.drafts.store import DraftStore
 
 
 class CacheResource(Protocol):
@@ -102,6 +104,8 @@ class ApplicationSession:
         config_path: Path | None = None,
         cache_path: Path | None = None,
         cache: CacheResource | None = None,
+        draft_db_path: Path | None = None,
+        draft_store: DraftStore | None = None,
         forge_registry: ForgeRegistryResource | None = None,
         config_loader: ConfigLoader = load_config,
         discoverer: RepositoryDiscoverer = discover_repos,
@@ -112,10 +116,13 @@ class ApplicationSession:
             raise ValueError("shutdown_timeout must be positive")
         if event_queue_size <= 0:
             raise ValueError("event_queue_size must be positive")
+        if draft_db_path is not None and draft_store is not None:
+            raise ValueError("draft_db_path and draft_store are mutually exclusive")
         self._provided_config = config
         self._config_path = config_path
         self._cache_path = cache_path
         self._provided_cache = cache
+        self._draft_store = draft_store or DraftStore(draft_db_path)
         self._provided_registry = forge_registry
         self._config_loader = config_loader
         self._discoverer = discoverer
@@ -140,6 +147,7 @@ class ApplicationSession:
         self._close_task: asyncio.Task[None] | None = None
         self._close_requested = False
         self._cache_open_attempted = False
+        self._draft_store_open_attempted = False
         self._registry_owned = False
         self._registry_close_attempted = False
         self._registry_close_failure: BaseException | None = None
@@ -150,6 +158,11 @@ class ApplicationSession:
             get_diff=self.get_raw_diff,
             get_discussions=self.get_discussions,
             emit_change=self.emit_change,
+        )
+        self._review_submissions = ReviewSubmissionService(
+            store=self._draft_store,
+            mutations=self._review_mutations,
+            get_review=self.get_review,
         )
         self._ci_mutations = CIMutationService(
             get_client=self._client_for_repository,
@@ -187,6 +200,18 @@ class ApplicationSession:
     def review_mutations(self) -> ReviewMutationService:
         """Return the session-scoped, bounded review mutation service."""
         return self._review_mutations
+
+    @property
+    def drafts(self) -> DraftStore:
+        """Return the session-owned durable review draft store."""
+        self._require_started()
+        return self._draft_store
+
+    @property
+    def review_submissions(self) -> ReviewSubmissionService:
+        """Return the session-scoped durable review submission service."""
+        self._require_started()
+        return self._review_submissions
 
     @property
     def ci_mutations(self) -> CIMutationService:
@@ -228,6 +253,10 @@ class ApplicationSession:
                     )
                     self._cache_open_attempted = True
                     await self._cache.open()
+                    self._require_start_open()
+                    self._draft_store_open_attempted = True
+                    await self._draft_store.open()
+                    await self._draft_store.recover_incomplete_attempts()
                     self._require_start_open()
                     self._registry = self._provided_registry or ForgeRegistry(
                         extra_gitlab_hosts=self._config.extra_gitlab_hosts,
@@ -312,6 +341,25 @@ class ApplicationSession:
         try:
             try:
                 await asyncio.wait_for(
+                    self._review_submissions.close(), timeout=self._shutdown_timeout
+                )
+            except asyncio.CancelledError:
+                failures.append(RuntimeError("review submission cleanup cancelled"))
+                mutation_cleanup_failed = True
+            except Exception as error:  # noqa: BLE001 - Preserve dependencies.
+                failures.append(error)
+                mutation_cleanup_failed = True
+            if mutation_cleanup_failed:
+                self._close_event_streams()
+                self._issued_repositories.clear()
+                self._repositories.clear()
+                self._shutdown_error = ServiceError(
+                    ServiceErrorCode.SHUTDOWN_FAILED,
+                    "One or more application resources did not close cleanly.",
+                )
+                raise self._shutdown_error
+            try:
+                await asyncio.wait_for(
                     self._ci_mutations.close(), timeout=self._shutdown_timeout
                 )
             except asyncio.CancelledError:
@@ -340,6 +388,15 @@ class ApplicationSession:
                 )
                 raise self._shutdown_error
             terminal_close = True
+            if self._draft_store_open_attempted:
+                try:
+                    await asyncio.wait_for(
+                        self._draft_store.close(), timeout=self._shutdown_timeout
+                    )
+                except asyncio.CancelledError:
+                    failures.append(RuntimeError("draft storage cleanup cancelled"))
+                except Exception as error:  # noqa: BLE001 - Continue owned cleanup.
+                    failures.append(error)
             if self._registry_owned and self._registry is not None:
                 try:
                     await asyncio.wait_for(

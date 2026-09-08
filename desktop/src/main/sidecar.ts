@@ -136,6 +136,13 @@ export class SidecarTransport extends EventEmitter {
     return this.request<T>(method, params, true, this.requestTimeoutMs);
   }
 
+  requestMutation<T extends JsonValue = JsonValue>(
+    method: string,
+    params: JsonObject,
+  ): SidecarRequest<T> {
+    return this.request<T>(method, params, false, this.requestTimeoutMs);
+  }
+
   cancelRead(requestId: string): boolean {
     const pending = this.pending.get(requestId);
     if (!pending?.read || !this.child?.stdin.writable) return false;
@@ -226,7 +233,7 @@ export class SidecarTransport extends EventEmitter {
       throw new SidecarError("not_running", "The desktop service is not running.");
     }
     if (this.pending.size >= MAX_PENDING) {
-      throw new SidecarError("too_many_requests", "Too many desktop reads are pending.");
+      throw new SidecarError("too_many_requests", "Too many desktop requests are pending.");
     }
     validateJson(params);
     const requestId = `electron-${this.generation}-${this.nextId}`;
@@ -245,7 +252,15 @@ export class SidecarTransport extends EventEmitter {
       if (!pending) return;
       if (pending.read) this.cancelRead(requestId);
       this.pending.delete(requestId);
-      pending.reject(new SidecarError("timeout", "The desktop read timed out.", true));
+      pending.reject(
+        pending.read
+          ? new SidecarError("timeout", "The desktop read timed out.", true)
+          : new SidecarError(
+              "mutation_timeout",
+              "The CI mutation response timed out. Its outcome is unknown.",
+              true,
+            ),
+      );
     }, timeoutMs);
     this.pending.set(requestId, {
       method,
@@ -344,9 +359,10 @@ export class SidecarTransport extends EventEmitter {
       return;
     }
     const error = value.error as Record<string, unknown>;
+    const code = mutationErrorCode(error, pending.read);
     pending.reject(
       new SidecarError(
-        typeof error.code === "string" ? error.code : "service_error",
+        code,
         typeof error.message === "string" ? error.message : "The desktop request failed.",
         error.retryable === true,
       ),
@@ -410,6 +426,40 @@ export class SidecarTransport extends EventEmitter {
   }
 }
 
+const SERVICE_ERROR_CODES = new Set([
+  "authentication_failed",
+  "closed",
+  "configuration_invalid",
+  "conflict",
+  "internal",
+  "invalid_input",
+  "invalid_response",
+  "network_unavailable",
+  "not_found",
+  "not_started",
+  "permission_denied",
+  "rate_limited",
+  "resource_not_issued",
+  "revision_changed",
+  "revision_unavailable",
+  "shutdown_failed",
+  "unsupported",
+]);
+
+function mutationErrorCode(
+  error: Record<string, unknown>,
+  read: boolean,
+): string {
+  const protocolCode =
+    typeof error.code === "string" ? error.code : "service_error";
+  if (read || protocolCode !== "service_error" || !isRecord(error.details))
+    return protocolCode;
+  const serviceCode = error.details.service_code;
+  return typeof serviceCode === "string" && SERVICE_ERROR_CODES.has(serviceCode)
+    ? serviceCode
+    : protocolCode;
+}
+
 function validateHandshake(value: JsonValue, coreVersion: string): asserts value is HandshakeResult {
   if (!isRecord(value)) throw new SidecarError("invalid_handshake", "Invalid desktop handshake.");
   const required = [...REQUIRED_CAPABILITIES].sort();
@@ -437,9 +487,10 @@ function validateHandshake(value: JsonValue, coreVersion: string): asserts value
 }
 
 const REQUIRED_METHODS = Object.freeze([
-  "assets.list", "assets.read", "commits.list", "diff.open", "diff.page",
+  "assets.list", "assets.read", "ci.capabilities", "ci.receipt", "commits.list", "diff.open", "diff.page",
   "discussions.list", "host.set_location", "jobs.list", "logs.open", "logs.page",
-  "pipelines.list", "plugins.invoke", "plugins.list", "repositories.discover",
+  "jobs.cancel", "jobs.retry", "pipelines.cancel", "pipelines.list", "pipelines.retry",
+  "plugins.invoke", "plugins.list", "repositories.discover",
   "repositories.open", "review_pipelines.list", "reviews.get", "reviews.list", "shutdown",
 ]);
 

@@ -1,0 +1,6 @@
+{
+  "name": "tongs-native-ci-proof",
+  "private": true,
+  "type": "module",
+  "main": "../ci-proof.mjs"
+}

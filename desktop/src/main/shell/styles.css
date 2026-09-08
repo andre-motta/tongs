@@ -335,6 +335,214 @@ button {
 .commit-sha {
   color: var(--accent);
 }
+.ci-toolbar,
+.ci-section-heading,
+.ci-summary,
+.ci-actions,
+.ci-log-toolbar,
+.ci-log-windows,
+.ci-confirmation,
+.ci-mutation-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ci-toolbar,
+.ci-section-heading,
+.ci-summary,
+.ci-confirmation,
+.ci-mutation-result {
+  justify-content: space-between;
+}
+.ci-toolbar {
+  margin-bottom: 14px;
+}
+.ci-toolbar .section-title,
+.ci-section-heading h3,
+.ci-summary h3,
+.ci-log h3,
+.ci-confirmation p,
+.ci-mutation-result p {
+  margin: 0;
+}
+.ci-help,
+.ci-meta,
+.ci-match-count,
+.ci-log-windows {
+  color: var(--muted);
+}
+.ci-help,
+.ci-meta {
+  margin: 4px 0 0;
+}
+.ci-workspace {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  min-height: 480px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.ci-pipeline-list,
+.ci-job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  overflow: auto;
+}
+.ci-pipeline-list {
+  max-height: calc(100vh - 265px);
+  border-right: 1px solid var(--border);
+}
+.ci-pipeline,
+.ci-job {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 9px;
+  align-items: center;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.ci-pipeline > :not(.state),
+.ci-job > :not(.state) {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ci-pipeline:hover,
+.ci-pipeline:focus-visible,
+.ci-job:hover,
+.ci-job:focus-visible,
+.ci-selected {
+  border-color: var(--accent);
+  outline: none;
+  background: var(--panel-2);
+}
+.ci-detail {
+  min-width: 0;
+  padding: 16px;
+}
+.ci-summary {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.ci-section-heading {
+  margin: 14px 0 8px;
+}
+.ci-job-layout {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr);
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.ci-job-list {
+  max-height: calc(100vh - 390px);
+  border-right: 1px solid var(--border);
+}
+.ci-job-detail {
+  min-width: 0;
+  padding: 12px;
+}
+.ci-job-detail > .ci-actions {
+  justify-content: flex-end;
+}
+.ci-log-toolbar {
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.ci-log-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+}
+.ci-log-search {
+  min-width: 200px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 7px 9px;
+}
+.ci-log-search:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-2);
+}
+.ci-log-window {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.ci-log-lines {
+  display: block;
+  max-height: calc(100vh - 520px);
+  min-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px 0;
+  white-space: pre;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.ci-log-lines code {
+  display: grid;
+  grid-template-columns: 52px max-content;
+  min-width: 100%;
+}
+.ci-log-number {
+  margin-right: 12px;
+  padding-right: 10px;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+.ci-log-match {
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
+}
+.ci-log-match-selected {
+  outline: 1px solid var(--warning);
+  outline-offset: -1px;
+}
+.ci-log-windows {
+  justify-content: center;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+.ci-confirmation,
+.ci-mutation-result {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel-2);
+  box-shadow: 0 -6px 24px rgb(0 0 0 / 25%);
+}
+.ci-mutation-result {
+  align-items: flex-start;
+  flex-direction: column;
+}
+.ci-outcome-known {
+  border-color: var(--success);
+}
+.ci-outcome-unknown {
+  border-color: var(--warning);
+}
+.ci-confirm {
+  border-color: var(--warning);
+}
 .diff-toolbar {
   display: flex;
   align-items: center;
@@ -633,5 +841,21 @@ button {
   }
   .plugin-module {
     padding: 16px;
+  }
+  .ci-workspace {
+    grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+  }
+  .ci-job-layout {
+    grid-template-columns: 1fr;
+  }
+  .ci-job-list {
+    max-height: 150px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .ci-summary,
+  .ci-confirmation {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

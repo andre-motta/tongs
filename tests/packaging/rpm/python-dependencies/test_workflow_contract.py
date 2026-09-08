@@ -37,6 +37,14 @@ def test_rust_spec_uses_locked_sources_and_fedora_openssl() -> None:
     assert "CARGO_NET_OFFLINE=true" in spec
 
 
+def test_builder_uses_only_fedora_packaged_python_build_tools() -> None:
+    containerfile = (PACKAGING / "Containerfile").read_text()
+
+    assert "python3-pip" in containerfile
+    assert "curl" not in containerfile
+    assert "rustup" not in containerfile
+
+
 def test_workflow_has_minimal_permissions_and_retains_artifacts() -> None:
     workflow = WORKFLOW.read_text()
 

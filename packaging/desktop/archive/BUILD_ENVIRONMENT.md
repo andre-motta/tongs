@@ -15,13 +15,27 @@ Build the image with `packaging/desktop/archive` as its context:
 docker build --file Containerfile.build --tag tongs-archive-builder:local .
 ```
 
-Issue 53 should build this image on a disposable GitHub-hosted x86_64 runner and
-record the resulting image digest plus the version assertions before using it.
-The source checkout, exact npm lock and verified Electron zip are mounted as
-inputs. Run `npm ci --ignore-scripts` in each clean source root, then invoke
-`python3.12 scripts/build_desktop_archive.py` inside the container. A second
-clean root and fresh npm install must reproduce every output byte. Network access
-is unnecessary after the exact npm packages and Electron zip are present.
+The narrow `.github/workflows/desktop-archive.yml` validation job builds this
+image with Podman on a disposable GitHub-hosted x86_64 runner. It records the
+image identity and asserted tool versions, downloads the exact official Electron
+zip, and uses `git archive` to prepare two clean source roots. Each root gets an
+independent `npm ci --ignore-scripts` and producer invocation in a fresh
+container. The job compares every output byte and retains one complete output,
+both checksum lists, source and Electron inputs, and toolchain evidence for 14
+days. It has read-only repository permissions and does not publish an archive.
+
+Run the same proof on a compatible disposable host with:
+
+```bash
+TONGS_HEAD_SHA=$(git rev-parse HEAD) \
+  packaging/desktop/archive/run_hosted.sh \
+  --source-root "$PWD" \
+  --output-dir /path/to/new/evidence-directory
+```
+
+Issue 53 may call this validation seam from its aggregate workflow. It must keep
+the exact candidate checkout, pinned inputs, two-clean-root comparison, and
+bounded evidence retention intact.
 
 Fedora mirrors may retire an update RPM. Before that happens, issue 53 should
 retain the five Fedora-signed RPM bytes in its approved build-input store under

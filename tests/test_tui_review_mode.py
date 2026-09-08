@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -374,7 +375,7 @@ async def test_cancelled_submission_recovers_unknown_without_replaying_known_ste
         await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
         await pilot.press("v")
         await pilot.press("ctrl+s")
-        await _wait_until(app, forge.mutation_started.is_set)
+        await asyncio.wait_for(forge.mutation_started.wait(), timeout=2)
         cancelled = app.workers.cancel_group(screen, "review-draft-submit")
         assert len(cancelled) == 1
         await _wait_until(

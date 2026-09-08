@@ -68,6 +68,7 @@ async function runProof() {
       "drafts.db-wal",
       "discovery-state.txt",
       "mock-forge-actions.jsonl",
+      "native-review-proof.json",
     ]) await rm(path.join(evidenceRoot, name), { force: true });
     await writeFile(discoveryControl, "present\n", { mode: 0o600 });
     const sourceBinding = await verifySourceBinding();
@@ -207,6 +208,55 @@ async function runProof() {
     );
     await evaluate(`setValue(labelled("Quick comment"), ""); return true;`);
 
+    mark("author and post a controlled multiline GitHub suggestion");
+    const suggestion = await evaluate(`
+      button("Files changed").click();
+      await waitFor("source diff", () =>
+        document.querySelector('button[aria-label="Select new line 3"]'));
+      document.querySelector('button[aria-label="Select new line 3"]').click();
+      await waitFor("range origin selection", () =>
+        document.querySelector(
+          'button[aria-label="Select new line 3"][aria-pressed="true"]',
+        ));
+      document.querySelector('button[aria-label="Select new line 5"]').dispatchEvent(
+        new MouseEvent("click", { bubbles: true, shiftKey: true }),
+      );
+      await waitFor("committed multiline selection", () =>
+        [3, 4, 5].every((number) => document.querySelector(
+          'button[aria-label="Select new line ' + number + '"][aria-pressed="true"]',
+        )));
+      const suggest = await waitFor("enabled suggestion action", () => {
+        const action = button("Suggest replacement");
+        return action && !action.disabled ? action : null;
+      });
+      suggest.click();
+      const replacement = await waitFor("suggestion replacement", () =>
+        labelled("Replacement code"));
+      if (replacement.value !== "before\\nnew value\\nafter")
+        throw new Error("suggestion was not seeded from exact selected source");
+      setValue(labelled("Optional explanation"), "Use the guarded replacement");
+      setValue(replacement, "  replacement(\u0060value\u0060)  ");
+      button("Post quick suggestion").click();
+      return snapshot();
+    `);
+    await waitForAction("create_inline_comment", 1);
+    const suggestionScreenshot = await capture("03-suggestion-posted.png");
+
+    mark("resolve the discussion jump against the current loaded diff");
+    const discussionJump = await evaluate(`
+      const show = await waitFor("show discussion in diff", () => button("Show in diff"));
+      show.click();
+      await waitFor("discussion diff target", () =>
+        document.querySelector('button[aria-label="Select new line 4"][aria-pressed="true"]'));
+      return snapshot();
+    `);
+    const discussionJumpScreenshot = await capture("04-discussion-jump.png");
+    await evaluate(`
+      button("Discussions").click();
+      await waitFor("review workflow", () => document.querySelector(".review-workflow-shell"));
+      return true;
+    `);
+
     mark("exercise known and unknown quick comments without replay");
     await sendComposer("Quick comment", "controlled known quick comment");
     await evaluate(`
@@ -219,7 +269,7 @@ async function runProof() {
         document.body.innerText.includes("remote result is unknown"));
       return snapshot();
     `);
-    const unknownScreenshot = await capture("01-quick-unknown-dark.png");
+    const unknownScreenshot = await capture("05-quick-unknown-dark.png");
     await clickButton("I inspected the forge; acknowledge uncertainty");
     await evaluate(`
       await waitFor("uncertainty acknowledgment", () =>
@@ -231,11 +281,28 @@ async function runProof() {
     await clickButton("Start review");
     await evaluate(`
       await waitFor("draft", () => document.body.innerText.includes("Draft review active"));
+      button("Files changed").click();
+      const line = await waitFor("durable suggestion source", () =>
+        document.querySelector('button[aria-label="Select new line 4"]'));
+      line.click();
+      const suggest = await waitFor("enabled durable suggestion action", () => {
+        const action = button("Suggest replacement");
+        return action && !action.disabled ? action : null;
+      });
+      suggest.click();
+      const replacement = await waitFor("durable suggestion replacement", () =>
+        labelled("Replacement code"));
+      if (replacement.value !== "new value")
+        throw new Error("durable suggestion did not retain exact source text");
+      setValue(replacement, "durable_value");
+      button("Add suggestion to draft").click();
+      button("Discussions").click();
+      await waitFor("draft workflow", () => document.querySelector(".review-workflow-shell"));
       setValue(labelled("Add general draft comment"), "Durable general draft comment");
       button("Add general draft comment").click();
       await waitFor("draft comment", () =>
-        document.querySelector(".review-workflow-draft-comment textarea")?.value ===
-          "Durable general draft comment");
+        [...document.querySelectorAll(".review-workflow-draft-comment textarea")]
+          .some((item) => item.value === "Durable general draft comment"));
       setValue(labelled("Review body"), "Durable review body after renderer and sidecar restart");
       setValue(labelled("Verdict"), "approve");
       return snapshot();
@@ -245,7 +312,7 @@ async function runProof() {
       await waitFor("saved draft", () => button("Save draft")?.disabled === true);
       return true;
     `);
-    const draftScreenshot = await capture("02-draft-review-dark.png");
+    const draftScreenshot = await capture("06-draft-review-dark.png");
 
     mark("restart sidecar and renderer, then recover persisted draft");
     controller.reset();
@@ -258,12 +325,17 @@ async function runProof() {
       await waitFor("recovered draft body", () =>
         labelled("Review body")?.value ===
           "Durable review body after renderer and sidecar restart");
-      if (document.querySelector(".review-workflow-draft-comment textarea")?.value !==
-          "Durable general draft comment")
-        throw new Error("durable draft comment was not recovered");
+      const recoveredComments = [
+        ...document.querySelectorAll(".review-workflow-draft-comment textarea"),
+      ].map((item) => item.value);
+      if (!recoveredComments.includes("Durable general draft comment"))
+        throw new Error("durable general draft comment was not recovered");
+      if (!recoveredComments.includes(
+          "\u0060\u0060\u0060suggestion\\ndurable_value\\n\u0060\u0060\u0060"))
+        throw new Error("durable suggestion was not recovered");
       return snapshot();
     `);
-    const recoveredScreenshot = await capture("03-draft-recovered-after-restart.png");
+    const recoveredScreenshot = await capture("07-draft-recovered-after-restart.png");
 
     mark("submit persisted draft through production submission service");
     await clickButton("Submit review");
@@ -273,7 +345,7 @@ async function runProof() {
         document.body.innerText.includes("Review submitted."), 15000);
       return snapshot();
     `);
-    const submittedScreenshot = await capture("04-submitted-review.png");
+    const submittedScreenshot = await capture("08-submitted-review.png");
 
     mark("exercise known conflict and merge action");
     await clickButton("Close");
@@ -283,7 +355,7 @@ async function runProof() {
         document.body.innerText.includes("review changed remotely"));
       return snapshot();
     `);
-    const conflictScreenshot = await capture("05-known-conflict.png");
+    const conflictScreenshot = await capture("09-known-conflict.png");
 
     nativeTheme.themeSource = "light";
     window.setSize(900, 720);
@@ -328,7 +400,7 @@ async function runProof() {
         contrastRatio,
       };
     `);
-    const finalScreenshot = await capture("06-review-light-narrow.png");
+    const finalScreenshot = await capture("10-review-light-narrow.png");
     await clickButton("Merge");
     await clickButton("Confirm Merge");
     await waitForAction("merge", 1);
@@ -342,6 +414,53 @@ async function runProof() {
     assert.equal(actions.filter((item) => item.action === "close").length, 1);
     assert.equal(actions.filter((item) => item.action === "merge").length, 1);
     assert.ok(actions.some((item) => item.action === "submit_review"));
+    const suggestionActions = actions.filter(
+      (item) => item.action === "create_inline_comment",
+    );
+    assert.equal(suggestionActions.length, 2, "each suggestion must write exactly once");
+    const quickSuggestion = suggestionActions.find((item) =>
+      item.body.startsWith("Use the guarded replacement"),
+    );
+    const durableSuggestion = suggestionActions.find(
+      (item) => item.body === "```suggestion\ndurable_value\n```",
+    );
+    assert.ok(quickSuggestion, "quick suggestion action missing");
+    assert.ok(durableSuggestion, "durable suggestion action missing after restart");
+    assert.deepEqual(
+      {
+        filePath: quickSuggestion.file_path,
+        line: quickSuggestion.line,
+        side: quickSuggestion.side,
+        startLine: quickSuggestion.start_line,
+        startSide: quickSuggestion.start_side,
+        body: quickSuggestion.body,
+      },
+      {
+        filePath: "src/example.py",
+        line: 5,
+        side: "RIGHT",
+        startLine: 3,
+        startSide: "RIGHT",
+        body:
+          "Use the guarded replacement\n\n```suggestion\n  replacement(`value`)  \n```",
+      },
+    );
+    assert.deepEqual(
+      {
+        filePath: durableSuggestion.file_path,
+        line: durableSuggestion.line,
+        side: durableSuggestion.side,
+        startLine: durableSuggestion.start_line,
+        startSide: durableSuggestion.start_side,
+      },
+      {
+        filePath: "src/example.py",
+        line: 4,
+        side: "RIGHT",
+        startLine: null,
+        startSide: null,
+      },
+    );
     assert.equal(childLaunches.length, 2, "proof must include one sidecar restart");
     for (const launch of childLaunches) {
       assert.equal(path.resolve(launch.executable), pythonExecutable);
@@ -388,6 +507,8 @@ async function runProof() {
       demonstrations: {
         discoveryRemoval,
         discoveryRestoration,
+        suggestion,
+        discussionJump,
         unknown,
         recoveredDraft,
         submitted,
@@ -400,6 +521,8 @@ async function runProof() {
         navigationScreenshot,
         discoveryRemovalScreenshot,
         discoveryRestorationScreenshot,
+        suggestionScreenshot,
+        discussionJumpScreenshot,
         unknownScreenshot,
         draftScreenshot,
         recoveredScreenshot,
@@ -428,10 +551,11 @@ async function runProof() {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
     process.exitCode = 1;
   } finally {
+    const exitCode = process.exitCode ?? 0;
     controller?.dispose();
     if (window && !window.isDestroyed()) window.destroy();
     if (transport) await transport.stop().catch(() => undefined);
-    app.quit();
+    app.exit(exitCode);
   }
 }
 
@@ -543,7 +667,13 @@ async function waitForAction(action, count) {
 }
 
 async function readActions() {
-  const text = await readFile(path.join(evidenceRoot, "mock-forge-actions.jsonl"), "utf8");
+  let text;
+  try {
+    text = await readFile(path.join(evidenceRoot, "mock-forge-actions.jsonl"), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
   return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 

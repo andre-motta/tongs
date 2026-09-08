@@ -912,6 +912,7 @@ class DesktopSidecarServer:
             "handle": self._handles.issue(HandleKind.REPOSITORY, snapshot.ref),
             "display_name": snapshot.display_name,
             "forge_type": snapshot.forge_type.value,
+            "hostname": snapshot.ref.hostname,
         }
 
     def _review_list_wire(self, item: ReviewListItem) -> JsonObject:

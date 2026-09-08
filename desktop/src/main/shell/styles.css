@@ -121,6 +121,17 @@
   resize: vertical;
 }
 
+.suggestion-heading {
+  justify-content: space-between;
+}
+
+.suggestion-code {
+  min-height: 10rem !important;
+  tab-size: 4;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
 @media (max-width: 880px) {
   .review-workflow-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -216,6 +227,61 @@ button {
   overflow-wrap: anywhere;
   white-space: normal;
 }
+.repository-controls {
+  display: grid;
+  gap: 8px;
+  margin: 0 8px 10px;
+}
+.repository-control {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.repository-control input,
+.repository-control select,
+.control-field select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 7px 8px;
+  font: inherit;
+  font-weight: 400;
+}
+.repository-control input:focus-visible,
+.repository-control select:focus-visible,
+.control-field select:focus-visible {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+.repository-count {
+  margin: 0 8px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.repository-list {
+  display: grid;
+}
+.repository-choice {
+  display: grid;
+  gap: 2px;
+}
+.repository-choice span,
+.repository-choice::after {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-choice::after {
+  content: attr(data-repository-meta);
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: capitalize;
+}
 .nav-item,
 .file-item {
   width: 100%;
@@ -263,6 +329,39 @@ button {
   display: flex;
   justify-content: flex-end;
   margin: -10px 0 12px;
+}
+.inbox-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 18px;
+  margin: -8px 0 20px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.control-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.control-group legend,
+.control-field span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.control-field {
+  min-width: 140px;
 }
 .view-title {
   margin: 2px 0;

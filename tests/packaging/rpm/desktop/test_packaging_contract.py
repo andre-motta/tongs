@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).parents[4]
@@ -110,25 +111,43 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert all('"${dnf_transaction_options[@]}"' in line for line in transactions)
 
 
-def test_hosted_smoke_distinguishes_absent_dbus_from_missing_app_resources() -> None:
+def test_hosted_smoke_distinguishes_expected_headless_warnings_from_failures() -> None:
     installer = (PACKAGING / "install_and_verify.sh").read_text()
     match = re.search(r"! grep -Eiq '([^']+)'", installer)
     assert match is not None
     fatal_pattern = match.group(1)
-    expected_dbus_warning = (
-        "Failed to connect to socket /run/dbus/system_bus_socket: "
-        "No such file or directory"
-    )
 
-    assert re.search(fatal_pattern, expected_dbus_warning, re.IGNORECASE) is None
+    def matches(value: str) -> bool:
+        result = subprocess.run(
+            ["grep", "-Eiq", fatal_pattern],
+            input=f"{value}\n",
+            text=True,
+            check=False,
+        )
+        assert result.returncode in {0, 1}
+        return result.returncode == 0
+
+    for expected_warning in (
+        (
+            "Failed to connect to socket /run/dbus/system_bus_socket: "
+            "No such file or directory"
+        ),
+        (
+            "[628:0908/175812.000000:ERROR:gpu/command_buffer/service/context_group.cc:140] "
+            "ContextResult::kFatalFailure: WebGL1 blocklisted"
+        ),
+    ):
+        assert not matches(expected_warning)
+
     for failure in (
         "Traceback (most recent call last)",
         "ModuleNotFoundError: No module named 'tongs'",
         "sidecar failed to start",
-        "FATAL:zygote_host_impl_linux.cc",
+        "[598:0908/175812.000000:FATAL:zygote_host_impl_linux.cc(201)] crashed",
+        "FATAL: desktop runtime failed",
         "net::ERR_FILE_NOT_FOUND",
     ):
-        assert re.search(fatal_pattern, failure, re.IGNORECASE) is not None
+        assert matches(failure)
 
 
 def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:

@@ -1118,6 +1118,147 @@ def test_final_verifier_rejects_first_observed_compacted_helper_with_hidden_swit
         _verify(fixture)
 
 
+def _fixture_with_zygote_forked_utility(
+    tmp_path: Path,
+    *,
+    argv0: str,
+    later_raw: tuple[str, ...] | None,
+) -> dict[str, Any]:
+    """Add one zygote-forked network-service utility to both fixture runs."""
+
+    fixture = _fixture(tmp_path)
+    first, second = fixture["observations"]
+    zygote = first.processes[1]
+    canonical = (argv0, *ATTEMPT_SIX_UTILITY_TAIL)
+    base = replace(
+        zygote,
+        pid=105,
+        ppid=zygote.pid,
+        start_time_ticks=1050,
+        role="utility",
+        argv=canonical,
+        raw_argv=canonical,
+        sandbox=SandboxStatus(1, 2, 1),
+    )
+    later = base if later_raw is None else replace(base, raw_argv=later_raw)
+    fixture["observations"] = (
+        replace(first, processes=(*first.processes, base)),
+        replace(second, processes=(*second.processes, later)),
+    )
+    return fixture
+
+
+def _compacted_title(executable: str, tail: tuple[str, ...]) -> tuple[str, ...]:
+    return (" ".join((executable, *tail)),)
+
+
+def test_final_verifier_accepts_zygote_forked_utility_compaction_end_to_end(
+    tmp_path: Path,
+) -> None:
+    reference = _fixture(tmp_path)
+    executable = reference["observations"][0].processes[1].executable
+    fixture = _fixture_with_zygote_forked_utility(
+        tmp_path,
+        argv0=acceptance_module.CHROMIUM_ZYGOTE_ARGV0,
+        later_raw=_compacted_title(executable, ATTEMPT_SIX_UTILITY_TAIL),
+    )
+
+    assert _verify(fixture).validation == "controlled-fixture-structural-only"
+
+
+def test_final_verifier_accepts_zygote_forked_gpu_compaction_end_to_end(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    tail = ("--type=gpu-process", "--gpu-preferences=value with space")
+    observations = []
+    for index, observation in enumerate(fixture["observations"]):
+        processes = tuple(
+            replace(
+                process,
+                argv=(acceptance_module.CHROMIUM_ZYGOTE_ARGV0, *tail),
+                raw_argv=(
+                    _compacted_title(process.executable, tail)
+                    if index
+                    else (acceptance_module.CHROMIUM_ZYGOTE_ARGV0, *tail)
+                ),
+            )
+            if process.role == "gpu"
+            else process
+            for process in observation.processes
+        )
+        observations.append(replace(observation, processes=processes))
+    fixture["observations"] = tuple(observations)
+
+    assert _verify(fixture).validation == "controlled-fixture-structural-only"
+
+
+def test_final_verifier_rejects_compaction_whose_leading_path_is_not_the_executable(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture_with_zygote_forked_utility(
+        tmp_path,
+        argv0=acceptance_module.CHROMIUM_ZYGOTE_ARGV0,
+        later_raw=_compacted_title(
+            acceptance_module.CHROMIUM_ZYGOTE_ARGV0, ATTEMPT_SIX_UTILITY_TAIL
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="raw process arguments differ from canonical arguments",
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_zygote_forked_utility_with_unknown_argv0(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture_with_zygote_forked_utility(
+        tmp_path,
+        argv0="/proc/self/exe.bak",
+        later_raw=None,
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="process role differs from canonical type arguments",
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_utility_observed_only_as_a_compact_title(
+    tmp_path: Path,
+) -> None:
+    reference = _fixture(tmp_path)
+    executable = reference["observations"][0].processes[1].executable
+    compacted = _compacted_title(executable, ATTEMPT_SIX_UTILITY_TAIL)
+    fixture = _fixture_with_zygote_forked_utility(
+        tmp_path,
+        argv0=compacted[0],
+        later_raw=None,
+    )
+    observations = tuple(
+        replace(
+            observation,
+            processes=tuple(
+                replace(process, argv=compacted, raw_argv=compacted)
+                if process.role == "utility"
+                else process
+                for process in observation.processes
+            ),
+        )
+        for observation in fixture["observations"]
+    )
+    fixture["observations"] = observations
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="process role differs from canonical type arguments",
+    ):
+        _verify(fixture)
+
+
 def test_rejects_editable_or_wrong_wheel_core(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     editable = replace(fixture["policy"].core, editable=True)

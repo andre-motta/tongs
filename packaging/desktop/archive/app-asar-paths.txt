@@ -11,8 +11,10 @@ dist/src/main/renderer_lifecycle.js
 dist/src/main/review.js
 dist/src/main/security.js
 dist/src/main/sidecar.js
+dist/src/main/utilities.js
 dist/src/preload/index.cjs
 dist/src/shared/bridge.js
 dist/src/shared/ci.js
 dist/src/shared/review.js
+dist/src/shared/utilities.js
 package.json

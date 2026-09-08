@@ -59,6 +59,7 @@ nav:
       - Pipelines: guides/pipelines.md
       - Plugins: guides/plugins.md
       - Desktop installation: desktop/installation.md
+      - Desktop workspace: desktop/workspace.md
       - Desktop plugin providers: plugins/provider.md
   - Reference:
       - Keybindings: reference/keybindings.md

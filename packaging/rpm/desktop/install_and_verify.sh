@@ -316,7 +316,7 @@ run_desktop_smoke() {
     }
     grep -F -- 'exec /usr/libexec/tongs-desktop/tongs-desktop --ozone-platform=x11' \
         "$evidence_dir/$name.stderr"
-    ! grep -Eiq 'Traceback|ModuleNotFoundError|sidecar failed|FATAL|No such file' \
+    ! grep -Eiq 'Traceback|ModuleNotFoundError|sidecar failed|FATAL|ERR_FILE_NOT_FOUND' \
         "$evidence_dir/$name.stdout" "$evidence_dir/$name.stderr"
 }
 run_desktop_smoke hosted-launch

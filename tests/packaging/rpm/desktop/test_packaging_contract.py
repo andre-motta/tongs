@@ -110,6 +110,27 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert all('"${dnf_transaction_options[@]}"' in line for line in transactions)
 
 
+def test_hosted_smoke_distinguishes_absent_dbus_from_missing_app_resources() -> None:
+    installer = (PACKAGING / "install_and_verify.sh").read_text()
+    match = re.search(r"! grep -Eiq '([^']+)'", installer)
+    assert match is not None
+    fatal_pattern = match.group(1)
+    expected_dbus_warning = (
+        "Failed to connect to socket /run/dbus/system_bus_socket: "
+        "No such file or directory"
+    )
+
+    assert re.search(fatal_pattern, expected_dbus_warning, re.IGNORECASE) is None
+    for failure in (
+        "Traceback (most recent call last)",
+        "ModuleNotFoundError: No module named 'tongs'",
+        "sidecar failed to start",
+        "FATAL:zygote_host_impl_linux.cc",
+        "net::ERR_FILE_NOT_FOUND",
+    ):
+        assert re.search(fatal_pattern, failure, re.IGNORECASE) is not None
+
+
 def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:
     workflow = WORKFLOW.read_text()
 

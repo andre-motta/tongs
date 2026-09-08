@@ -31,6 +31,10 @@ _TAP_DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z")
 _TAP_DIAGNOSTIC_DURATION = re.compile(
     r"duration_ms: (?P<duration>[0-9]+(?:\.[0-9]+)?)\Z"
 )
+_TAP_DIAGNOSTIC_FIELD = re.compile(
+    r"(?P<key>[A-Za-z_][A-Za-z0-9_]*):(?: (?P<value>.*))?\Z"
+)
+_TAP_BLOCK_SCALAR = re.compile(r"[|>][+-]?\Z")
 
 
 class ReportValidationError(ValueError):
@@ -113,6 +117,20 @@ def _tap_integer(raw_value: str, label: str, *, allow_zero: bool) -> int:
     if value > MAX_RECORDS:
         raise ReportValidationError(f"Node TAP {label} exceeds the record limit")
     return value
+
+
+def _has_unescaped_hash(value: str) -> bool:
+    for index, character in enumerate(value):
+        if character != "#":
+            continue
+        backslashes = 0
+        cursor = index - 1
+        while cursor >= 0 and value[cursor] == "\\":
+            backslashes += 1
+            cursor -= 1
+        if backslashes % 2 == 0:
+            return True
+    return False
 
 
 def _validate_leaf_element(element: ET.Element, label: str) -> None:
@@ -350,6 +368,9 @@ class _TapParser:
         kinds: list[str] = []
         durations: list[str] = []
         field_indent = f"{indent}  "
+        field_depth = len(field_indent)
+        fields: set[str] = set()
+        block_scalar = False
         while True:
             line = self._current()
             if line is None:
@@ -357,15 +378,37 @@ class _TapParser:
             if line == closing:
                 self.index += 1
                 break
-            if line.startswith(field_indent):
-                match = _TAP_TYPE.fullmatch(line[len(field_indent) :])
+            leading_spaces = len(line) - len(line.lstrip(" "))
+            if block_scalar and leading_spaces >= field_depth + 2:
+                self.index += 1
+                continue
+            block_scalar = False
+            if leading_spaces != field_depth or not line.startswith(field_indent):
+                raise ReportValidationError(
+                    "Node TAP diagnostic contains content outside its indentation"
+                )
+            content = line[field_depth:]
+            field = _TAP_DIAGNOSTIC_FIELD.fullmatch(content)
+            if field is None:
+                raise ReportValidationError(
+                    "Node TAP diagnostic contains unsupported YAML content"
+                )
+            key = field.group("key")
+            if key in fields:
+                raise ReportValidationError(
+                    f"Node TAP diagnostic repeats {key!r} field"
+                )
+            fields.add(key)
+            value = field.group("value") or ""
+            if key == "type":
+                match = _TAP_TYPE.fullmatch(content)
                 if match is not None:
                     kinds.append(match.group("kind"))
-                duration_match = _TAP_DIAGNOSTIC_DURATION.fullmatch(
-                    line[len(field_indent) :]
-                )
+            elif key == "duration_ms":
+                duration_match = _TAP_DIAGNOSTIC_DURATION.fullmatch(content)
                 if duration_match is not None:
                     durations.append(duration_match.group("duration"))
+            block_scalar = _TAP_BLOCK_SCALAR.fullmatch(value) is not None
             self.index += 1
         if len(kinds) != 1:
             raise ReportValidationError(
@@ -414,6 +457,10 @@ class _TapParser:
             subtest_name = line[len(prefix) :]
             if not subtest_name:
                 raise ReportValidationError("Node TAP contains an unnamed subtest")
+            if _has_unescaped_hash(subtest_name):
+                raise ReportValidationError(
+                    "Node TAP subtest name contains an unescaped hash"
+                )
             self.index += 1
 
             child_counts: _TapStreamCounts | None = None
@@ -444,6 +491,10 @@ class _TapParser:
             if assertion.group("name") != subtest_name:
                 raise ReportValidationError(
                     "Node TAP subtest and assertion names do not match"
+                )
+            if _has_unescaped_hash(assertion.group("name")):
+                raise ReportValidationError(
+                    "Node TAP assertion name contains an unescaped hash"
                 )
             if assertion.group("status") != "ok":
                 raise ReportValidationError("Node TAP contains a failing assertion")

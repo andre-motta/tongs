@@ -310,6 +310,7 @@ def test_node_tap_rejects_cancelled_and_failure_records_hidden_by_success_summar
 def test_node_tap_treats_yaml_diagnostics_as_data() -> None:
     report = _flat_tap(
         diagnostic_extra=(
+            "message: 'literal not ok and Bail out! text'",
             "error: |-",
             "  not ok 999 - diagnostic data",
             "  # tests 999",
@@ -317,6 +318,39 @@ def test_node_tap_treats_yaml_diagnostics_as_data() -> None:
         )
     )
     assert verifier.verify_node_tap(report).tests == 1
+
+
+@pytest.mark.parametrize(
+    "outside_line",
+    [
+        "not ok 999 - swallowed failure",
+        "Bail out! swallowed bailout",
+        "# fail 99",
+        "  not ok 999 - field-depth plain scalar",
+    ],
+)
+def test_node_tap_rejects_out_of_scope_lines_inside_diagnostic_envelope(
+    outside_line: str,
+) -> None:
+    report = _flat_tap().replace(b"  ---\n", f"  ---\n{outside_line}\n".encode(), 1)
+    with pytest.raises(verifier.ReportValidationError, match="diagnostic contains"):
+        verifier.verify_node_tap(report)
+
+
+def test_node_tap_rejects_parent_stream_record_inside_nested_diagnostic() -> None:
+    report = _fixture("desktop_test_reports_node_pass.tap").replace(
+        b"      ---\n",
+        b"      ---\n    not ok 999 - swallowed parent assertion\n",
+        1,
+    )
+    with pytest.raises(verifier.ReportValidationError, match="diagnostic contains"):
+        verifier.verify_node_tap(report)
+
+
+def test_node_tap_requires_node_escaped_hashes_in_test_names() -> None:
+    with pytest.raises(verifier.ReportValidationError, match="unescaped hash"):
+        verifier.verify_node_tap(_flat_tap(("literal # skip",)))
+    assert verifier.verify_node_tap(_flat_tap((r"literal \# skip",))).tests == 1
 
 
 def test_node_tap_rejects_bailout_and_wrong_or_missing_version() -> None:
@@ -359,7 +393,7 @@ def test_node_tap_rejects_truncation_and_content_after_summary() -> None:
     with pytest.raises(
         verifier.ReportValidationError, match="diagnostic block is truncated"
     ):
-        verifier.verify_node_tap(_flat_tap().replace(b"  ...\n1..1", b"1..1"))
+        verifier.verify_node_tap(_flat_tap().split(b"  ...", 1)[0])
     with pytest.raises(verifier.ReportValidationError, match="content after"):
         verifier.verify_node_tap(_flat_tap() + b"# forged success\n")
 
@@ -371,7 +405,7 @@ def test_node_tap_rejects_missing_or_ambiguous_diagnostic_fields() -> None:
     duplicate_type = _flat_tap().replace(
         b"  type: 'test'\n", b"  type: 'test'\n  type: 'suite'\n"
     )
-    with pytest.raises(verifier.ReportValidationError, match="one test type"):
+    with pytest.raises(verifier.ReportValidationError, match="repeats 'type'"):
         verifier.verify_node_tap(duplicate_type)
     missing_duration = _flat_tap().replace(b"  duration_ms: 0.125\n", b"")
     with pytest.raises(verifier.ReportValidationError, match="one duration"):

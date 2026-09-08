@@ -3,12 +3,6 @@ name: Desktop Fedora RPM
 on:
   pull_request:
     branches: [feat/desktop-app]
-    paths:
-      - packaging/rpm/desktop/**
-      - tests/packaging/rpm/desktop/**
-      - src/tongs/mcp/plugin.py
-      - tests/test_plugins/test_plugin_system.py
-      - .github/workflows/desktop-rpm.yml
   workflow_dispatch:
 
 permissions:
@@ -30,11 +24,20 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.TONGS_HEAD_SHA }}
           persist-credentials: false
+      - name: Set up Python for RPM source checks
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - name: Record hosted runner and Podman versions
         run: |
           uname -a
           podman version
           gh version
+      - name: Check RPM Python sources
+        run: |
+          python3 -m pip install ruff
+          ruff check packaging/rpm/desktop tests/packaging/rpm/desktop
+          ruff format --check packaging/rpm/desktop tests/packaging/rpm/desktop
       - name: Build source RPMs and verify the package lifecycle
         run: >-
           packaging/rpm/desktop/run_hosted.sh

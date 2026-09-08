@@ -32,6 +32,104 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _metadata_fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
+    compatibility = {
+        "core_minimum": "0.4.2-dev.183",
+        "core_maximum_exclusive": "0.5.0",
+        "plugin_api_major": 1,
+        "rpc_api_major": 1,
+    }
+    install = {
+        "platform": {
+            "abi": "gnu",
+            "architecture": "x86_64",
+            "distribution": "fedora",
+            "distribution_version": "44",
+            "operating_system": "linux",
+        },
+        "release_version": "0.5.0",
+        "electron_version": "44.2.0",
+        "compatibility": compatibility,
+        "files": [],
+    }
+    documents = {
+        "desktop-install.json": install,
+        "desktop-manifest-v1.json": {
+            "source_commit": "a" * 40,
+            "release_version": "0.5.0",
+            "compatibility": compatibility,
+        },
+        "runtime-inventory.json": {"files": []},
+        "build-provenance.json": {"source_date_epoch": 100},
+    }
+    for name, document in documents.items():
+        (tmp_path / name).write_text(json.dumps(document))
+    archive = tmp_path / "desktop.tar.gz"
+    archive.write_bytes(b"validated separately")
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "target": {
+            "architecture": "x86_64",
+            "distribution": "fedora",
+            "release": "44",
+            "python_minimum": "3.12",
+        },
+        "accepted_desktop": {
+            "source_commit": "a" * 40,
+            "archive": {
+                "filename": archive.name,
+                "bytes": archive.stat().st_size,
+                "sha256": _digest(archive),
+            },
+            "evidence": {
+                name: _digest(tmp_path / name) for name in documents
+            },
+            "release_version": "0.5.0",
+            "electron_version": "44.2.0",
+            "compatibility": compatibility,
+        },
+    }
+    return manifest, documents
+
+
+def _archive_fixture(
+    tmp_path: Path,
+    members: list[tuple[str, bytes, int, int, int, bytes | None]],
+) -> tuple[Path, dict[str, object]]:
+    payload = b"accepted bytes"
+    install = {
+        "files": [
+            {
+                "path": "runtime/file",
+                "byte_count": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "executable": False,
+            }
+        ],
+        "extraction_limits": {
+            "max_entries": 8,
+            "max_file_bytes": 1024,
+            "max_path_bytes": 128,
+            "max_total_bytes": 4096,
+        },
+    }
+    archive_path = tmp_path / "candidate.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for name, contents, mode, uid, mtime, member_type in members:
+            member = tarfile.TarInfo(name)
+            member.size = len(contents)
+            member.mode = mode
+            member.uid = uid
+            member.gid = 0
+            member.uname = "root"
+            member.gname = "root"
+            member.mtime = mtime
+            if member_type is not None:
+                member.type = member_type
+            archive.addfile(member, io.BytesIO(contents))
+    return archive_path, install
+
+
 def test_manifest_pins_accepted_issue_51_payload() -> None:
     manifest = json.loads((PACKAGING / "manifest.json").read_text())
 
@@ -193,3 +291,156 @@ def test_payload_validator_rejects_links(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="unsupported accepted archive member"):
         contract._validate_archive_members(archive_path, install)
+
+
+@pytest.mark.parametrize(
+    "filename", ("../payload", "dir/payload", "dir\\payload", "manifest.json")
+)
+def test_manifest_rejects_unsafe_or_reserved_source_names(filename: str) -> None:
+    manifest = json.loads((PACKAGING / "manifest.json").read_text())
+    manifest["accepted_desktop"]["archive"]["filename"] = filename
+
+    with pytest.raises(ValueError, match="filename"):
+        contract.validate_manifest(manifest)
+
+
+def test_manifest_rejects_wrong_target_and_exact_pair() -> None:
+    manifest = json.loads((PACKAGING / "manifest.json").read_text())
+    manifest["target"]["release"] = "43"
+    with pytest.raises(ValueError, match="target"):
+        contract.validate_manifest(manifest)
+
+    manifest = json.loads((PACKAGING / "manifest.json").read_text())
+    manifest["rpm_pairing"] = {
+        "mode": "exact",
+        "core_source_commit": "b" * 40,
+    }
+    with pytest.raises(ValueError, match="pairing mismatch"):
+        contract.validate_manifest(manifest)
+
+
+def test_bind_rejects_mismatched_unreviewed_fixture() -> None:
+    manifest = json.loads((PACKAGING / "manifest.json").read_text())
+    manifest["accepted_desktop"].pop("reviewed_fixture")
+    identity = contract.SourceIdentity(
+        commit="b" * 40,
+        pep440_version="0.4.2.dev250+gbbbbbbbbbb",
+        rpm_version="0.4.2~dev250",
+        rpm_release="0.1.20260908gitbbbbbbb",
+        source_date_epoch=100,
+    )
+
+    with pytest.raises(RuntimeError, match="same source commit"):
+        contract.bind_manifest(manifest, identity, allow_reviewed_fixture=True)
+
+
+def test_input_identity_rejects_hash_and_size_mismatch(tmp_path: Path) -> None:
+    candidate = tmp_path / "candidate"
+    candidate.write_bytes(b"bytes")
+
+    with pytest.raises(RuntimeError, match="input mismatch"):
+        contract._verify_file(candidate, 6, hashlib.sha256(b"other").hexdigest())
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    (
+        (
+            lambda documents: documents["desktop-manifest-v1.json"].__setitem__(
+                "source_commit", "b" * 40
+            ),
+            "source commit mismatch",
+        ),
+        (
+            lambda documents: documents["desktop-manifest-v1.json"].__setitem__(
+                "compatibility", {"rpc_api_major": 999}
+            ),
+            "compatibility mismatch",
+        ),
+        (
+            lambda documents: documents["desktop-install.json"]["platform"].__setitem__(
+                "distribution", "other"
+            ),
+            "platform mismatch",
+        ),
+    ),
+)
+def test_payload_rejects_wrong_source_compatibility_or_platform(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutator: object,
+    message: str,
+) -> None:
+    manifest, documents = _metadata_fixture(tmp_path)
+    mutator(documents)  # type: ignore[operator]
+    for name, document in documents.items():
+        (tmp_path / name).write_text(json.dumps(document))
+        manifest["accepted_desktop"]["evidence"][name] = _digest(  # type: ignore[index]
+            tmp_path / name
+        )
+    monkeypatch.setattr(contract, "_validate_archive_members", lambda *_args: None)
+
+    with pytest.raises(RuntimeError, match=message):
+        contract.validate_accepted_payload(manifest, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("members", "message"),
+    (
+        ([], "lacks declared files"),
+        (
+            [
+                ("runtime/file", b"accepted bytes", 0o644, 0, 100, None),
+                ("runtime/file", b"accepted bytes", 0o644, 0, 100, None),
+            ],
+            "duplicate accepted archive member",
+        ),
+        (
+            [
+                ("runtime/file", b"accepted bytes", 0o644, 0, 100, None),
+                ("runtime/extra", b"extra", 0o644, 0, 100, None),
+            ],
+            "undeclared accepted archive file",
+        ),
+        (
+            [("runtime/file", b"accepted bytes", 0o644, 1, 100, None)],
+            "non-root accepted archive owner",
+        ),
+        (
+            [("runtime/file", b"accepted bytes", 0o644, 0, 101, None)],
+            "timestamp mismatch",
+        ),
+        (
+            [("runtime/file", b"accepted bytes", 0o755, 0, 100, None)],
+            "archive file mismatch",
+        ),
+        (
+            [("runtime/file", b"accepted bytes", 0o4644, 0, 100, None)],
+            "special mode in accepted archive",
+        ),
+        (
+            [("runtime/file", b"accepted bytes", 0o644, 0, 100, tarfile.FIFOTYPE)],
+            "unsupported accepted archive member",
+        ),
+    ),
+)
+def test_archive_rejects_structural_and_metadata_mismatches(
+    tmp_path: Path,
+    members: list[tuple[str, bytes, int, int, int, bytes | None]],
+    message: str,
+) -> None:
+    archive_path, install = _archive_fixture(tmp_path, members)
+
+    with pytest.raises(RuntimeError, match=message):
+        contract._validate_archive_members(
+            archive_path,
+            install,
+            {
+                "runtime/file": (
+                    len(b"accepted bytes"),
+                    "0644",
+                    hashlib.sha256(b"accepted bytes").hexdigest(),
+                )
+            },
+            100,
+        )

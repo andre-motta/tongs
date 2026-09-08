@@ -23,6 +23,16 @@ _DESCRIBE_RE = re.compile(
     r"(?P<distance>\d+)-g(?P<short>[0-9a-f]+)$"
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_RESERVED_SOURCE_NAMES = {
+    "io.github.andre_motta.tongs.metainfo.xml",
+    "manifest.json",
+    "package_contract.py",
+    "prepared-inputs.json",
+    "tongs-desktop",
+    "tongs-desktop.1",
+    "tongs.desktop",
+    "tongs.png",
+}
 
 
 @dataclass(frozen=True)
@@ -89,6 +99,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", accepted.get("source_commit", "")):
         raise ValueError("invalid accepted source commit")
     archive = accepted.get("archive", {})
+    archive_filename = archive.get("filename")
+    _validate_source_filename(archive_filename)
     if archive.get("bytes", 0) <= 0 or not _SHA256_RE.fullmatch(
         archive.get("sha256", "")
     ):
@@ -98,6 +110,13 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         not _SHA256_RE.fullmatch(value) for value in evidence.values()
     ):
         raise ValueError("invalid accepted evidence identity")
+    source_names = [archive_filename, *evidence]
+    if len(source_names) != len(set(source_names)):
+        raise ValueError("accepted source filenames must be unique")
+    for filename in evidence:
+        _validate_source_filename(filename)
+    if _RESERVED_SOURCE_NAMES.intersection(source_names):
+        raise ValueError("accepted source filename collides with generated RPM input")
     pairing = manifest.get("rpm_pairing")
     if pairing is not None:
         mode = pairing.get("mode")
@@ -112,6 +131,19 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 raise ValueError("reviewed fixture lacks immutable review evidence")
         elif mode != "exact":
             raise ValueError("unsupported RPM source pairing mode")
+
+
+def _validate_source_filename(filename: object) -> None:
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or "\x00" in filename
+        or PurePosixPath(filename).name != filename
+    ):
+        raise ValueError("accepted source filename must be a basename")
 
 
 def bind_manifest(
@@ -280,6 +312,8 @@ def _validate_archive_members(
                 member.name, (0, default_mode, "")
             )
             expected_mode = int(expected[1], 8)
+            if member.mode & 0o7000:
+                raise RuntimeError(f"special mode in accepted archive: {member.name}")
             if (
                 member.size != record["byte_count"]
                 or digest != record["sha256"]
@@ -287,8 +321,6 @@ def _validate_archive_members(
                 or member.mode != expected_mode
             ):
                 raise RuntimeError(f"accepted archive file mismatch: {member.name}")
-            if member.mode & 0o7000:
-                raise RuntimeError(f"special mode in accepted archive: {member.name}")
         if total > limits.get("max_total_bytes", 0):
             raise RuntimeError("accepted archive total limit exceeded")
     archive_files = seen_files - {"desktop-install.json"}

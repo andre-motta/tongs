@@ -37,9 +37,14 @@ this package is eligible for Fedora or COPR publication review.
 The end-to-end harness is deliberately restricted to a disposable GitHub-hosted
 runner because it performs normal Fedora DNF and Podman operations. It rebuilds
 the seven accepted issue 85 companion SRPMs, creates and independently rebuilds
-both issue 52 SRPMs, then proves clean install, a dependency-negative failed
-upgrade, upgrade, reinstall, optional MCP installation, file and metadata
-integrity, and uninstall preservation of user and unrelated sentinels.
+both issue 52 SRPMs, and source-builds a test-only desktop plugin RPM. It creates
+local install repositories and proves a minimal clean install, installed sidecar
+plugin discovery and invocation, Sigstore and system OpenSSL behavior, Electron
+SONAME providers, exact ownership and metadata, a bounded X11 launch, explicit
+MCP command integration and removal, same-NEVRA reinstall, a 0.4.9 to 0.5.0
+desktop upgrade, lower-to-current core upgrade, classified corrupted-package and
+dependency-negative failures, and uninstall preservation of user and unrelated
+sentinels. The X11 smoke is a lifecycle check and makes no hardware GPU claim.
 
 Local source-level checks do not invoke Podman or RPM tooling:
 

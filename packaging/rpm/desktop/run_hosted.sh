@@ -55,8 +55,12 @@ prepared="$output_dir/prepared"
 srpms="$output_dir/srpms"
 rpms="$output_dir/rpms"
 install_evidence="$output_dir/install"
+test_plugin_rpms="$output_dir/test-plugin-rpms"
+previous_repo="$output_dir/install-repo/previous"
+final_repo="$output_dir/install-repo/final"
 mkdir -p -- "$accepted" "$dependency_prepared" "$dependency_srpms" \
-    "$dependency_rpms" "$prepared" "$srpms" "$rpms" "$install_evidence"
+    "$dependency_rpms" "$prepared" "$srpms" "$rpms" "$install_evidence" \
+    "$test_plugin_rpms" "$previous_repo" "$final_repo"
 {
     printf 'GITHUB_RUN_ATTEMPT=%s\n' "${GITHUB_RUN_ATTEMPT:-unknown}"
     printf 'GITHUB_RUN_ID=%s\n' "${GITHUB_RUN_ID:-unknown}"
@@ -129,12 +133,33 @@ podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
     --base-image "$base_image" --checkout "$repo_root" --source-sha "$source_sha" \
     --srpm-dir "$srpms" --companion-rpm-dir "$dependency_rpms" --output-dir "$rpms"
 
+podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
+    --volume "$repo_root:/checkout:ro" --volume "$test_plugin_rpms:/output:rw" \
+    "$source_builder" /checkout/packaging/rpm/desktop/build_test_plugin.sh \
+        --source-dir /checkout/packaging/rpm/desktop/test-plugin \
+        --license /checkout/LICENSE --output-dir /output
+find "$dependency_rpms" -maxdepth 1 -type f -name '*.rpm' ! -name '*.src.rpm' \
+    ! -name '*-debuginfo-*' -exec cp -- {} "$previous_repo/" \; \
+    -exec cp -- {} "$final_repo/" \;
+find "$rpms/previous" -maxdepth 1 -type f -name '*.rpm' ! -name '*.src.rpm' \
+    ! -name '*-debuginfo-*' -exec cp -- {} "$previous_repo/" \;
+find "$rpms/final" -maxdepth 1 -type f -name '*.rpm' ! -name '*.src.rpm' \
+    ! -name '*-debuginfo-*' -exec cp -- {} "$final_repo/" \;
+find "$test_plugin_rpms" -maxdepth 1 -type f -name '*.rpm' \
+    -exec cp -- {} "$previous_repo/" \; -exec cp -- {} "$final_repo/" \;
+for repository in "$previous_repo" "$final_repo"; do
+    podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
+        --volume "$repository:/repo:rw" "$source_builder" createrepo_c /repo
+done
+
 podman run --rm --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" --volume "$dependency_rpms:/companions:ro" \
     --volume "$rpms/previous:/previous:ro" --volume "$rpms/final:/final:ro" \
+    --volume "$previous_repo:/previous-repo:ro" --volume "$final_repo:/final-repo:ro" \
     --volume "$prepared:/prepared:ro" --volume "$install_evidence:/evidence:rw" \
     "$base_image" /checkout/packaging/rpm/desktop/install_and_verify.sh \
         --companion-dir /companions --previous-dir /previous --final-dir /final \
+        --previous-repo /previous-repo --final-repo /final-repo \
         --prepared-dir /prepared --evidence-dir /evidence --checkout /checkout
 
 find "$output_dir" -type f ! -name ALL-SHA256SUMS -print0 | sort -z | xargs -0 sha256sum \

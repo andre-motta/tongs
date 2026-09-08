@@ -39,7 +39,9 @@ for source_name in python-tongs tongs-desktop; do
 FROM $base_image
 COPY companions /companions
 COPY source.src.rpm /source.src.rpm
-RUN dnf install --assumeyes --setopt=install_weak_deps=False dnf5-plugins rpm-build /companions/*.rpm \
+RUN dnf install --assumeyes --setopt=install_weak_deps=False createrepo_c dnf5-plugins rpm-build \
+    && createrepo_c /companions \
+    && printf '[tongs-companions]\nname=Tongs source-built companions\nbaseurl=file:///companions\nenabled=1\ngpgcheck=0\n' >/etc/yum.repos.d/tongs-companions.repo \
     && dnf builddep --assumeyes --setopt=install_weak_deps=False /source.src.rpm \
     && dnf clean all
 LABEL org.opencontainers.image.revision="$source_sha"
@@ -51,11 +53,16 @@ EOF
         mkdir -p -- "$output_dir/$variant"
         dist=.fc44
         [[ "$variant" == previous ]] && dist='.fc44~previous'
+        rebuild_arguments=()
+        if [[ "$source_name" == tongs-desktop && "$variant" == previous ]]; then
+            rebuild_arguments=(--desktop-version 0.4.9)
+        fi
         podman run --rm --network=none --cap-drop=all \
             --security-opt=no-new-privileges \
             --volume "$checkout:/checkout:ro" \
             --volume "$output_dir/$variant:/output:rw" \
-            "$image" "$script" --source-rpm /source.src.rpm --output-dir /output --dist "$dist"
+            "$image" "$script" --source-rpm /source.src.rpm --output-dir /output \
+                --dist "$dist" "${rebuild_arguments[@]}"
         podman image inspect "$image" >"$output_dir/buildenv-${source_name}-${variant}.inspect.json"
         rm -rf -- "$context"
     done

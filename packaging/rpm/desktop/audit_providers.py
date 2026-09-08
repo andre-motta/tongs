@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from packaging.version import Version
 
 _QUERY_FORMAT = "%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{repoid}\n"
 
@@ -68,6 +71,27 @@ def _package_provides(name: str) -> dict[str, Any]:
     )
 
 
+def _mcp_direct_resolution(records: list[dict[str, Any]]) -> dict[str, Any]:
+    cli = next(item for item in records if item["name"] == "python3-mcp+cli")
+    match = re.search(
+        r"^python3dist\(mcp\[cli\]\) = (?P<version>\S+)$",
+        str(cli["provides_result"]["stdout"]),
+        re.MULTILINE,
+    )
+    usable = bool(cli["result"]["packages"]) and match is not None
+    version = match.group("version") if match is not None else None
+    if usable:
+        parsed = Version(version)
+        usable = Version("1") <= parsed < Version("2")
+    return {
+        "capability": "python3dist(mcp[cli])",
+        "mode": "direct-package-provides" if usable else "unresolved",
+        "package": "python3-mcp+cli",
+        "usable": usable,
+        "version": version,
+    }
+
+
 def audit(manifest: dict[str, Any]) -> dict[str, Any]:
     requirements = [
         *manifest["core_runtime_requirements"],
@@ -109,6 +133,13 @@ def audit(manifest: dict[str, Any]) -> dict[str, Any]:
                 "provides_result": _package_provides(name),
             }
         )
+    mcp_resolution = _mcp_direct_resolution(mcp_names)
+    if mcp_resolution["usable"]:
+        missing = [
+            requirement
+            for requirement in missing
+            if requirement != manifest["mcp_requirement"]
+        ]
 
     return {
         "schema_version": 2,
@@ -118,6 +149,7 @@ def audit(manifest: dict[str, Any]) -> dict[str, Any]:
             "os_release": Path("/etc/os-release").read_text(),
         },
         "mcp_direct_names": mcp_names,
+        "mcp_resolution": mcp_resolution,
         "missing_requirements": missing,
         "requirements": records,
     }

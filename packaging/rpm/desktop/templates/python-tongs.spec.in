@@ -60,6 +60,7 @@ export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS=@CORE_PEP440_VERSION@
 export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS=@CORE_PEP440_VERSION@
 %pyproject_install
 %pyproject_save_files -l tongs
+install -Dm 0644 LICENSE %{buildroot}%{_licensedir}/python3-tongs/LICENSE
 
 %check
 export PYTHONPATH=%{buildroot}%{python3_sitelib}
@@ -70,6 +71,7 @@ test -x %{buildroot}%{_bindir}/tongs-mcp
 
 %files -n python3-tongs -f %{pyproject_files}
 %{_bindir}/tongs
+%license %{_licensedir}/python3-tongs/LICENSE
 
 %files -n python3-tongs+mcp
 %{_bindir}/tongs-mcp

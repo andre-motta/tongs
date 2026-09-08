@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import stat
@@ -66,6 +67,21 @@ def verify(
         failures.append("installed Python distribution version mismatch")
     if sys.version_info < (3, 12):
         failures.append("system Python is below 3.12")
+    if sys.executable != "/usr/bin/python3":
+        failures.append(f"verification did not use /usr/bin/python3: {sys.executable}")
+    distribution = importlib.metadata.distribution("tongs")
+    module_paths = []
+    for module_name in ("tongs", "tongs.app", "tongs.desktop.sidecar"):
+        module = importlib.util.find_spec(module_name)
+        if module is None or module.origin is None:
+            failures.append(f"installed module is unavailable: {module_name}")
+            continue
+        module_paths.append(module.origin)
+    module_paths.append(os.fspath(distribution.locate_file("")))
+    forbidden = ("/checkout", "/.venv", "/root/.local", "/home/")
+    for path in module_paths:
+        if any(marker in path for marker in forbidden):
+            failures.append(f"module resolved outside the system installation: {path}")
     if Path("/usr/bin/tongs-desktop").read_bytes() != expected_launcher.read_bytes():
         failures.append("system launcher differs from prepared source")
     installed_desktop = Path("/usr/share/applications/tongs.desktop")
@@ -85,6 +101,7 @@ def verify(
                 "executable": sys.executable,
                 "file_count": len(expected_paths),
                 "libexec": os.fspath(libexec_dir),
+                "module_paths": module_paths,
                 "python": sys.version.split()[0],
             },
             indent=2,

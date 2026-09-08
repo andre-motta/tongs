@@ -4,7 +4,8 @@
 %global __brp_strip_static_archive %{nil}
 
 Name:           tongs-desktop
-Version:        @DESKTOP_VERSION@
+%{!?tongs_desktop_version:%global tongs_desktop_version @DESKTOP_VERSION@}
+Version:        %{tongs_desktop_version}
 Release:        @RPM_RELEASE@%{?dist}
 Summary:        Desktop application for Tongs
 License:        MIT AND LicenseRef-Electron-Bundled-Third-Party

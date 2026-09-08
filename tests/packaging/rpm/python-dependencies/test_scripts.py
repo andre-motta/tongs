@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import subprocess
 import tarfile
 from pathlib import Path
 from types import ModuleType
@@ -23,6 +24,24 @@ def _load_script(name: str) -> ModuleType:
 
 audit_providers = _load_script("audit_providers")
 prepare_sources = _load_script("prepare_sources")
+
+
+def test_repoquery_requests_one_record_per_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+
+    def fake_run(
+        command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        captured.extend(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(audit_providers.subprocess, "run", fake_run)
+
+    assert audit_providers._query("python(abi) >= 3.12") == []
+    query_format = captured[captured.index("--queryformat") + 1]
+    assert query_format.endswith("\n")
 
 
 def test_audit_rejects_missing_system_provider(monkeypatch: pytest.MonkeyPatch) -> None:

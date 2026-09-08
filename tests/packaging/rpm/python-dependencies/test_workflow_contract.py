@@ -25,6 +25,7 @@ def test_hosted_harness_separates_networked_preparation_and_offline_build() -> N
     assert harness.index("prepare_sources.py") < harness.index("--network=none")
     assert "dnf install" in installer
     assert "pip install" not in installer
+    assert "! -name ALL-SHA256SUMS" in harness
 
 
 def test_rust_spec_uses_locked_sources_and_fedora_openssl() -> None:

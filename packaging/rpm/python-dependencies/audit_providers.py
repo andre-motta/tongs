@@ -16,7 +16,7 @@ def _query(requirement: str) -> list[dict[str, str]]:
         "--available",
         "--latest-limit=1",
         "--queryformat",
-        "%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{repoid}",
+        "%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{repoid}\n",
         "--whatprovides",
         requirement,
     ]

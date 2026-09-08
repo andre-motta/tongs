@@ -117,5 +117,5 @@ podman run --rm \
         --evidence-dir /evidence \
         --checkout /checkout
 
-find "$output_dir" -type f -print0 | sort -z | xargs -0 sha256sum \
+find "$output_dir" -type f ! -name ALL-SHA256SUMS -print0 | sort -z | xargs -0 sha256sum \
     | sed "s#${output_dir}/##" >"$output_dir/ALL-SHA256SUMS"

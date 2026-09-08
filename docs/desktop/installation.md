@@ -258,5 +258,7 @@ and the main-branch release decision are separate gates. Do not treat the
 examples on this page as evidence that a public archive, production tag, or RPM
 is already available.
 
-See the [desktop production design](../work/desktop-production.md) for the
-shared architecture and acceptance boundary.
+The shared desktop architecture and acceptance boundary are tracked in the
+project's internal planning records rather than on this site. See
+[Contributing](../contributing.md) for how desktop changes are proposed,
+validated, and reviewed.

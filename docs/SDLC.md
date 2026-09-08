@@ -5,7 +5,7 @@ Tongs adopts Agent SDLC **0.1.0**, maintained in the private
 Source commit: `4e851d1b8a903aa8bebceea078860a21152ee8e8`.
 Read the installed `agent-sdlc` skill's `references/workflow.md` with this profile.
 Contributors without access to the private package can still follow the project
-review process in [CONTRIBUTING.md](https://github.com/andre-motta/tongs/blob/feat/desktop-app/CONTRIBUTING.md); the private skill is an
+review process in [CONTRIBUTING.md](https://github.com/andre-motta/tongs/blob/main/CONTRIBUTING.md); the private skill is an
 orchestration aid, not a prerequisite for ordinary contributions.
 
 ## Project settings
@@ -132,7 +132,7 @@ Contributors continue using `Refs #...` in intermediate PRs and do not close iss
 automatically. Preserve rejected/interrupted worktrees, review findings,
 assignments, evidence and next actions for safe resumption.
 
-Use the [desktop PR template](https://github.com/andre-motta/tongs/blob/feat/desktop-app/.github/PULL_REQUEST_TEMPLATE/desktop.md)
+Use the [desktop PR template](https://github.com/andre-motta/tongs/blob/main/.github/PULL_REQUEST_TEMPLATE/desktop.md)
 for intermediate work. Baseline CI/lint/dependency failures remain unmet; branch
 creation does not waive them. CI readiness and hardware GPU work are separate,
 issue-tracked items that can be investigated independently after bootstrap.

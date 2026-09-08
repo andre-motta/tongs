@@ -228,8 +228,20 @@ def _archive_documents(source_commit: str, epoch: int) -> dict[str, bytes]:
     return documents
 
 
-def _seal(root: Path, expectations, *, rebuild_builds: bool = True) -> None:
-    """Recompute the checksum lists and the unsigned transfer manifest."""
+def _seal(
+    root: Path,
+    expectations,
+    *,
+    rebuild_builds: bool = True,
+    source_archive: Path | None = None,
+) -> None:
+    """Recompute the checksum lists and the unsigned transfer manifest.
+
+    With ``source_archive`` the manifest comes from the real issue #138
+    producer, so the happy-path fixture never restates that document shape.
+    Negative fixtures hand-build it because the producer refuses to seal an
+    output it already considers invalid.
+    """
     archive_root = root / "archive"
     names = sorted(
         path.name for path in archive_root.iterdir() if path.name != "SHA256SUMS"
@@ -249,6 +261,24 @@ def _seal(root: Path, expectations, *, rebuild_builds: bool = True) -> None:
         (root / "evidence/build-b.sha256").write_text(records, encoding="ascii")
     manifest_path = root / ADAPTER.TRANSFER_MANIFEST_NAME
     manifest_path.unlink(missing_ok=True)
+    if source_archive is not None:
+        ADAPTER.TRANSFER.prepare_transfer_manifest(
+            root,
+            manifest_path,
+            ADAPTER.TRANSFER.UnsignedTransferIdentity(
+                repository=expectations.transfer_repository,
+                repository_id=expectations.transfer_repository_id,
+                repository_owner_id=expectations.transfer_repository_owner_id,
+                ref=expectations.transfer_ref,
+                source_commit=expectations.source_commit,
+                source_tree=expectations.source_tree,
+                event=expectations.transfer_event,
+                run_id=expectations.transfer_run_id,
+                run_attempt=expectations.transfer_run_attempt,
+            ),
+            source_archive,
+        )
+        return
     files = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():
@@ -419,7 +449,7 @@ def template(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
         transfer_run_id=TRANSFER_RUN_ID,
         transfer_run_attempt=TRANSFER_RUN_ATTEMPT,
     )
-    _seal(transfer, expectations)
+    _seal(transfer, expectations, source_archive=source_tar)
     return {"source": source, "transfer": transfer, "expectations": expectations}
 
 
@@ -641,6 +671,82 @@ def test_unclean_subject_checkout_cannot_publish(
     case["source"] = dirty
 
     with pytest.raises(ADAPTER.ArchiveEvidenceError, match="must be clean"):
+        _produce(case)
+    assert not case["output"].exists()
+
+
+def _planted_source(tmp_path: Path, source: Path) -> Path:
+    """Copy the inspected configuration files into a non repository directory."""
+    planted = tmp_path / "planted-source"
+    (planted / "desktop").mkdir(parents=True)
+    (planted / "packaging/desktop/archive").mkdir(parents=True)
+    shutil.copyfile(source / "desktop/package.json", planted / "desktop/package.json")
+    for name in (
+        "contract.json",
+        ADAPTER.ELECTRON_CONFIGURATION_NAME,
+    ):
+        shutil.copyfile(
+            source / "packaging/desktop/archive" / name,
+            planted / "packaging/desktop/archive" / name,
+        )
+    (planted / "PLANTED.txt").write_bytes(b"never inspected by git\n")
+    return planted
+
+
+def test_non_repository_source_root_cannot_publish(
+    case: dict[str, object], tmp_path: Path
+) -> None:
+    case["source"] = _planted_source(tmp_path, case["source"])
+
+    with pytest.raises(
+        ADAPTER.ArchiveEvidenceError, match="subject checkout inspection failed"
+    ):
+        _produce(case)
+    assert not case["output"].exists()
+
+
+def test_ambient_git_redirect_cannot_certify_a_planted_source_root(
+    case: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_source = case["source"]
+    case["source"] = _planted_source(tmp_path, real_source)
+    monkeypatch.setenv("GIT_DIR", str(real_source / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(real_source))
+
+    with pytest.raises(ADAPTER.ArchiveEvidenceError):
+        _produce(case)
+    assert not case["output"].exists()
+
+
+def test_ambient_git_redirect_cannot_change_a_valid_subject(
+    case: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    _git(decoy, "init", "-q")
+    _git(decoy, "config", "user.name", "Archive Evidence Test")
+    _git(decoy, "config", "user.email", "archive@example.invalid")
+    (decoy / "decoy.txt").write_bytes(b"decoy\n")
+    _git(decoy, "add", ".")
+    _commit(decoy)
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(decoy / ".git/index"))
+
+    binding = _produce(case)
+
+    assert binding.source_commit == case["expectations"].source_commit
+    assert binding.source_commit != _git(decoy, "rev-parse", "HEAD")
+
+
+def test_source_root_below_its_checkout_top_cannot_publish(
+    case: dict[str, object],
+) -> None:
+    case["source"] = case["source"] / "desktop"
+
+    with pytest.raises(
+        ADAPTER.ArchiveEvidenceError, match="not the top of its own checkout"
+    ):
         _produce(case)
     assert not case["output"].exists()
 

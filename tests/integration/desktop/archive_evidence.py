@@ -80,6 +80,8 @@ MAX_TRANSFER_MANIFEST_BYTES: Final = 256 * 1024
 MAX_CHECKSUM_RECORDS: Final = 256
 HASH_CHUNK_BYTES: Final = 1024 * 1024
 
+_GIT_ENVIRONMENT_ALLOWLIST: Final = frozenset({"PATH", "HOME", "LANG"})
+
 _SHA1_RE: Final = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256_RE: Final = re.compile(r"[0-9a-f]{64}\Z")
 _CHECKSUM_LINE_RE: Final = re.compile(r"([0-9a-f]{64})  \./([A-Za-z0-9._-]{1,128})\Z")
@@ -136,7 +138,11 @@ _RECEIPTS_ORIGIN: Final = str(Path(RECEIPTS.__file__).resolve())
 
 ARCHIVE_NAME: Final = TRANSFER.CANDIDATE_ARCHIVE_NAME
 TRANSFER_MANIFEST_NAME: Final = TRANSFER.TRANSFER_MANIFEST_NAME
-ELECTRON_ARCHIVE_NAME: Final = "electron-v44.2.0-linux-x64.zip"
+ELECTRON_VERSION: Final = "44.2.0"
+ELECTRON_ARCHIVE_NAME: Final = f"electron-v{ELECTRON_VERSION}-linux-x64.zip"
+ELECTRON_CONFIGURATION_NAME: Final = (
+    f"electron-runtime-{ELECTRON_VERSION}-linux-x64.json"
+)
 
 TRANSFER_FILE_BOUNDS: Final = {
     "archive/SHA256SUMS": MAX_TEXT_BYTES,
@@ -506,7 +512,10 @@ def _preflight_transfer(transfer_root: Path) -> dict[str, int]:
         if maximum == 0:
             _fail("retained transfer contains an unexpected file")
         if not 0 < details.st_size <= maximum:
-            _fail("retained transfer file is outside its per-class byte bound")
+            _fail(
+                "retained transfer file is outside its per-class byte bound: "
+                f"{relative}"
+            )
         observed[relative] = details.st_size
     if set(observed) != set(TRANSFER_FILE_BOUNDS) | {TRANSFER_MANIFEST_NAME}:
         _fail("retained transfer path set is incomplete or unexpected")
@@ -541,14 +550,17 @@ def _preflight_manifest(
         if maximum == 0:
             _fail("retained transfer manifest declares an unexpected path")
         if type(size) is not int or not 0 < size <= maximum:
-            _fail("declared transfer file size is outside its per-class byte bound")
+            _fail(
+                "declared transfer file size is outside its per-class byte bound: "
+                f"{path}"
+            )
         if observed.get(path) != size:
             _fail("declared transfer file size disagrees with the retained file")
         if (
             not isinstance(item["sha256"], str)
             or _SHA256_RE.fullmatch(item["sha256"]) is None
         ):
-            _fail("declared transfer file digest is invalid")
+            _fail(f"declared transfer file digest is invalid: {path}")
         declared[path] = size
     if set(declared) != set(TRANSFER_FILE_BOUNDS):
         _fail("retained transfer manifest path set is incomplete or unexpected")
@@ -579,12 +591,12 @@ def _bound_bytes(
 ) -> bytes:
     record = observed.get(relative)
     if record is None:
-        _fail("required transfer file was not validated")
+        _fail(f"required transfer file was not validated: {relative}")
     value = _read_regular_bytes(
         transfer_root / relative, TRANSFER_FILE_BOUNDS[relative], relative
     )
     if len(value) != record["size"] or _sha256(value) != record["sha256"]:
-        _fail("retained transfer file changed after it was validated")
+        _fail(f"retained transfer file changed after it was validated: {relative}")
     return value
 
 
@@ -640,7 +652,7 @@ def _archive_state(
     declarations = {item.path: item for item in install.files}
     for required in (FIXED_LAUNCHER_PATH, FIXED_APP_ASAR_PATH):
         if required not in declarations:
-            _fail("install manifest omits a required runtime path")
+            _fail(f"install manifest omits a required runtime path: {required}")
     if not declarations[FIXED_LAUNCHER_PATH].executable:
         _fail("install manifest launcher is not executable")
     license_declaration = declarations.get(FIXED_LICENSE_INVENTORY_PATH)
@@ -746,6 +758,8 @@ def _source_configuration(
         or version != expectations.electron_version
     ):
         _fail("desktop Electron version does not match caller policy")
+    if version != ELECTRON_VERSION:
+        _fail(f"desktop Electron version is not the pinned {ELECTRON_VERSION}")
     contract_bytes = _read_regular_bytes(
         root / ARCHIVE_CONTRACT_PATH, MAX_JSON_BYTES, "archive build contract"
     )
@@ -763,7 +777,7 @@ def _source_configuration(
         _fail("source defined compression policy is incomplete or unexpected")
     inventory_name = contract.get("electron_runtime_inventory")
     if not isinstance(inventory_name, str) or inventory_name != (
-        f"electron-runtime-{version}-linux-x64.json"
+        ELECTRON_CONFIGURATION_NAME
     ):
         _fail("archive build contract Electron inventory reference is invalid")
     configuration_bytes = _read_regular_bytes(
@@ -969,6 +983,15 @@ def _derive_source_identity(source_root: Path, archive_path: Path) -> dict[str, 
         raise ArchiveEvidenceError("subject source root is missing") from error
     if not root.is_dir() or Path(source_root).is_symlink():
         _fail("subject source root must be a real directory")
+    toplevel = _git(root, "rev-parse", "--show-toplevel").decode("utf-8").strip()
+    try:
+        resolved = Path(toplevel).resolve(strict=True)
+    except OSError as error:
+        raise ArchiveEvidenceError(
+            "subject source root is not the top of its own checkout"
+        ) from error
+    if not toplevel or resolved != root:
+        _fail("subject source root is not the top of its own checkout")
     if _git(root, "status", "--porcelain=v1", "--untracked-files=all"):
         _fail("subject source checkout must be clean")
     commit = _git(root, "rev-parse", "HEAD").decode("ascii").strip()
@@ -1247,6 +1270,23 @@ def _parse_inputs(document: bytes) -> dict[str, str]:
     return result
 
 
+def _git_environment() -> dict[str, str]:
+    """Build the scrubbed environment for every subject checkout inspection.
+
+    An ambient ``GIT_DIR`` or ``GIT_WORK_TREE`` outranks ``-C``, so an inherited
+    environment could point the derivation at a different checkout than the one
+    whose files are read from the filesystem. Only an explicit allowlist
+    survives, so no ``GIT_*`` variable of any kind can redirect the inspection.
+    """
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name in _GIT_ENVIRONMENT_ALLOWLIST
+    }
+    environment.setdefault("PATH", os.defpath)
+    return environment
+
+
 def _git(root: Path, *arguments: str) -> bytes:
     try:
         completed = subprocess.run(
@@ -1254,6 +1294,7 @@ def _git(root: Path, *arguments: str) -> bytes:
             check=False,
             capture_output=True,
             timeout=300,
+            env=_git_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ArchiveEvidenceError(

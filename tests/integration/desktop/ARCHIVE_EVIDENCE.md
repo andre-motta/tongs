@@ -68,6 +68,27 @@ Matching build A and build B lists alone are insufficient. Lists that agree with
 each other but describe outputs unrelated to the validated archive directory, or
 that omit the checksum file, are rejected.
 
+Byte identity of the two lists is already enforced upstream by the issue #138
+validator, which runs first, so this adapter's own byte-identity branch is
+defense in depth reachable only through a direct call. The unique contribution
+here is the map equality with the validated archive directory. A future change
+to #138 that drops the byte-identity check would therefore not remove the
+guarantee, but it would move which check fails first.
+
+## The derivation is pinned to the inspected source root
+
+Every git invocation runs with a scrubbed environment built from a small
+allowlist, `PATH`, `HOME` and `LANG`, so no ambient `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_INDEX_FILE` or any other `GIT_*` variable can outrank `-C` and point the
+derivation at a checkout other than `--source-root`. Before any other query,
+`git rev-parse --show-toplevel` must resolve to exactly the source root, so a
+subdirectory of a checkout, and a directory that is not a repository at all, are
+both refused. Without both guards a planted directory holding only the inspected
+configuration files could be certified under the identity of an unrelated
+repository, because `_source_configuration` reads `desktop/package.json` and
+`packaging/desktop/archive/*` from the plain filesystem while the identity came
+from git.
+
 ## Published evidence root
 
 The producer writes into a temporary sibling directory, runs the separate
@@ -142,7 +163,26 @@ application startup or hardware GPU function, and the report says so in its
 Operator negatives observed against the genuine fd33 data, each exiting 1 with no
 output root created and the earlier success receipt untouched: wrong subject
 source tree, a `push` relabel of the `pull_request` transfer, a wrong upstream
-run ID, and a wrong trusted adapter program digest.
+run ID, a wrong trusted adapter program digest, a source root that is not a
+repository, and that same planted source root under an ambient `GIT_DIR` and
+`GIT_WORK_TREE` redirect to the real checkout. A legitimate fd33 invocation made
+under an ambient redirect to a foreign repository still binds the fd33 identity,
+which is what the scrubbed environment guarantees.
+
+The fd33 transfer manifest is prepared locally, so its `execution` block is an
+assertion by the preparer rather than an upstream attestation. Every wrong
+upstream execution negative on fd33 proves the comparison mechanism, not the
+provenance of run `34276954588`. The ce4 evidence carries the genuine hosted
+manifest and does have that property. Parent issue #53 tracking should record
+fd33 as the mechanism diagnostic and ce4 as the hosted manifest exercise.
+
+Neither receipt carries a marker that distinguishes a known diagnostic subject
+from an ordinary passing run. Both were produced with check ID
+`desktop-archive-lifecycle` and environment
+`local-archive-adapter-fedora44-x86_64`, which are caller-owned values, and the
+generic `application-startup` scope exclusion is the standing statement for every
+run rather than a statement about ce4. The check ID vocabulary belongs to parent
+issue #53.
 
 ## Parent issue #53 obligations
 
@@ -157,3 +197,13 @@ run ID, and a wrong trusted adapter program digest.
    retained fd33 and ce4 runs are diagnostics.
 5. Treat application startup and hardware GPU function as separate mandatory
    gates. This adapter never establishes either, and never makes a signing claim.
+6. Use a distinct check ID or environment for a known diagnostic subject such as
+   ce4, so a receipt for a subject with a known defect cannot satisfy a
+   `ReceiptPolicy` whose expected check ID is the acceptance value.
+7. Recompute the four trusted tool digests per head. `artifact_contract_sha256`
+   is a directory digest over `src/tongs/desktop/artifact_contract`, so it moves
+   whenever that package changes; do not pin any of the four in a long-lived
+   file.
+8. The published evidence root is owner-only, `0700` for the root and `0600` for
+   each file, because it is produced with `mkdtemp` and `O_EXCL` and then
+   renamed. Confirm the artifact upload step runs as the same user.

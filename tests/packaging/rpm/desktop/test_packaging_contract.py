@@ -66,7 +66,7 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert "python-dependencies/verify_install.py" in installer
     assert "rpm -V" in (PACKAGING / "verify_rpm_state.py").read_text()
     assert "[[ $status -eq 124 ]]" in installer
-    assert "preinstall-sentinels.json" in installer
+    assert "preinstall-sentinels.txt" in installer
     assert "user-archive-sentinel" in installer
     assert "tongs_user_plugin_sentinel.py" in installer
     assert "verify_mcp_provider.py" in installer
@@ -80,6 +80,16 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     )
     assert 'cmp "$evidence_dir/installed-previous.json"' in installer
     assert "--setopt=install_weak_deps=False" in installer
+    pre_bootstrap = installer[: installer.index("dnf-bootstrap.log")]
+    assert "sentinel_snapshot preinstall" in pre_bootstrap
+    assert installer.index("sentinel_snapshot preinstall") < installer.index("\ndnf ")
+    assert "core_version=$(python3" not in pre_bootstrap
+    assert "user_site=$(/usr/bin/python3" not in pre_bootstrap
+    assert "expected-companion-packages.txt" in installer
+    assert "clean-install-closure.txt" in installer
+    assert "|tongs-final" in installer
+    assert "companion-consumer-rpms" in harness
+    assert "select_companion_rpms.py" in harness
 
 
 def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:

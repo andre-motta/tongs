@@ -38,8 +38,11 @@ The end-to-end harness is deliberately restricted to a disposable GitHub-hosted
 runner because it performs normal Fedora DNF and Podman operations. It rebuilds
 the exact source wheel once with Fedora's packaging macros and rejects any
 version mismatch before rebuilding the seven accepted issue 85 companion SRPMs.
-It then creates and independently rebuilds both issue 52 SRPMs and source-builds
-a test-only desktop plugin RPM. It creates
+It matches the rebuilt companion RPM metadata against the manifest's exact seven
+binary identities and copies only that allowlist into consumer repositories;
+debuginfo and debugsource outputs remain in the raw build evidence. It then creates
+and independently rebuilds both issue 52 SRPMs and source-builds a test-only
+desktop plugin RPM. It creates
 local install repositories and proves a minimal clean install, installed sidecar
 plugin discovery and invocation, Sigstore and system OpenSSL behavior, Electron
 SONAME providers, exact ownership and metadata, a bounded X11 launch, explicit
@@ -47,8 +50,9 @@ MCP command integration and removal, same-NEVRA reinstall, a 0.4.9 to 0.5.0
 desktop upgrade, lower-to-current core upgrade, classified corrupted-package and
 dependency-negative failures, and uninstall preservation of user and unrelated
 sentinels. Every successful transaction is bound to the intended RPM NEVRA and
-an empty `rpm -V` result. The X11 smoke is a lifecycle check and makes no hardware
-GPU claim.
+an empty `rpm -V` result. The clean install also binds all seven companion NEVRAs
+and their `tongs-final` repository origin. The X11 smoke is a lifecycle check and
+makes no hardware GPU claim.
 
 Local source-level checks do not invoke Podman or RPM tooling:
 

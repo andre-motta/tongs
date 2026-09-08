@@ -51,6 +51,7 @@ accepted="$output_dir/accepted-download"
 dependency_prepared="$output_dir/dependency-prepared"
 dependency_srpms="$output_dir/dependency-srpms"
 dependency_rpms="$output_dir/dependency-rpms"
+companion_consumer_rpms="$output_dir/companion-consumer-rpms"
 prepared="$output_dir/prepared"
 srpms="$output_dir/srpms"
 rpms="$output_dir/rpms"
@@ -59,8 +60,8 @@ test_plugin_rpms="$output_dir/test-plugin-rpms"
 previous_repo="$output_dir/install-repo/previous"
 final_repo="$output_dir/install-repo/final"
 mkdir -p -- "$accepted" "$dependency_prepared" "$dependency_srpms" \
-    "$dependency_rpms" "$prepared" "$srpms" "$rpms" "$install_evidence" \
-    "$test_plugin_rpms" "$previous_repo" "$final_repo"
+    "$dependency_rpms" "$companion_consumer_rpms" "$prepared" "$srpms" "$rpms" \
+    "$install_evidence" "$test_plugin_rpms" "$previous_repo" "$final_repo"
 {
     printf 'GITHUB_RUN_ATTEMPT=%s\n' "${GITHUB_RUN_ATTEMPT:-unknown}"
     printf 'GITHUB_RUN_ID=%s\n' "${GITHUB_RUN_ID:-unknown}"
@@ -135,6 +136,14 @@ podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
 "$repo_root/packaging/rpm/python-dependencies/rebuild_srpms.sh" \
     --base-image "$base_image" --checkout "$repo_root" --source-sha "$source_sha" \
     --srpm-dir "$dependency_srpms" --output-dir "$dependency_rpms"
+podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
+    --volume "$repo_root:/checkout:ro" --volume "$dependency_rpms:/rpms:ro" \
+    --volume "$companion_consumer_rpms:/selected:rw" \
+    --volume "$output_dir:/evidence:rw" "$source_builder" \
+    python3 /checkout/packaging/rpm/desktop/select_companion_rpms.py \
+        --manifest /checkout/packaging/rpm/python-dependencies/manifest.json \
+        --rpm-dir /rpms --output-dir /selected \
+        --report /evidence/companion-rpm-selection.json
 
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" --volume "$prepared:/prepared:ro" \
@@ -143,16 +152,16 @@ podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
         --prepared-dir /prepared --output-dir /srpms
 "$script_dir/rebuild_srpms.sh" \
     --base-image "$base_image" --checkout "$repo_root" --source-sha "$source_sha" \
-    --srpm-dir "$srpms" --companion-rpm-dir "$dependency_rpms" --output-dir "$rpms"
+    --srpm-dir "$srpms" --companion-rpm-dir "$companion_consumer_rpms" \
+    --output-dir "$rpms"
 
 podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" --volume "$test_plugin_rpms:/output:rw" \
     "$source_builder" /checkout/packaging/rpm/desktop/build_test_plugin.sh \
         --source-dir /checkout/packaging/rpm/desktop/test-plugin \
         --license /checkout/LICENSE --output-dir /output
-find "$dependency_rpms" -maxdepth 1 -type f -name '*.rpm' ! -name '*.src.rpm' \
-    ! -name '*-debuginfo-*' -exec cp -- {} "$previous_repo/" \; \
-    -exec cp -- {} "$final_repo/" \;
+find "$companion_consumer_rpms" -maxdepth 1 -type f -name '*.rpm' \
+    -exec cp -- {} "$previous_repo/" \; -exec cp -- {} "$final_repo/" \;
 find "$rpms/previous" -maxdepth 1 -type f -name '*.rpm' ! -name '*.src.rpm' \
     ! -name '*-debuginfo-*' -exec cp -- {} "$previous_repo/" \;
 find "$rpms/final" -maxdepth 1 -type f -name '*.rpm' ! -name '*.src.rpm' \
@@ -165,14 +174,16 @@ for repository in "$previous_repo" "$final_repo"; do
 done
 
 podman run --rm --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" --volume "$dependency_rpms:/companions:ro" \
+    --volume "$repo_root:/checkout:ro" \
+    --volume "$companion_consumer_rpms:/companions:ro" \
     --volume "$rpms/previous:/previous:ro" --volume "$rpms/final:/final:ro" \
     --volume "$previous_repo:/previous-repo:ro" --volume "$final_repo:/final-repo:ro" \
     --volume "$prepared:/prepared:ro" --volume "$install_evidence:/evidence:rw" \
     "$base_image" /checkout/packaging/rpm/desktop/install_and_verify.sh \
         --companion-dir /companions --previous-dir /previous --final-dir /final \
         --previous-repo /previous-repo --final-repo /final-repo \
-        --prepared-dir /prepared --evidence-dir /evidence --checkout /checkout
+        --prepared-dir /prepared --evidence-dir /evidence --checkout /checkout \
+        --core-version "$core_version"
 
 find "$output_dir" -type f ! -name ALL-SHA256SUMS -print0 | sort -z | xargs -0 sha256sum \
     | sed "s#${output_dir}/##" >"$output_dir/ALL-SHA256SUMS"

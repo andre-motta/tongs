@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    printf 'usage: %s --companion-dir DIR --previous-dir DIR --final-dir DIR --previous-repo DIR --final-repo DIR --prepared-dir DIR --evidence-dir DIR --checkout DIR\n' "$0" >&2
+    printf 'usage: %s --companion-dir DIR --previous-dir DIR --final-dir DIR --previous-repo DIR --final-repo DIR --prepared-dir DIR --evidence-dir DIR --checkout DIR --core-version VERSION\n' "$0" >&2
 }
 companion_dir=""
 previous_dir=""
@@ -12,6 +12,7 @@ final_repo=""
 prepared_dir=""
 evidence_dir=""
 checkout=""
+core_version=""
 while (($#)); do
     case "$1" in
         --companion-dir) companion_dir=$2; shift 2 ;;
@@ -22,6 +23,7 @@ while (($#)); do
         --prepared-dir) prepared_dir=$2; shift 2 ;;
         --evidence-dir) evidence_dir=$2; shift 2 ;;
         --checkout) checkout=$2; shift 2 ;;
+        --core-version) core_version=$2; shift 2 ;;
         *) usage; exit 2 ;;
     esac
 done
@@ -29,10 +31,9 @@ for directory in "$companion_dir" "$previous_dir" "$final_dir" "$previous_repo" 
     "$final_repo" "$prepared_dir" "$evidence_dir" "$checkout"; do
     [[ -d "$directory" ]] || { usage; exit 2; }
 done
+[[ $core_version =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] || { usage; exit 2; }
 
 packaging_dir="$checkout/packaging/rpm/desktop"
-identity="$prepared_dir/prepared-inputs.json"
-core_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["pep440_version"])' "$identity")
 previous_core=$(find "$previous_dir" -maxdepth 1 -type f -name 'python3-tongs-[0-9]*.noarch.rpm' -print -quit)
 previous_desktop=$(find "$previous_dir" -maxdepth 1 -type f -name 'tongs-desktop-*.x86_64.rpm' -print -quit)
 final_core=$(find "$final_dir" -maxdepth 1 -type f -name 'python3-tongs-[0-9]*.noarch.rpm' -print -quit)
@@ -44,12 +45,34 @@ for package in "$previous_core" "$previous_desktop" "$previous_test_plugin" \
     "$final_core" "$final_mcp" "$final_desktop" "$final_test_plugin"; do
     [[ -f "$package" ]] || { printf 'missing lifecycle package\n' >&2; exit 1; }
 done
-companion_count=$(find "$companion_dir" -maxdepth 1 -type f -name '*.rpm' \
-    ! -name '*.src.rpm' ! -name '*-debuginfo-*' | wc -l)
-[[ $companion_count -eq 7 ]] || {
-    printf 'expected seven source-built companion RPMs, found %s\n' "$companion_count" >&2
+companion_contract="$companion_dir/expected-packages.tsv"
+[[ -f "$companion_contract" ]] || {
+    printf 'missing manifest-bound companion package contract\n' >&2
     exit 1
 }
+mapfile -t companion_rpms < <(
+    find "$companion_dir" -maxdepth 1 -type f -name '*.rpm' -print | sort
+)
+[[ ${#companion_rpms[@]} -eq 7 ]] || {
+    printf 'expected seven selected companion RPMs, found %s\n' \
+        "${#companion_rpms[@]}" >&2
+    exit 1
+}
+sort "$companion_contract" >"$evidence_dir/expected-companion-packages.txt"
+rpm -qp --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
+    "${companion_rpms[@]}" | sort >"$evidence_dir/selected-companion-packages.txt"
+cmp "$evidence_dir/expected-companion-packages.txt" \
+    "$evidence_dir/selected-companion-packages.txt"
+mapfile -t core_python_abis < <(
+    rpm -qp --requires "$final_core" \
+        | sed -nE 's/^python\(abi\) = (3\.[0-9]+)$/\1/p'
+)
+[[ ${#core_python_abis[@]} -eq 1 ]] || {
+    printf 'expected one exact Python ABI in final core RPM, found %s\n' \
+        "${#core_python_abis[@]}" >&2
+    exit 1
+}
+printf '%s\n' "${core_python_abis[0]}" >"$evidence_dir/core-python-abi.txt"
 
 cat >/etc/yum.repos.d/tongs-previous.repo <<EOF
 [tongs-previous]
@@ -65,9 +88,8 @@ baseurl=file://$final_repo
 enabled=0
 gpgcheck=0
 EOF
-dnf repolist --all >"$evidence_dir/install-repositories.txt"
 
-user_site=$(/usr/bin/python3 -c 'import site; print(site.getusersitepackages())')
+user_site="/root/.local/lib/python${core_python_abis[0]}/site-packages"
 install -d /root/.local/share/applications /root/.config/tongs \
     /root/.local/share/tongs/desktop/versions/user-archive-sentinel "$user_site"
 printf 'per-user menu sentinel\n' >/root/.local/share/applications/tongs.desktop
@@ -100,19 +122,23 @@ snapshot() {
 }
 sentinel_snapshot() {
     local name=$1
-    local arguments=()
     local sentinel
-    for sentinel in "${sentinels[@]}"; do
-        arguments+=(--sentinel "$sentinel")
-    done
-    /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" snapshot \
-        "${arguments[@]}" --output "$evidence_dir/$name-sentinels.json"
+    {
+        for sentinel in "${sentinels[@]}"; do
+            [[ -f "$sentinel" && ! -L "$sentinel" ]] || {
+                printf 'sentinel is not a regular non-link file: %s\n' "$sentinel" >&2
+                return 1
+            }
+            stat --printf='%n|%F|%a|%u|%g|%s|' "$sentinel"
+            sha256sum "$sentinel" | cut -d ' ' -f 1
+        done
+    } >"$evidence_dir/$name-sentinels.txt"
 }
 assert_sentinels() {
     local name=$1
     sentinel_snapshot "$name"
-    cmp "$evidence_dir/preinstall-sentinels.json" \
-        "$evidence_dir/$name-sentinels.json"
+    cmp "$evidence_dir/preinstall-sentinels.txt" \
+        "$evidence_dir/$name-sentinels.txt"
 }
 assert_final_state() {
     local name=$1
@@ -144,12 +170,27 @@ installed_closure() {
 }
 
 sentinel_snapshot preinstall
+dnf repolist --all >"$evidence_dir/install-repositories.txt"
 dnf repoquery --repo=tongs-final --available \
     --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{repoid}\n' \
     | sort >"$evidence_dir/final-repository-packages.txt"
+[[ $(grep -c '^[^|]*|' "$evidence_dir/final-repository-packages.txt") -eq 11 ]] || {
+    printf 'final consumer repository does not contain exactly eleven packages\n' >&2
+    exit 1
+}
+! grep -Eq '^[^|]+-(debuginfo|debugsource)\|' \
+    "$evidence_dir/final-repository-packages.txt"
+while IFS= read -r identity; do
+    [[ $(grep -Fxc "$identity|tongs-final" \
+        "$evidence_dir/final-repository-packages.txt") -eq 1 ]] || {
+        printf 'final repository lacks exact companion identity: %s\n' "$identity" >&2
+        exit 1
+    }
+done <"$evidence_dir/expected-companion-packages.txt"
 for package in python3-tongs 'python3-tongs+mcp' tongs-desktop \
     tongs-desktop-test-plugin; do
-    grep -F "$package|" "$evidence_dir/final-repository-packages.txt"
+    [[ $(cut -d '|' -f 1 "$evidence_dir/final-repository-packages.txt" \
+        | grep -Fxc "$package") -eq 1 ]]
 done
 
 dnf install --assumeyes --setopt=install_weak_deps=False \
@@ -162,6 +203,15 @@ dnf install --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-fina
 assert_sentinels clean-install
 assert_final_state clean-final no
 snapshot clean-final
+installed_closure "$evidence_dir/clean-install-closure.txt"
+while IFS= read -r identity; do
+    [[ $(grep -Fxc "$identity|tongs-final" \
+        "$evidence_dir/clean-install-closure.txt") -eq 1 ]] || {
+        printf 'installed companion lacks exact tongs-final provenance: %s\n' \
+            "$identity" >&2
+        exit 1
+    }
+done <"$evidence_dir/expected-companion-packages.txt"
 
 if rpm -q 'python3-tongs+mcp' >"$evidence_dir/minimal-mcp-package.txt" 2>&1; then
     printf 'minimal transaction unexpectedly installed python3-tongs+mcp\n' >&2

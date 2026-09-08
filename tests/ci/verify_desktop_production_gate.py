@@ -139,6 +139,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
         evidence_directory="core-python-3.12",
         receipt_name="core-receipt.json",
         reports=(
+            ExpectedReport("reports/core-evidence.json", ARTIFACT_LIFECYCLE),
             ExpectedReport("reports/core.junit.xml", PYTEST_JUNIT),
             ExpectedReport("reports/mcp.junit.xml", PYTEST_JUNIT, "tests.test_mcp."),
         ),
@@ -150,6 +151,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
         evidence_directory="core-python-3.13",
         receipt_name="core-receipt.json",
         reports=(
+            ExpectedReport("reports/core-evidence.json", ARTIFACT_LIFECYCLE),
             ExpectedReport("reports/core.junit.xml", PYTEST_JUNIT),
             ExpectedReport("reports/mcp.junit.xml", PYTEST_JUNIT, "tests.test_mcp."),
         ),
@@ -161,6 +163,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
         evidence_directory="desktop-production-tap",
         receipt_name="desktop-tap-receipt.json",
         reports=(
+            ExpectedReport("reports/desktop-tap-evidence.json", ARTIFACT_LIFECYCLE),
             ExpectedReport("reports/desktop-shell.tap", NODE_TAP),
             ExpectedReport(
                 "reports/plugin-example.junit.xml",
@@ -216,6 +219,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
         evidence_directory="desktop-native-payload-fixture",
         receipt_name="native-payload-receipt.json",
         reports=(
+            ExpectedReport("reports/native-payload-evidence.json", ARTIFACT_LIFECYCLE),
             ExpectedReport(
                 "reports/native-payload.junit.xml",
                 PYTEST_JUNIT,

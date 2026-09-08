@@ -567,7 +567,24 @@ def test_gate_rejects_a_declared_format_that_hides_the_real_parser(
     directory = evidence / check.evidence_directory
     path = directory / check.receipt_name
     receipt = _read_receipt(path)
-    receipt["reports"][0]["format"] = ARTIFACT_LIFECYCLE
+    for entry in receipt["reports"]:
+        if entry["path"] == "reports/native-payload.junit.xml":
+            entry["format"] = ARTIFACT_LIFECYCLE
+    _write_receipt(path, receipt)
+    with pytest.raises(GateVerificationError, match="rejected|declares format"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_a_lifecycle_report_relabelled_as_a_test_report(
+    evidence: Path,
+) -> None:
+    check = _check("desktop-native-payload-fixture")
+    directory = evidence / check.evidence_directory
+    path = directory / check.receipt_name
+    receipt = _read_receipt(path)
+    for entry in receipt["reports"]:
+        if entry["path"] == "reports/native-payload-evidence.json":
+            entry["format"] = PYTEST_JUNIT
     _write_receipt(path, receipt)
     with pytest.raises(GateVerificationError, match="rejected|declares format"):
         verify_check_set(evidence, IDENTITY)

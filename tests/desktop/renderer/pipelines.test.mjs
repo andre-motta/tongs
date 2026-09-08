@@ -65,7 +65,7 @@ test("initial job failure does not claim that the pipeline has no jobs", async (
   assert.equal(view.queryByText("This pipeline has no jobs."), null);
 });
 
-test("failed pipeline refresh hides an empty state retained from a successful read", async () => {
+test("failed pipeline refresh preserves an empty state from a successful read", async () => {
   let reads = 0;
   const bridge = baseBridge({
     listReviewPipelines: () =>
@@ -80,13 +80,10 @@ test("failed pipeline refresh hides an empty state retained from a successful re
   await view.findByText("No pipelines are available for this review.");
   fireEvent.click(view.getByRole("button", { name: "Refresh CI" }));
   await view.findByText("Refresh failed. Showing the previous pipeline list.");
-  assert.equal(
-    view.queryByText("No pipelines are available for this review."),
-    null,
-  );
+  assert.ok(view.getByText("No pipelines are available for this review."));
 });
 
-test("failed job refresh hides an empty state retained from a successful read", async () => {
+test("failed job refresh preserves an empty state from a successful read", async () => {
   let reads = 0;
   const bridge = baseBridge({
     listJobs: () =>
@@ -101,7 +98,7 @@ test("failed job refresh hides an empty state retained from a successful read", 
   await view.findByText("This pipeline has no jobs.");
   fireEvent.click(view.getByRole("button", { name: "Refresh jobs" }));
   await view.findByText("Refresh failed. Showing previous jobs.");
-  assert.equal(view.queryByText("This pipeline has no jobs."), null);
+  assert.ok(view.getByText("This pipeline has no jobs."));
 });
 
 test("pipeline panel renders hierarchy, inert paged logs, search, and keyboard selection", async () => {

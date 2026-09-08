@@ -316,7 +316,6 @@ function PipelinesView({
         </Notice>
       )}
       {pipelines.value !== null &&
-        !pipelines.error &&
         pipelineItems.length === 0 &&
         !pipelines.loading && (
           <Notice kind="empty">
@@ -518,7 +517,6 @@ function JobsPanel({
         </Notice>
       )}
       {jobs.value !== null &&
-        !jobs.error &&
         items.length === 0 &&
         !jobs.loading && (
           <Notice kind="empty">This pipeline has no jobs.</Notice>

@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any
 
 REQUIRED_GATE_JOBS = frozenset(
-    {"lint-and-format", "core", "desktop-fixtures", "fedora-podman"}
+    {
+        "lint-and-format",
+        "core",
+        "desktop-fixtures",
+        "fedora-podman",
+        "desktop-production",
+    }
 )
 
 

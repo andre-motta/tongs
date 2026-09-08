@@ -66,6 +66,19 @@ def test_aggregate_rejects_malformed_results(raw_results: str) -> None:
         verify_aggregate_results(raw_results)
 
 
+def test_aggregate_requires_the_called_production_workflow_result() -> None:
+    assert "desktop-production" in REQUIRED_GATE_JOBS
+    without_production = _results()
+    without_production.pop("desktop-production")
+    with pytest.raises(VerificationError, match="desktop-production"):
+        verify_aggregate_results(json.dumps(without_production))
+
+    skipped = _results()
+    skipped["desktop-production"] = {"result": "skipped", "outputs": {}}
+    with pytest.raises(VerificationError, match="desktop-production"):
+        verify_aggregate_results(json.dumps(skipped))
+
+
 def test_aggregate_rejects_a_malformed_required_job() -> None:
     results = _results()
     results["core"] = None

@@ -190,6 +190,16 @@ test("diff anchor selection keeps full immutable identity across layouts", async
     lineType: "addition",
     contextLines: ["from typing import TYPE_CHECKING"],
     contextComplete: true,
+    rangeOriginOldLine: null,
+    rangeOriginNewLine: 1,
+    selectedLines: [
+      {
+        oldLine: null,
+        newLine: 1,
+        lineType: "addition",
+        content: "from typing import TYPE_CHECKING",
+      },
+    ],
   });
   fireEvent.click(view.getByText("Split"));
   await waitFor(() =>
@@ -204,6 +214,50 @@ test("diff anchor selection keeps full immutable identity across layouts", async
   assert.equal(
     view.container.querySelector(".line-no_newline[tabindex]"),
     null,
+  );
+});
+
+test("Shift+Enter extends a keyboard diff selection across new-side source lines", async () => {
+  const bridge = baseBridge({
+    openDiff: () => read(rangeDiffPage()),
+    pageDiff: () => {
+      throw new Error("no next page");
+    },
+  });
+  const feature = createDiffFeature();
+  let observed = null;
+  function Harness() {
+    const [inlineAnchor, setInlineAnchor] = React.useState(null);
+    const selectInlineAnchor = (next) => {
+      observed = next;
+      setInlineAnchor(next);
+    };
+    return feature.render(
+      {
+        ...featureContext(bridge),
+        inlineAnchor,
+        selectInlineAnchor,
+      },
+      { kind: "review", item: reviewItem(), panel: "diff" },
+    );
+  }
+  const view = render(React.createElement(Harness));
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll('.diff-unified .line-content[role="button"]')
+        .length,
+      3,
+    ),
+  );
+  const lines = view.container.querySelectorAll(
+    '.diff-unified .line-content[role="button"]',
+  );
+  fireEvent.keyDown(lines[0], { key: "Enter" });
+  fireEvent.keyDown(lines[2], { key: "Enter", shiftKey: true });
+  await waitFor(() => assert.equal(observed?.selectedLines.length, 3));
+  assert.deepEqual(
+    observed.selectedLines.map((line) => [line.newLine, line.content]),
+    [[1, "first"], [2, "second"], [3, "third"]],
   );
 });
 
@@ -448,6 +502,45 @@ function diffPage(layout) {
     cursor: 0,
     next_cursor: null,
     entries: [file, hunk, row, marker],
+  };
+}
+
+function rangeDiffPage() {
+  const page = diffPage("unified");
+  return {
+    ...page,
+    snapshot_id: "snapshot-range",
+    entries: [
+      page.entries[0],
+      page.entries[1],
+      {
+        kind: "line",
+        file_index: 0,
+        hunk_index: 0,
+        old_line: 1,
+        new_line: 1,
+        content: "first",
+        line_type: "context",
+      },
+      {
+        kind: "line",
+        file_index: 0,
+        hunk_index: 0,
+        old_line: null,
+        new_line: 2,
+        content: "second",
+        line_type: "addition",
+      },
+      {
+        kind: "line",
+        file_index: 0,
+        hunk_index: 0,
+        old_line: 2,
+        new_line: 3,
+        content: "third",
+        line_type: "context",
+      },
+    ],
   };
 }
 

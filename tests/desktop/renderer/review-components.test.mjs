@@ -3,7 +3,10 @@ import { createRequire } from "node:module";
 import test, { afterEach } from "node:test";
 
 import { QueryCoordinator } from "../../../desktop/dist/src/renderer/core/query.js";
-import { createReviewFeature } from "../../../desktop/dist/src/renderer/features/review/index.js";
+import {
+  createReviewFeature,
+  discussionDiffTarget,
+} from "../../../desktop/dist/src/renderer/features/review/index.js";
 
 const desktopRequire = createRequire(
   new URL("../../../desktop/package.json", import.meta.url),
@@ -60,6 +63,133 @@ test("quick comment remains immediate, retains unknown intent, and needs explici
   fireEvent.click(view.getByRole("button", { name: "Quick comment" }));
   await waitFor(() => assert.equal(calls, 2));
   assert.notEqual(operations[0], operations[1]);
+});
+
+test("quick GitHub suggestion preserves its buffer across cancel and unknown delivery", async () => {
+  const review = "review-quick-suggestion";
+  const writes = [];
+  const bridge = reviewBridge(review, {
+    postInlineReviewComment: async (params) => {
+      writes.push(params);
+      throw {
+        code: "mutation_timeout",
+        message: "The mutation response timed out.",
+        retryable: true,
+      };
+    },
+  });
+  const selected = inlineSelection(review, "head", 4, [
+    sourceLine(3, 3, "  first()"),
+    sourceLine(null, 4, "  second()", "addition"),
+  ]);
+  const view = renderFeature(bridge, review, { inlineAnchor: selected });
+  const replacement = await view.findByLabelText("Suggestion replacement code");
+  assert.equal(replacement.value, "  first()\n  second()");
+  fireEvent.change(view.getByLabelText("Suggestion explanation"), {
+    target: { value: "Keep this precise" },
+  });
+  fireEvent.change(replacement, {
+    target: { value: "  use(`value`)  " },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Cancel and keep text" }));
+  fireEvent.click(view.getByRole("button", { name: "Suggest replacement" }));
+  assert.equal(view.getByLabelText("Suggestion replacement code").value, "  use(`value`)  ");
+  fireEvent.click(view.getByRole("button", { name: "Post quick suggestion" }));
+  await view.findByText(/may have completed remotely/);
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].anchor, {
+    old_path: "src/example.py",
+    new_path: "src/example.py",
+    line: 4,
+    side: "RIGHT",
+    start_line: 3,
+    start_side: "RIGHT",
+  });
+  assert.equal(
+    writes[0].body,
+    "Keep this precise\n\n```suggestion\n  use(`value`)  \n```",
+  );
+  fireEvent.click(
+    view.getByRole("button", {
+      name: "I inspected the forge; acknowledge uncertainty",
+    }),
+  );
+  await view.findByLabelText("Suggestion replacement code");
+  assert.equal(view.getByLabelText("Suggestion replacement code").value, "  use(`value`)  ");
+  assert.equal(writes.length, 1);
+});
+
+test("GitLab suggestion enters the durable draft and saves without a direct forge write", async () => {
+  const review = "review-draft-suggestion";
+  const saves = [];
+  let saveAttempts = 0;
+  let quickWrites = 0;
+  const bridge = reviewBridge(review, {
+    postInlineReviewComment: async (params) => {
+      quickWrites += 1;
+      return mutation(params.operation_id);
+    },
+    saveReviewDraft: async (params) => {
+      saveAttempts += 1;
+      saves.push(params);
+      if (saveAttempts === 1)
+        throw {
+          code: "conflict",
+          message: "The durable draft changed elsewhere.",
+          retryable: true,
+        };
+      return {
+        ...draft(review, params.expected_version + 1, params.content.body),
+        comments: params.content.comments.map((comment) => ({
+          ...comment,
+          anchor:
+            comment.kind === "inline"
+              ? { ...comment.anchor, stale: false }
+              : undefined,
+        })),
+      };
+    },
+    getReviewDraft: () => read(draft(review, 2, "remote change")),
+  });
+  const selected = inlineSelection(review, "head", 8, [
+    sourceLine(7, 7, "first"),
+    sourceLine(8, 8, "second"),
+  ]);
+  const view = renderFeature(bridge, review, {
+    inlineAnchor: selected,
+    repositories: [
+      { handle: "repo", display_name: "example/repo", forge_type: "gitlab" },
+    ],
+  });
+  fireEvent.click(await view.findByRole("button", { name: "Start review" }));
+  await view.findByText("Draft review active");
+  fireEvent.change(view.getByLabelText("Suggestion replacement code"), {
+    target: { value: "replacement" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Add suggestion to draft" }));
+  assert.equal(quickWrites, 0);
+  const draftComment = await view.findByLabelText(/Edit draft comment/);
+  assert.equal(draftComment.value, "```suggestion:-0+1\nreplacement\n```");
+  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  await view.findByText(/Your unsaved text is preserved/);
+  assert.equal(draftComment.value, "```suggestion:-0+1\nreplacement\n```");
+  fireEvent.click(view.getByRole("button", { name: "Keep my text" }));
+  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  await waitFor(() => assert.equal(saves.length, 2));
+  assert.equal(saves[1].expected_version, 2);
+  assert.equal(saves[1].content.comments.length, 1);
+  assert.deepEqual(saves[0].content.comments[0].anchor, {
+    revision: { head_sha: "head", base_sha: "base", start_sha: null },
+    old_path: "src/example.py",
+    new_path: "src/example.py",
+    old_line: 7,
+    new_line: 7,
+    side: "new",
+    context_fingerprint: saves[0].content.comments[0].anchor.context_fingerprint,
+    start_line: null,
+    start_side: null,
+  });
+  assert.deepEqual(saves[1].content.comments[0], saves[0].content.comments[0]);
 });
 
 test("explicit review recovery avoids duplicate drafts and preserves text on version conflict", async () => {
@@ -163,6 +293,7 @@ test("submission timeout recovers durable status without replaying start", async
 test("discussion controls explain unsupported actions and support keyboard focus", async () => {
   const review = "review-discussion";
   let resolves = 0;
+  const navigated = [];
   const bridge = reviewBridge(review, {
     listDiscussions: () => read({ discussions: [discussion()] }),
     getReviewMutationCapabilities: () =>
@@ -172,17 +303,56 @@ test("discussion controls explain unsupported actions and support keyboard focus
       return mutation(params.operation_id);
     },
   });
-  const view = renderFeature(bridge, review);
+  const view = renderFeature(bridge, review, {
+    navigate: (route) => navigated.push(route),
+  });
   const reply = await view.findByRole("button", { name: "Reply" });
   const resolve = view.getByRole("button", { name: "Resolve" });
+  const show = view.getByRole("button", { name: "Show in diff" });
+  fireEvent.click(show);
+  assert.deepEqual(navigated[0].diffTarget, {
+    discussionId: "thread-1",
+    path: "src/example.py",
+    side: "new",
+    line: 4,
+  });
   assert.equal(reply.disabled, true);
   assert.match(reply.title, /unsupported/);
   const list = view.container.querySelector(".review-workflow-thread-list");
   fireEvent.keyDown(list, { key: "ArrowDown" });
-  assert.equal(document.activeElement, resolve);
+  assert.equal(document.activeElement, show);
   fireEvent.click(resolve);
   await waitFor(() => assert.equal(resolves, 1));
   await view.findByRole("button", { name: "Reopen thread" });
+});
+
+test("discussion diff targets use only actual path and side line data", () => {
+  const inline = discussion();
+  assert.deepEqual(discussionDiffTarget(inline), {
+    discussionId: "thread-1",
+    path: "src/example.py",
+    side: "new",
+    line: 4,
+  });
+  assert.deepEqual(
+    discussionDiffTarget({
+      ...inline,
+      root_comment: { ...inline.root_comment, new_line: null, old_line: 9 },
+    }),
+    {
+      discussionId: "thread-1",
+      path: "src/example.py",
+      side: "old",
+      line: 9,
+    },
+  );
+  assert.equal(
+    discussionDiffTarget({
+      ...inline,
+      root_comment: { ...inline.root_comment, new_line: null, old_line: null },
+    }),
+    null,
+  );
 });
 
 test("quick verdict and merge cleanup require explicit confirmation with immutable command options", async () => {
@@ -404,7 +574,9 @@ function renderFeature(bridge, review, contextChanges = {}) {
       {
         bridge,
         queries: new QueryCoordinator(bridge),
-        repositories: [],
+        repositories: [
+          { handle: "repo", display_name: "example/repo", forge_type: "github" },
+        ],
         repositoriesReady: true,
         repositoryGeneration: 1,
         reviewPanels: [{ id: "discussions", label: "Discussions", order: 40 }],
@@ -550,18 +722,37 @@ function draftInlineAnchor(stale) {
   };
 }
 
-function inlineSelection(review, head, line) {
+function inlineSelection(
+  review,
+  head,
+  line,
+  selectedLines = [sourceLine(null, line, "selected", "addition")],
+) {
+  const last = selectedLines.at(-1);
   return {
     review,
+    snapshotId: "snapshot",
+    resource: review,
     revision: { head_sha: head, base_sha: "base", start_sha: null },
+    fileIndex: 0,
+    hunkIndex: 0,
+    rowIndex: null,
     oldPath: "src/example.py",
     newPath: "src/example.py",
     side: "new",
-    oldLine: null,
-    newLine: line,
+    oldLine: last.oldLine,
+    newLine: last.newLine,
+    lineType: last.lineType,
     contextLines: ["before", "selected", "after"],
     contextComplete: true,
+    rangeOriginOldLine: selectedLines[0].oldLine,
+    rangeOriginNewLine: selectedLines[0].newLine,
+    selectedLines,
   };
+}
+
+function sourceLine(oldLine, newLine, content, lineType = "context") {
+  return { oldLine, newLine, content, lineType };
 }
 
 function mutation(operationId) {

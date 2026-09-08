@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  resolveDiscussionTarget,
+  selectionForSplitCell,
+  selectionForUnifiedLine,
   splitSourceContext,
   unifiedSourceContext,
 } from "../../../desktop/dist/src/renderer/features/diff/index.js";
@@ -91,6 +94,135 @@ test("opposite-only and empty split cells never enter selected-side context", ()
   const value = loaded("split", [file, ...rows]);
   assert.deepEqual(splitSourceContext(value, file, rows[0], "old").lines, ["old only", "shared"]);
   assert.deepEqual(splitSourceContext(value, file, rows[1], "new").lines, ["new only", "shared"]);
+});
+
+test("unified range selection keeps contiguous new source and skips deletion rows", () => {
+  const rows = [
+    line(0, 1, 1, "first", "context"),
+    line(1, 2, null, "deleted", "deletion"),
+    line(2, null, 2, "second", "addition"),
+    line(3, 3, 3, "third", "context"),
+    line(4, null, null, "No newline at end of file", "no_newline"),
+  ];
+  const value = loaded("unified", [file, ...rows]);
+  const origin = selectionForUnifiedLine(
+    "review",
+    value,
+    file,
+    rows[0],
+    "new",
+  );
+  const selected = selectionForUnifiedLine(
+    "review",
+    value,
+    file,
+    rows[3],
+    "new",
+    origin,
+    true,
+  );
+  assert.deepEqual(
+    selected.selectedLines.map((item) => [item.newLine, item.content]),
+    [[1, "first"], [2, "second"], [3, "third"]],
+  );
+  assert.equal(selected.rangeOriginNewLine, 1);
+  assert.equal(selected.newLine, 3);
+  assert.deepEqual(selected.contextLines, ["first", "second", "third"]);
+
+  const additionOrigin = selectionForUnifiedLine(
+    "review",
+    value,
+    file,
+    rows[2],
+    "new",
+  );
+  const later = selectionForUnifiedLine(
+    "review",
+    value,
+    file,
+    rows[3],
+    "new",
+    additionOrigin,
+    true,
+  );
+  const extendedBack = selectionForUnifiedLine(
+    "review",
+    value,
+    file,
+    rows[0],
+    "new",
+    later,
+    true,
+  );
+  assert.equal(extendedBack.rangeOriginOldLine, null);
+  assert.equal(extendedBack.rangeOriginNewLine, 2);
+  assert.deepEqual(
+    extendedBack.selectedLines.map((item) => item.newLine),
+    [1, 2],
+  );
+});
+
+test("split range selection uses the same original new-side lines", () => {
+  const rows = [
+    split(0, cell(1, 1, "first", "context", "old"), cell(1, 1, "first", "context", "new")),
+    split(1, cell(2, null, "deleted", "deletion", "old"), cell(null, 2, "second", "addition", "new")),
+    split(2, cell(3, 3, "third", "context", "old"), cell(3, 3, "third", "context", "new")),
+  ];
+  const value = loaded("split", [file, ...rows]);
+  const origin = selectionForSplitCell(
+    "review",
+    value,
+    file,
+    rows[0],
+    rows[0].new,
+  );
+  const selected = selectionForSplitCell(
+    "review",
+    value,
+    file,
+    rows[2],
+    rows[2].new,
+    origin,
+    true,
+  );
+  assert.deepEqual(
+    selected.selectedLines.map((item) => [item.newLine, item.content]),
+    [[1, "first"], [2, "second"], [3, "third"]],
+  );
+});
+
+test("discussion jumps resolve only exact current loaded rows", () => {
+  const unifiedRows = [
+    line(0, 4, 4, "current", "context"),
+    line(1, null, 5, "added", "addition"),
+  ];
+  const unified = loaded("unified", [file, ...unifiedRows]);
+  const target = {
+    discussionId: "thread",
+    path: "new.py",
+    side: "new",
+    line: 5,
+  };
+  assert.equal(resolveDiscussionTarget("review", unified, target).newLine, 5);
+  assert.equal(
+    resolveDiscussionTarget("review", unified, { ...target, line: 99 }),
+    null,
+  );
+  assert.equal(
+    resolveDiscussionTarget(
+      "review",
+      loaded("unified", [{ ...file, is_truncated: true }, ...unifiedRows]),
+      target,
+    ),
+    null,
+  );
+
+  const splitRows = [
+    split(0, cell(4, 4, "current", "context", "old"), cell(4, 4, "current", "context", "new")),
+    split(1, null, cell(null, 5, "added", "addition", "new")),
+  ];
+  const splitLoaded = loaded("split", [file, ...splitRows]);
+  assert.equal(resolveDiscussionTarget("review", splitLoaded, target).newLine, 5);
 });
 
 function loaded(layout, rows, partialError = null) {

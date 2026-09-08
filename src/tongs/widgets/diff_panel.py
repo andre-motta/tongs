@@ -26,6 +26,7 @@ from tongs.diff.models import DiffFile, DiffHunk, DiffLine, LineType
 from tongs.forges.models import Discussion
 from tongs.helpers import relative_time
 from tongs.state.drafts import DiffSide
+from tongs.widgets.review_draft import DraftMarker
 from tongs.widgets.split_diff import (
     DiffModeChanged,
     DiffModeState,
@@ -57,6 +58,7 @@ class CommentRequested(Message):
         mode: CommentMode = CommentMode.COMMENT,
         context_lines: list[DiffLine] | None = None,
         side: DiffSide | None = None,
+        selection: DiffSelection | None = None,
     ) -> None:
         super().__init__()
         self.file = file
@@ -64,6 +66,7 @@ class CommentRequested(Message):
         self.mode = mode
         self.context_lines = context_lines
         self.side = side
+        self.selection = selection
 
 
 class DiffFileTree(Tree):
@@ -409,13 +412,15 @@ class DiffOptionList(OptionList):
         context = (
             self._get_selection_lines() if self._selection_anchor is not None else None
         )
+        selection = self.selection
         self.post_message(
             CommentRequested(
                 file=self._current_file,
                 line=dl,
                 mode=CommentMode.COMMENT,
                 context_lines=context,
-                side=self._explicit_selection_side,
+                side=selection.side if selection is not None else None,
+                selection=selection,
             )
         )
         self._selection_anchor = None
@@ -438,13 +443,15 @@ class DiffOptionList(OptionList):
         context = (
             self._get_selection_lines() if self._selection_anchor is not None else None
         )
+        selection = self.selection
         self.post_message(
             CommentRequested(
                 file=self._current_file,
                 line=dl,
                 mode=CommentMode.SUGGEST,
                 context_lines=context,
-                side=self._explicit_selection_side,
+                side=selection.side if selection is not None else None,
+                selection=selection,
             )
         )
         self._selection_anchor = None
@@ -553,6 +560,7 @@ class DiffContent(Widget):
         self._requested_mode = DiffViewMode.UNIFIED
         self._effective_mode = DiffViewMode.UNIFIED
         self._preview_selection: DiffSelection | None = None
+        self._draft_markers: tuple[DraftMarker, ...] = ()
 
     def compose(self) -> ComposeResult:
         yield DiffOptionList(id="diff-option-list")
@@ -645,6 +653,12 @@ class DiffContent(Widget):
         self._file_discussions = discussions or []
         self._render_current_file()
 
+    def set_draft_markers(self, markers: tuple[DraftMarker, ...]) -> None:
+        """Replace durable marker projections and preserve the current selection."""
+        self._draft_markers = markers
+        if self._current_file is not None:
+            self._render_current_file(self.selection)
+
     def _render_current_file(self, selection: DiffSelection | None = None) -> None:
         file = self._current_file
         if file is None:
@@ -656,6 +670,7 @@ class DiffContent(Widget):
                 self._file_discussions,
                 _build_highlight_map(file),
                 selection,
+                self._draft_markers,
             )
         else:
             self._show_diff(file, selection)
@@ -710,7 +725,10 @@ class DiffContent(Widget):
 
         highlight_map = _build_highlight_map(file)
         renderer = DiffRenderer(
-            file.language, comment_lines=comment_lines, highlight_map=highlight_map
+            file.language,
+            comment_lines=comment_lines,
+            highlight_map=highlight_map,
+            protected_lines=self._draft_line_keys(file),
         )
 
         all_options: list[Option] = []
@@ -746,6 +764,11 @@ class DiffContent(Widget):
                     for block_line in _render_thread_block(expanded_discs):
                         all_options.append(Option(block_line, disabled=True))
                         option_idx += 1
+                    for marker in self._markers_for_line(file, dl):
+                        all_options.append(
+                            Option(_render_draft_marker(marker), disabled=True)
+                        )
+                        option_idx += 1
                     continue
                 option_idx += 1
 
@@ -774,6 +797,7 @@ class DiffContent(Widget):
                 mode=CommentMode.SUGGEST if event.suggest else CommentMode.COMMENT,
                 context_lines=list(selection.lines),
                 side=selection.side,
+                selection=selection,
             )
         )
 
@@ -832,8 +856,25 @@ class DiffContent(Widget):
         self._preview_selection = None
         self._current_file = None
         self._file_discussions = []
+        self._draft_markers = ()
         self._show_active_diff()
         self.post_message(DiffSelectionChanged(None))
+
+    def _markers_for_line(
+        self, file: DiffFile, line: DiffLine
+    ) -> tuple[DraftMarker, ...]:
+        return tuple(
+            marker
+            for marker in self._draft_markers
+            if marker.matches(file, line, marker.side)
+        )
+
+    def _draft_line_keys(self, file: DiffFile) -> set[tuple[int | None, int | None]]:
+        return {
+            (marker.old_line, marker.new_line)
+            for marker in self._draft_markers
+            if marker.old_path == file.old_path and marker.new_path == file.new_path
+        }
 
     def jump_to(
         self,
@@ -872,10 +913,12 @@ class DiffRenderer:
         language: str = "",
         comment_lines: dict[tuple[int | None, int | None], bool] | None = None,
         highlight_map: dict[int, Text] | None = None,
+        protected_lines: set[tuple[int | None, int | None]] | None = None,
     ):
         self._language = language or "text"
         self._comment_lines = comment_lines or {}
         self._highlight_map = highlight_map or {}
+        self._protected_lines = protected_lines or set()
 
     CONTEXT_LINES = 3
 
@@ -952,7 +995,12 @@ class DiffRenderer:
         ctx_start = None
 
         for i, dl in enumerate(lines):
-            if dl.line_type == LineType.CONTEXT:
+            key = (dl.old_lineno, dl.new_lineno)
+            if (
+                dl.line_type == LineType.CONTEXT
+                and key not in self._comment_lines
+                and key not in self._protected_lines
+            ):
                 if ctx_start is None:
                     ctx_start = i
             else:
@@ -1281,6 +1329,16 @@ def _match_discussions(
     return result
 
 
+def _render_draft_marker(marker: DraftMarker) -> Text:
+    state = " stale" if marker.stale else ""
+    text = Text()
+    text.append(
+        f"    DRAFT {marker.side.value}{state}: ", Style(color="yellow", bold=True)
+    )
+    text.append(marker.body, Style(color="yellow"))
+    return text
+
+
 class DiffPanel(Widget):
     """Split-pane diff viewer with file tree and content."""
 
@@ -1321,6 +1379,7 @@ class DiffPanel(Widget):
         self._files: list[DiffFile] = []
         self._current_index: int = 0
         self._discussions_by_file: dict[str, list[Discussion]] = {}
+        self._draft_markers: tuple[DraftMarker, ...] = ()
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -1370,6 +1429,11 @@ class DiffPanel(Widget):
         tree.set_files(files, self._discussions_by_file)
         self._show_file(0)
 
+    def set_draft_markers(self, markers: tuple[DraftMarker, ...]) -> None:
+        """Show durable comments without adding selectable source rows."""
+        self._draft_markers = markers
+        self.query_one("#diff-content", DiffContent).set_draft_markers(markers)
+
     def show_placeholder(self, message: str) -> None:
         """Replace all source-backed panel state with an authoritative message."""
         self._files = []
@@ -1397,6 +1461,7 @@ class DiffPanel(Widget):
             )
 
             content = self.query_one("#diff-content", DiffContent)
+            content.set_draft_markers(self._draft_markers)
             content.show_file(file, file_discs)
 
     def action_next_file(self) -> None:
@@ -1418,7 +1483,20 @@ class DiffPanel(Widget):
             file = self._files[self._current_index]
             line = self._find_first_changed_line(file)
             if line:
-                self.post_message(CommentRequested(file=file, line=line))
+                side = (
+                    DiffSide.OLD
+                    if line.line_type is LineType.DELETION
+                    else DiffSide.NEW
+                )
+                selection = DiffSelection(file, side, line, (line,))
+                self.post_message(
+                    CommentRequested(
+                        file=file,
+                        line=line,
+                        side=side,
+                        selection=selection,
+                    )
+                )
                 return
         self.post_message(CommentRequested())
 

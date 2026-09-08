@@ -121,6 +121,17 @@
   resize: vertical;
 }
 
+.suggestion-heading {
+  justify-content: space-between;
+}
+
+.suggestion-code {
+  min-height: 10rem !important;
+  tab-size: 4;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
 @media (max-width: 880px) {
   .review-workflow-grid {
     grid-template-columns: minmax(0, 1fr);

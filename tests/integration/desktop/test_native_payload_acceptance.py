@@ -2083,6 +2083,171 @@ def test_process_refresh_does_not_promote_a_compact_first_observation(
         launcher_module._validate_process_refresh(compact_first, previous, observations)
 
 
+def _command_line_permuted_title(process: ProcessObservation) -> str:
+    """Mirror ``base::CommandLine::argv()`` order: program, switches, arguments.
+
+    See ``.worktrees/desktop-125-attempt8-analysis.md`` and the retained
+    ``command_line.cc`` lines 433 to 464 and 640 to 665.
+    """
+
+    switches = []
+    arguments = []
+    parse_switches = True
+    for token in process.argv[1:]:
+        parse_switches &= token != "--"
+        prefix = 2 if token.startswith("--") else (1 if token.startswith("-") else 0)
+        if parse_switches and prefix and prefix != len(token):
+            switches.append(token)
+        else:
+            arguments.append(token)
+    return " ".join((process.executable, *switches, *arguments))
+
+
+def test_refresh_rejection_reports_the_attempt_eight_permuted_browser_title(
+    tmp_path: Path,
+) -> None:
+    """Failed native attempt 8: the difference hid past the 253 character bound."""
+
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    permuted = (_command_line_permuted_title(browser),)
+    expected = " ".join((browser.executable, *browser.argv[1:]))
+    assert permuted[0] != expected
+    assert len(permuted[0]) == len(expected)
+    index = next(
+        position
+        for position, (one, other) in enumerate(zip(permuted[0], expected, strict=True))
+        if one != other
+    )
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        launcher_module._validate_process_refresh(
+            browser,
+            replace(browser, argv=permuted, raw_argv=permuted),
+            {},
+        )
+
+    message = str(raised.value)
+    assert "owned process PID identity changed" in message
+    assert "precondition='argv join equality'" in message
+    assert "current_fields=1" in message
+    assert f"compact_len={len(expected.encode())}" in message
+    assert f"expected_len={len(expected.encode())}" in message
+    assert f"first_difference={index}" in message
+    assert "compact_window=" in message
+    assert "expected_window=" in message
+    assert permuted[0] in message
+    assert expected in message
+    assert "--tongs-core-version" in message
+
+
+@pytest.mark.parametrize(
+    ("previous_change", "current_change", "precondition"),
+    [
+        ({}, {"executable": "/usr/bin/false"}, "executable equality"),
+        ({}, {"role": "helper"}, "role transition"),
+        (
+            {"argv": (acceptance_module.CHROMIUM_ZYGOTE_ARGV0,)},
+            {},
+            "previous argv[0] is not the executable",
+        ),
+        ({}, {"raw_argv": ("other",)}, "current raw_argv consistency"),
+        ({"raw_argv": ("arbitrary prior raw",)}, {}, "previous raw_argv consistency"),
+    ],
+)
+def test_refresh_rejection_names_each_failed_browser_precondition(
+    tmp_path: Path,
+    previous_change: dict[str, Any],
+    current_change: dict[str, Any],
+    precondition: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    previous = replace(browser, **previous_change)
+    compacted = (" ".join(previous.argv),)
+    current_values: dict[str, Any] = {"argv": compacted, "raw_argv": compacted}
+    current_values.update(current_change)
+    current = replace(previous, **current_values)
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        launcher_module._validate_process_refresh(previous, current, {})
+
+    assert f"precondition={precondition!r}" in str(raised.value)
+
+
+def test_refresh_rejection_names_a_failed_child_type_token_precondition(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    zygote = fixture["observations"][0].processes[1]
+    canonical = (zygote.executable, "--type=zygote", "--type=renderer")
+    previous = replace(zygote, argv=canonical, raw_argv=canonical)
+    compacted = (" ".join(canonical),)
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        launcher_module._validate_process_refresh(
+            previous,
+            replace(previous, role="helper", argv=compacted, raw_argv=compacted),
+            {},
+        )
+
+    assert "precondition='--type token count'" in str(raised.value)
+
+
+def test_refresh_rejection_bounds_every_diagnostic_value(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    oversized = (
+        " ".join(browser.argv) + "x" * (acceptance_module.MAX_ARGUMENT_BYTES + 64),
+    )
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        launcher_module._validate_process_refresh(
+            browser,
+            replace(browser, argv=oversized, raw_argv=oversized),
+            {},
+        )
+
+    message = str(raised.value)
+    assert "more bytes)" in message
+    assert oversized[0] not in message
+    assert "x" * acceptance_module.MAX_ARGUMENT_BYTES not in message
+
+
+def test_refresh_rejection_keeps_the_generic_listing_for_other_changes(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    changed = (*browser.argv, "--extra")
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        launcher_module._validate_process_refresh(
+            browser,
+            replace(browser, argv=changed, raw_argv=changed),
+            {},
+        )
+
+    message = str(raised.value)
+    assert "precondition=" not in message
+    assert "owned process PID identity changed" in message
+
+
+def test_refresh_rejection_reports_a_changed_kernel_identity(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    compacted = (" ".join(browser.argv),)
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        launcher_module._validate_process_refresh(
+            browser,
+            replace(browser, start_time_ticks=99, argv=compacted, raw_argv=compacted),
+            {},
+        )
+
+    assert "precondition='kernel identity'" in str(raised.value)
+
+
 def test_process_refresh_carries_browser_role_across_attempt_seven_compaction(
     tmp_path: Path,
 ) -> None:

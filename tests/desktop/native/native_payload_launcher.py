@@ -548,9 +548,7 @@ def _validate_process_refresh(
     )
     if stable_changed:
         raise NativeAcceptanceError(
-            "owned process PID identity changed: "
-            f"previous={_process_debug_identity(previous)}; "
-            f"current={_process_debug_identity(current)}"
+            _refresh_rejection_message(previous, current, "kernel identity")
         )
     if previous.executable == current.executable:
         if previous.argv == current.argv and previous.raw_argv == current.raw_argv:
@@ -585,9 +583,9 @@ def _validate_process_refresh(
     if inherited_parent_image and previous.raw_argv == previous.argv:
         return current
     raise NativeAcceptanceError(
-        "owned process PID identity changed: "
-        f"previous={_process_debug_identity(previous)}; "
-        f"current={_process_debug_identity(current)}"
+        _refresh_rejection_message(
+            previous, current, _failed_compaction_precondition(previous, current)
+        )
     )
 
 
@@ -643,6 +641,126 @@ def _is_exact_argv_storage_compaction(
         if type_arguments != (f"--type={process_type}",):
             return False
     return current[0] == " ".join((executable, *previous[1:]))
+
+
+def _refresh_rejection_message(
+    previous: ProcessObservation,
+    current: ProcessObservation,
+    precondition: str | None,
+) -> str:
+    """Explain a rejected refresh without changing what is accepted."""
+
+    message = (
+        "owned process PID identity changed: "
+        f"previous={_process_debug_identity(previous)}; "
+        f"current={_process_debug_identity(current)}"
+    )
+    if precondition is None:
+        return message
+    return f"{message}; {_compaction_debug_detail(previous, current, precondition)}"
+
+
+def _failed_compaction_precondition(
+    previous: ProcessObservation, current: ProcessObservation
+) -> str | None:
+    """Name the first unmet precondition of the exact compaction rule.
+
+    Returns ``None`` when the current observation is not even a candidate
+    compaction, so unrelated rejections keep their previous message.
+    """
+
+    if len(current.argv) != 1:
+        return None
+    if previous.executable != current.executable:
+        return "executable equality"
+    if not _is_compaction_role_transition(previous.role, current.role):
+        return "role transition"
+    if not previous.argv:
+        return "previous argv is empty"
+    type_arguments = tuple(
+        argument for argument in previous.argv if argument.startswith("--type=")
+    )
+    if previous.role == "browser":
+        if previous.argv[0] != previous.executable:
+            return "previous argv[0] is not the executable"
+        if type_arguments:
+            return "browser carries --type arguments"
+    else:
+        process_type = COMPACTED_PROCESS_ROLE_TYPES.get(previous.role)
+        if process_type is None:
+            return "role is not compactable"
+        if previous.argv[0] not in (previous.executable, CHROMIUM_ZYGOTE_ARGV0):
+            return "previous argv[0] is neither the executable nor /proc/self/exe"
+        if type_arguments != (f"--type={process_type}",):
+            return "--type token count"
+    if current.raw_argv != current.argv:
+        return "current raw_argv consistency"
+    if previous.raw_argv not in (previous.argv, current.argv):
+        return "previous raw_argv consistency"
+    return "argv join equality"
+
+
+def _compaction_debug_detail(
+    previous: ProcessObservation,
+    current: ProcessObservation,
+    precondition: str,
+) -> str:
+    """Bounded byte-level evidence for a rejected candidate compaction."""
+
+    compact = current.argv[0] if current.argv else ""
+    expected = " ".join((previous.executable, *previous.argv[1:]))
+    compact_bytes = compact.encode("utf-8", errors="replace")
+    expected_bytes = expected.encode("utf-8", errors="replace")
+    index = _first_difference(compact_bytes, expected_bytes)
+    if index is None:
+        difference = "first_difference=none"
+    else:
+        start = max(0, index - 40)
+        difference = (
+            f"first_difference={index},"
+            f"compact_window={_bounded_debug_value(compact_bytes[start : index + 40])},"
+            f"expected_window={_bounded_debug_value(expected_bytes[start : index + 40])}"
+        )
+    return (
+        f"precondition={precondition!r},"
+        f"current_fields={len(current.argv)},"
+        f"compact_len={len(compact_bytes)},"
+        f"expected_len={len(expected_bytes)},"
+        f"compact={_bounded_debug_value(compact_bytes)},"
+        f"expected={_bounded_debug_value(expected_bytes)},"
+        f"{difference},"
+        f"previous_raw_argv={_bounded_debug_raw(previous.raw_argv)},"
+        f"current_raw_argv={_bounded_debug_raw(current.raw_argv)}"
+    )
+
+
+def _first_difference(left: bytes, right: bytes) -> int | None:
+    for index, (one, other) in enumerate(zip(left, right, strict=False)):
+        if one != other:
+            return index
+    if len(left) != len(right):
+        return min(len(left), len(right))
+    return None
+
+
+def _bounded_debug_value(value: bytes) -> str:
+    """Render one value, bounded to the per-argument byte limit."""
+
+    if len(value) <= MAX_ARGUMENT_BYTES:
+        return repr(value.decode("utf-8", errors="replace"))
+    kept = value[:MAX_ARGUMENT_BYTES].decode("utf-8", errors="replace")
+    return f"{kept!r}...({len(value) - MAX_ARGUMENT_BYTES} more bytes)"
+
+
+def _bounded_debug_raw(values: tuple[str, ...] | None) -> str:
+    if values is None:
+        return "None"
+    bounded = tuple(
+        _bounded_debug_value(value.encode("utf-8", errors="replace"))
+        for value in values[:16]
+    )
+    tail = "" if len(values) <= 16 else f",...({len(values) - 16} more)"
+    return f"({','.join(bounded)}{tail})"
 
 
 def _process_debug_identity(observation: ProcessObservation) -> str:

@@ -34,6 +34,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -62,6 +63,11 @@ NODE_TAP = "node-tap"
 ARTIFACT_LIFECYCLE = "artifact-lifecycle-v1"
 STAGED_REPORT_FORMATS = frozenset({PYTEST_JUNIT, NODE_TAP})
 
+#: Recorded when the run is not a pull request, so the two pull request fields
+#: are always present and never silently empty.
+NOT_A_PULL_REQUEST = "not-a-pull-request"
+_SHA1_RE = re.compile(r"[0-9a-f]{40}\Z")
+
 
 class StageReceiptError(ValueError):
     """Raised when a stage plan or its staged bytes are not acceptable."""
@@ -83,6 +89,47 @@ def _load_module(name: str, path: Path) -> ModuleType:
 
 RECEIPTS = _load_module("desktop_stage_receipts", ROOT / RECEIPT_READER_PROGRAM)
 REPORTS = _load_module("desktop_stage_reports", ROOT / REPORT_PARSER_PROGRAM)
+
+
+def validate_source_context(
+    context: Mapping[str, Any], checked_out_commit: str
+) -> dict[str, str]:
+    """Require honest labelling of what was checked out and what it came from.
+
+    ``checked_out_commit`` is the commit the job actually checked out.  For a
+    pull request that is GitHub's synthetic merge commit, which is deliberately
+    what ordinary CI tests, so the pull request head and base are recorded
+    beside it as metadata rather than substituted for it.  Requiring the head
+    to differ from the checked-out commit is what stops synthetic output from
+    ever being labelled as a contributor-head result.
+    """
+
+    _require_exact_keys(
+        context,
+        {"event", "pull_request_head", "pull_request_base"},
+        "source context",
+    )
+    event = _require_text(context["event"], "source context event")
+    head = _require_text(context["pull_request_head"], "pull request head")
+    base = _require_text(context["pull_request_base"], "pull request base")
+    if event == "pull_request":
+        for label, value in (("head", head), ("base", base)):
+            if _SHA1_RE.fullmatch(value) is None:
+                _fail(f"pull request {label} must be a full lowercase commit SHA")
+        if head == checked_out_commit:
+            _fail(
+                "a pull request checkout must be the synthetic merge commit, so "
+                "the pull request head must not equal the checked-out commit"
+            )
+        if head == base:
+            _fail("the pull request head and base must differ")
+    else:
+        if head != NOT_A_PULL_REQUEST or base != NOT_A_PULL_REQUEST:
+            _fail(
+                f"a {event!r} run must record {NOT_A_PULL_REQUEST!r} for both "
+                "pull request fields"
+            )
+    return {"event": event, "pull_request_head": head, "pull_request_base": base}
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,12 +309,15 @@ class _PlannedFile:
     role: str | None
 
 
-def _parse_plan(plan: Mapping[str, Any], check_id: str) -> dict[str, Any]:
+def _parse_plan(
+    plan: Mapping[str, Any], check_id: str, checked_out_commit: str
+) -> dict[str, Any]:
     _require_exact_keys(
         plan,
         {
             "check_id",
             "report_path",
+            "source_context",
             "scope",
             "files",
             "stages",
@@ -279,6 +329,10 @@ def _parse_plan(plan: Mapping[str, Any], check_id: str) -> dict[str, Any]:
     if _require_text(plan["check_id"], "plan check_id") != check_id:
         _fail("stage plan check_id does not match the caller-owned check identity")
     report_path = _require_relative_path(plan["report_path"], "plan report_path")
+    source_context = validate_source_context(
+        _require_object(plan["source_context"], "plan source_context"),
+        checked_out_commit,
+    )
 
     scope = _require_object(plan["scope"], "plan scope")
     _require_exact_keys(scope, {"covered", "excluded"}, "plan scope")
@@ -376,6 +430,7 @@ def _parse_plan(plan: Mapping[str, Any], check_id: str) -> dict[str, Any]:
 
     return {
         "report_path": report_path,
+        "source_context": source_context,
         "scope": {"covered": scope["covered"], "excluded": list(excluded)},
         "files": files,
         "stages": stages,
@@ -487,6 +542,7 @@ def _build_report(
         "check_id": check_id,
         "result": "pass",
         "source": {"commit": commit, "tree": tree},
+        "source_context": parsed["source_context"],
         "tool": _tool_identity(),
         "stages": stages,
         "report_outcomes": dict(outcomes),
@@ -585,7 +641,9 @@ def publish_stage_receipt(
         _read_regular_bytes(Path(plan_path), MAX_PLAN_BYTES, "stage plan"),
         "stage plan",
     )
-    parsed = _parse_plan(plan, receipt_policy.expected_check_id)
+    parsed = _parse_plan(
+        plan, receipt_policy.expected_check_id, receipt_policy.expected_commit
+    )
     for planned in parsed["files"]:
         if (
             planned.report_format is not None
@@ -673,6 +731,7 @@ def consume_stage_receipt(
             "check_id",
             "result",
             "source",
+            "source_context",
             "tool",
             "stages",
             "report_outcomes",
@@ -693,6 +752,10 @@ def consume_stage_receipt(
         "tree": receipt_policy.expected_tree,
     }:
         _fail("stage lifecycle report source does not match caller policy")
+    validate_source_context(
+        _require_object(report["source_context"], "report source_context"),
+        receipt_policy.expected_commit,
+    )
     if report["tool"] != _tool_identity():
         _fail("stage lifecycle report tool identity does not match this checkout")
 

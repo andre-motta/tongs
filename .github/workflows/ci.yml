@@ -10,12 +10,16 @@ permissions:
   contents: read
 
 env:
-  # Every receipt-bearing job checks out this exact revision.  Ordinary CI used
-  # to test the synthetic merge commit, but the production receipt contract
-  # selects the contributor head SHA, and labelling synthetic output as a
-  # contributor-head result would be untrue.  The tested base is recorded
-  # separately by the aggregate.
-  TONGS_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  # Every receipt-bearing job checks out and binds this exact revision.  For a
+  # pull request that is GitHub's synthetic merge commit, because pre-merge
+  # combination testing is how this initiative gates integration.  The pull
+  # request head and base travel beside it as clearly named metadata, so
+  # synthetic output is never labelled as a contributor-head result.
+  TONGS_CHECKED_OUT_SHA: ${{ github.sha }}
+  PULL_REQUEST_HEAD: >-
+    ${{ github.event.pull_request.head.sha || 'not-a-pull-request' }}
+  PULL_REQUEST_BASE: >-
+    ${{ github.event.pull_request.base.sha || 'not-a-pull-request' }}
   PRODUCTION_ENVIRONMENT: github-hosted-ubuntu-24.04
   PRODUCTION_PROVENANCE: hosted
 
@@ -25,10 +29,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Check out the exact head without persisted credentials
+      - name: Check out the exact revision without persisted credentials
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ env.TONGS_HEAD_SHA }}
+          ref: ${{ env.TONGS_CHECKED_OUT_SHA }}
           persist-credentials: false
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -52,20 +56,23 @@ jobs:
     env:
       CHECK_ID: core-python-${{ matrix.python-version }}
     steps:
-      - name: Check out the exact head without persisted credentials
+      - name: Check out the exact revision without persisted credentials
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ env.TONGS_HEAD_SHA }}
+          ref: ${{ env.TONGS_CHECKED_OUT_SHA }}
           persist-credentials: false
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Bind the exact source tree for this matrix leg
+      - name: Bind the checked-out tree for this matrix leg
         id: identity
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$TONGS_HEAD_SHA"
+          test "$(git rev-parse HEAD)" = "$TONGS_CHECKED_OUT_SHA"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            test "$PULL_REQUEST_HEAD" != "$TONGS_CHECKED_OUT_SHA"
+          fi
           printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
       - name: Install core, development, and MCP dependencies
         run: python -m pip install -e ".[dev,mcp]"
@@ -90,6 +97,11 @@ jobs:
           {
             "check_id": "$CHECK_ID",
             "report_path": "reports/core-evidence.json",
+            "source_context": {
+              "event": "${{ github.event_name }}",
+              "pull_request_head": "${{ env.PULL_REQUEST_HEAD }}",
+              "pull_request_base": "${{ env.PULL_REQUEST_BASE }}"
+            },
             "scope": {
               "covered": "core-and-mcp-suites-on-one-interpreter",
               "excluded": [
@@ -135,7 +147,7 @@ jobs:
           --plan "$RUNNER_TEMP/stage-plan.json"
           --output-root "$RUNNER_TEMP/gate/$CHECK_ID"
           --receipt-name core-receipt.json
-          --commit "$TONGS_HEAD_SHA"
+          --commit "$TONGS_CHECKED_OUT_SHA"
           --tree "${{ steps.identity.outputs.tree }}"
           --repository "$GITHUB_REPOSITORY"
           --run-id "$GITHUB_RUN_ID"
@@ -149,7 +161,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: >-
-            gate-core-python-${{ matrix.python-version }}-${{ env.TONGS_HEAD_SHA
+            gate-core-python-${{ matrix.python-version }}-${{ env.TONGS_CHECKED_OUT_SHA
             }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate/core-python-${{ matrix.python-version }}
           if-no-files-found: error
@@ -160,10 +172,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Check out the exact head without persisted credentials
+      - name: Check out the exact revision without persisted credentials
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ env.TONGS_HEAD_SHA }}
+          ref: ${{ env.TONGS_CHECKED_OUT_SHA }}
           persist-credentials: false
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -209,7 +221,7 @@ jobs:
     name: Fedora 44 Podman
     uses: ./.github/workflows/desktop-podman-probe.yml
     with:
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      head_sha: ${{ github.sha }}
 
   desktop-production:
     name: Desktop production evidence
@@ -218,7 +230,7 @@ jobs:
       contents: read
       actions: read
     with:
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      checked_out_sha: ${{ github.sha }}
 
   desktop-pr-gate:
     name: Desktop pre-merge aggregate
@@ -239,28 +251,32 @@ jobs:
       DESKTOP_PRODUCTION_RESULTS: >-
         ${{ needs.desktop-production.outputs.job-results }}
     steps:
-      - name: Check out the exact head without persisted credentials
+      - name: Check out the exact revision without persisted credentials
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ env.TONGS_HEAD_SHA }}
+          ref: ${{ env.TONGS_CHECKED_OUT_SHA }}
           persist-credentials: false
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - name: Record the tested head and its separately identified base
+      - name: Record the checked-out revision and its pull request metadata
         id: identity
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$TONGS_HEAD_SHA"
+          test "$(git rev-parse HEAD)" = "$TONGS_CHECKED_OUT_SHA"
           tree=$(git rev-parse 'HEAD^{tree}')
           printf 'tree=%s\n' "$tree" >> "$GITHUB_OUTPUT"
-          base="${{ github.event.pull_request.base.sha || 'not-a-pull-request' }}"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            test "$PULL_REQUEST_HEAD" != "$TONGS_CHECKED_OUT_SHA"
+          fi
           {
-            printf 'Tested head: %s\n\n' "$TONGS_HEAD_SHA"
-            printf 'Tested tree: %s\n\n' "$tree"
-            printf 'Tested base: %s\n\n' "$base"
-            printf 'Reconstruct with: git checkout %s\n' "$TONGS_HEAD_SHA"
+            printf 'Event: %s\n\n' "$GITHUB_EVENT_NAME"
+            printf 'Checked out commit: %s\n\n' "$TONGS_CHECKED_OUT_SHA"
+            printf 'Checked out tree: %s\n\n' "$tree"
+            printf 'Pull request head: %s\n\n' "$PULL_REQUEST_HEAD"
+            printf 'Pull request base: %s\n\n' "$PULL_REQUEST_BASE"
+            printf 'Reconstruct with: git checkout %s\n' "$TONGS_CHECKED_OUT_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Require every desktop pre-merge job to succeed
         run: python3 tests/ci/verify_desktop_ci.py aggregate
@@ -268,66 +284,69 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            gate-core-python-3.12-${{ env.TONGS_HEAD_SHA }}-${{ github.run_id
+            gate-core-python-3.12-${{ env.TONGS_CHECKED_OUT_SHA }}-${{ github.run_id
             }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence/core-python-3.12
       - name: Download the Python 3.13 gate evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            gate-core-python-3.13-${{ env.TONGS_HEAD_SHA }}-${{ github.run_id
+            gate-core-python-3.13-${{ env.TONGS_CHECKED_OUT_SHA }}-${{ github.run_id
             }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence/core-python-3.13
       - name: Download the production desktop TAP gate evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            gate-desktop-production-tap-${{ env.TONGS_HEAD_SHA }}-${{
+            gate-desktop-production-tap-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
             github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence/desktop-production-tap
       - name: Download the archive lifecycle gate evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            gate-desktop-archive-lifecycle-${{ env.TONGS_HEAD_SHA }}-${{
+            gate-desktop-archive-lifecycle-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
             github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence/desktop-archive-lifecycle
       - name: Download the installed core gate evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            gate-desktop-installed-core-${{ env.TONGS_HEAD_SHA }}-${{
+            gate-desktop-installed-core-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
             github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence/desktop-installed-core
       - name: Download the archive SBOM gate evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            gate-desktop-archive-sbom-${{ env.TONGS_HEAD_SHA }}-${{
+            gate-desktop-archive-sbom-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
             github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence/desktop-archive-sbom
       - name: Download the RPM lifecycle gate evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            gate-desktop-rpm-lifecycle-${{ env.TONGS_HEAD_SHA }}-${{
+            gate-desktop-rpm-lifecycle-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
             github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence/desktop-rpm-lifecycle
       - name: Download the native payload fixture gate evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            gate-desktop-native-payload-fixture-${{ env.TONGS_HEAD_SHA }}-${{
+            gate-desktop-native-payload-fixture-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
             github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gate-evidence/desktop-native-payload-fixture
       - name: Require the complete production check set and every receipt
         run: >-
           python3 tests/ci/verify_desktop_production_gate.py
           --evidence-root "$RUNNER_TEMP/gate-evidence"
-          --commit "$TONGS_HEAD_SHA"
+          --commit "$TONGS_CHECKED_OUT_SHA"
           --tree "${{ steps.identity.outputs.tree }}"
           --repository "$GITHUB_REPOSITORY"
           --run-id "$GITHUB_RUN_ID"
           --attempt "$GITHUB_RUN_ATTEMPT"
           --environment "$PRODUCTION_ENVIRONMENT"
           --provenance "$PRODUCTION_PROVENANCE"
+          --event "$GITHUB_EVENT_NAME"
+          --pull-request-head "$PULL_REQUEST_HEAD"
+          --pull-request-base "$PULL_REQUEST_BASE"

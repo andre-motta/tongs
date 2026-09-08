@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -258,3 +259,23 @@ def test_rejects_a_missing_workflow_context_variable(
     monkeypatch.delenv("GITHUB_REF")
     with pytest.raises(ExpectationError, match="GITHUB_REF"):
         archive_evidence_argv(_namespace(transfer_root, tmp_path))
+
+
+def test_reviewed_constants_still_match_the_producer_literals() -> None:
+    """Guard the caller-owned constants against a silent producer change.
+
+    The producer declares the same release version and artifact identifier.
+    Holding them here is what makes the consumer expectation independent, so
+    this case exists to fail loudly when the producer moves and force a
+    deliberate update rather than letting the two drift apart.
+    """
+
+    producer = (ROOT / "scripts/build_desktop_archive.py").read_text()
+    assert f'"artifact_id": "{USER_ARCHIVE_ARTIFACT_ID}"' in producer
+    assert f'"{USER_ARCHIVE_ARTIFACT_ID}"' in producer
+
+    hosted = (ROOT / "packaging/desktop/archive/run_hosted.sh").read_text()
+    assert f"release_version={DESKTOP_RELEASE_VERSION}\n" in hosted
+
+    contract = json.loads((ROOT / "packaging/rpm/desktop/manifest.json").read_text())
+    assert contract["accepted_desktop"]["release_version"] == DESKTOP_RELEASE_VERSION

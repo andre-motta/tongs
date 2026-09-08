@@ -34,6 +34,9 @@ from tests.ci.verify_desktop_production_gate import (
 
 COMMIT = "1" * 40
 TREE = "2" * 40
+PULL_REQUEST_HEAD = "a" * 40
+PULL_REQUEST_BASE = "b" * 40
+EVENT = "pull_request"
 REPOSITORY = "andre-motta/tongs"
 RUN_ID = "34274245440"
 ATTEMPT = 1
@@ -48,6 +51,9 @@ IDENTITY = GateIdentity(
     attempt=ATTEMPT,
     environment=ENVIRONMENT,
     provenance=PROVENANCE,
+    event=EVENT,
+    pull_request_head=PULL_REQUEST_HEAD,
+    pull_request_base=PULL_REQUEST_BASE,
 )
 
 
@@ -87,7 +93,7 @@ def _tap(status: str = "ok", directive: str = "") -> bytes:
 
 
 def _lifecycle(check_id: str, *, result: str = "pass") -> bytes:
-    document = {
+    document: dict[str, Any] = {
         "schema_version": 1,
         "check_id": check_id,
         "result": result,
@@ -96,6 +102,12 @@ def _lifecycle(check_id: str, *, result: str = "pass") -> bytes:
             {"name": "producer-output-binding", "result": "pass"},
         ],
     }
+    if _check(check_id).requires_source_context:
+        document["source_context"] = {
+            "event": EVENT,
+            "pull_request_head": PULL_REQUEST_HEAD,
+            "pull_request_base": PULL_REQUEST_BASE,
+        }
     return (json.dumps(document, sort_keys=True) + "\n").encode()
 
 
@@ -483,6 +495,15 @@ def test_gate_rejects_a_failed_skipped_or_todo_tap_report(
 
 def _replace_lifecycle(evidence: Path, check_id: str, document: dict[str, Any]) -> None:
     check = _check(check_id)
+    if check.requires_source_context and "source_context" not in document:
+        document = {
+            **document,
+            "source_context": {
+                "event": EVENT,
+                "pull_request_head": PULL_REQUEST_HEAD,
+                "pull_request_base": PULL_REQUEST_BASE,
+            },
+        }
     directory = evidence / check.evidence_directory
     report_path = check.reports[0].path
     payload = (json.dumps(document, sort_keys=True) + "\n").encode()
@@ -602,4 +623,88 @@ def test_gate_rejects_a_loose_file_beside_the_check_directories(
 ) -> None:
     (evidence / "summary.txt").write_text("all green\n")
     with pytest.raises(GateVerificationError, match="non-directory entry"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_a_report_that_relabels_a_synthetic_merge_as_the_head(
+    evidence: Path,
+) -> None:
+    """A stage may not claim the pull request head as what it checked out."""
+
+    _replace_lifecycle(
+        evidence,
+        "desktop-rpm-lifecycle",
+        {
+            "check_id": "desktop-rpm-lifecycle",
+            "result": "pass",
+            "stages": [{"name": "clean-install", "result": "pass"}],
+            "source_context": {
+                "event": EVENT,
+                "pull_request_head": COMMIT,
+                "pull_request_base": PULL_REQUEST_BASE,
+            },
+        },
+    )
+    with pytest.raises(GateVerificationError, match="source context"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_a_pull_request_identity_bound_to_its_own_head(
+    evidence: Path,
+) -> None:
+    identity = replace(IDENTITY, pull_request_head=COMMIT)
+    with pytest.raises(GateVerificationError, match="synthetic merge commit"):
+        verify_check_set(evidence, identity)
+
+
+@pytest.mark.parametrize("field", ["event", "pull_request_head", "pull_request_base"])
+def test_gate_rejects_a_source_context_from_another_run(
+    evidence: Path, field: str
+) -> None:
+    replacement = {
+        "event": "push",
+        "pull_request_head": "c" * 40,
+        "pull_request_base": "d" * 40,
+    }
+    identity = replace(IDENTITY, **{field: replacement[field]})
+    with pytest.raises(GateVerificationError, match="source context|synthetic"):
+        verify_check_set(evidence, identity)
+
+
+def test_gate_rejects_a_missing_source_context(evidence: Path) -> None:
+    _replace_lifecycle(
+        evidence,
+        "desktop-installed-core",
+        {
+            "check_id": "desktop-installed-core",
+            "result": "pass",
+            "stages": [{"name": "source-admission", "result": "pass"}],
+            "source_context": None,
+        },
+    )
+    with pytest.raises(GateVerificationError, match="source context"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_a_bespoke_adapter_that_claims_a_source_context(
+    evidence: Path,
+) -> None:
+    """Only the issue #53 binder records this block, so #135 and #139 may not."""
+
+    assert not _check("desktop-archive-lifecycle").requires_source_context
+    _replace_lifecycle(
+        evidence,
+        "desktop-archive-lifecycle",
+        {
+            "check_id": "desktop-archive-lifecycle",
+            "result": "pass",
+            "stages": [{"name": "source-admission", "result": "pass"}],
+            "source_context": {
+                "event": EVENT,
+                "pull_request_head": PULL_REQUEST_HEAD,
+                "pull_request_base": PULL_REQUEST_BASE,
+            },
+        },
+    )
+    with pytest.raises(GateVerificationError, match="must not claim one"):
         verify_check_set(evidence, IDENTITY)

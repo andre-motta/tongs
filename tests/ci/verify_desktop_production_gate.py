@@ -85,6 +85,12 @@ class RequiredCheck:
     evidence_directory: str
     receipt_name: str
     reports: tuple[ExpectedReport, ...]
+    #: True for the checks published by the issue #53 stage binder, which
+    #: records the checked-out commit alongside the pull request head, base and
+    #: event.  The bespoke issue #135 and #139 adapters own their own report
+    #: shape and must not carry the block, so requiring it per check keeps a
+    #: producer from skipping the label check by omitting the field.
+    requires_source_context: bool = True
 
     @property
     def report_formats(self) -> tuple[str, ...]:
@@ -178,6 +184,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-archive-lifecycle",
+        requires_source_context=False,
         workflow="desktop-production",
         job="archive-evidence",
         evidence_directory="desktop-archive-lifecycle",
@@ -196,6 +203,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-archive-sbom",
+        requires_source_context=False,
         workflow="desktop-production",
         job="archive-sbom",
         evidence_directory="desktop-archive-sbom",
@@ -245,6 +253,9 @@ class GateIdentity:
     attempt: int
     environment: str
     provenance: str
+    event: str
+    pull_request_head: str
+    pull_request_base: str
 
 
 def _decode_results(raw_results: str, label: str) -> dict[str, Any]:
@@ -349,7 +360,7 @@ def _verify_one_check(
                 f"{declared_formats.get(path)!r} rather than "
                 f"{expected.report_format!r}"
             )
-        _verify_report_outcome(check, expected, directory, bound[path])
+        _verify_report_outcome(check, expected, directory, bound[path], identity)
     return str(receipt_path)
 
 
@@ -358,6 +369,7 @@ def _verify_report_outcome(
     expected: ExpectedReport,
     directory: Path,
     bound_file: Any,
+    identity: GateIdentity,
 ) -> None:
     if expected.report_format == ARTIFACT_LIFECYCLE:
         maximum = RECEIPTS.MAX_JSON_REPORT_BYTES
@@ -372,7 +384,7 @@ def _verify_report_outcome(
         elif expected.report_format == NODE_TAP:
             REPORTS.verify_node_tap(report_bytes)
         else:
-            _verify_lifecycle_outcome(check, expected, report_bytes)
+            _verify_lifecycle_outcome(check, expected, report_bytes, identity)
     except REPORTS.ReportValidationError as error:
         raise GateVerificationError(
             f"check {check.check_id!r} report {expected.path!r} did not pass: {error}"
@@ -380,7 +392,10 @@ def _verify_report_outcome(
 
 
 def _verify_lifecycle_outcome(
-    check: RequiredCheck, expected: ExpectedReport, report_bytes: bytes
+    check: RequiredCheck,
+    expected: ExpectedReport,
+    report_bytes: bytes,
+    identity: GateIdentity,
 ) -> None:
     """Require a passing lifecycle result with ordered, named, passing stages.
 
@@ -412,6 +427,7 @@ def _verify_lifecycle_outcome(
             f"check {check.check_id!r} lifecycle result is "
             f"{document.get('result')!r} rather than pass"
         )
+    _verify_source_context(check, document, identity)
     stages = document.get("stages")
     if not isinstance(stages, list) or not stages:
         raise GateVerificationError(
@@ -437,6 +453,44 @@ def _verify_lifecycle_outcome(
     if len(set(names)) != len(names):
         raise GateVerificationError(
             f"check {check.check_id!r} lifecycle report repeats a stage name"
+        )
+
+
+def _verify_source_context(
+    check: RequiredCheck, document: dict[str, Any], identity: GateIdentity
+) -> None:
+    """Require honest labelling of the checked-out commit and its origin.
+
+    Ordinary CI deliberately tests GitHub's synthetic merge commit for a pull
+    request, so the receipt binds that commit while the pull request head and
+    base travel beside it as metadata.  This consumer owns the expected values
+    and never reads them from the report.
+    """
+
+    context = document.get("source_context")
+    if not check.requires_source_context:
+        if context is not None:
+            raise GateVerificationError(
+                f"check {check.check_id!r} is not expected to record a source "
+                "context and must not claim one"
+            )
+        return
+    if identity.event == "pull_request" and (
+        identity.pull_request_head == identity.commit
+    ):
+        raise GateVerificationError(
+            "a pull request gate must bind the synthetic merge commit, not the "
+            "pull request head"
+        )
+    expected = {
+        "event": identity.event,
+        "pull_request_head": identity.pull_request_head,
+        "pull_request_base": identity.pull_request_base,
+    }
+    if context != expected:
+        raise GateVerificationError(
+            f"check {check.check_id!r} source context {context!r} does not "
+            f"match the consumer expectation {expected!r}"
         )
 
 
@@ -497,6 +551,9 @@ def _identity(arguments: argparse.Namespace) -> GateIdentity:
         attempt=arguments.attempt,
         environment=arguments.environment,
         provenance=arguments.provenance,
+        event=arguments.event,
+        pull_request_head=arguments.pull_request_head,
+        pull_request_base=arguments.pull_request_base,
     )
 
 
@@ -512,6 +569,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--provenance", required=True, choices=("hosted", "local", "controlled-fixture")
     )
+    parser.add_argument("--event", required=True)
+    parser.add_argument("--pull-request-head", required=True)
+    parser.add_argument("--pull-request-base", required=True)
     return parser
 
 

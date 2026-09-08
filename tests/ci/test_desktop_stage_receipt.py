@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from tests.ci.desktop_stage_receipt import (
+    NOT_A_PULL_REQUEST,
     RECEIPTS,
     StageReceiptError,
     admit_source,
@@ -24,6 +25,8 @@ from tests.ci.desktop_stage_receipt import (
 )
 
 CHECK_ID = "desktop-production-tap"
+PULL_REQUEST_HEAD = "a" * 40
+PULL_REQUEST_BASE = "b" * 40
 REPORT_PATH = "reports/desktop-tap-evidence.json"
 RECEIPT_NAME = "desktop-tap-receipt.json"
 
@@ -123,6 +126,11 @@ def _plan(produced: dict[str, Path], **overrides: Any) -> dict[str, Any]:
     plan: dict[str, Any] = {
         "check_id": CHECK_ID,
         "report_path": REPORT_PATH,
+        "source_context": {
+            "event": "pull_request",
+            "pull_request_head": PULL_REQUEST_HEAD,
+            "pull_request_base": PULL_REQUEST_BASE,
+        },
         "scope": {
             "covered": "production-desktop-shell-plugin-and-draft-process-reports",
             "excluded": ["hardware-gpu-function", "rpm-package-set"],
@@ -249,6 +257,12 @@ def test_publishes_and_independently_consumes_a_complete_stage(
     ]
     assert report["equalities"][0]["reason"].startswith("a clean final install")
     assert report["scope"]["excluded"] == ["hardware-gpu-function", "rpm-package-set"]
+    assert report["source_context"] == {
+        "event": "pull_request",
+        "pull_request_head": PULL_REQUEST_HEAD,
+        "pull_request_base": PULL_REQUEST_BASE,
+    }
+    assert report["source"]["commit"] != PULL_REQUEST_HEAD
     assert set(report["report_outcomes"]) == {
         "reports/desktop-shell.tap",
         "reports/plugin-example.junit.xml",
@@ -482,3 +496,88 @@ def test_source_admission_accepts_the_real_checkout(
 ) -> None:
     root, commit, tree = checkout
     admit_source(root, commit, tree)
+
+
+def test_records_a_push_run_without_inventing_pull_request_identity(
+    checkout: tuple[Path, str, str], produced: dict[str, Path], tmp_path: Path
+) -> None:
+    plan = _plan(produced)
+    plan["source_context"] = {
+        "event": "push",
+        "pull_request_head": NOT_A_PULL_REQUEST,
+        "pull_request_base": NOT_A_PULL_REQUEST,
+    }
+    _publish(checkout, plan, tmp_path)
+    report = json.loads((tmp_path / "evidence" / REPORT_PATH).read_bytes())
+    assert report["source_context"]["event"] == "push"
+
+
+def test_refuses_a_pull_request_plan_that_claims_the_head_was_checked_out(
+    checkout: tuple[Path, str, str], produced: dict[str, Path], tmp_path: Path
+) -> None:
+    """Ordinary CI checks out the synthetic merge, never the head."""
+
+    _, commit, _ = checkout
+    plan = _plan(produced)
+    plan["source_context"]["pull_request_head"] = commit
+    with pytest.raises(StageReceiptError, match="must not equal the checked-out"):
+        _publish(checkout, plan, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        {
+            "event": "pull_request",
+            "pull_request_head": "short",
+            "pull_request_base": "b" * 40,
+        },
+        {
+            "event": "pull_request",
+            "pull_request_head": "A" * 40,
+            "pull_request_base": "b" * 40,
+        },
+        {
+            "event": "pull_request",
+            "pull_request_head": "a" * 40,
+            "pull_request_base": "a" * 40,
+        },
+        {"event": "push", "pull_request_head": "a" * 40, "pull_request_base": "b" * 40},
+        {
+            "event": "push",
+            "pull_request_head": NOT_A_PULL_REQUEST,
+            "pull_request_base": "b" * 40,
+        },
+        {"event": "pull_request", "pull_request_head": "a" * 40},
+    ],
+)
+def test_refuses_a_dishonest_or_malformed_source_context(
+    checkout: tuple[Path, str, str],
+    produced: dict[str, Path],
+    tmp_path: Path,
+    context: dict[str, str],
+) -> None:
+    plan = _plan(produced)
+    plan["source_context"] = context
+    with pytest.raises(StageReceiptError):
+        _publish(checkout, plan, tmp_path)
+
+
+def test_consumer_rejects_a_source_context_edited_after_publication(
+    checkout: tuple[Path, str, str], produced: dict[str, Path], tmp_path: Path
+) -> None:
+    _publish(checkout, _plan(produced), tmp_path)
+    _, commit, tree = checkout
+    evidence = tmp_path / "evidence"
+    report = evidence / REPORT_PATH
+    report.chmod(0o600)
+    document = json.loads(report.read_bytes())
+    document["source_context"]["pull_request_head"] = "c" * 40
+    report.write_bytes(json.dumps(document, sort_keys=True).encode())
+    with pytest.raises(RECEIPTS.ReceiptValidationError):
+        consume_stage_receipt(
+            evidence_root=evidence,
+            receipt_path=evidence / RECEIPT_NAME,
+            receipt_policy=_policy(commit, tree),
+            expected_report_path=REPORT_PATH,
+        )

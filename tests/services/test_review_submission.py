@@ -858,41 +858,55 @@ async def test_close_cancels_inflight_submission_and_rejects_new_work(
 @pytest.mark.asyncio
 async def test_close_retries_cancellation_of_submission_owner(tmp_path: Path) -> None:
     entered = asyncio.Event()
+    release = asyncio.Event()
+    cancellations = 0
 
     class FirstCancelResistantMutations:
         async def validate(self, _command: object) -> None:
             return None
 
         async def execute(self, _command: object) -> object:
+            nonlocal cancellations
             entered.set()
             try:
-                await asyncio.Event().wait()
+                await release.wait()
             except asyncio.CancelledError:
-                await asyncio.Event().wait()
+                cancellations += 1
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancellations += 1
+                    raise
             raise AssertionError("unreachable")
 
-    store = DraftStore(tmp_path / "drafts.db")
-    await store.open()
-    draft = await store.create_draft(
-        REF, REVISION, _content(GeneralDraftComment(uuid4(), "comment"))
-    )
-    service = ReviewSubmissionService(
-        store=store,
-        mutations=FirstCancelResistantMutations(),  # type: ignore[arg-type]
-        get_review=AsyncMock(return_value=_snapshot()),
-        close_timeout=0.01,
-    )
-    owner = asyncio.create_task(service.start(draft.id, draft.version))
-    await entered.wait()
+    async with DraftStore(tmp_path / "drafts.db") as store:
+        draft = await store.create_draft(
+            REF, REVISION, _content(GeneralDraftComment(uuid4(), "comment"))
+        )
+        service = ReviewSubmissionService(
+            store=store,
+            mutations=FirstCancelResistantMutations(),  # type: ignore[arg-type]
+            get_review=AsyncMock(return_value=_snapshot()),
+            # The second cancellation persists recovery through real SQLite I/O.
+            # A 10 ms disk/scheduler deadline is unreliable on shared runners.
+            close_timeout=1.0,
+        )
+        owner = asyncio.create_task(service.start(draft.id, draft.version))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            await service.close()
 
-    await service.close()
-
-    with pytest.raises(asyncio.CancelledError):
-        await owner
-    attempt = (await store.list_recovery_attempts())[0]
-    assert attempt.unknown_outcomes[0].step_id.startswith("comment:")
-    assert service._active_tasks == set()
-    await store.close()
+            with pytest.raises(asyncio.CancelledError):
+                await owner
+            assert cancellations == 2
+            attempt = (await store.list_recovery_attempts())[0]
+            assert attempt.unknown_outcomes[0].step_id.startswith("comment:")
+            assert service._active_tasks == set()
+        finally:
+            # A failed assertion or close must not strand the SQLite worker.
+            release.set()
+            await asyncio.gather(owner, return_exceptions=True)
+            await service.close()
 
 
 @pytest.mark.asyncio

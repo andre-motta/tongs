@@ -131,6 +131,22 @@ def test_documents_are_reproducible_and_validate_against_s0() -> None:
     assert validated.install.compatibility.core_minimum == "0.4.2-dev.183"
 
 
+def test_shared_desktop_icon_metadata_matches_original_pixmap() -> None:
+    contract = _contract()
+    metadata = contract["desktop_metadata"]
+    assert isinstance(metadata, dict)
+    icon = (ROOT / "packaging/desktop/common/tongs.png").read_bytes()
+    entry = (ROOT / "packaging/desktop/common/tongs.desktop").read_bytes()
+
+    assert icon == (ROOT / "desktop/assets/icon.png").read_bytes()
+    assert producer._png_dimensions(icon) == (
+        metadata["icon_width"],
+        metadata["icon_height"],
+    )
+    assert metadata["icon_path"] == "runtime/share/pixmaps/tongs.png"
+    assert f"Icon={metadata['icon_name']}\n".encode() in entry
+
+
 def test_verified_electron_zip_is_extracted_with_normalized_modes(
     tmp_path: Path,
 ) -> None:
@@ -188,6 +204,63 @@ def test_electron_zip_rejects_wrong_digest_and_escaping_member(
             archive_path,
             tmp_path / "runtime-wrong-digest",
             inventory,
+            PARAMETERS.source_date_epoch,
+        )
+
+
+def test_electron_zip_rejects_member_mutation_duplicate_and_omission(
+    tmp_path: Path,
+) -> None:
+    expected = {
+        "electron": (b"expected", 0o755),
+        "version": (b"44.2.0\n", 0o644),
+    }
+    mutated = _electron_zip(expected | {"electron": (b"mutated", 0o755)})
+    mutated_path = tmp_path / "electron.zip"
+    mutated_path.write_bytes(mutated)
+    mutated_inventory = _electron_inventory(mutated, expected)
+    with pytest.raises(ArchiveBuildError, match="member changed"):
+        producer._prepare_electron_archive(
+            mutated_path,
+            tmp_path / "mutated",
+            mutated_inventory,
+            PARAMETERS.source_date_epoch,
+        )
+
+    omitted_entries = {"electron": expected["electron"]}
+    omitted = _electron_zip(omitted_entries)
+    omitted_path = tmp_path / "omitted-input/electron.zip"
+    omitted_path.parent.mkdir()
+    omitted_path.write_bytes(omitted)
+    omitted_inventory = _electron_inventory(omitted, expected)
+    with pytest.raises(ArchiveBuildError, match="inventory changed"):
+        producer._prepare_electron_archive(
+            omitted_path,
+            tmp_path / "omitted",
+            omitted_inventory,
+            PARAMETERS.source_date_epoch,
+        )
+
+    duplicate_stream = io.BytesIO()
+    with zipfile.ZipFile(duplicate_stream, mode="w") as duplicate_zip:
+        member = zipfile.ZipInfo("electron")
+        member.create_system = 3
+        member.external_attr = (stat.S_IFREG | 0o755) << 16
+        duplicate_zip.writestr(member, b"expected")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            duplicate_zip.writestr(member, b"expected")
+    duplicate = duplicate_stream.getvalue()
+    duplicate_path = tmp_path / "duplicate-input/electron.zip"
+    duplicate_path.parent.mkdir()
+    duplicate_path.write_bytes(duplicate)
+    duplicate_inventory = _electron_inventory(
+        duplicate, {"electron": (b"expected", 0o755)}
+    )
+    with pytest.raises(ArchiveBuildError, match="inventory changed"):
+        producer._prepare_electron_archive(
+            duplicate_path,
+            tmp_path / "duplicate",
+            duplicate_inventory,
             PARAMETERS.source_date_epoch,
         )
 

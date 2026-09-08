@@ -9,6 +9,12 @@ five exact Fedora NEVRAs, verifies their package bytes against
 asserts every compression and JavaScript tool version enforced by
 `contract.json`.
 
+Build the image with `packaging/desktop/archive` as its context:
+
+```bash
+docker build --file Containerfile.build --tag tongs-archive-builder:local .
+```
+
 Issue 53 should build this image on a disposable GitHub-hosted x86_64 runner and
 record the resulting image digest plus the version assertions before using it.
 The source checkout, exact npm lock and verified Electron zip are mounted as

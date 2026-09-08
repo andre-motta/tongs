@@ -27,8 +27,8 @@ tar timestamp and the gzip mtime use `SOURCE_DATE_EPOCH`. The gzip filename is
 empty, XFL is `2`, and OS is `255`. Directories and runtime executables are mode
 `0755`; data is mode `0644`.
 
-The measured Electron 44.2.0 candidate has 94 archive entries, 80 files,
-305,022,484 uncompressed file bytes, and a 228,556,104-byte largest file. The
+The measured Electron 44.2.0 candidate has 91 archive entries, 80 files,
+305,022,465 uncompressed file bytes, and a 228,556,104-byte largest file. The
 declared 256-entry, 512 MiB total and 256 MiB per-file limits provide bounded
 headroom for this fixed runtime without approaching the S0 hard bounds.
 

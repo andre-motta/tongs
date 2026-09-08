@@ -274,6 +274,7 @@ def build_desktop_archive(
             electron_dist,
             runtime_inventory,
             asar_bytes,
+            _mapping(contract, "desktop_metadata"),
         )
 
     built = build_contract_documents(runtime_files, parameters, contract)
@@ -355,19 +356,30 @@ def _prepare_electron_archive(
     raw_files = inventory.get("files")
     if not isinstance(raw_files, list):
         raise ArchiveBuildError("Electron inventory files are invalid")
-    expected = {
-        _string(_object(raw, "Electron file"), "path"): _object(raw, "Electron file")
-        for raw in raw_files
-    }
+    expected: dict[str, Mapping[str, object]] = {}
+    for raw in raw_files:
+        item = _object(raw, "Electron file")
+        path = _string(item, "path")
+        _validate_relative_path(path)
+        if path in expected:
+            raise ArchiveBuildError("Electron inventory contains a duplicate path")
+        expected[path] = item
     destination.mkdir(mode=0o755, parents=True)
     observed: set[str] = set()
     try:
         with zipfile.ZipFile(io.BytesIO(archive), mode="r") as source:
-            for member in source.infolist():
-                path = member.filename
+            members = source.infolist()
+            member_paths = [member.filename for member in members]
+            for path in member_paths:
                 _validate_relative_path(path)
-                if path in observed or path not in expected or member.is_dir():
-                    raise ArchiveBuildError("Electron archive inventory changed")
+            if (
+                len(member_paths) != len(set(member_paths))
+                or set(member_paths) != set(expected)
+                or any(member.is_dir() for member in members)
+            ):
+                raise ArchiveBuildError("Electron archive inventory changed")
+            for member in members:
+                path = member.filename
                 item = expected[path]
                 mode = stat.S_IMODE(member.external_attr >> 16)
                 file_type = stat.S_IFMT(member.external_attr >> 16)
@@ -495,6 +507,7 @@ def _prepare_runtime_files(
     electron_dist: Path,
     runtime_inventory: Mapping[str, object],
     asar_bytes: bytes,
+    desktop_metadata: Mapping[str, object],
 ) -> tuple[dict[str, tuple[bytes, int]], dict[str, object]]:
     files: dict[str, tuple[bytes, int]] = {}
     raw_files = runtime_inventory.get("files")
@@ -515,11 +528,24 @@ def _prepare_runtime_files(
     _require_regular_file(icon, "prepared icon")
     if icon.read_bytes() != (desktop / "assets/icon.png").read_bytes():
         raise ArchiveBuildError("prepared desktop icons disagree")
-    files["runtime/share/applications/tongs.desktop"] = (
+    if _png_dimensions(icon.read_bytes()) != (
+        _integer(desktop_metadata, "icon_width"),
+        _integer(desktop_metadata, "icon_height"),
+    ):
+        raise ArchiveBuildError("prepared desktop icon dimensions changed")
+    entry_path = _string(desktop_metadata, "entry_path")
+    icon_path = _string(desktop_metadata, "icon_path")
+    _validate_payload_path(entry_path)
+    _validate_payload_path(icon_path)
+    if f"Icon={_string(desktop_metadata, 'icon_name')}\n".encode() not in (
+        desktop_entry.read_bytes()
+    ):
+        raise ArchiveBuildError("prepared desktop icon name changed")
+    files[entry_path] = (
         desktop_entry.read_bytes(),
         0o644,
     )
-    files["runtime/share/icons/hicolor/512x512/apps/tongs.png"] = (
+    files[icon_path] = (
         icon.read_bytes(),
         0o644,
     )
@@ -899,6 +925,12 @@ def _integer(value: Mapping[str, object], key: str) -> int:
 
 def _file_identity(content: bytes) -> dict[str, object]:
     return {"byte_count": len(content), "sha256": _sha256(content)}
+
+
+def _png_dimensions(content: bytes) -> tuple[int, int]:
+    if len(content) < 24 or content[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
+        raise ArchiveBuildError("prepared icon is not a canonical PNG")
+    return struct.unpack(">II", content[16:24])
 
 
 def _sha256(content: bytes) -> str:

@@ -570,11 +570,8 @@ def publish_stage_receipt(
 
     if not isinstance(receipt_policy, RECEIPTS.ReceiptPolicy):
         _fail("receipt policy must use the existing validated policy type")
-    if receipt_policy.allowed_report_formats == frozenset({ARTIFACT_LIFECYCLE}):
-        _fail(
-            "the stage policy must also allow the staged test report formats "
-            "it declares"
-        )
+    if ARTIFACT_LIFECYCLE not in receipt_policy.allowed_report_formats:
+        _fail("the stage policy must allow the generated lifecycle report format")
     _require_relative_path(receipt_name, "receipt name")
     destination = Path(output_root)
     if destination.exists() or destination.is_symlink():
@@ -589,6 +586,15 @@ def publish_stage_receipt(
         "stage plan",
     )
     parsed = _parse_plan(plan, receipt_policy.expected_check_id)
+    for planned in parsed["files"]:
+        if (
+            planned.report_format is not None
+            and planned.report_format not in receipt_policy.allowed_report_formats
+        ):
+            _fail(
+                f"the stage policy does not allow the staged report format "
+                f"{planned.report_format!r}"
+            )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(

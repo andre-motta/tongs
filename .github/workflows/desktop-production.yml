@@ -521,7 +521,6 @@ jobs:
           --provenance "$PRODUCTION_PROVENANCE"
           --check-id "$CHECK_ID"
           --format artifact-lifecycle-v1
-          --format pytest-junit
       - name: Upload the installed core gate evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -871,7 +870,6 @@ jobs:
           --provenance "$PRODUCTION_PROVENANCE"
           --check-id "$CHECK_ID"
           --format artifact-lifecycle-v1
-          --format pytest-junit
       - name: Upload the RPM lifecycle gate evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

@@ -414,17 +414,32 @@ def test_refuses_an_existing_output_root(
         _publish(checkout, _plan(produced), tmp_path)
 
 
-def test_refuses_a_policy_that_only_allows_the_lifecycle_format(
+def test_refuses_a_policy_that_omits_a_staged_report_format(
     checkout: tuple[Path, str, str], produced: dict[str, Path], tmp_path: Path
 ) -> None:
     _, commit, tree = checkout
-    with pytest.raises(StageReceiptError, match="staged test report formats"):
+    with pytest.raises(StageReceiptError, match="does not allow the staged report"):
         _publish(
             checkout,
             _plan(produced),
             tmp_path,
             policy=_policy(
                 commit, tree, allowed_report_formats=("artifact-lifecycle-v1",)
+            ),
+        )
+
+
+def test_refuses_a_policy_that_omits_the_lifecycle_format(
+    checkout: tuple[Path, str, str], produced: dict[str, Path], tmp_path: Path
+) -> None:
+    _, commit, tree = checkout
+    with pytest.raises(StageReceiptError, match="lifecycle report format"):
+        _publish(
+            checkout,
+            _plan(produced),
+            tmp_path,
+            policy=_policy(
+                commit, tree, allowed_report_formats=("node-tap", "pytest-junit")
             ),
         )
 

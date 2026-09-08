@@ -159,9 +159,17 @@ async function runProof() {
       await waitFor("source diff", () =>
         document.querySelector('button[aria-label="Select new line 3"]'));
       document.querySelector('button[aria-label="Select new line 3"]').click();
+      await waitFor("range origin selection", () =>
+        document.querySelector(
+          'button[aria-label="Select new line 3"][aria-pressed="true"]',
+        ));
       document.querySelector('button[aria-label="Select new line 5"]').dispatchEvent(
         new MouseEvent("click", { bubbles: true, shiftKey: true }),
       );
+      await waitFor("committed multiline selection", () =>
+        [3, 4, 5].every((number) => document.querySelector(
+          'button[aria-label="Select new line ' + number + '"][aria-pressed="true"]',
+        )));
       const suggest = await waitFor("enabled suggestion action", () => {
         const action = button("Suggest replacement");
         return action && !action.disabled ? action : null;

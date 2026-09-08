@@ -92,6 +92,7 @@ def test_clean_install_verifies_license_file_flags_and_inventory() -> None:
     assert "upstream_cargo_lock_sha256" in verifier
     assert "resolved Cargo package lacks bundled license" in verifier
     assert "vendored OpenSSL appears" in verifier
+    assert "%{=NAME}|%{FILENAMES}|%{FILEFLAGS:fflags}" in installer
 
 
 def test_offline_build_keeps_tool_caches_in_disposable_topdir() -> None:
@@ -107,9 +108,12 @@ def test_each_srpm_gets_clean_builddep_environment_and_offline_rebuild() -> None
     rebuilder = (PACKAGING / "rebuild_srpms.sh").read_text()
 
     assert 'cp -- "$source_dir"/rfc3161-cargo-inventory.json' in srpm_builder
+    assert "resolve_srpms.py" in rebuilder
+    assert '-name "python-${distribution}-*.src.rpm"' not in rebuilder
+    assert "%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}" in rebuilder
     assert "dnf builddep" in rebuilder
     assert "--network=none" in rebuilder
-    assert rebuilder.index("dnf builddep") < rebuilder.index("--network=none")
+    assert rebuilder.index("dnf builddep") < rebuilder.rindex("--network=none")
 
 
 def test_workflow_has_minimal_permissions_and_retains_artifacts() -> None:

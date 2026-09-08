@@ -24,6 +24,7 @@ def _load_script(name: str) -> ModuleType:
 
 audit_providers = _load_script("audit_providers")
 prepare_sources = _load_script("prepare_sources")
+resolve_srpms = _load_script("resolve_srpms")
 
 
 def test_repoquery_requests_one_record_per_line(
@@ -139,3 +140,26 @@ def test_cargo_package_identity_excludes_temporary_path_id() -> None:
         "1.0.8",
         None,
     )
+
+
+def test_resolve_srpms_uses_exact_names_with_prefix_overlap(tmp_path: Path) -> None:
+    filenames = [
+        "python-sigstore-4.5.0-1.fc44.src.rpm",
+        "python-sigstore-models-0.0.6-1.fc44.src.rpm",
+        "python-sigstore-rekor-types-0.0.18-1.fc44.src.rpm",
+    ]
+    for filename in filenames:
+        (tmp_path / filename).touch()
+    metadata = (
+        "python-sigstore|4.5.0|1.fc44|src\n"
+        "python-sigstore-models|0.0.6|1.fc44|src\n"
+        "python-sigstore-rekor-types|0.0.18|1.fc44|src"
+    )
+
+    resolved = resolve_srpms.resolve_srpms(
+        ["sigstore", "sigstore-models", "sigstore-rekor-types"],
+        metadata,
+        tmp_path,
+    )
+
+    assert [path.name for _, path in resolved] == filenames

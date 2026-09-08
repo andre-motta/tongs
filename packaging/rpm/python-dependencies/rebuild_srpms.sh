@@ -25,15 +25,29 @@ done
     exit 2
 }
 
-while IFS= read -r distribution; do
-    mapfile -t matches < <(find "$srpm_dir" -maxdepth 1 -type f \
-        -name "python-${distribution}-*.src.rpm" -print)
-    [[ ${#matches[@]} -eq 1 ]] || {
-        printf 'expected one SRPM for %s, found %s\n' "$distribution" "${#matches[@]}" >&2
-        exit 1
-    }
+mapfile -t source_rpms < <(find "$srpm_dir" -maxdepth 1 -type f \
+    -name '*.src.rpm' -print | sort)
+[[ ${#source_rpms[@]} -gt 0 ]] || { printf 'no source RPMs found\n' >&2; exit 1; }
+container_srpms=()
+for source_rpm in "${source_rpms[@]}"; do
+    container_srpms+=("/srpms/$(basename -- "$source_rpm")")
+done
+podman run --rm --network=none --cap-drop=all \
+    --security-opt=no-new-privileges \
+    --volume "$srpm_dir:/srpms:ro" \
+    --entrypoint rpm \
+    "$base_image" \
+    -qp --queryformat '%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
+    "${container_srpms[@]}" >"$output_dir/srpm-package-metadata.txt"
+
+python3 "$checkout/packaging/rpm/python-dependencies/resolve_srpms.py" \
+    --build-order "$srpm_dir/build-order.txt" \
+    --metadata "$output_dir/srpm-package-metadata.txt" \
+    --srpm-dir "$srpm_dir" >"$output_dir/resolved-srpms.txt"
+
+while IFS='|' read -r distribution source_rpm; do
     context=$(mktemp -d "${RUNNER_TEMP:-/tmp}/tongs-builddep-${distribution}.XXXXXX")
-    cp -- "${matches[0]}" "$context/source.src.rpm"
+    cp -- "$source_rpm" "$context/source.src.rpm"
     cat >"$context/Containerfile" <<EOF
 FROM $base_image
 COPY source.src.rpm /source.src.rpm
@@ -61,6 +75,6 @@ EOF
         rpm -qa --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
         | sort >"$output_dir/buildenv-${distribution}.packages.txt"
     rm -rf -- "$context"
-done <"$srpm_dir/build-order.txt"
+done <"$output_dir/resolved-srpms.txt"
 
 sha256sum "$output_dir"/*.rpm | sed "s#${output_dir}/##" >"$output_dir/SHA256SUMS"

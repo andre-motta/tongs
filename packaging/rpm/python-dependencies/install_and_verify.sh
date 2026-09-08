@@ -62,7 +62,7 @@ dnf repoquery --installed --queryformat '%{name}|%{epoch}|%{version}|%{release}|
 rpm -qa --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
     | sort >"$evidence_dir/rpm-installed.txt"
 rpm -q python3-rfc3161-client python3-securesystemslib \
-    --queryformat '[%{NAME}|%{FILENAMES}|%{FILEFLAGS:fflags}\n]' \
+    --queryformat '[%{=NAME}|%{FILENAMES}|%{FILEFLAGS:fflags}\n]' \
     >"$evidence_dir/license-file-flags.txt"
 grep -Eq 'python3-rfc3161-client\|.*/cargo-inventory\.json\|.*l' \
     "$evidence_dir/license-file-flags.txt"

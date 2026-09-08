@@ -128,6 +128,38 @@ for intermediate work. Baseline CI/lint/dependency failures remain unmet; branch
 creation does not waive them. CI readiness and hardware GPU work are separate,
 issue-tracked items that can be investigated independently after bootstrap.
 
+### Periodic branch and worktree cleanup
+
+The CTO authorized periodic cleanup in
+[issue #23](https://github.com/andre-motta/tongs/issues/23#issuecomment-5577199044).
+After three verified integrations, or when storage pressure warrants it, Astra
+allocates a bounded cleanup pass to Luna at `xhigh`. Use available capacity and
+resume paused implementation promptly after the pass. This is maintenance within
+the initiative, not permission to clean unrelated projects.
+
+The agent first inventories exact branch tips, merged PRs, ancestry in the latest
+verified integration commit, checkout changes, ignored files and active users of
+each worktree. A separate Sol reviewer checks the proposed batch, and Astra
+authorizes the concrete list. Immediately before removal, recheck that those
+facts still hold. Skip any changed or uncertain candidate.
+
+Protect main and integration, active or dirty work, pending corrections, unmerged
+or failed investigations, and environments still borrowed by other contributors.
+Required evidence must remain available. Before retiring a worktree containing
+such artifacts, move them to a retained evidence location, verify their hashes
+and update references. Ignored files are not automatically disposable; remove
+only inventoried generated content. Do not run broad cleanup or prune commands
+that also affect unapproved worktrees.
+
+Remove only the approved worktrees and local task branches. Delete a remaining
+remote task branch only when it still names the approved merged tip, using an
+exact old-tip guard. Record removed paths and refs, source tips, merge proof,
+command outcomes, retained evidence and exclusions in a cleanup receipt. Verify
+the resulting Git inventory and preserve enough information to recreate a
+checkout from its retained merge history. Report storage savings as measured or
+estimated. The first pass is recorded in
+[issue #23](https://github.com/andre-motta/tongs/issues/23#issuecomment-5577309137).
+
 ## Hardware GPU production and release gate
 
 Electron is selected. Hardware GPU acceleration must work in the installed

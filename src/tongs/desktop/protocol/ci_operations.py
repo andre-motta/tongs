@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Protocol, assert_never
 
 from tongs.desktop.protocol.messages import (
     JsonObject,
@@ -142,15 +142,7 @@ class CIOperations:
             raise _redact_service_error(error) from None
         if receipt is None:
             return {"receipt": None}
-        if (
-            receipt.action is not action
-            or receipt.pipeline != pipeline
-            or receipt.job != job
-        ):
-            raise ServiceError(
-                ServiceErrorCode.CONFLICT,
-                "The operation ID is bound to another CI action.",
-            )
+        _require_receipt_authority(receipt, action, pipeline, job)
         return {"receipt": _receipt_wire(receipt)}
 
     async def _execute(
@@ -179,6 +171,7 @@ class CIOperations:
                 receipt = await self._session.ci_mutations.receipt(operation_id)
                 if receipt is None:
                     raise _predispatch_cancellation() from None
+                _require_receipt_authority(receipt, *_command_authority(command))
                 return _receipt_wire(receipt)
             return _receipt_wire(execute.result())
         except ServiceError as error:
@@ -263,6 +256,37 @@ class CIOperations:
                 "Pipeline receipt lookups cannot include a job handle.",
             )
         return operation_id, action, pipeline, None
+
+
+def _command_authority(
+    command: CIMutationCommand,
+) -> tuple[CIMutationAction, PipelineRef, JobRef | None]:
+    if isinstance(command, RetryPipelineCommand):
+        return CIMutationAction.RETRY_PIPELINE, command.target.pipeline, None
+    if isinstance(command, CancelPipelineCommand):
+        return CIMutationAction.CANCEL_PIPELINE, command.target.pipeline, None
+    if isinstance(command, RetryJobCommand):
+        return CIMutationAction.RETRY_JOB, command.target.pipeline, command.target.job
+    if isinstance(command, CancelJobCommand):
+        return CIMutationAction.CANCEL_JOB, command.target.pipeline, command.target.job
+    assert_never(command)
+
+
+def _require_receipt_authority(
+    receipt: CIMutationReceipt,
+    action: CIMutationAction,
+    pipeline: PipelineRef,
+    job: JobRef | None,
+) -> None:
+    if (
+        receipt.action is not action
+        or receipt.pipeline != pipeline
+        or receipt.job != job
+    ):
+        raise ServiceError(
+            ServiceErrorCode.CONFLICT,
+            "The operation ID is bound to another CI action or target.",
+        )
 
 
 def _receipt_wire(receipt: CIMutationReceipt) -> JsonObject:

@@ -24,6 +24,8 @@ from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.scanner.repo import ForgeType
 from tongs.services import (
     ApplicationSession,
+    CIMutationCommand,
+    CIMutationReceipt,
     CIMutationService,
     JobRef,
     PipelineRef,
@@ -418,6 +420,57 @@ async def test_predispatch_cancel_does_not_admit_or_write() -> None:
     assert raised.value.details == {"outcome": "not_dispatched"}
     assert session.client.calls == []
     assert await session.ci_mutations.receipt("cancel-before") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "pipeline_key"),
+    [
+        pytest.param("cancel_pipeline", "pipeline", id="different-action"),
+        pytest.param("retry_pipeline", "other_pipeline", id="different-target"),
+    ],
+)
+async def test_cancelled_conflicting_request_cannot_inherit_retained_receipt(
+    method: str,
+    pipeline_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations, session, handles = _operations()
+    operation_id = "cancelled-conflict"
+    await operations.retry_pipeline(
+        {"operation_id": operation_id, "pipeline": handles["pipeline"]},
+        _context("original-request"),
+    )
+    original_execute = session.ci_mutations.execute
+    entered_execute = asyncio.Event()
+
+    async def tracked_execute(command: CIMutationCommand) -> CIMutationReceipt:
+        entered_execute.set()
+        return await original_execute(command)
+
+    monkeypatch.setattr(session.ci_mutations, "execute", tracked_execute)
+    await session.ci_mutations._operation_lock.acquire()
+    context = _context("conflicting-request")
+    task = asyncio.create_task(
+        getattr(operations, method)(
+            {"operation_id": operation_id, "pipeline": handles[pipeline_key]},
+            context,
+        )
+    )
+    try:
+        await entered_execute.wait()
+        await asyncio.sleep(0)
+        context.cancellation.cancel()
+        await asyncio.sleep(0)
+    finally:
+        session.ci_mutations._operation_lock.release()
+
+    with pytest.raises(ServiceError) as conflict:
+        await task
+
+    assert conflict.value.code is ServiceErrorCode.CONFLICT
+    assert conflict.value.details == ()
+    assert session.client.calls == [("retry_pipeline", "team/project", 101)]
 
 
 @pytest.mark.asyncio

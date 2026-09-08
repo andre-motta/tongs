@@ -66,7 +66,7 @@ SUMMARY = MRSummary(
     ci_status=CIStatus.RUNNING,
     created_at=NOW,
     updated_at=NOW,
-    web_url="https://fixture.invalid/proof/desktop-ci/merge_requests/47",
+    web_url="https://fixture.example/proof/desktop-ci/merge_requests/47",
     additions=47,
     deletions=2,
 )

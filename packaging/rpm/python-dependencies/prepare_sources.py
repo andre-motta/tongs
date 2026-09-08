@@ -68,6 +68,14 @@ def _safe_extract(source: Path, destination: Path) -> None:
         archive.extractall(destination, filter="data")
 
 
+def _relativize_vendor_config(config: str, vendor: Path) -> str:
+    absolute = str(vendor)
+    relative = config.replace(f'directory = "{absolute}"', 'directory = "vendor"')
+    if absolute in relative or 'directory = "vendor"' not in relative:
+        raise RuntimeError("cargo vendor config did not contain the expected directory")
+    return relative
+
+
 def _prepare_cargo(
     companion: dict[str, Any], source_archive: Path, output: Path
 ) -> dict[str, Any]:
@@ -94,7 +102,9 @@ def _prepare_cargo(
             raise RuntimeError(f"cargo vendor failed:\n{result.stderr.strip()}")
         cargo_dir = source_root / ".cargo"
         cargo_dir.mkdir()
-        (cargo_dir / "config.toml").write_text(result.stdout)
+        (cargo_dir / "config.toml").write_text(
+            _relativize_vendor_config(result.stdout, vendor)
+        )
         metadata = subprocess.run(
             ["cargo", "metadata", "--locked", "--offline", "--format-version", "1"],
             cwd=source_root,

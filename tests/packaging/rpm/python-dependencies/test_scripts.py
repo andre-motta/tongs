@@ -93,3 +93,13 @@ def test_prepare_refuses_nonempty_evidence_directory(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="must be empty"):
         prepare_sources.prepare({"companions": []}, output)
+
+
+def test_cargo_vendor_config_is_relocatable() -> None:
+    vendor = Path("/tmp/preparation/source/vendor")
+    config = f'[source.vendored-sources]\ndirectory = "{vendor}"\n'
+
+    result = prepare_sources._relativize_vendor_config(config, vendor)
+
+    assert result == '[source.vendored-sources]\ndirectory = "vendor"\n'
+    assert str(vendor) not in result

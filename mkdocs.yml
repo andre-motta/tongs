@@ -71,6 +71,7 @@ nav:
       - Installation: desktop/installation.md
       - Workspace: desktop/workspace.md
       - Plugin providers: plugins/provider.md
+      - Troubleshooting: desktop/troubleshooting.md
   - Reference:
       - Keybindings: reference/keybindings.md
       - Configuration: reference/configuration.md

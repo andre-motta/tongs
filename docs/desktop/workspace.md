@@ -43,7 +43,10 @@ drafts.
 While discovery is running, the sidebar shows **Finding admitted
 repositories…**. If no repository is found, it shows **No local repositories
 were found. Clone a repository under the configured scan root, then refresh.**
-If discovery fails, use **Retry**.
+When repositories were found but the current search text or forge filter hides
+all of them, it shows **No local repositories match the current search and
+forge filter.** instead, so an empty list caused by a filter is never mistaken
+for an empty scan root. If discovery fails, use **Retry**.
 
 ## Find a review
 
@@ -197,6 +200,15 @@ Enter a search term or press `/` while the pipeline view is focused, then use
 match and total matches; **No matches** is shown when appropriate. Empty output
 shows **This job has no log output.**
 
+The log view also provides **Open log in editor**, which is bound to ++f2++
+while the log is loaded. It starts the configured graphical editor with a
+private, bounded export of the log. While the editor is starting, the control
+reads **Starting editor…**. A started editor process is reported separately
+from any confirmation that the editor read the file, and closing Tongs does not
+terminate it. See the
+[editor configuration reference](../reference/configuration.md) for the
+supported editor commands.
+
 Long logs are loaded and displayed in bounded pages and windows. If a refresh,
 page, or log revision check fails after output was loaded, the previous bounded
 result stays visible with an explanation. A log that exceeds the renderer's
@@ -228,6 +240,27 @@ these outcomes:
 An event gap or pipeline status event reloads the current pipeline view. The
 workspace does not silently replay an uncertain action.
 
+## Application bar commands
+
+The top application bar carries two built-in commands in addition to anything a
+plugin contributes.
+
+**Copy URL** appears only while a review is open. It copies that review's URL to
+the clipboard, resolving the URL from the currently open review rather than from
+anything typed into the window. The result is reported as a dismissible notice.
+If the copy fails, the notice reads **The review URL could not be copied. Check
+clipboard access and retry.**
+
+**Clear Cache** is always available. It opens a confirmation titled **Clear
+shared API cache?** that states **Cached forge responses will be removed. Saved
+and in-progress review drafts will be preserved.** The confirmation offers
+**Cancel** and **Clear cache**, and ++escape++ cancels it. While the clear is
+running, the button reads **Clearing…** and the command reports **The shared API
+cache is being cleared.** as its reason for being unavailable. Clearing the cache
+removes shared API response entries only; it does not delete durable review
+drafts or any other user file. If it fails, the notice reads **The shared API
+cache could not be cleared. Retry after reconnecting the local service.**
+
 ## Use installed plugins
 
 The sidebar also contains **Plugins**. Use its refresh button to reload the
@@ -240,7 +273,7 @@ Started plugins contribute their declared navigation entries below their title.
 Select an entry to open its installed module. The module view identifies the
 plugin and version, shows **Loading plugin module…** while it starts, and
 provides **Reload plugin**. A plugin can also contribute a command button in
-the top application bar. The module may publish notifications; dismiss a
+the top application bar, alongside the built-in commands described below. The module may publish notifications; dismiss a
 notification with its close control.
 
 The module's declared help appears under **Plugin help**. If the help asset

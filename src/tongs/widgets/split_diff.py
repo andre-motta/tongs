@@ -153,6 +153,8 @@ class SplitDiffColumn(OptionList):
         border: none;
         padding: 0;
         overflow-x: auto;
+        text-wrap: nowrap;
+        text-overflow: clip;
         & > .option-list--option {
             padding: 0;
         }
@@ -535,7 +537,7 @@ class SplitDiffView(Widget):
             column._selection_anchor = None
             column._current_file = self._file
             column.add_option(
-                Option(Text(message, style=Style(dim=True)), disabled=True)
+                Option(_single_line(message, Style(dim=True)), disabled=True)
             )
 
     def focus_side(self, side: DiffSide) -> None:
@@ -642,12 +644,12 @@ class SplitDiffView(Widget):
 
         old_options = [
             Option(
-                Text(f" OLD  {file.old_path}", style=Style(bold=True)), disabled=True
+                _single_line(f" OLD  {file.old_path}", Style(bold=True)), disabled=True
             )
         ]
         new_options = [
             Option(
-                Text(f" NEW  {file.new_path}", style=Style(bold=True)), disabled=True
+                _single_line(f" NEW  {file.new_path}", Style(bold=True)), disabled=True
             )
         ]
         option_index = 1
@@ -662,26 +664,26 @@ class SplitDiffView(Widget):
 
         if file.is_binary or not file.hunks:
             message = _placeholder_message(file)
-            placeholder = Option(Text(message, style=Style(dim=True)), disabled=True)
+            placeholder = Option(_single_line(message, Style(dim=True)), disabled=True)
             old_options.append(placeholder)
             new_options.append(
-                Option(Text(message, style=Style(dim=True)), disabled=True)
+                Option(_single_line(message, Style(dim=True)), disabled=True)
             )
         else:
             for hunk in file.hunks:
-                header = Text(f" {hunk.header}", style=Style(bold=True, dim=True))
+                header = _single_line(f" {hunk.header}", Style(bold=True, dim=True))
                 old_options.append(Option(header.copy(), disabled=True))
                 new_options.append(Option(header.copy(), disabled=True))
                 option_index += 1
                 for row in _fold_context_rows(align_hunk(hunk)):
                     if isinstance(row, str):
                         marker = Option(
-                            Text(f"      {row}", style=Style(dim=True)), disabled=True
+                            _single_line(f"      {row}", Style(dim=True)), disabled=True
                         )
                         old_options.append(marker)
                         new_options.append(
                             Option(
-                                Text(f"      {row}", style=Style(dim=True)),
+                                _single_line(f"      {row}", Style(dim=True)),
                                 disabled=True,
                             )
                         )
@@ -727,7 +729,7 @@ class SplitDiffView(Widget):
                         if discussion.id in self._expanded_threads
                     ]
                     for thread_line in _thread_lines(expanded):
-                        old_options.append(Option(Text(""), disabled=True))
+                        old_options.append(Option(_single_line(""), disabled=True))
                         new_options.append(Option(thread_line, disabled=True))
                         option_index += 1
 
@@ -753,14 +755,14 @@ class SplitDiffView(Widget):
         discussions: list[Discussion],
     ) -> Option:
         if line is None:
-            return Option(Text("      ", style=Style(dim=True)), disabled=True)
+            return Option(_single_line("      ", Style(dim=True)), disabled=True)
         if line.line_type == LineType.NO_NEWLINE:
             return Option(
-                Text(f"      {line.content}", style=Style(dim=True)), disabled=True
+                _single_line(f"      {line.content}", Style(dim=True)), disabled=True
             )
         number = line.old_lineno if side is DiffSide.OLD else line.new_lineno
         if number is None:
-            return Option(Text("      ", style=Style(dim=True)), disabled=True)
+            return Option(_single_line("      ", Style(dim=True)), disabled=True)
         marker = "*" if discussions else " "
         prefix = (
             "-"
@@ -769,7 +771,7 @@ class SplitDiffView(Widget):
             if line.line_type == LineType.ADDITION
             else " "
         )
-        text = Text(f"{number:>5} {marker} ", style=Style(dim=True))
+        text = _single_line(f"{number:>5} {marker} ", Style(dim=True))
         prefix_style = (
             Style(color="red")
             if prefix == "-"
@@ -830,6 +832,11 @@ def _discussion_index(
             root = discussion.root_comment
             index.setdefault((root.old_line, root.new_line), []).append(discussion)
     return index
+
+
+def _single_line(content: str, style: Style | None = None) -> Text:
+    """Build a non-wrapping row so paired columns stay vertically aligned."""
+    return Text(content, style=style, no_wrap=True, overflow="crop")
 
 
 def _fold_context_rows(
@@ -904,27 +911,25 @@ def _thread_lines(discussions: list[Discussion]) -> list[Text]:
         root = discussion.root_comment
         state = "resolved" if discussion.is_resolved else "open"
         lines.append(
-            Text(
+            _single_line(
                 f" [{state}] @{root.author.username} {relative_time(root.created_at)}",
-                style=Style(
-                    dim=discussion.is_resolved, bold=not discussion.is_resolved
-                ),
+                Style(dim=discussion.is_resolved, bold=not discussion.is_resolved),
             )
         )
         for segments in console.render_lines(
             RichMarkdown(root.body or ""), console.options.update_width(60)
         ):
-            text = Text("   ")
+            text = _single_line("   ")
             for segment in segments:
                 if segment.text and segment.text != "\n":
                     text.append(segment.text, segment.style)
             lines.append(text)
         for reply in root.replies:
-            lines.append(Text(f"   @{reply.author.username}", style=Style(dim=True)))
+            lines.append(_single_line(f"   @{reply.author.username}", Style(dim=True)))
             for segments in console.render_lines(
                 RichMarkdown(reply.body or ""), console.options.update_width(57)
             ):
-                text = Text("     ")
+                text = _single_line("     ")
                 for segment in segments:
                     if segment.text and segment.text != "\n":
                         text.append(segment.text, segment.style)

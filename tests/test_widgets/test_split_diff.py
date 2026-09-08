@@ -29,9 +29,9 @@ from tongs.widgets.split_diff import (
 
 def _file() -> DiffFile:
     context = DiffLine(10, 20, "café = '東京'", LineType.CONTEXT)
-    deleted = DiffLine(11, None, "old_value = 'long ' * 30", LineType.DELETION)
+    deleted = DiffLine(11, None, "old_value = '" + "x" * 120 + "'", LineType.DELETION)
     deleted_extra = DiffLine(12, None, "obsolete = True", LineType.DELETION)
-    added = DiffLine(None, 21, "new_value = 'long ' * 30", LineType.ADDITION)
+    added = DiffLine(None, 21, "new_value = 1", LineType.ADDITION)
     marker = DiffLine(None, None, "\\ No newline at end of file", LineType.NO_NEWLINE)
     return DiffFile(
         old_path="before/renamed.py",
@@ -184,6 +184,25 @@ async def test_split_comment_publishes_explicit_original_side() -> None:
 
 
 @pytest.mark.asyncio
+async def test_visible_v_binding_toggles_requested_layout() -> None:
+    app = _DiffApp()
+
+    async with app.run_test(size=(160, 30)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.set_files([_file()])
+        app.query_one(DiffOptionList).focus()
+        await pilot.press("v")
+        await pilot.pause()
+        assert panel.mode_state.requested is DiffViewMode.SPLIT
+        assert panel.mode_state.effective is DiffViewMode.SPLIT
+
+        await pilot.press("v")
+        await pilot.pause()
+        assert panel.mode_state.requested is DiffViewMode.UNIFIED
+        assert panel.mode_state.effective is DiffViewMode.UNIFIED
+
+
+@pytest.mark.asyncio
 async def test_narrow_fallback_comment_keeps_old_context_side() -> None:
     app = _DiffApp()
     file = _file()
@@ -222,12 +241,48 @@ async def test_columns_share_rows_but_empty_and_marker_cells_are_not_anchors() -
         old = app.query_one("#split-old", SplitDiffColumn)
         new = app.query_one("#split-new", SplitDiffColumn)
         assert old.option_count == new.option_count
+        assert len(old._lines) == len(new._lines) == old.option_count
         assert set(old._line_map) != set(new._line_map)
         assert all(is_actionable(line, DiffSide.OLD) for line in old._line_map.values())
         assert all(is_actionable(line, DiffSide.NEW) for line in new._line_map.values())
         marker = file.hunks[0].lines[3]
         assert marker not in old._line_map.values()
         assert marker not in new._line_map.values()
+
+
+@pytest.mark.asyncio
+async def test_vertical_scroll_and_cursor_are_synchronized() -> None:
+    app = _DiffApp()
+    deletions = tuple(
+        DiffLine(number, None, f"old {number}", LineType.DELETION)
+        for number in range(1, 51)
+    )
+    additions = tuple(
+        DiffLine(None, number, f"new {number}", LineType.ADDITION)
+        for number in range(1, 51)
+    )
+    file = DiffFile(
+        "many.py",
+        "many.py",
+        FileStatus.MODIFIED,
+        (DiffHunk("@@ -1,50 +1,50 @@", 1, 50, 1, 50, (*deletions, *additions)),),
+    )
+
+    async with app.run_test(size=(160, 20)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.set_files([file])
+        panel.request_mode(DiffViewMode.SPLIT)
+        await pilot.pause()
+        old = app.query_one("#split-old", SplitDiffColumn)
+        new = app.query_one("#split-new", SplitDiffColumn)
+        old.focus()
+        old.scroll_to(y=20, animate=False, immediate=True)
+        await pilot.pause()
+        assert old.scroll_y == new.scroll_y == 20
+
+        old.action_cursor_down()
+        await pilot.pause()
+        assert old.highlighted == new.highlighted
 
 
 @pytest.mark.asyncio

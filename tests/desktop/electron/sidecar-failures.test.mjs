@@ -10,6 +10,7 @@ import {
 const caps = [
   "assets",
   "cancellation",
+  "ci_mutations",
   "events",
   "opaque_handles",
   "paged_diffs",
@@ -19,15 +20,21 @@ const caps = [
 const methods = [
   "assets.list",
   "assets.read",
+  "ci.capabilities",
+  "ci.receipt",
   "commits.list",
   "diff.open",
   "diff.page",
   "discussions.list",
   "host.set_location",
   "jobs.list",
+  "jobs.cancel",
+  "jobs.retry",
   "logs.open",
   "logs.page",
   "pipelines.list",
+  "pipelines.cancel",
+  "pipelines.retry",
   "plugins.invoke",
   "plugins.list",
   "repositories.discover",
@@ -257,5 +264,148 @@ test("handshake accepts server capability supersets", async () => {
   const transport = transportFor(fake);
   await transport.start();
   assert.equal(transport.sessionGeneration, 1);
+  await transport.stop();
+});
+
+test("mutation timeout is uncertain and never sends cancel or replays a late result", async () => {
+  const fake = harness();
+  const transport = new SidecarTransport(launch, 20, 1_000, 1_000, fake.spawn);
+  await transport.start();
+  const request = transport.requestMutation("pipelines.retry", {
+    operation_id: "timeout-operation",
+    pipeline: "pipeline-handle",
+  });
+
+  await assert.rejects(request.result, { code: "mutation_timeout" });
+  assert.equal(
+    fake.children[0].frames.filter((frame) => frame.type === "cancel").length,
+    0,
+  );
+  assert.equal(
+    fake.children[0].frames.filter((frame) => frame.method === "pipelines.retry").length,
+    1,
+  );
+
+  fake.children[0].stdout.write(
+    `${JSON.stringify({
+      v: 1,
+      type: "response",
+      id: request.requestId,
+      result: {
+        operation_id: "timeout-operation",
+        action: "retry_pipeline",
+        outcome: "known",
+        error: null,
+        resync_required: false,
+      },
+    })}\n`,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(transport.crashHistory.length, 0);
+  assert.equal(
+    fake.children[0].frames.filter((frame) => frame.method === "pipelines.retry").length,
+    1,
+  );
+  await transport.stop();
+});
+
+test("mutation cannot be cancelled through the read cancellation channel", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const request = transport.requestMutation("jobs.cancel", {
+    operation_id: "cancel-channel-operation",
+    pipeline: "pipeline-handle",
+    job: "job-handle",
+  });
+
+  assert.equal(transport.cancelRead(request.requestId), false);
+  assert.equal(
+    fake.children[0].frames.filter((frame) => frame.type === "cancel").length,
+    0,
+  );
+  fake.children[0].finish(8, null);
+  await assert.rejects(request.result, { code: "unexpected_eof" });
+});
+
+test("mutation responses preserve validated service error classifications", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const mutation = transport.requestMutation("pipelines.retry", {
+    operation_id: "known-rejection-operation",
+    pipeline: "pipeline-handle",
+  });
+  fake.children[0].stdout.write(
+    `${JSON.stringify({
+      v: 1,
+      type: "response",
+      id: mutation.requestId,
+      error: {
+        code: "service_error",
+        message: "safe server message",
+        retryable: false,
+        details: { service_code: "not_found" },
+      },
+    })}\n`,
+  );
+  await assert.rejects(mutation.result, { code: "not_found" });
+
+  const read = transport.requestRead("pipelines.list", {});
+  fake.children[0].stdout.write(
+    `${JSON.stringify({
+      v: 1,
+      type: "response",
+      id: read.requestId,
+      error: {
+        code: "service_error",
+        message: "safe server message",
+        retryable: false,
+        details: { service_code: "not_found" },
+      },
+    })}\n`,
+  );
+  await assert.rejects(read.result, { code: "service_error" });
+  await transport.stop();
+});
+
+test("sidecar disappearance leaves a dispatched mutation unknown", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const result = transport.requestMutation("jobs.retry", {
+    operation_id: "disappearance-operation",
+    pipeline: "pipeline-handle",
+    job: "job-handle",
+  }).result;
+
+  fake.children[0].finish(9, null);
+  await assert.rejects(result, { code: "unexpected_eof" });
+  assert.equal(
+    fake.children[0].frames.filter((frame) => frame.method === "jobs.retry").length,
+    1,
+  );
+});
+
+test("restart rejects an in-flight mutation and never replays it in the new session", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const result = transport.requestMutation("pipelines.cancel", {
+    operation_id: "restart-operation",
+    pipeline: "pipeline-handle",
+  }).result;
+
+  await transport.restart();
+  await assert.rejects(result, { code: "shutting_down" });
+  assert.equal(
+    fake.children[0].frames.filter((frame) => frame.method === "pipelines.cancel").length,
+    1,
+  );
+  assert.equal(
+    fake.children[1].frames.filter((frame) => frame.method === "pipelines.cancel").length,
+    0,
+  );
+  assert.equal(transport.sessionGeneration, 2);
   await transport.stop();
 });

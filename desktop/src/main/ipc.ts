@@ -12,6 +12,16 @@ import {
 } from "../shared/bridge.js";
 import type { AssetCatalog } from "./assets.js";
 import {
+  assertCIParams,
+  assertCIResult,
+  CI_OPERATIONS,
+  type CIOperation,
+} from "./ci.js";
+import type {
+  CIMutationIPCResult,
+  CIMutationReceipt,
+} from "../shared/ci.js";
+import {
   assertAuthorizedSender,
   assertHttpsExternalUrl,
   assertParams,
@@ -63,6 +73,19 @@ export class DesktopIpcController {
         this.read(event, method, invocation),
       );
     }
+    for (const operation of CI_OPERATIONS) {
+      ipcMain.handle(operation.channel, (event, value) =>
+        operation.mutation
+          ? this.mutate(event, operation, value)
+          : this.read(
+              event,
+              operation.method,
+              value,
+              assertCIParams,
+              assertCIResult,
+            ),
+      );
+    }
     ipcMain.handle(IPC_CHANNELS.listAssets, (event, invocation) =>
       this.listAssets(event, invocation),
     );
@@ -91,6 +114,7 @@ export class DesktopIpcController {
     this.reset();
     for (const channel of [
       ...OPERATIONS.keys(),
+      ...CI_OPERATIONS.map((operation) => operation.channel),
       IPC_CHANNELS.listAssets,
       IPC_CHANNELS.setLocation,
       IPC_CHANNELS.cancelRead,
@@ -108,10 +132,12 @@ export class DesktopIpcController {
     event: IpcMainInvokeEvent,
     method: string,
     value: unknown,
+    validateParams: ParamsValidator = assertParams,
+    validateResult: ResultValidator = assertResult,
   ): Promise<JsonValue> {
     assertAuthorizedSender(event, this.window.webContents);
     const invocation = parseInvocation(value);
-    assertParams(method, invocation.params);
+    validateParams(method, invocation.params);
     if (this.bindings.has(invocation.requestToken)) {
       throw new Error("Duplicate desktop request token");
     }
@@ -120,10 +146,37 @@ export class DesktopIpcController {
     this.bindings.set(invocation.requestToken, binding);
     try {
       const result = await request.result;
-      assertResult(method, result);
+      validateResult(method, result);
       return result;
     } finally {
       this.deleteBinding(invocation.requestToken, binding);
+    }
+  }
+
+  private async mutate(
+    event: IpcMainInvokeEvent,
+    operation: CIOperation,
+    value: unknown,
+  ): Promise<JsonValue> {
+    assertAuthorizedSender(event, this.window.webContents);
+    assertCIParams(operation.method, value);
+    try {
+      const result = await this.transport.requestMutation(
+        operation.method,
+        value,
+      ).result;
+      assertCIResult(operation.method, result);
+      const response = {
+        receipt: result as unknown as CIMutationReceipt,
+        error: null,
+      } satisfies CIMutationIPCResult;
+      return response as unknown as JsonValue;
+    } catch (error) {
+      const response = {
+        receipt: null,
+        error: safeMutationError(error),
+      } satisfies CIMutationIPCResult;
+      return response as unknown as JsonValue;
     }
   }
 
@@ -194,6 +247,46 @@ export class DesktopIpcController {
     if (this.bindings.get(token) === binding) this.bindings.delete(token);
   }
 }
+
+function safeMutationError(error: unknown): {
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+} {
+  const code =
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    /^[a-z][a-z0-9_]{0,79}$/.test(error.code)
+      ? error.code
+      : "invalid_response";
+  const retryable =
+    error !== null &&
+    typeof error === "object" &&
+    "retryable" in error &&
+    error.retryable === true;
+  return {
+    code,
+    message:
+      code === "mutation_timeout" ||
+      code === "unexpected_eof" ||
+      code === "write_failed" ||
+      code === "invalid_response"
+        ? "The CI action result could not be confirmed."
+        : "The CI action was rejected with a known result.",
+    retryable,
+  };
+}
+
+type ParamsValidator = (
+  method: string,
+  value: unknown,
+) => asserts value is JsonObject;
+type ResultValidator = (
+  method: string,
+  value: unknown,
+) => asserts value is JsonValue;
 
 function parseInvocation(value: unknown): Invocation {
   if (

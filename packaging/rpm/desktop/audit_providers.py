@@ -60,7 +60,11 @@ def audit(manifest: dict[str, Any]) -> dict[str, Any]:
             query = "python3dist(mcp[cli])"
         providers = _query(query)
         records.append(
-            {"provider_query": query, "requirement": requirement, "providers": providers}
+            {
+                "provider_query": query,
+                "requirement": requirement,
+                "providers": providers,
+            }
         )
         if not providers and "sigstore" not in requirement:
             missing.append(requirement)

@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from tongs_example_dashboard.desktop import ExampleDashboardProvider
-
 from tongs.plugins.desktop import (
     DesktopCallContext,
     DesktopCancellation,
@@ -17,6 +15,8 @@ from tongs.plugins.desktop import (
     JsonValue,
     freeze_json_object,
 )
+
+from tongs_example_dashboard.desktop import ExampleDashboardProvider
 
 
 class RecordingHost:

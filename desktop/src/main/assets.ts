@@ -14,7 +14,7 @@ const SHELL_FILES = new Map([
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/icon.png", ["icon.png", "image/png"]],
 ] as const);
-const ALLOWED_MEDIA = new Set(["text/css", "text/javascript", "application/javascript", "image/png", "image/svg+xml", "font/woff2", "application/json"]);
+const ALLOWED_MEDIA = new Set(["text/css", "text/css; charset=utf-8", "text/javascript", "text/javascript; charset=utf-8", "application/javascript", "text/markdown; charset=utf-8", "image/png", "image/svg+xml", "font/woff2", "application/json"]);
 
 interface WireAsset extends Omit<AssetDescriptor, "url"> { readonly handle: string; }
 interface AssetChunk extends JsonObject { readonly handle: string; readonly offset: number; readonly next_offset: number | null; readonly data_base64: string; }

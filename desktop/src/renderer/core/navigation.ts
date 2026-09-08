@@ -14,6 +14,12 @@ export type AppRoute =
       readonly kind: "review";
       readonly item: ReviewListItemDto;
       readonly panel: ReviewPanel;
+    }
+  | {
+      readonly kind: "plugin";
+      readonly pluginId: string;
+      readonly navigationId: string;
+      readonly moduleId: string;
     };
 
 export interface FeatureContext {

@@ -5,23 +5,15 @@ import { app, BrowserWindow, protocol, session } from "electron";
 import { AssetCatalog } from "./assets.js";
 import { DesktopIpcController } from "./ipc.js";
 import { parseLaunchArguments } from "./launch.js";
-import { APP_DOCUMENT, isAllowedAppUrl } from "./security.js";
+import {
+  APP_DOCUMENT,
+  APP_SCHEME_REGISTRATION,
+  isAllowedAppUrl,
+} from "./security.js";
 import { RendererRecoveryCoordinator } from "./renderer_lifecycle.js";
 import { SidecarTransport } from "./sidecar.js";
 
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: "tongs",
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: false,
-      bypassCSP: false,
-      allowServiceWorkers: false,
-      codeCache: true,
-    },
-  },
-]);
+protocol.registerSchemesAsPrivileged([APP_SCHEME_REGISTRATION]);
 const forbidden = [
   "disable-gpu",
   "disable-gpu-sandbox",

@@ -36,7 +36,7 @@ interface UtilityTransport {
 }
 
 interface ClipboardWriter {
-  writeText(value: string): void;
+  writeText(value: string): Promise<void> | void;
 }
 
 interface ReviewUrlPlan {
@@ -110,7 +110,7 @@ export class WorkspaceUtilities {
       ).result;
       const plan = assertReviewUrlPlan(value, handle);
       assertHttpsExternalUrl(plan.url);
-      this.clipboard.writeText(plan.url);
+      await this.clipboard.writeText(plan.url);
       return Object.freeze({
         outcome: "copied",
         message: "Review URL copied to the clipboard.",

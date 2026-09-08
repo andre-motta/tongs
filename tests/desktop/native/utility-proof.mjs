@@ -139,7 +139,7 @@ async function runProof() {
         document.body.innerText.includes("Review URL copied to the clipboard."));
       return snapshot();
     `);
-    const copiedUrl = clipboard.readText();
+    const copiedUrl = await clipboard.readText();
 
     const cache = await evaluate(`
       button("Clear Cache").click();
@@ -235,7 +235,8 @@ async function evaluate(body) {
         (item) => item.textContent.trim() === label && !item.disabled);
       const snapshot = () => ({
         title: document.querySelector(".view-title")?.textContent ?? null,
-        notice: document.querySelector(".utility-notice")?.textContent ?? null,
+        notice:
+          document.querySelector(".utility-notice, .notice")?.textContent ?? null,
         pipeline: document.querySelector(".ci-pipeline.ci-selected")?.textContent ?? null,
         job: document.querySelector(".ci-job.ci-selected")?.textContent ?? null,
         processGlobal: typeof globalThis.process,

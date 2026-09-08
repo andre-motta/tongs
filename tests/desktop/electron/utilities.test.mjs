@@ -100,6 +100,26 @@ test("clipboard failure is reported without exposing or changing the URL", async
   assert.deepEqual(transport.reads, [["utilities.review_url", { review: "review-handle" }]]);
 });
 
+test("asynchronous clipboard failure cannot be reported as copied", async (t) => {
+  const { root, transport } = await fixture(t);
+  const clipboard = {
+    async writeText() {
+      throw new Error("asynchronous clipboard unavailable");
+    },
+  };
+  const utility = new WorkspaceUtilities(transport, clipboard, root, () => {
+    throw new Error("unused");
+  });
+
+  const result = await utility.copyReviewUrl("review-handle");
+
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /clipboard access/);
+  assert.deepEqual(transport.reads, [
+    ["utilities.review_url", { review: "review-handle" }],
+  ]);
+});
+
 test("clear cache has no renderer-selected target", async (t) => {
   const { utility, transport } = await fixture(t);
 

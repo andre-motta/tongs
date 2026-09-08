@@ -147,12 +147,19 @@ async def run() -> None:
     _append_jsonl(
         event_path,
         {
+            "argv": sys.argv,
+            "cmdline": Path("/proc/self/cmdline")
+            .read_bytes()
+            .rstrip(b"\0")
+            .decode()
+            .split("\0"),
             "event": "installed_core_process_started",
             "fixture_path": str(fixture_path),
             "fixture_sha256": fixture_sha256,
             "forge_mode": forge_mode,
             "package_root": str(actual_package_root),
             "pid": os.getpid(),
+            "proc_self_exe": str(Path("/proc/self/exe").resolve()),
             "source_commit": expected_commit,
             "source_root": str(source_root),
             "python": str(Path(sys.executable).resolve()),

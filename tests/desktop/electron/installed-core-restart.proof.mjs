@@ -59,6 +59,24 @@ async function readJsonl(file) {
   }
 }
 
+async function cgroupLimits() {
+  const membership = (await readFile("/proc/self/cgroup", "utf8")).trim().split("\n");
+  const unified = membership.find((line) => line.startsWith("0::"));
+  if (!unified) throw new Error("unified cgroup membership is unavailable");
+  const root = path.join("/sys/fs/cgroup", unified.slice(3));
+  const limits = {
+    memory_max: (await readFile(path.join(root, "memory.max"), "utf8")).trim(),
+    memory_swap_max: (await readFile(path.join(root, "memory.swap.max"), "utf8")).trim(),
+    path: unified.slice(3),
+    tasks_max: (await readFile(path.join(root, "pids.max"), "utf8")).trim(),
+  };
+  assert.equal(limits.memory_max, "1073741824");
+  assert.equal(limits.memory_swap_max, "0");
+  assert.equal(limits.tasks_max, "64");
+  assert.equal(process.env.NODE_OPTIONS, "--max-old-space-size=512");
+  return limits;
+}
+
 async function eventually(read, predicate) {
   const deadline = Date.now() + TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -79,6 +97,7 @@ async function rejectionCode(promise) {
 }
 
 test("installed core crosses an actual transport and server restart once", async () => {
+  const guard = await cgroupLimits();
   const terminalReportPath = requiredAbsolute("TONGS_INSTALLED_CORE_TERMINAL_REPORT");
   const evidenceRoot = requiredAbsolute("TONGS_INSTALLED_CORE_EVIDENCE_ROOT");
   const sourceRoot = requiredAbsolute("TONGS_INSTALLED_CORE_SOURCE_ROOT");
@@ -142,7 +161,13 @@ test("installed core crosses an actual transport and server restart once", async
     child.once("exit", () => {
       stderr[generation - 1] = Buffer.concat(chunks).toString("utf8");
     });
-    launches.push({ forgeMode, pid: child.pid });
+    launches.push({
+      args: ["-E", "-P", wrapper],
+      cwd: options.cwd,
+      executable,
+      forgeMode,
+      pid: child.pid,
+    });
     return child;
   };
 
@@ -255,6 +280,8 @@ test("installed core crosses an actual transport and server restart once", async
       assert.equal(record.source_commit, expectedCommit);
       assert.equal(record.wrapper_path, wrapper);
       assert.equal(record.wrapper_sha256, terminal.sidecar_wrapper.sha256);
+      assert.deepEqual(record.cmdline, [candidatePython, "-E", "-P", wrapper]);
+      assert.equal(record.proc_self_exe, terminal.installed_identity.proc_self_exe);
       assert.equal(
         record.sys_path.some((entry) => {
           const relative = path.relative(sourceRoot, entry);
@@ -269,11 +296,13 @@ test("installed core crosses an actual transport and server restart once", async
         { generation: 1, pid: firstPid, repository: oldRepository, review: oldReview },
         { generation: 2, pid: secondPid, repository: newRepository, review: newReview },
       ],
+      guard,
       interrupted_mutation: {
         operation_id: "12300000-0000-4000-8000-000000000001",
         rejection_code: interruptedCode,
       },
       ledger: [expectedLedger],
+      launches,
       old_handle_rejections: {
         repository: oldRepositoryCode,
         review: oldReviewCode,

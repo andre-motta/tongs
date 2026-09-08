@@ -222,11 +222,13 @@ class TestMessages:
         assert msg.pipeline_id == 99
 
     def test_cancel_job_requested(self):
-        msg = CancelJobRequested(job_id=101)
+        msg = CancelJobRequested(pipeline_id=55, job_id=101)
+        assert msg.pipeline_id == 55
         assert msg.job_id == 101
 
     def test_retry_job_requested(self):
-        msg = RetryJobRequested(job_id=202)
+        msg = RetryJobRequested(pipeline_id=56, job_id=202)
+        assert msg.pipeline_id == 56
         assert msg.job_id == 202
 
     def test_load_jobs_requested(self):

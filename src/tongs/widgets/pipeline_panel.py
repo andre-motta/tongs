@@ -38,14 +38,16 @@ class RetryPipelineRequested(Message):
 
 
 class CancelJobRequested(Message):
-    def __init__(self, job_id: int) -> None:
+    def __init__(self, pipeline_id: int, job_id: int) -> None:
         super().__init__()
+        self.pipeline_id = pipeline_id
         self.job_id = job_id
 
 
 class RetryJobRequested(Message):
-    def __init__(self, job_id: int) -> None:
+    def __init__(self, pipeline_id: int, job_id: int) -> None:
         super().__init__()
+        self.pipeline_id = pipeline_id
         self.job_id = job_id
 
 
@@ -430,7 +432,8 @@ class PipelinePanel(Widget, can_focus=True):
                 return
             if self._pending_cancel == j.id:
                 self._pending_cancel = None
-                self.post_message(CancelJobRequested(j.id))
+                assert self._current_pipeline is not None
+                self.post_message(CancelJobRequested(self._current_pipeline.id, j.id))
             else:
                 self._pending_cancel = j.id
                 self.app.notify(f"Cancel job {j.name}? Press C again.")
@@ -454,7 +457,8 @@ class PipelinePanel(Widget, can_focus=True):
                 return
             if self._pending_retry == j.id:
                 self._pending_retry = None
-                self.post_message(RetryJobRequested(j.id))
+                assert self._current_pipeline is not None
+                self.post_message(RetryJobRequested(self._current_pipeline.id, j.id))
             else:
                 self._pending_retry = j.id
                 self.app.notify(f"Retry job {j.name}? Press R again.")

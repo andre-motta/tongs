@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parseLaunchArguments, SIDECAR_ARGUMENTS } from "../../../desktop/dist/src/main/launch.js";
-import { assertAuthorizedSender, assertHttpsExternalUrl, assertParams, assertResult, isAllowedAppUrl } from "../../../desktop/dist/src/main/security.js";
+import { assertCIParams, assertCIResult, CI_OPERATIONS } from "../../../desktop/dist/src/main/ci.js";
+import { APP_SCHEME_REGISTRATION, assertAuthorizedSender, assertHttpsExternalUrl, assertParams, assertResult, CONTENT_SECURITY_POLICY, isAllowedAppUrl } from "../../../desktop/dist/src/main/security.js";
 
 test("launcher accepts only exact absolute interpreter and safe cwd", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tongs-launch-"));
@@ -62,10 +63,115 @@ test("runtime result boundary validates operation-specific DTOs", () => {
   });
 });
 
+test("CI IPC boundary exposes six fixed operations with exact schemas", () => {
+  assert.deepEqual(
+    CI_OPERATIONS.map(({ method, mutation }) => [method, mutation]),
+    [
+      ["ci.capabilities", false],
+      ["ci.receipt", false],
+      ["pipelines.retry", true],
+      ["pipelines.cancel", true],
+      ["jobs.retry", true],
+      ["jobs.cancel", true],
+    ],
+  );
+  assertCIParams("ci.capabilities", { repository: "opaque-repository" });
+  assertCIParams("jobs.retry", {
+    operation_id: "desktop:retry_job:123",
+    pipeline: "opaque-pipeline",
+    job: "opaque-job",
+  });
+  assertCIParams("ci.receipt", {
+    operation_id: "desktop:retry_job:123",
+    action: "retry_job",
+    pipeline: "opaque-pipeline",
+    job: "opaque-job",
+  });
+  assert.throws(() =>
+    assertCIParams("jobs.retry", {
+      operation_id: "bad/slash",
+      pipeline: "opaque-pipeline",
+      job: "opaque-job",
+    }),
+  );
+  assert.throws(() =>
+    assertCIParams("jobs.retry", {
+      operation_id: "valid",
+      pipeline: "opaque-pipeline",
+      job: "opaque-job",
+      project: "must-not-cross-bridge",
+    }),
+  );
+  assert.throws(() =>
+    assertCIParams("ci.receipt", {
+      operation_id: "valid",
+      action: "retry_pipeline",
+      pipeline: "opaque-pipeline",
+      job: "wrong-shape",
+    }),
+  );
+});
+
+test("CI IPC result boundary preserves safe known, unknown, and absent receipts", () => {
+  const known = {
+    operation_id: "known",
+    action: "retry_pipeline",
+    outcome: "known",
+    error: null,
+    resync_required: false,
+  };
+  const unknown = {
+    operation_id: "unknown",
+    action: "cancel_job",
+    outcome: "unknown",
+    error: {
+      code: "network_unavailable",
+      message: "The remote CI mutation outcome is unknown.",
+      retryable: true,
+    },
+    resync_required: true,
+  };
+  assertCIResult("pipelines.retry", known);
+  assertCIResult("jobs.cancel", unknown);
+  assertCIResult("ci.receipt", { receipt: null });
+  assertCIResult("ci.receipt", { receipt: unknown });
+  assert.throws(() => assertCIResult("pipelines.cancel", known));
+  assert.throws(() =>
+    assertCIResult("pipelines.retry", {
+      ...known,
+      error: unknown.error,
+    }),
+  );
+  assert.throws(() =>
+    assertCIResult("jobs.cancel", { ...unknown, error: null }),
+  );
+  assert.throws(() =>
+    assertCIResult("jobs.cancel", {
+      ...unknown,
+      error: { ...unknown.error, internal: "/secret/path" },
+    }),
+  );
+});
+
 test("navigation and external URL policy is scheme exact", () => {
   assert.equal(isAllowedAppUrl("tongs://app/index.html"), true); assert.equal(isAllowedAppUrl("https://app/index.html"), false);
   assert.equal(isAllowedAppUrl("tongs://evil/index.html"), false); assert.equal(assertHttpsExternalUrl("https://example.com/review"), "https://example.com/review");
   assert.throws(() => assertHttpsExternalUrl("http://example.com")); assert.throws(() => assertHttpsExternalUrl("https://token@example.com"));
+});
+test("plugin help CSP admits only the trusted application origin", () => {
+  assert.deepEqual(APP_SCHEME_REGISTRATION, {
+    scheme: "tongs",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      bypassCSP: false,
+      allowServiceWorkers: false,
+      codeCache: true,
+    },
+  });
+  assert.match(CONTENT_SECURITY_POLICY, /connect-src 'self'/); assert.doesNotMatch(CONTENT_SECURITY_POLICY, /connect-src https?:/);
+  assert.equal(isAllowedAppUrl("tongs://app/assets/opaque"), true); assert.equal(isAllowedAppUrl("https://app/assets/opaque"), false); assert.equal(isAllowedAppUrl("tongs://remote/assets/opaque"), false);
 });
 
 test("IPC sender must be the exact top-level authorized document", () => {

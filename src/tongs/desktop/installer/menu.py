@@ -13,29 +13,32 @@ from tongs.desktop.installer.models import InstallerError, InstallerErrorCode
 _MAX_ENTRY_BYTES = 16 * 1024
 
 
-def render_desktop_entry(console_path: Path) -> bytes:
+def render_desktop_entry(console_path: Path, *, icon_path: Path | None = None) -> bytes:
     """Render a fixed desktop entry bound to one absolute Tongs console script."""
     invocation = _exec_argument(console_path)
+    icon = f"Icon={_icon_value(icon_path)}\n" if icon_path is not None else ""
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=Tongs\n"
         "Comment=Review GitHub and GitLab changes\n"
         f"Exec={invocation} desktop\n"
+        f"{icon}"
         "Terminal=false\n"
         "Categories=Development;RevisionControl;\n"
         "StartupNotify=true\n"
-    ).encode("ascii")
+    ).encode()
 
 
 def install_user_menu(
     path: Path,
     console_path: Path,
     *,
+    icon_path: Path | None = None,
     replace_digest: str | None,
 ) -> str:
     """Atomically install an entry without replacing unrelated existing content."""
-    desired = render_desktop_entry(console_path)
+    desired = render_desktop_entry(console_path, icon_path=icon_path)
     digest = hashlib.sha256(desired).hexdigest()
     parent_fd = _open_menu_parent(path.parent)
     temporary: str | None = None
@@ -152,6 +155,27 @@ def _exec_argument(path: Path) -> str:
     quoted = "".join(f"\\{char}" if char in '"`$\\' else char for char in value)
     escaped = quoted.replace("\\", "\\\\")
     return f'"{escaped}"'
+
+
+def _icon_value(path: Path) -> str:
+    value = os.fspath(path)
+    if (
+        not path.is_absolute()
+        or not value
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        raise InstallerError(
+            InstallerErrorCode.INCOMPATIBLE,
+            "The Tongs icon path cannot be represented by a desktop entry.",
+        )
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise InstallerError(
+            InstallerErrorCode.INCOMPATIBLE,
+            "The Tongs icon path cannot be represented by a desktop entry.",
+        ) from None
+    return value.replace("\\", "\\\\").replace(" ", "\\s")
 
 
 def _open_menu_parent(path: Path) -> int:

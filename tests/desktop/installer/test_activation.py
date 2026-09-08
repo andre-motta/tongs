@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import tongs.desktop.installer.activation as activation_module
+from tongs.desktop.artifact_contract import ArchiveEntry, ArchiveEntryType, InstallFile
 from tongs.desktop.installer.activation import (
     BoundPythonEnvironment,
     DesktopInstallationPaths,
@@ -23,7 +24,11 @@ from tongs.desktop.installer.activation import (
     validate_installed_payload,
 )
 from tongs.desktop.installer.extract import extract_verified_archive
-from tongs.desktop.installer.models import AcceptedReleaseState, InstallerError
+from tongs.desktop.installer.models import (
+    AcceptedReleaseState,
+    InstallerError,
+    VerifiedStagedArtifact,
+)
 
 from .helpers import documents, verified_metadata
 
@@ -61,14 +66,56 @@ def _stage(store: DesktopInstallationStore):
     )
 
 
+def _stage_with_icon(
+    store: DesktopInstallationStore, content: bytes = b"packaged-icon"
+) -> VerifiedStagedArtifact:
+    staged = _stage(store)
+    relative = "runtime/share/pixmaps/tongs.png"
+    icon_path = staged.staging_path / relative
+    icon_path.parent.mkdir(parents=True)
+    icon_path.write_bytes(content)
+    icon_path.chmod(0o644)
+    digest = hashlib.sha256(content).hexdigest()
+    declared_file = InstallFile(relative, len(content), digest)
+    additions = (
+        ArchiveEntry("runtime/share", ArchiveEntryType.DIRECTORY, 0o755, 0),
+        ArchiveEntry("runtime/share/pixmaps", ArchiveEntryType.DIRECTORY, 0o755, 0),
+        ArchiveEntry(
+            relative,
+            ArchiveEntryType.FILE,
+            0o644,
+            len(content),
+            digest,
+        ),
+    )
+    contract = replace(
+        staged.contract,
+        install=replace(
+            staged.contract.install,
+            files=(*staged.contract.install.files, declared_file),
+        ),
+        layout=replace(
+            staged.contract.layout,
+            entries=(*staged.contract.layout.entries, *additions),
+            file_count=staged.contract.layout.file_count + 1,
+            total_bytes=staged.contract.layout.total_bytes + len(content),
+        ),
+    )
+    return replace(staged, contract=contract)
+
+
+def _installed_icon_path(target_path: Path) -> Path:
+    return target_path / "runtime/share/pixmaps/tongs.png"
+
+
 def test_activation_moves_complete_payload_and_retains_previous(tmp_path: Path) -> None:
     store = _store(tmp_path)
     environment = _environment(tmp_path)
-    first_stage = _stage(store)
+    first_stage = _stage_with_icon(store, b"first-icon")
     with store.transaction() as transaction:
         first = activate_staged_artifact(transaction, first_stage, environment)
 
-    second_stage = _stage(store)
+    second_stage = _stage_with_icon(store, b"second-icon")
     with store.transaction() as transaction:
         second = activate_staged_artifact(transaction, second_stage, environment)
         persisted = transaction.read_state()
@@ -78,7 +125,12 @@ def test_activation_moves_complete_payload_and_retains_previous(tmp_path: Path) 
     assert persisted == second.state
     assert persisted is not None and persisted.previous == first.activated
     assert persisted.recovery is RecoveryStatus.HEALTHY
-    assert store.paths.menu_path.read_text().startswith("[Desktop Entry]\n")
+    menu = store.paths.menu_path.read_text()
+    assert menu.startswith("[Desktop Entry]\n")
+    assert (
+        f"Icon={_installed_icon_path(second.activated.payload.target_path)}\n" in menu
+    )
+    assert str(_installed_icon_path(first.activated.payload.target_path)) not in menu
     assert not store.paths.journal_path.exists()
 
 
@@ -250,11 +302,11 @@ def test_menu_failure_preserves_old_active_and_journal_recovers_new(
 ) -> None:
     store = _store(tmp_path)
     environment = _environment(tmp_path)
-    first_stage = _stage(store)
+    first_stage = _stage_with_icon(store, b"first-icon")
     with store.transaction() as transaction:
         first = activate_staged_artifact(transaction, first_stage, environment)
 
-    second_stage = _stage(store)
+    second_stage = _stage_with_icon(store, b"second-icon")
 
     def fail_menu(*_args: object, **_kwargs: object) -> str:
         raise InstallerError(
@@ -278,6 +330,10 @@ def test_menu_failure_preserves_old_active_and_journal_recovers_new(
     assert recovered is not None and recovered.recovered is True
     assert recovered.state.active == recovered.activated
     assert recovered.state.previous == first.activated
+    assert (
+        f"Icon={_installed_icon_path(recovered.activated.payload.target_path)}\n"
+        in store.paths.menu_path.read_text()
+    )
     assert not store.paths.journal_path.exists()
 
 
@@ -329,11 +385,11 @@ def test_prepublication_failures_leave_prior_state_launchable(
 ) -> None:
     store = _store(tmp_path)
     environment = _environment(tmp_path)
-    first_stage = _stage(store)
+    first_stage = _stage_with_icon(store, b"first-icon")
     with store.transaction() as transaction:
         first = activate_staged_artifact(transaction, first_stage, environment)
     original_menu = store.paths.menu_path.read_bytes()
-    second_stage = _stage(store)
+    second_stage = _stage_with_icon(store, b"second-icon")
 
     if boundary == "rename":
         monkeypatch.setattr(
@@ -366,6 +422,10 @@ def test_prepublication_failures_leave_prior_state_launchable(
         assert transaction.read_state() == first.state
     assert first.activated.payload.launcher_path.is_file()
     assert store.paths.menu_path.read_bytes() == original_menu
+    assert (
+        f"Icon={_installed_icon_path(first.activated.payload.target_path)}\n"
+        in original_menu.decode()
+    )
 
 
 def test_lock_contention_is_bounded_and_retryable(tmp_path: Path) -> None:
@@ -388,7 +448,7 @@ async def test_uninstall_preserves_watermark_and_unrelated_rpm_files(
 ) -> None:
     store = _store(tmp_path)
     environment = _environment(tmp_path)
-    staged = _stage(store)
+    staged = _stage_with_icon(store)
     rpm = tmp_path / "usr/bin/tongs-desktop"
     rpm.parent.mkdir(parents=True)
     rpm.write_text("rpm-owned")
@@ -624,7 +684,7 @@ def test_uninstall_discards_inactive_recovery_candidate(
 def test_repair_rebinds_missing_menu_without_network(tmp_path: Path) -> None:
     store = _store(tmp_path)
     environment = _environment(tmp_path)
-    staged = _stage(store)
+    staged = _stage_with_icon(store)
     with store.transaction() as transaction:
         installed = activate_staged_artifact(transaction, staged, environment)
     store.paths.menu_path.unlink()
@@ -637,6 +697,28 @@ def test_repair_rebinds_missing_menu_without_network(tmp_path: Path) -> None:
     assert hashlib.sha256(store.paths.menu_path.read_bytes()).hexdigest() == (
         repaired.menu_sha256
     )
+    assert repaired.active is not None
+    assert (
+        f"Icon={_installed_icon_path(repaired.active.payload.target_path)}\n"
+        in store.paths.menu_path.read_text()
+    )
+
+
+def test_repair_rejects_a_mutated_declared_icon(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    staged = _stage_with_icon(store)
+    with store.transaction() as transaction:
+        installed = activate_staged_artifact(transaction, staged, environment)
+    _installed_icon_path(installed.activated.payload.target_path).write_bytes(
+        b"mutated-icon"
+    )
+
+    with (
+        store.transaction() as transaction,
+        pytest.raises(InstallerError, match="incomplete or changed"),
+    ):
+        repair_activation(transaction, environment)
 
 
 def test_repair_rebinds_recovered_journal_to_invoking_environment(
@@ -645,7 +727,7 @@ def test_repair_rebinds_recovered_journal_to_invoking_environment(
     store = _store(tmp_path)
     first_environment = _environment(tmp_path, "first")
     second_environment = _environment(tmp_path, "second")
-    staged = _stage(store)
+    staged = _stage_with_icon(store)
 
     def fail_menu(*_args: object, **_kwargs: object) -> str:
         raise InstallerError(
@@ -665,6 +747,10 @@ def test_repair_rebinds_recovered_journal_to_invoking_environment(
     assert repaired.active.environment == second_environment
     assert (
         second_environment.console_path.as_posix() in store.paths.menu_path.read_text()
+    )
+    assert (
+        f"Icon={_installed_icon_path(repaired.active.payload.target_path)}\n"
+        in store.paths.menu_path.read_text()
     )
     assert not store.paths.journal_path.exists()
 

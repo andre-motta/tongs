@@ -27,3 +27,12 @@ test("catalog rejects wrong MIME", async () => {
   transport.requestRead = () => ({ requestId: "1", result: Promise.resolve({ assets: [{ handle: "x", source: "plugin", asset_id: "x", plugin_id: "p", kind: "module", media_type: "text/html", byte_count: 1, sha256: "0".repeat(64) }] }) });
   await assert.rejects(new AssetCatalog(transport, root).refresh());
 });
+test("bundled React renderer is served only through the fixed shell route", async () => {
+  const shellRoot = path.resolve(import.meta.dirname, "../../../desktop/dist/shell");
+  const catalog = new AssetCatalog(new FakeTransport(Buffer.from("unused")), shellRoot);
+  const served = await catalog.response("tongs://app/app.js");
+  assert.equal(served.status, 200);
+  assert.match(served.headers.get("content-type"), /text\/javascript/);
+  assert.match(await served.text(), /createRoot|createElement/);
+  assert.equal((await catalog.response("tongs://app/renderer/index.js")).status, 404);
+});

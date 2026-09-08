@@ -71,7 +71,8 @@ export class AssetCatalog {
     const candidate = path.join(root, name);
     const info = await lstat(candidate);
     const resolved = await realpath(candidate);
-    if (!info.isFile() || info.isSymbolicLink() || path.dirname(resolved) !== root) throw new Error("Invalid bundled shell asset");
+    const relative = path.relative(root, resolved);
+    if (!info.isFile() || info.isSymbolicLink() || resolved !== path.resolve(candidate) || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Invalid bundled shell asset");
     return response(await readFile(resolved), 200, mediaType);
   }
 

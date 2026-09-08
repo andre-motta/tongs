@@ -159,12 +159,8 @@ def test_payload_validator_accepts_declared_regular_files(tmp_path: Path) -> Non
                 "desktop-manifest-v1.json": _digest(
                     tmp_path / "desktop-manifest-v1.json"
                 ),
-                "runtime-inventory.json": _digest(
-                    tmp_path / "runtime-inventory.json"
-                ),
-                "build-provenance.json": _digest(
-                    tmp_path / "build-provenance.json"
-                ),
+                "runtime-inventory.json": _digest(tmp_path / "runtime-inventory.json"),
+                "build-provenance.json": _digest(tmp_path / "build-provenance.json"),
             },
             "release_version": "0.5.0",
             "electron_version": "44.2.0",

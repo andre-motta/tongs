@@ -18,8 +18,7 @@ def test_two_srpms_and_optional_mcp_ownership_are_explicit() -> None:
     assert "python3dist(mcp[cli])" in core
     assert "mcp[cli]" not in core.split("%package -n python3-tongs+mcp", 1)[0]
     exact_core = (
-        "Requires:       python3-tongs = "
-        "@CORE_RPM_VERSION@-@RPM_RELEASE@%{?dist}"
+        "Requires:       python3-tongs = @CORE_RPM_VERSION@-@RPM_RELEASE@%{?dist}"
     )
     assert exact_core in desktop
 

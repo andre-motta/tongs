@@ -301,18 +301,14 @@ class TestMCPPlugin:
         assert commands[0][1]
         assert callable(commands[0][2])
 
-    def test_mcp_plugin_hides_command_when_dependency_is_missing(
-        self, monkeypatch
-    ):
+    def test_mcp_plugin_hides_command_when_dependency_is_missing(self, monkeypatch):
         from tongs.mcp import plugin
 
         monkeypatch.setattr(plugin, "_mcp_available", lambda: False)
 
         assert plugin.MCPPlugin().get_commands() == []
 
-    def test_mcp_plugin_refuses_launch_when_dependency_disappears(
-        self, monkeypatch
-    ):
+    def test_mcp_plugin_refuses_launch_when_dependency_disappears(self, monkeypatch):
         from tongs.mcp import plugin
 
         monkeypatch.setattr(plugin, "_mcp_available", lambda: False)

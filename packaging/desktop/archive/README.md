@@ -6,6 +6,9 @@ Every release, compatibility, source, runtime and timestamp value is an explicit
 input. The initial `0.5.0` value is an unpublished candidate and is not a tag or
 published release declaration.
 
+`BUILD_ENVIRONMENT.md` and `Containerfile.build` define the reproducible hosted
+builder. The package hashes are retained independently of Fedora mirror URLs.
+
 The pinned Electron input is the official
 `electron-v44.2.0-linux-x64.zip` payload. Its upstream SHA-256 and the exact
 extracted file inventory are recorded in
@@ -35,7 +38,7 @@ Candidate build example:
 npm --prefix desktop ci --ignore-scripts
 .venv/bin/python scripts/build_desktop_archive.py \
   --source-root . \
-  --electron-dist /path/to/electron-44.2.0-linux-x64 \
+  --electron-archive /path/to/electron-v44.2.0-linux-x64.zip \
   --output-dir /path/to/output \
   --release-version 0.5.0 \
   --core-minimum 0.4.2-dev.183 \

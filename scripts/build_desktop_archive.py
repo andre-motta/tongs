@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zipfile
 import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -40,11 +41,26 @@ _SOURCE_INPUTS: Final = (
     Path("desktop/package-lock.json"),
     Path("desktop/tsconfig.json"),
     Path("LICENSE"),
+    Path("scripts/build_desktop_archive.py"),
+    Path("src/tongs/desktop/artifact_contract/__init__.py"),
+    Path("src/tongs/desktop/artifact_contract/_json.py"),
+    Path("src/tongs/desktop/artifact_contract/_validation.py"),
+    Path("src/tongs/desktop/artifact_contract/archive.py"),
+    Path("src/tongs/desktop/artifact_contract/manifests.py"),
+    Path("src/tongs/desktop/artifact_contract/models.py"),
+    Path("src/tongs/desktop/artifact_contract/schema_resources.py"),
+    Path("src/tongs/desktop/artifact_contract/schemas/__init__.py"),
+    Path(
+        "src/tongs/desktop/artifact_contract/schemas/"
+        "desktop-install-manifest-v1.schema.json"
+    ),
+    Path(
+        "src/tongs/desktop/artifact_contract/schemas/"
+        "desktop-release-manifest-v1.schema.json"
+    ),
+    Path("src/tongs/__init__.py"),
+    Path("packaging/desktop/archive"),
     Path("packaging/desktop/common"),
-    _CONTRACT_PATH,
-    _ASAR_HELPER_PATH,
-    Path("packaging/desktop/archive/app-asar-paths.txt"),
-    Path("packaging/desktop/archive/electron-runtime-44.2.0-linux-x64.json"),
 )
 _SHA_RE: Final = re.compile(r"^[0-9a-f]{40}$")
 _VERSION_RE: Final = re.compile(
@@ -190,7 +206,7 @@ def build_contract_documents(
 
 def build_desktop_archive(
     source_root: Path,
-    electron_dist: Path,
+    electron_archive: Path,
     output_dir: Path,
     parameters: BuildParameters,
     *,
@@ -212,7 +228,6 @@ def build_desktop_archive(
         _mapping(contract, "electron"), "version"
     ):
         raise ArchiveBuildError("Electron version inputs disagree")
-    _validate_electron_runtime(electron_dist.resolve(strict=True), runtime_inventory)
     toolchain = _toolchain_inventory(
         desktop, node_executable=node_executable, npm_executable=npm_executable
     )
@@ -228,6 +243,14 @@ def build_desktop_archive(
         prefix=".tongs-archive-", dir=output.parent
     ) as raw:
         temporary = Path(raw)
+        electron_dist = temporary / "electron-runtime"
+        electron_archive_identity = _prepare_electron_archive(
+            electron_archive.resolve(strict=True),
+            electron_dist,
+            runtime_inventory,
+            parameters.source_date_epoch,
+        )
+        _validate_electron_runtime(electron_dist, runtime_inventory)
         asar_input = temporary / "asar-input"
         asar_path = temporary / "app.asar"
         asar_paths = _prepare_asar_input(source, desktop, asar_input, parameters)
@@ -300,6 +323,7 @@ def build_desktop_archive(
         },
         "toolchain": toolchain,
         "electron_input": {
+            "archive": electron_archive_identity,
             "inventory_sha256": _sha256(runtime_inventory_path.read_bytes()),
             "upstream_archive": runtime_inventory["upstream_archive"],
         },
@@ -313,6 +337,68 @@ def build_desktop_archive(
     (output / "build-provenance.json").write_bytes(canonical_json(provenance))
     _write_checksums(output)
     return built
+
+
+def _prepare_electron_archive(
+    archive_path: Path,
+    destination: Path,
+    inventory: Mapping[str, object],
+    source_date_epoch: int,
+) -> dict[str, object]:
+    _require_regular_file(archive_path, "Electron archive")
+    archive = archive_path.read_bytes()
+    upstream = _mapping(inventory, "upstream_archive")
+    if archive_path.name != _string(upstream, "name") or _sha256(archive) != _string(
+        upstream, "sha256"
+    ):
+        raise ArchiveBuildError("Electron archive identity changed")
+    raw_files = inventory.get("files")
+    if not isinstance(raw_files, list):
+        raise ArchiveBuildError("Electron inventory files are invalid")
+    expected = {
+        _string(_object(raw, "Electron file"), "path"): _object(raw, "Electron file")
+        for raw in raw_files
+    }
+    destination.mkdir(mode=0o755, parents=True)
+    observed: set[str] = set()
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive), mode="r") as source:
+            for member in source.infolist():
+                path = member.filename
+                _validate_relative_path(path)
+                if path in observed or path not in expected or member.is_dir():
+                    raise ArchiveBuildError("Electron archive inventory changed")
+                item = expected[path]
+                mode = stat.S_IMODE(member.external_attr >> 16)
+                file_type = stat.S_IFMT(member.external_attr >> 16)
+                if (
+                    member.flag_bits & 0x1
+                    or file_type != stat.S_IFREG
+                    or member.file_size != _integer(item, "byte_count")
+                    or mode != _integer(item, "mode")
+                ):
+                    raise ArchiveBuildError(f"Electron archive member changed: {path}")
+                content = source.read(member)
+                if _sha256(content) != _string(item, "sha256"):
+                    raise ArchiveBuildError(f"Electron archive member changed: {path}")
+                target = destination / path
+                target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+                target.write_bytes(content)
+                target.chmod(mode)
+                os.utime(target, (source_date_epoch, source_date_epoch))
+                observed.add(path)
+    except ArchiveBuildError:
+        raise
+    except (OSError, RuntimeError, zipfile.BadZipFile) as error:
+        raise ArchiveBuildError("Electron archive is invalid") from error
+    if observed != set(expected):
+        raise ArchiveBuildError("Electron archive inventory changed")
+    for directory in sorted(
+        (path for path in destination.rglob("*") if path.is_dir()), reverse=True
+    ):
+        directory.chmod(0o755)
+        os.utime(directory, (source_date_epoch, source_date_epoch))
+    return {"name": archive_path.name, **_file_identity(archive)}
 
 
 def _prepare_asar_input(
@@ -822,7 +908,7 @@ def _sha256(content: bytes) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True, type=Path)
-    parser.add_argument("--electron-dist", required=True, type=Path)
+    parser.add_argument("--electron-archive", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--release-version", required=True)
     parser.add_argument("--core-minimum", required=True)
@@ -847,7 +933,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         built = build_desktop_archive(
             args.source_root,
-            args.electron_dist,
+            args.electron_archive,
             args.output_dir,
             parameters,
             node_executable=args.node_executable,

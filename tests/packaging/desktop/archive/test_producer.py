@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import stat
 import struct
 import sys
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
@@ -76,6 +79,39 @@ def _rewritten_archive(
     )
 
 
+def _electron_zip(entries: dict[str, tuple[bytes, int]]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path, (content, mode) in entries.items():
+            member = zipfile.ZipInfo(path)
+            member.create_system = 3
+            member.external_attr = (stat.S_IFREG | mode) << 16
+            archive.writestr(member, content)
+    return output.getvalue()
+
+
+def _electron_inventory(
+    archive: bytes, entries: dict[str, tuple[bytes, int]]
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "electron_version": "44.2.0",
+        "upstream_archive": {
+            "name": "electron.zip",
+            "sha256": producer._sha256(archive),
+        },
+        "files": [
+            {
+                "path": path,
+                "byte_count": len(content),
+                "sha256": producer._sha256(content),
+                "mode": mode,
+            }
+            for path, (content, mode) in entries.items()
+        ],
+    }
+
+
 def test_documents_are_reproducible_and_validate_against_s0() -> None:
     first = build_contract_documents(PAYLOAD, PARAMETERS, _contract())
     second = build_contract_documents(PAYLOAD, PARAMETERS, _contract())
@@ -93,6 +129,67 @@ def test_documents_are_reproducible_and_validate_against_s0() -> None:
     )
     assert validated.layout.file_count == 4
     assert validated.install.compatibility.core_minimum == "0.4.2-dev.183"
+
+
+def test_verified_electron_zip_is_extracted_with_normalized_modes(
+    tmp_path: Path,
+) -> None:
+    entries = {
+        "electron": (b"binary", 0o755),
+        "resources/default_app.asar": (b"default", 0o644),
+        "version": (b"44.2.0\n", 0o644),
+    }
+    archive = _electron_zip(entries)
+    archive_path = tmp_path / "electron.zip"
+    archive_path.write_bytes(archive)
+    destination = tmp_path / "runtime"
+
+    identity = producer._prepare_electron_archive(
+        archive_path,
+        destination,
+        _electron_inventory(archive, entries),
+        PARAMETERS.source_date_epoch,
+    )
+
+    assert identity == {
+        "name": "electron.zip",
+        "byte_count": len(archive),
+        "sha256": producer._sha256(archive),
+    }
+    for path, (content, mode) in entries.items():
+        extracted = destination / path
+        assert extracted.read_bytes() == content
+        assert stat.S_IMODE(extracted.stat().st_mode) == mode
+        assert int(extracted.stat().st_mtime) == PARAMETERS.source_date_epoch
+
+
+def test_electron_zip_rejects_wrong_digest_and_escaping_member(
+    tmp_path: Path,
+) -> None:
+    entries = {"../escape": (b"bad", 0o644)}
+    archive = _electron_zip(entries)
+    archive_path = tmp_path / "electron.zip"
+    archive_path.write_bytes(archive)
+    inventory = _electron_inventory(archive, entries)
+
+    with pytest.raises(ArchiveBuildError, match="path is invalid"):
+        producer._prepare_electron_archive(
+            archive_path,
+            tmp_path / "runtime",
+            inventory,
+            PARAMETERS.source_date_epoch,
+        )
+
+    upstream = inventory["upstream_archive"]
+    assert isinstance(upstream, dict)
+    upstream["sha256"] = "0" * 64
+    with pytest.raises(ArchiveBuildError, match="identity changed"):
+        producer._prepare_electron_archive(
+            archive_path,
+            tmp_path / "runtime-wrong-digest",
+            inventory,
+            PARAMETERS.source_date_epoch,
+        )
 
 
 def test_wrong_platform_has_no_candidate() -> None:

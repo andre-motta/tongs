@@ -23,17 +23,15 @@ scan_depth = 5
 
 The desktop workspace does not provide an online repository picker. Clone a
 repository below the scan root, then choose **Refresh local repositories** in
-the sidebar. The discovered repository name and forge are then available as a
-sidebar entry. Choose **All reviews** to combine review reads from every
+the sidebar. The repository name then appears as a sidebar entry. Choose **All
+reviews** to combine review reads from every
 discovered repository, or choose one repository to scope the inbox to that
 project.
 
 While discovery is running, the sidebar shows **Finding admitted
 repositories…**. If no repository is found, it shows **No local repositories
 were found. Clone a repository under the configured scan root, then refresh.**
-If discovery fails, use **Retry**. Refreshing discovery also refreshes the
-repository handles used by the inbox, so a later read does not use a stale
-repository selection.
+If discovery fails, use **Retry**.
 
 ## Find a review
 
@@ -51,8 +49,8 @@ scope.** or **No closed or merged reviews match this repository scope.**
 
 The review header contains **← Reviews**, the review number and title, and an
 **Open on forge** button. That button opens the review's existing forge URL in
-the external browser. The desktop workspace itself continues to use the local
-repository admission and service data described above.
+the external browser. The desktop workspace continues to use the local
+repositories and review data described above.
 
 ## Read review details
 
@@ -94,8 +92,8 @@ bounded row windows with **Previous rows** and **Next rows** controls. In
 **Unified** layout, rows are shown in one sequence. In **Split** layout, the
 old and new sides are aligned in two panes; an empty cell represents a side
 with no corresponding row. Changed lines and their available line numbers are
-selectable for navigation. Non-text, unavailable, and placeholder rows remain
-read-only.
+selectable to highlight the chosen line in the current diff. Non-text,
+unavailable, and placeholder rows remain read-only.
 
 The desktop checks the revision and snapshot while it loads pages. If a
 snapshot expires or the review changes during loading, it asks you to reload

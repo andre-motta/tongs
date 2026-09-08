@@ -30,6 +30,7 @@ import type {
 import { reviewMutationMessage } from "../../../shared/review.js";
 import type {
   AppRoute,
+  DiscussionDiffTarget,
   FeatureContribution,
   FeatureContext,
   InlineAnchorSelection,
@@ -66,6 +67,12 @@ import {
   type DraftAnchorSelection,
   type ReviewWorkflowState,
 } from "./state.js";
+import {
+  formatSuggestionBody,
+  prepareSuggestionTarget,
+  suggestionDisabledReason,
+  type SuggestionForge,
+} from "./suggestion.js";
 
 const ACTIVE_DRAFT_STATES = ["editable", "submitting", "partial", "unknown"] as const;
 const workflowCache = new Map<string, ReviewWorkflowState>();
@@ -80,6 +87,10 @@ interface ComposerBuffers {
   general: string;
   readonly inline: Map<string, string>;
   readonly replies: Map<string, string>;
+  readonly suggestions: Map<
+    string,
+    { readonly comment: string; readonly replacement: string }
+  >;
 }
 
 const composerCache = new Map<string, ComposerBuffers>();
@@ -128,6 +139,10 @@ function ReviewWorkflow({
   readonly route: Extract<AppRoute, { kind: "review" }>;
 }): ReactNode {
   const review = route.item.handle;
+  const forge =
+    context.repositories.find(
+      (repository) => repository.handle === route.item.repository,
+    )?.forge_type ?? null;
   const [snapshot, setSnapshot] = useState<ReviewSnapshotDto | null>(null);
   const [discussions, setDiscussions] = useState<readonly DiscussionDto[]>([]);
   const [mutationCapabilities, setMutationCapabilities] =
@@ -150,6 +165,20 @@ function ReviewWorkflow({
   const [inlineBody, setInlineBodyState] = useState(
     initialAnchorKey ? initialBuffers.inline.get(initialAnchorKey) ?? "" : "",
   );
+  const initialSuggestion = suggestionBuffer(
+    initialBuffers,
+    initialAnchorKey,
+    context.inlineAnchor,
+  );
+  const [suggestionComment, setSuggestionCommentState] = useState(
+    initialSuggestion.comment,
+  );
+  const [suggestionReplacement, setSuggestionReplacementState] = useState(
+    initialSuggestion.replacement,
+  );
+  const [suggestionOpen, setSuggestionOpen] = useState(
+    context.inlineAnchor !== null,
+  );
   const [reply, setReply] = useState<{ readonly id: string; readonly body: string } | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [mergeOptions, setMergeOptions] = useState({
@@ -167,6 +196,16 @@ function ReviewWorkflow({
     if (key) buffersFor(review).inline.set(key, body);
     setInlineBodyState(body);
   };
+  const setSuggestionBuffer = (
+    comment: string,
+    replacement: string,
+  ): void => {
+    const key = anchorIdentity(anchorRef.current);
+    if (key)
+      buffersFor(review).suggestions.set(key, { comment, replacement });
+    setSuggestionCommentState(comment);
+    setSuggestionReplacementState(replacement);
+  };
   const setReplyBuffer = (
     value: { readonly id: string; readonly body: string } | null,
   ): void => {
@@ -181,12 +220,24 @@ function ReviewWorkflow({
     anchorRef.current = context.inlineAnchor;
     const key = anchorIdentity(context.inlineAnchor);
     setInlineBodyState(key ? buffersFor(review).inline.get(key) ?? "" : "");
+    const suggestion = suggestionBuffer(
+      buffersFor(review),
+      key,
+      context.inlineAnchor,
+    );
+    setSuggestionCommentState(suggestion.comment);
+    setSuggestionReplacementState(suggestion.replacement);
+    setSuggestionOpen(context.inlineAnchor !== null);
   }, [context.inlineAnchor]);
   useEffect(() => {
     const buffers = buffersFor(review);
     setGeneralBodyState(buffers.general);
     const key = anchorIdentity(context.inlineAnchor);
     setInlineBodyState(key ? buffers.inline.get(key) ?? "" : "");
+    const suggestion = suggestionBuffer(buffers, key, context.inlineAnchor);
+    setSuggestionCommentState(suggestion.comment);
+    setSuggestionReplacementState(suggestion.replacement);
+    setSuggestionOpen(context.inlineAnchor !== null);
     setReply(null);
   }, [context.inlineAnchor, review]);
   const apply = useCallback(
@@ -386,6 +437,97 @@ function ReviewWorkflow({
     try {
       if (workflow?.draft.remote) await addDraftComment(body, anchor);
       else await quickComment(body, anchor);
+    } catch (reason) {
+      setError(reviewMutationError(reason));
+    }
+  };
+
+  const sendSuggestion = async (): Promise<void> => {
+    const selection = anchorRef.current;
+    if (!workflow || !selection || !forge) return;
+    const reason = suggestionActionDisabledReason(
+      selection,
+      forge,
+      mutationCapabilities,
+      Boolean(workflow.draft.remote),
+      workflow,
+      quickBlocked,
+    );
+    if (reason) {
+      setError(reason);
+      return;
+    }
+    try {
+      const target = prepareSuggestionTarget(selection, forge);
+      const body = formatSuggestionBody(
+        suggestionReplacement,
+        target.originalLineCount,
+        forge,
+        suggestionComment,
+      );
+      if (workflow.draft.remote) {
+        const draftAnchor = await captureDraftAnchor(
+          target.draftSelection,
+          () => {
+            const current = anchorRef.current;
+            if (!current) return null;
+            try {
+              return prepareSuggestionTarget(current, forge).draftSelection;
+            } catch {
+              return null;
+            }
+          },
+        );
+        apply((current) =>
+          editDraft(current, {
+            ...current.draft.local,
+            comments: [
+              ...current.draft.local.comments,
+              {
+                id: crypto.randomUUID(),
+                kind: "inline",
+                body,
+                anchor: draftAnchor,
+              },
+            ],
+          }),
+        );
+        clearSuggestionBuffer(review, selection);
+        setSuggestionCommentState("");
+        setSuggestionReplacementState(target.originalCode);
+        setSuggestionOpen(false);
+        return;
+      }
+      const operationId = newOperationId("suggestion");
+      const command: InlineCommentParams = {
+        operation_id: operationId,
+        review,
+        revision: selection.revision,
+        anchor: target.mutationAnchor,
+        body,
+      };
+      apply((current) => beginQuickIntent(current, operationId, command));
+      setError(null);
+      try {
+        const outcome = await bridge.postInlineReviewComment(command);
+        apply((current) => settleQuickIntent(current, operationId, outcome));
+        if (outcome.outcome === "known") {
+          clearSuggestionBuffer(review, selection);
+          setSuggestionCommentState("");
+          setSuggestionReplacementState(target.originalCode);
+          setSuggestionOpen(false);
+        }
+      } catch (reason) {
+        apply((current) =>
+          isUncertainError(reason)
+            ? markQuickIntentUncertain(current, operationId)
+            : rejectQuickIntent(
+                current,
+                operationId,
+                reviewMutationError(reason),
+              ),
+        );
+      }
     } catch (reason) {
       setError(reviewMutationError(reason));
     }
@@ -733,6 +875,13 @@ function ReviewWorkflow({
                     setReply={setReplyBuffer}
                     sendReply={sendReply}
                     resolve={resolveDiscussion}
+                    showInDiff={(target) =>
+                      context.navigate({
+                        ...route,
+                        panel: "diff",
+                        diffTarget: target,
+                      })
+                    }
                   />
                 ))}
               </div>
@@ -786,6 +935,25 @@ function ReviewWorkflow({
               }
               submit={() => void sendComment(inlineBody, context.inlineAnchor)}
             />
+            <SuggestionComposer
+              selection={context.inlineAnchor}
+              forge={forge}
+              durable={Boolean(workflow?.draft.remote)}
+              capabilities={mutationCapabilities}
+              workflow={workflow}
+              quickBlocked={quickBlocked}
+              open={suggestionOpen}
+              comment={suggestionComment}
+              replacement={suggestionReplacement}
+              setOpen={setSuggestionOpen}
+              setComment={(value) =>
+                setSuggestionBuffer(value, suggestionReplacement)
+              }
+              setReplacement={(value) =>
+                setSuggestionBuffer(suggestionComment, value)
+              }
+              submit={() => void sendSuggestion()}
+            />
             <BufferedInlineNotes
               entries={buffersFor(review).inline}
               currentKey={anchorIdentity(context.inlineAnchor)}
@@ -829,6 +997,7 @@ function DiscussionCard({
   setReply,
   sendReply,
   resolve,
+  showInDiff,
 }: {
   readonly discussion: DiscussionDto;
   readonly canReply: boolean;
@@ -837,8 +1006,10 @@ function DiscussionCard({
   readonly setReply: (value: { readonly id: string; readonly body: string } | null) => void;
   readonly sendReply: () => Promise<void>;
   readonly resolve: (discussion: DiscussionDto) => Promise<void>;
+  readonly showInDiff: (target: DiscussionDiffTarget) => void;
 }): ReactNode {
   const composing = reply?.id === discussion.id;
+  const diffTarget = discussionDiffTarget(discussion);
   return (
     <article className="review-workflow-thread" tabIndex={-1}>
       <p className="review-workflow-thread-meta">
@@ -850,6 +1021,20 @@ function DiscussionCard({
         <blockquote key={item.id}>{item.body}</blockquote>
       ))}
       <div className="review-workflow-row">
+        {discussion.is_inline && (
+          <button
+            className="button button-secondary"
+            disabled={!diffTarget}
+            title={
+              diffTarget
+                ? "Resolve this discussion against the currently displayed diff."
+                : "This discussion has no usable diff location."
+            }
+            onClick={() => diffTarget && showInDiff(diffTarget)}
+          >
+            Show in diff
+          </button>
+        )}
         <button
           className="button button-secondary"
           disabled={!canReply}
@@ -888,6 +1073,28 @@ function DiscussionCard({
   );
 }
 
+export function discussionDiffTarget(
+  discussion: DiscussionDto,
+): DiscussionDiffTarget | null {
+  const comment = discussion.root_comment;
+  if (!discussion.is_inline || !comment.file_path) return null;
+  if (Number.isInteger(comment.new_line) && (comment.new_line ?? 0) > 0)
+    return Object.freeze({
+      discussionId: discussion.id,
+      path: comment.file_path,
+      side: "new",
+      line: comment.new_line!,
+    });
+  if (Number.isInteger(comment.old_line) && (comment.old_line ?? 0) > 0)
+    return Object.freeze({
+      discussionId: discussion.id,
+      path: comment.file_path,
+      side: "old",
+      line: comment.old_line!,
+    });
+  return null;
+}
+
 function Composer({
   label,
   body,
@@ -921,6 +1128,108 @@ function Composer({
       <button className="button" disabled={disabled || !body} onClick={submit}>
         {label}
       </button>
+    </section>
+  );
+}
+
+function SuggestionComposer({
+  selection,
+  forge,
+  durable,
+  capabilities,
+  workflow,
+  quickBlocked,
+  open,
+  comment,
+  replacement,
+  setOpen,
+  setComment,
+  setReplacement,
+  submit,
+}: {
+  readonly selection: InlineAnchorSelection | null;
+  readonly forge: SuggestionForge | null;
+  readonly durable: boolean;
+  readonly capabilities: ReviewMutationCapabilitiesDto | null;
+  readonly workflow: ReviewWorkflowState | null;
+  readonly quickBlocked: boolean;
+  readonly open: boolean;
+  readonly comment: string;
+  readonly replacement: string;
+  readonly setOpen: (value: boolean) => void;
+  readonly setComment: (value: string) => void;
+  readonly setReplacement: (value: string) => void;
+  readonly submit: () => void;
+}): ReactNode {
+  const reason = suggestionActionDisabledReason(
+    selection,
+    forge,
+    capabilities,
+    durable,
+    workflow,
+    quickBlocked,
+  );
+  const count = selection?.selectedLines?.length ?? 0;
+  const lineStart = selection?.selectedLines?.[0]?.newLine ?? null;
+  const lineEnd = selection?.selectedLines?.at(-1)?.newLine ?? null;
+  return (
+    <section className="review-workflow-composer suggestion-composer">
+      <div className="review-workflow-row suggestion-heading">
+        <strong>Suggested replacement</strong>
+        <button
+          className="button button-secondary"
+          disabled={reason !== null}
+          title={reason ?? undefined}
+          onClick={() => setOpen(!open)}
+        >
+          {open ? "Hide editor" : "Suggest replacement"}
+        </button>
+      </div>
+      {reason && <small>{reason}</small>}
+      {!reason && selection && (
+        <small>
+          {selection.newPath}, new line {lineStart}
+          {lineEnd !== lineStart ? ` through ${lineEnd}` : ""} ({count} source
+          {count === 1 ? " line" : " lines"})
+        </small>
+      )}
+      {open && !reason && selection && forge && (
+        <>
+          <label>
+            Optional explanation
+            <textarea
+              aria-label="Suggestion explanation"
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
+            />
+          </label>
+          <label>
+            Replacement code
+            <textarea
+              className="suggestion-code"
+              aria-label="Suggestion replacement code"
+              value={replacement}
+              spellCheck={false}
+              onChange={(event) => setReplacement(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.ctrlKey || event.metaKey) && event.key === "Enter")
+                  submit();
+              }}
+            />
+          </label>
+          <div className="review-workflow-row">
+            <button className="button" onClick={submit}>
+              {durable ? "Add suggestion to draft" : "Post quick suggestion"}
+            </button>
+            <button
+              className="button button-secondary"
+              onClick={() => setOpen(false)}
+            >
+              Cancel and keep text
+            </button>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -1449,10 +1758,38 @@ function draftCommentLabel(comment: DraftCommentInputDto): string {
 function buffersFor(review: string): ComposerBuffers {
   let buffers = composerCache.get(review);
   if (!buffers) {
-    buffers = { general: "", inline: new Map(), replies: new Map() };
+    buffers = {
+      general: "",
+      inline: new Map(),
+      replies: new Map(),
+      suggestions: new Map(),
+    };
     composerCache.set(review, buffers);
   }
   return buffers;
+}
+
+function suggestionBuffer(
+  buffers: ComposerBuffers,
+  key: string | null,
+  selection: InlineAnchorSelection | null,
+): { readonly comment: string; readonly replacement: string } {
+  if (!key || !selection) return { comment: "", replacement: "" };
+  return (
+    buffers.suggestions.get(key) ?? {
+      comment: "",
+      replacement:
+        selection.selectedLines?.map((line) => line.content).join("\n") ?? "",
+    }
+  );
+}
+
+function clearSuggestionBuffer(
+  review: string,
+  selection: InlineAnchorSelection,
+): void {
+  const key = anchorIdentity(selection);
+  if (key) buffersFor(review).suggestions.delete(key);
 }
 
 function anchorIdentity(anchor: InlineAnchorSelection | null): string | null {
@@ -1467,7 +1804,50 @@ function anchorIdentity(anchor: InlineAnchorSelection | null): string | null {
     newLine: anchor.newLine,
     contextLines: anchor.contextLines,
     contextComplete: anchor.contextComplete,
+    rangeOriginOldLine: anchor.rangeOriginOldLine,
+    rangeOriginNewLine: anchor.rangeOriginNewLine,
+    selectedLines: anchor.selectedLines,
   });
+}
+
+function suggestionActionDisabledReason(
+  selection: InlineAnchorSelection | null,
+  forge: SuggestionForge | null,
+  capabilities: ReviewMutationCapabilitiesDto | null,
+  durable: boolean,
+  workflow: ReviewWorkflowState | null,
+  quickBlocked: boolean,
+): string | null {
+  if (quickBlocked)
+    return "Resolve or acknowledge the previous action before another mutation.";
+  if (capabilities?.inline_comment !== true)
+    return "Inline comments are unsupported for this review.";
+  const reason = suggestionDisabledReason(selection, forge);
+  if (reason) return reason;
+  if (!selection || !workflow) return "The review workflow is still loading.";
+  if (selection.review !== workflow.displayed.review)
+    return "Select source code in the current review diff.";
+  if (!sameRevision(selection.revision, workflow.displayed.latestObservedRevision))
+    return "The selected code belongs to an earlier revision. Refresh the diff.";
+  if (
+    (selection.selectedLines?.length ?? 0) > 1 &&
+    capabilities.multiline_comment !== true
+  )
+    return "This forge does not support multi-line suggestions for the selected review.";
+  if (durable && !canCaptureDraftInline(workflow))
+    return "The draft is bound to an earlier revision or a durable submission attempt.";
+  return null;
+}
+
+function sameRevision(
+  left: ReviewRevisionDto,
+  right: ReviewRevisionDto,
+): boolean {
+  return (
+    left.head_sha === right.head_sha &&
+    left.base_sha === right.base_sha &&
+    left.start_sha === right.start_sha
+  );
 }
 
 function inlineBufferLabel(key: string): string {

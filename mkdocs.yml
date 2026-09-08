@@ -74,4 +74,5 @@ nav:
   - Reference:
       - Keybindings: reference/keybindings.md
       - Configuration: reference/configuration.md
+      - Security and signing: reference/security.md
   - Contributing: contributing.md

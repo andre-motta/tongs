@@ -88,7 +88,9 @@ Every change is reviewed for architecture, security, UX, and quality engineering
 ## Reporting a security issue
 
 Do not open a public issue for a vulnerability. Follow
-[SECURITY.md](https://github.com/andre-motta/tongs/blob/main/SECURITY.md).
+[SECURITY.md](https://github.com/andre-motta/tongs/blob/main/SECURITY.md), and see
+[Security and signing](reference/security.md) for the trust boundaries that the
+report scope depends on.
 
 ## Code of conduct
 

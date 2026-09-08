@@ -137,4 +137,3 @@ function split(rowIndex, old, newer) {
     new: newer,
   };
 }
-

@@ -672,7 +672,9 @@ class ReviewOperations:
                     ServiceErrorCode.CONFLICT,
                     "The operation ID is bound to another review action.",
                 )
-            return receipt
+            if receipt is None:
+                return None
+            return await self._session.mr_actions.execute(command)
 
         try:
             receipt = await _cancelable(

@@ -31,7 +31,7 @@ from tongs.desktop.protocol.review_operations import (
 )
 from tongs.desktop.protocol.server import DesktopSidecarServer, RequestContext
 from tongs.desktop.protocol.state import HandleKind, HandleRegistry
-from tongs.errors import NetworkError
+from tongs.errors import AuthError, NetworkError
 from tongs.forges.base import ForgeClient
 from tongs.forges.github import GitHubClient
 from tongs.forges.models import (
@@ -707,6 +707,58 @@ async def test_cancel_fallback_rejects_receipt_for_different_action(setup) -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change_options", [False, True])
+async def test_cancel_fallback_uses_full_retained_merge_command(
+    setup, monkeypatch: pytest.MonkeyPatch, change_options: bool
+) -> None:
+    operations, session, handles = setup
+    params: JsonObject = {
+        "operation_id": f"cancelled-merge-options:{change_options}",
+        "review": handles["review"],
+        "revision": _revision_wire(),
+        "squash": False,
+    }
+    first = await operations.merge_review(params, _context("original-request"))
+    original_execute = session.mr_actions.execute
+    original_receipt = session.mr_actions.receipt
+    entered_execute = asyncio.Event()
+    entered_recovery = asyncio.Event()
+
+    async def tracked_execute(command):
+        entered_execute.set()
+        return await original_execute(command)
+
+    async def tracked_receipt(operation_id: str):
+        entered_recovery.set()
+        return await original_receipt(operation_id)
+
+    monkeypatch.setattr(session.mr_actions, "execute", tracked_execute)
+    monkeypatch.setattr(session.mr_actions, "receipt", tracked_receipt)
+    await session.mr_actions._operation_lock.acquire()
+    context = _context("cancelled-request")
+    repeated_params = params.copy()
+    if change_options:
+        repeated_params.update(
+            {"squash": True, "source_cleanup": {"branch": "feature"}}
+        )
+    running = asyncio.create_task(operations.merge_review(repeated_params, context))
+    try:
+        await entered_execute.wait()
+        context.cancellation.cancel()
+        await entered_recovery.wait()
+    finally:
+        session.mr_actions._operation_lock.release()
+
+    if change_options:
+        with pytest.raises(ServiceError) as conflict:
+            await running
+        assert conflict.value.code is ServiceErrorCode.CONFLICT
+    else:
+        assert await running == first
+    session.client.merge_mr.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_draft_roundtrip_conflict_stale_anchor_and_identity(setup) -> None:
     operations, session, handles = setup
     comment_id = uuid4()
@@ -792,16 +844,24 @@ async def test_draft_and_attempt_ids_never_authorize_another_review(setup) -> No
             )
         assert raised.value.code is ServiceErrorCode.RESOURCE_NOT_ISSUED
 
-    attempt = await session.drafts.lock_submission(draft.id, draft.version)
-    await session.drafts.mark_attempt_unknown(
-        attempt.id, step_id="step", reason="interrupted"
-    )
-    with pytest.raises(ServiceError) as attempt_error:
-        await operations.submission_status(
-            {"review": handles["review"], "attempt_id": str(attempt.id)},
-            _context(),
+    for foreign_draft in (draft, cross_forge):
+        attempt = await session.drafts.lock_submission(
+            foreign_draft.id, foreign_draft.version
         )
-    assert attempt_error.value.code is ServiceErrorCode.RESOURCE_NOT_ISSUED
+        await session.drafts.mark_attempt_unknown(
+            attempt.id, step_id="step", reason="interrupted"
+        )
+        with pytest.raises(ServiceError) as attempt_error:
+            await operations.submission_status(
+                {"review": handles["review"], "attempt_id": str(attempt.id)},
+                _context(),
+            )
+        assert attempt_error.value.code is ServiceErrorCode.RESOURCE_NOT_ISSUED
+
+    listed = await operations.list_submissions(
+        {"review": handles["review"], "max_items": 10}, _context()
+    )
+    assert listed["attempts"] == []
 
 
 @pytest.mark.asyncio
@@ -1005,6 +1065,10 @@ def _frame(request_id: str, method: str, params: JsonObject) -> bytes:
     )
 
 
+def _cancel_frame(request_id: str) -> bytes:
+    return json.dumps({"v": 1, "type": "cancel", "id": request_id}).encode() + b"\n"
+
+
 def _github_pr() -> dict[str, object]:
     return {
         "id": 420,
@@ -1027,6 +1091,117 @@ def _github_pr() -> dict[str, object]:
         "assignees": [],
         "changed_files": 1,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["start", "resume", "reconcile"])
+async def test_submission_cancellation_crosses_actual_ndjson_boundary(
+    tmp_path: Path, operation: str
+) -> None:
+    client = _client()
+    store = DraftStore(tmp_path / operation / "drafts.db")
+    await store.open()
+    session = _Session(store, client)
+    draft = await store.create_draft(
+        REVIEW,
+        REVISION,
+        DraftContent(comments=(GeneralDraftComment(uuid4(), "pending"),)),
+    )
+    expected_writes = 1
+    if operation == "resume":
+        client.add_comment.side_effect = AuthError("private rejection")
+        prepared = await session.review_submissions.start(draft.id, draft.version)
+        assert prepared.outcome.value == "paused"
+        expected_writes = 2
+    elif operation == "reconcile":
+        client.add_comment.side_effect = NetworkError("private uncertainty")
+        prepared = await session.review_submissions.start(draft.id, draft.version)
+        assert prepared.outcome.value == "unknown"
+        expected_writes = 2
+
+    entered = asyncio.Event()
+
+    async def hang(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    client.add_comment.side_effect = hang
+    server = DesktopSidecarServer(
+        session=cast(ApplicationSession, session),
+        plugin_registry=DesktopPluginRegistry(
+            entry_point_source=lambda _group: (), host_version="1.0"
+        ),
+        shutdown_timeout=1,
+    )
+    reader = asyncio.StreamReader()
+    writer = _WireWriter()
+    running = asyncio.create_task(server.run(reader, writer))
+    try:
+        reader.feed_data(
+            _frame(
+                "handshake",
+                "handshake",
+                {
+                    "protocol_major": 1,
+                    "core_version": version("tongs"),
+                    "capabilities": [REVIEW_CAPABILITY],
+                },
+            )
+        )
+        await writer.response("handshake")
+        review_handle = server._handles.issue(HandleKind.REVIEW, REVIEW)
+        if operation == "start":
+            method = "review_submissions.start"
+            params: JsonObject = {
+                "review": review_handle,
+                "draft_id": str(draft.id),
+                "expected_version": draft.version,
+            }
+        elif operation == "resume":
+            method = "review_submissions.resume"
+            params = {
+                "review": review_handle,
+                "attempt_id": str(prepared.attempt_id),
+            }
+        else:
+            method = "review_submissions.reconcile"
+            params = {
+                "review": review_handle,
+                "attempt_id": str(prepared.attempt_id),
+                "resolution": "retry_remaining",
+            }
+        request_id = f"cancel-submission-{operation}"
+        reader.feed_data(_frame(request_id, method, params))
+        await asyncio.wait_for(entered.wait(), 2)
+        reader.feed_data(_cancel_frame(request_id))
+        response = await writer.response(request_id)
+        result = cast(dict[str, object], response["result"])
+        assert result["outcome"] == "unknown"
+        assert result["resync_required"] is True
+        assert "private" not in json.dumps(response)
+
+        reader.feed_data(
+            _frame(
+                f"status-{operation}",
+                "review_submissions.status",
+                {
+                    "review": review_handle,
+                    "attempt_id": result["attempt_id"],
+                },
+            )
+        )
+        status = await writer.response(f"status-{operation}")
+        assert status["result"] == result
+        assert client.add_comment.await_count == expected_writes
+
+        reader.feed_data(_frame("shutdown", "shutdown", {}))
+        assert (await writer.response("shutdown"))["result"] == {"accepted": True}
+        await asyncio.wait_for(running, 2)
+    finally:
+        if not running.done():
+            reader.feed_eof()
+            with suppress(BaseException):
+                await asyncio.wait_for(running, 2)
 
 
 @pytest.mark.asyncio

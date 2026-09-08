@@ -1,0 +1,36 @@
+TAP version 13
+# Subtest: desktop report sample
+    # Subtest: passes a direct assertion
+    ok 1 - passes a direct assertion
+      ---
+      duration_ms: 0.778588
+      type: 'test'
+      ...
+    # Subtest: nested group
+        # Subtest: passes a nested assertion
+        ok 1 - passes a nested assertion
+          ---
+          duration_ms: 0.801228
+          type: 'test'
+          ...
+        1..1
+    ok 2 - nested group
+      ---
+      duration_ms: 0.884967
+      type: 'suite'
+      ...
+    1..2
+ok 1 - desktop report sample
+  ---
+  duration_ms: 2.450942
+  type: 'suite'
+  ...
+1..1
+# tests 2
+# suites 2
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 91.156555

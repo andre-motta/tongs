@@ -1,0 +1,43 @@
+name: Desktop Python companion RPMs
+
+on:
+  pull_request:
+    branches: [feat/desktop-app]
+    paths:
+      - packaging/rpm/python-dependencies/**
+      - tests/packaging/rpm/python-dependencies/**
+      - .github/workflows/desktop-python-rpms.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fedora-44-python-rpms:
+    name: Fedora 44 Python RPM closure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TONGS_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TONGS_HEAD_SHA }}
+          persist-credentials: false
+      - name: Record hosted runner and Podman versions
+        run: |
+          uname -a
+          podman version
+      - name: Build and install source-pinned companion RPMs
+        run: >-
+          packaging/rpm/python-dependencies/run_hosted.sh
+          --output-dir "$RUNNER_TEMP/tongs-python-rpms"
+      - name: Upload dependency, build, and install evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fedora-44-python-companion-rpms-${{ env.TONGS_HEAD_SHA }}
+          path: ${{ runner.temp }}/tongs-python-rpms
+          if-no-files-found: error
+          retention-days: 14

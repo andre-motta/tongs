@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from tests.integration.desktop.native_payload_acceptance import (
+    CHROMIUM_ZYGOTE_ARGV0,
     COMPACTED_PROCESS_ROLE_TYPES,
     MAX_ARGUMENT_BYTES,
     MAX_ARGUMENTS,
@@ -540,7 +541,8 @@ def _validate_process_refresh(
     """Allow only proven exec or exact Chromium argv-storage transitions."""
 
     stable_changed = (
-        previous.start_time_ticks != current.start_time_ticks
+        previous.pid != current.pid
+        or previous.start_time_ticks != current.start_time_ticks
         or previous.process_group != current.process_group
         or previous.ppid != current.ppid
     )
@@ -556,14 +558,22 @@ def _validate_process_refresh(
         if (
             previous.role in COMPACTED_PROCESS_ROLE_TYPES
             and current.role == "helper"
-            and previous.argv
-            and previous.argv[0] == previous.executable
             and _is_exact_argv_storage_compaction(
-                previous.role, previous.argv, current.argv
+                previous.role,
+                previous.executable,
+                previous.argv,
+                current.argv,
             )
             and current.raw_argv == current.argv
             and previous.raw_argv in (previous.argv, current.argv)
         ):
+            # The compact title carries no ``--type=`` token of its own, so the
+            # current observation was necessarily reclassified as a generic
+            # helper. The role must come from the already validated canonical
+            # observation, not from the compact string, so that a compacted
+            # ``--type=gpu-process`` process still counts as the single
+            # out-of-process GPU process. See
+            # ``.worktrees/desktop-125-chromium-process-title-audit.md``.
             return replace(current, role=previous.role, argv=previous.argv)
     parent = observations.get(previous.ppid)
     inherited_parent_image = (
@@ -581,19 +591,32 @@ def _validate_process_refresh(
 
 
 def _is_exact_argv_storage_compaction(
-    role: str, previous: tuple[str, ...], current: tuple[str, ...]
+    role: str, executable: str, previous: tuple[str, ...], current: tuple[str, ...]
 ) -> bool:
+    """Match Chromium's exact one-field process-title rewrite of a known role.
+
+    Per the pinned audit in
+    ``.worktrees/desktop-125-chromium-process-title-audit.md``,
+    ``SetProcessTitleFromCommandLine`` resolves ``/proc/self/exe`` and writes the
+    resolved executable followed by every canonical argument after argv[0],
+    separated by one ASCII space. A zygote-forked child therefore keeps canonical
+    argv[0] ``/proc/self/exe`` while its compact title starts with the resolved
+    executable, which is exactly the network-service utility case in failed
+    native attempt 6. Only that exact full-title equality is admitted: no
+    whitespace reconstruction, no prefix, and no re-parse of the compact field.
+    """
+
     process_type = COMPACTED_PROCESS_ROLE_TYPES.get(role)
-    expected_type = None if process_type is None else f"--type={process_type}"
+    if process_type is None or not previous or len(current) != 1:
+        return False
+    if previous[0] not in (executable, CHROMIUM_ZYGOTE_ARGV0):
+        return False
     type_arguments = tuple(
         argument for argument in previous if argument.startswith("--type=")
     )
-    return (
-        expected_type is not None
-        and type_arguments == (expected_type,)
-        and len(current) == 1
-        and current[0] == " ".join(previous)
-    )
+    if type_arguments != (f"--type={process_type}",):
+        return False
+    return current[0] == " ".join((executable, *previous[1:]))
 
 
 def _process_debug_identity(observation: ProcessObservation) -> str:

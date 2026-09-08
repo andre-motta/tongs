@@ -57,6 +57,12 @@ COMPACTED_PROCESS_ROLE_TYPES = {
     "renderer": "renderer",
     "utility": "utility",
 }
+# Chromium 152 ``zygote_linux.cc`` forks its children with this literal argv[0]
+# while ``SetProcessTitleFromCommandLine`` rewrites the title using the resolved
+# ``/proc/self/exe`` target, so a zygote-forked child legitimately reports a
+# canonical argv[0] that differs from its resolved executable. See
+# ``.worktrees/desktop-125-chromium-process-title-audit.md``.
+CHROMIUM_ZYGOTE_ARGV0 = "/proc/self/exe"
 SOFTWARE_RENDERERS = (
     "swiftshader",
     "llvmpipe",

@@ -1706,6 +1706,193 @@ def test_process_refresh_normalizes_exact_chromium_argv_storage_compaction(
     )
 
 
+# Exact canonical tail of the network-service utility process from failed native
+# attempt 6 (`.worktrees/evidence/desktop-125-ac90ce9-local-inputs/
+# failed-native-attempt-6.md`), trimmed to the arguments the journal recorded in
+# full. Chromium forked it from the zygote, so canonical argv[0] is the literal
+# `/proc/self/exe` while the later compacted title starts with the resolved
+# executable.
+ATTEMPT_SIX_UTILITY_TAIL = (
+    "--type=utility",
+    "--utility-sub-type=network.mojom.NetworkService",
+    "--lang=en-US",
+    "--service-sandbox-type=none",
+    "--enable-crash-reporter=4c35a100-cf37-40d1-9460-3f34de5e5ea6,no_channel",
+    "--standard-schemes=tongs",
+    "--shared-files=v8_context_snapshot_data:100",
+    "--field-trial-handle=3,i,16729955238146300512,10406605718793136162,262144",
+    "--variations-seed-version",
+)
+
+
+def _zygote_forked_pair(
+    tmp_path: Path, role: str, tail: tuple[str, ...]
+) -> tuple[ProcessObservation, ProcessObservation, dict[int, ProcessObservation]]:
+    """Build one canonical observation and its exact Chromium compaction."""
+
+    fixture = _fixture(tmp_path)
+    browser, zygote, *_rest = fixture["observations"][0].processes
+    canonical = (acceptance_module.CHROMIUM_ZYGOTE_ARGV0, *tail)
+    previous = replace(zygote, role=role, argv=canonical, raw_argv=canonical)
+    compacted = (" ".join((previous.executable, *tail)),)
+    current = replace(previous, role="helper", argv=compacted, raw_argv=compacted)
+    return previous, current, {browser.pid: browser, previous.pid: previous}
+
+
+def test_process_refresh_carries_utility_role_across_attempt_six_compaction(
+    tmp_path: Path,
+) -> None:
+    previous, current, observations = _zygote_forked_pair(
+        tmp_path, "utility", ATTEMPT_SIX_UTILITY_TAIL
+    )
+
+    normalized = launcher_module._validate_process_refresh(
+        previous, current, observations
+    )
+
+    assert normalized.role == "utility"
+    assert normalized.argv == previous.argv
+    assert normalized.argv[0] == acceptance_module.CHROMIUM_ZYGOTE_ARGV0
+    assert normalized.raw_argv == current.argv
+    assert normalized.executable == previous.executable
+    assert (
+        normalized.pid,
+        normalized.start_time_ticks,
+        normalized.process_group,
+        normalized.ppid,
+    ) == (
+        previous.pid,
+        previous.start_time_ticks,
+        previous.process_group,
+        previous.ppid,
+    )
+
+
+def test_process_refresh_carries_gpu_role_across_zygote_forked_compaction(
+    tmp_path: Path,
+) -> None:
+    previous, current, observations = _zygote_forked_pair(
+        tmp_path, "gpu", ("--type=gpu-process", "--gpu-preferences=value with space")
+    )
+
+    normalized = launcher_module._validate_process_refresh(
+        previous, current, observations
+    )
+
+    assert normalized.role == "gpu"
+    assert normalized.argv == previous.argv
+    assert normalized.raw_argv == current.argv
+
+
+@pytest.mark.parametrize(
+    "compacted",
+    [
+        "{exe} --type=utility",
+        "{exe} --type=utility --lang=en-US --extra",
+        "{exe} --type=utility --lang=en-GB",
+        "{exe} --type=renderer --lang=en-US",
+        "{argv0} --type=utility --lang=en-US",
+        "{exe}  --type=utility --lang=en-US",
+        "{exe}\t--type=utility --lang=en-US",
+        "--type=utility --lang=en-US {exe}",
+        "{exe} --type=utility --lang=en-US ",
+    ],
+)
+def test_process_refresh_rejects_compaction_differing_by_any_token(
+    tmp_path: Path, compacted: str
+) -> None:
+    previous, _current, observations = _zygote_forked_pair(
+        tmp_path, "utility", ("--type=utility", "--lang=en-US")
+    )
+    claimed = (
+        compacted.format(
+            exe=previous.executable, argv0=acceptance_module.CHROMIUM_ZYGOTE_ARGV0
+        ),
+    )
+    current = replace(previous, role="helper", argv=claimed, raw_argv=claimed)
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(previous, current, observations)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"pid": 909},
+        {"start_time_ticks": 9090},
+        {"process_group": 909},
+        {"ppid": 909},
+        {"executable": "/usr/bin/false"},
+    ],
+)
+def test_process_refresh_rejects_compaction_with_changed_kernel_identity(
+    tmp_path: Path, change: dict[str, Any]
+) -> None:
+    previous, current, observations = _zygote_forked_pair(
+        tmp_path, "utility", ATTEMPT_SIX_UTILITY_TAIL
+    )
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(
+            previous, replace(current, **change), observations
+        )
+
+
+def test_process_refresh_does_not_promote_a_compact_first_observation(
+    tmp_path: Path,
+) -> None:
+    previous, current, observations = _zygote_forked_pair(
+        tmp_path, "utility", ATTEMPT_SIX_UTILITY_TAIL
+    )
+    compact_first = replace(
+        previous, role="helper", argv=current.argv, raw_argv=current.argv
+    )
+
+    unchanged = launcher_module._validate_process_refresh(
+        compact_first, compact_first, observations
+    )
+
+    assert unchanged.role == "helper"
+    assert unchanged.argv == current.argv
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(compact_first, previous, observations)
+
+
+def test_final_verifier_rejects_first_observed_compacted_utility_title(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    base = fixture["observations"][0].processes[1]
+    compacted = (f"{base.executable} --type=utility --lang=en-US",)
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="process role differs from canonical type arguments",
+    ):
+        acceptance_module._verify_raw_process_argv(
+            replace(base, role="utility", argv=compacted, raw_argv=compacted)
+        )
+
+    first = fixture["observations"][0]
+    processes = tuple(
+        replace(process, role="helper", argv=compacted, raw_argv=compacted)
+        if process.role == "gpu"
+        else process
+        for process in first.processes
+    )
+    fixture["observations"] = (
+        replace(first, processes=processes),
+        fixture["observations"][1],
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="Electron canonical argv does not name its executable",
+    ):
+        _verify(fixture)
+
+
 @pytest.mark.parametrize(
     ("previous_change", "current_change"),
     [

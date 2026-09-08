@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Tongs
+Comment=Review GitHub and GitLab changes
+Exec=tongs desktop
+Icon=tongs
+Terminal=false
+Categories=Development;RevisionControl;
+StartupNotify=true

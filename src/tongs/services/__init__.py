@@ -70,6 +70,7 @@ from tongs.services.review_mutations import (
 from tongs.services.workspace_utilities import (
     EditorLogPlan,
     EditorPlanStatus,
+    EditorReservation,
     ReviewUrl,
     WorkspaceUtilityService,
 )
@@ -138,6 +139,7 @@ __all__ = [
     "DiffSide",
     "EditorLogPlan",
     "EditorPlanStatus",
+    "EditorReservation",
     "ForgeCapabilities",
     "GeneralComment",
     "HostFailure",

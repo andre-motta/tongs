@@ -26,6 +26,7 @@ export const MAX_ASSET_CHUNK_BYTES = 512 * 1024;
 const MAX_CRASH_HISTORY = 16;
 const MAX_JSON_DEPTH = 24;
 const MAX_JSON_ITEMS = 20_000;
+const EDITOR_EXPORT_ROOT_ENV = "TONGS_DESKTOP_EDITOR_EXPORT_ROOT";
 
 export class SidecarError extends Error {
   constructor(
@@ -188,6 +189,11 @@ export class SidecarTransport extends EventEmitter {
     const environment = { ...process.env };
     delete environment.PYTHONHOME;
     delete environment.PYTHONPATH;
+    if (this.launch.utilityExportRoot === undefined) {
+      delete environment[EDITOR_EXPORT_ROOT_ENV];
+    } else {
+      environment[EDITOR_EXPORT_ROOT_ENV] = this.launch.utilityExportRoot;
+    }
     let child: ChildProcessWithoutNullStreams;
     try {
       child = this.spawnChild(this.launch.pythonExecutable, SIDECAR_ARGUMENTS, {

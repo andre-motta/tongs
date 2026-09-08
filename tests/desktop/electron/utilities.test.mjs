@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -18,6 +18,9 @@ class FakeTransport {
       job_id: 31,
       argv: ["code", "--wait"],
       content: "safe log\n",
+      slot: 1,
+      token: "a".repeat(32),
+      export_name: `tongs-slot-1-job-31-${"a".repeat(32)}.log`,
     };
   }
   requestRead(method, params) {
@@ -29,7 +32,13 @@ class FakeTransport {
   }
   requestMutation(method, params) {
     this.mutations.push([method, params]);
-    return { result: Promise.resolve({ cleared: true }) };
+    return {
+      result: Promise.resolve(
+        method === "utilities.job_log_release"
+          ? { released: true }
+          : { cleared: true },
+      ),
+    };
   }
 }
 
@@ -113,7 +122,10 @@ test("editor export uses exact job, private file, safe argv, and exit cleanup", 
   assert.equal(launches[0][1][0], "--wait");
   const exported = launches[0][1][1];
   assert.equal(path.dirname(exported), root);
-  assert.match(path.basename(exported), /^tongs-job-31-.*\.log$/);
+  assert.equal(
+    path.basename(exported),
+    `tongs-slot-1-job-31-${"a".repeat(32)}.log`,
+  );
   assert.equal(await readFile(exported, "utf8"), "safe log\n");
   assert.equal((await lstat(root)).mode & 0o777, 0o700);
   assert.equal((await lstat(exported)).mode & 0o777, 0o600);
@@ -122,6 +134,10 @@ test("editor export uses exact job, private file, safe argv, and exit cleanup", 
   children[0].emit("exit", 0);
   await waitForEmptyDirectory(root);
   assert.deepEqual(await readdir(root), []);
+  assert.deepEqual(transport.mutations, [[
+    "utilities.job_log_release",
+    { slot: 1, token: "a".repeat(32) },
+  ]]);
 });
 
 async function waitForEmptyDirectory(directory) {
@@ -156,6 +172,9 @@ test("disabled editor outcome does not create a file or launch", async (t) => {
     job_id: 31,
     argv: [],
     content: null,
+    slot: null,
+    token: null,
+    export_name: null,
   };
 
   const result = await utility.openJobLogInEditor("job-handle");
@@ -181,42 +200,98 @@ test("missing editor executable has an actionable failure and cleans the export"
   assert.deepEqual(await readdir(root), []);
 });
 
-test("export count is bounded before the job log is fetched", async (t) => {
-  const { utility, root, transport } = await fixture(t);
-  await mkdir(root, { mode: 0o700 });
-  for (let index = 1; index <= 8; index += 1) {
-    const suffix = String(index).padStart(12, "0");
-    await writeFile(
-      path.join(root, `tongs-job-${index}-123e4567-e89b-42d3-a456-${suffix}.log`),
-      "retained",
-      { mode: 0o600 },
-    );
-  }
-
-  const result = await utility.openJobLogInEditor("job-handle");
-
-  assert.equal(result.outcome, "capacity_exceeded");
-  assert.equal(transport.reads.length, 0);
-});
-
-test("stale cleanup touches only strict owned export names", async (t) => {
-  const { utility, root, parent, transport } = await fixture(t);
-  await mkdir(root, { mode: 0o700 });
-  const stale = path.join(root, "tongs-job-31-123e4567-e89b-42d3-a456-426614174000.log");
-  const unrelated = path.join(root, "keep.txt");
-  await writeFile(stale, "old", { mode: 0o600 });
-  await writeFile(unrelated, "user", { mode: 0o600 });
-  await utimes(stale, 0, 0);
-  transport.editorPlan = { ...transport.editorPlan, status: "missing", argv: [], content: null };
-
-  await utility.openJobLogInEditor("job-handle");
-
-  assert.deepEqual(await readdir(root), ["keep.txt"]);
-
+test("editor root rejects a symlink without requesting a reservation", async (t) => {
+  const { root, parent, transport } = await fixture(t);
   const symlinkRoot = path.join(parent, "link-root");
   await symlink(root, symlinkRoot);
   const guarded = new WorkspaceUtilities(transport, { writeText() {} }, symlinkRoot, () => { throw new Error("must not launch"); });
   assert.equal((await guarded.openJobLogInEditor("job-handle")).outcome, "failed");
+  assert.equal(transport.reads.length, 0);
+});
+
+test("two utility instances sharing seven occupied slots admit one delayed export", async (t) => {
+  const parent = await rmRoot();
+  const root = path.join(parent, "exports");
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const authority = { occupied: 7, nextToken: 1 };
+  let releaseFetch;
+  const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+  const children = [];
+  const launch = () => {
+    const child = new FakeChild();
+    children.push(child);
+    queueMicrotask(() => child.emit("spawn"));
+    return child;
+  };
+  const makeTransport = () => ({
+    reads: [],
+    mutations: [],
+    requestRead(method, params) {
+      this.reads.push([method, params]);
+      if (authority.occupied >= 8) {
+        return { result: Promise.resolve({
+          status: "capacity_exceeded",
+          message: "The private editor export limit was reached.",
+          job: params.job,
+          job_id: 31,
+          argv: [],
+          content: null,
+          slot: null,
+          token: null,
+          export_name: null,
+        }) };
+      }
+      authority.occupied += 1;
+      const token = authority.nextToken.toString(16).padStart(32, "0");
+      authority.nextToken += 1;
+      return { result: fetchGate.then(() => ({
+        status: "ready",
+        message: "ready",
+        job: params.job,
+        job_id: 31,
+        argv: ["code", "--wait"],
+        content: "bounded\n",
+        slot: 8,
+        token,
+        export_name: `tongs-slot-8-job-31-${token}.log`,
+      })) };
+    },
+    requestMutation(method, params) {
+      this.mutations.push([method, params]);
+      return { result: Promise.resolve({ released: true }) };
+    },
+  });
+  const firstTransport = makeTransport();
+  const secondTransport = makeTransport();
+  const first = new WorkspaceUtilities(firstTransport, { writeText() {} }, root, launch);
+  const second = new WorkspaceUtilities(secondTransport, { writeText() {} }, root, launch);
+
+  const firstResult = first.openJobLogInEditor("job-one");
+  while (firstTransport.reads.length === 0)
+    await new Promise((resolve) => setImmediate(resolve));
+  const secondResult = await second.openJobLogInEditor("job-two");
+  assert.equal(secondResult.outcome, "capacity_exceeded");
+  releaseFetch();
+  assert.equal((await firstResult).outcome, "started");
+  assert.equal(children.length, 1);
+  assert.equal((await readdir(root)).length, 1);
+  children[0].emit("exit", 0);
+  await waitForEmptyDirectory(root);
+});
+
+test("exit cleanup preserves a replacement inode and its reservation", async (t) => {
+  const { utility, root, transport, launches, children } = await fixture(t);
+
+  assert.equal((await utility.openJobLogInEditor("job-handle")).outcome, "started");
+  const exported = launches[0][1].at(-1);
+  await rm(exported);
+  await writeFile(exported, "replacement", { mode: 0o600 });
+
+  children[0].emit("exit", 0);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.equal(await readFile(exported, "utf8"), "replacement");
+  assert.deepEqual(transport.mutations, []);
 });
 
 test("early nonzero editor exit is distinct and removes the export", async (t) => {

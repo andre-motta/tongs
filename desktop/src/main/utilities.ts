@@ -4,11 +4,10 @@ import {
   lstat,
   mkdir,
   open,
-  readdir,
   unlink,
+  type FileHandle,
 } from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { JsonObject, JsonValue } from "../shared/bridge.js";
 import type {
   ClearCacheResult,
@@ -19,14 +18,11 @@ import type {
 import { assertHttpsExternalUrl } from "./security.js";
 
 const MAX_EDITOR_LOG_BYTES = 4 * 1024 * 1024;
-const MAX_EXPORTS = 8;
-const MAX_EXPORT_BYTES = MAX_EDITOR_LOG_BYTES * MAX_EXPORTS;
 const MAX_EDITOR_ARGUMENTS = 64;
 const MAX_EDITOR_ARGUMENT_BYTES = 4096;
-const STALE_EXPORT_MILLISECONDS = 24 * 60 * 60 * 1000;
 const LAUNCH_TIMEOUT_MILLISECONDS = 5_000;
 const EARLY_EXIT_MILLISECONDS = 250;
-const EXPORT_NAME = /^tongs-job-[1-9][0-9]{0,18}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.log$/;
+const EXPORT_NAME = /^tongs-slot-([1-8])-job-([1-9][0-9]{0,18})-([0-9a-f]{32})\.log$/;
 
 interface UtilityTransport {
   requestRead(
@@ -54,7 +50,8 @@ type EditorPlanStatus =
   | "missing"
   | "malformed"
   | "terminal_unsupported"
-  | "log_too_large";
+  | "log_too_large"
+  | "capacity_exceeded";
 
 interface EditorLogPlan {
   readonly status: EditorPlanStatus;
@@ -63,11 +60,25 @@ interface EditorLogPlan {
   readonly job_id: number;
   readonly argv: readonly string[];
   readonly content: string | null;
+  readonly slot: number | null;
+  readonly token: string | null;
+  readonly export_name: string | null;
 }
 
-interface ExportInventory {
-  readonly count: number;
-  readonly bytes: number;
+interface EditorReservation {
+  readonly slot: number;
+  readonly token: string;
+  readonly exportName: string;
+}
+
+interface FileIdentity {
+  readonly device: number;
+  readonly inode: number;
+}
+
+interface PrivateExport {
+  readonly file: FileHandle;
+  readonly identity: FileIdentity;
 }
 
 type SpawnEditor = (
@@ -77,16 +88,17 @@ type SpawnEditor = (
 
 export class WorkspaceUtilities {
   private openingEditor = false;
+  private readonly exportRoot: string;
 
   constructor(
     private readonly transport: UtilityTransport,
     private readonly clipboard: ClipboardWriter,
-    private readonly exportRoot: string,
+    exportRoot: string,
     private readonly spawnEditor: SpawnEditor = defaultSpawnEditor,
-    private readonly now: () => number = Date.now,
   ) {
     if (!path.isAbsolute(exportRoot))
       throw new Error("The editor export root must be absolute");
+    this.exportRoot = path.resolve(exportRoot);
   }
 
   async copyReviewUrl(review: unknown): Promise<CopyReviewUrlResult> {
@@ -141,18 +153,11 @@ export class WorkspaceUtilities {
     }
     this.openingEditor = true;
     let exportPath: string | null = null;
+    let reservation: EditorReservation | null = null;
+    let identity: FileIdentity | null = null;
     try {
       const handle = opaqueHandle(job);
-      const inventory = await this.prepareExportRoot();
-      if (
-        inventory.count >= MAX_EXPORTS ||
-        inventory.bytes >= MAX_EXPORT_BYTES
-      ) {
-        return utilityResult(
-          "capacity_exceeded",
-          "The private editor export limit was reached. Retry after older exports expire.",
-        );
-      }
+      await this.prepareExportRoot();
       const value = await this.transport.requestRead(
         "utilities.job_log_export",
         { job: handle },
@@ -161,23 +166,24 @@ export class WorkspaceUtilities {
       if (plan.status !== "ready") {
         return utilityResult(plan.status, plan.message);
       }
+      reservation = {
+        slot: plan.slot!,
+        token: plan.token!,
+        exportName: plan.export_name!,
+      };
       const content = plan.content;
       if (content === null) throw new Error("Missing editor log content");
       const byteCount = Buffer.byteLength(content, "utf8");
-      if (
-        byteCount > MAX_EDITOR_LOG_BYTES ||
-        inventory.bytes + byteCount > MAX_EXPORT_BYTES
-      ) {
-        return utilityResult(
-          "capacity_exceeded",
-          "The private editor export limit was reached. No file was written.",
-        );
+      if (byteCount > MAX_EDITOR_LOG_BYTES)
+        throw new Error("Editor log exceeds the accepted bound");
+      exportPath = path.join(this.exportRoot, reservation.exportName);
+      const created = await createPrivateExport(exportPath);
+      identity = created.identity;
+      try {
+        await created.file.writeFile(content, { encoding: "utf8" });
+      } finally {
+        await created.file.close();
       }
-      exportPath = path.join(
-        this.exportRoot,
-        `tongs-job-${plan.job_id}-${randomUUID()}.log`,
-      );
-      await writePrivateExport(exportPath, content);
       const started = await startEditor(
         this.spawnEditor,
         plan.argv,
@@ -186,38 +192,58 @@ export class WorkspaceUtilities {
       if (!started.ok) {
         if (started.retain) {
           const retainedPath = exportPath;
+          const retainedReservation = reservation;
+          const retainedIdentity = identity;
           exportPath = null;
+          reservation = null;
+          identity = null;
           if (started.exited) {
-            await safeRemoveExport(this.exportRoot, retainedPath);
-          } else {
-            started.child.once("exit", () =>
-              scheduleRemove(this.exportRoot, retainedPath),
+            await this.cleanupExport(
+              retainedPath,
+              retainedIdentity,
+              retainedReservation,
             );
-            started.child.once("error", () =>
-              scheduleRemove(this.exportRoot, retainedPath),
+          } else {
+            attachCleanup(started.child, () =>
+              this.scheduleCleanup(
+                retainedPath,
+                retainedIdentity,
+                retainedReservation,
+              ),
             );
             started.child.unref();
           }
         } else {
-          await safeRemoveExport(this.exportRoot, exportPath);
+          await this.cleanupExport(exportPath, identity, reservation);
           exportPath = null;
+          reservation = null;
+          identity = null;
         }
         return utilityResult("failed", started.message);
       }
       const retainedPath = exportPath;
+      const retainedReservation = reservation;
+      const retainedIdentity = identity;
       exportPath = null;
+      reservation = null;
+      identity = null;
       if (started.exited) {
-        await safeRemoveExport(this.exportRoot, retainedPath);
+        await this.cleanupExport(
+          retainedPath,
+          retainedIdentity,
+          retainedReservation,
+        );
         return utilityResult(
           "started",
           "Editor process started and exited. Tongs cannot confirm that the exported log was opened.",
         );
       }
-      started.child.once("exit", () =>
-        scheduleRemove(this.exportRoot, retainedPath),
-      );
-      started.child.once("error", () =>
-        scheduleRemove(this.exportRoot, retainedPath),
+      attachCleanup(started.child, () =>
+        this.scheduleCleanup(
+          retainedPath,
+          retainedIdentity,
+          retainedReservation,
+        ),
       );
       started.child.unref();
       return utilityResult(
@@ -225,8 +251,9 @@ export class WorkspaceUtilities {
         "Editor started. Tongs cannot confirm that the exported log was opened.",
       );
     } catch {
-      if (exportPath !== null)
-        await safeRemoveExport(this.exportRoot, exportPath);
+      if (reservation !== null) {
+        await this.cleanupExport(exportPath, identity, reservation);
+      }
       return utilityResult(
         "failed",
         "The editor could not be started. Check the configured command and retry.",
@@ -236,7 +263,7 @@ export class WorkspaceUtilities {
     }
   }
 
-  private async prepareExportRoot(): Promise<ExportInventory> {
+  private async prepareExportRoot(): Promise<void> {
     try {
       await mkdir(this.exportRoot, { mode: 0o700 });
     } catch (error) {
@@ -251,29 +278,41 @@ export class WorkspaceUtilities {
     ) {
       throw new Error("The editor export root is not private");
     }
-    const entries = await readdir(this.exportRoot, { withFileTypes: true });
-    let count = 0;
-    let bytes = 0;
-    for (const entry of entries) {
-      if (!EXPORT_NAME.test(entry.name) || !entry.isFile()) continue;
-      const candidate = path.join(this.exportRoot, entry.name);
-      const metadata = await lstat(candidate);
-      if (
-        !metadata.isFile() ||
-        metadata.isSymbolicLink() ||
-        (typeof process.getuid === "function" &&
-          metadata.uid !== process.getuid())
-      ) {
-        continue;
-      }
-      if (this.now() - metadata.mtimeMs >= STALE_EXPORT_MILLISECONDS) {
-        await unlink(candidate);
-        continue;
-      }
-      count += 1;
-      bytes += metadata.size;
+  }
+
+  private scheduleCleanup(
+    exportPath: string,
+    identity: FileIdentity,
+    reservation: EditorReservation,
+  ): void {
+    void this.cleanupExport(exportPath, identity, reservation);
+  }
+
+  private async cleanupExport(
+    exportPath: string | null,
+    identity: FileIdentity | null,
+    reservation: EditorReservation,
+  ): Promise<void> {
+    const absent =
+      exportPath === null
+        ? true
+        : await removeExport(
+            this.exportRoot,
+            exportPath,
+            identity,
+          ).catch(() => false);
+    if (!absent) return;
+    try {
+      const result = await this.transport.requestMutation(
+        "utilities.job_log_release",
+        { slot: reservation.slot, token: reservation.token },
+      ).result;
+      exactKeys(result, ["released"]);
+      if (typeof result.released !== "boolean")
+        throw new Error("Invalid editor reservation release result");
+    } catch {
+      // The retained ledger row is reclaimed by a later explicit operation.
     }
-    return { count, bytes };
   }
 }
 
@@ -283,6 +322,17 @@ function defaultSpawnEditor(command: string, args: readonly string[]): ChildProc
     shell: false,
     stdio: "ignore",
   });
+}
+
+function attachCleanup(child: ChildProcess, cleanup: () => void): void {
+  let scheduled = false;
+  const once = () => {
+    if (scheduled) return;
+    scheduled = true;
+    cleanup();
+  };
+  child.once("exit", once);
+  child.once("error", once);
 }
 
 async function startEditor(
@@ -380,7 +430,7 @@ async function startEditor(
   return { ok: true, child, exited: earlyExit !== "running" };
 }
 
-async function writePrivateExport(filePath: string, content: string): Promise<void> {
+async function createPrivateExport(filePath: string): Promise<PrivateExport> {
   const flags =
     constants.O_WRONLY |
     constants.O_CREAT |
@@ -395,39 +445,41 @@ async function writePrivateExport(filePath: string, content: string): Promise<vo
     ) {
       throw new Error("The editor export file is not owned by this user");
     }
-    await file.writeFile(content, { encoding: "utf8" });
-  } finally {
-    await file.close();
+    return {
+      file,
+      identity: { device: metadata.dev, inode: metadata.ino },
+    };
+  } catch (error) {
+    await file.close().catch(() => undefined);
+    throw error;
   }
 }
 
-async function removeExport(exportRoot: string, filePath: string): Promise<void> {
+async function removeExport(
+  exportRoot: string,
+  filePath: string,
+  identity: FileIdentity | null,
+): Promise<boolean> {
   try {
     const metadata = await lstat(filePath);
     if (
+      identity === null ||
       !EXPORT_NAME.test(path.basename(filePath)) ||
       path.dirname(filePath) !== exportRoot ||
       !metadata.isFile() ||
       metadata.isSymbolicLink() ||
-      (typeof process.getuid === "function" && metadata.uid !== process.getuid())
+      (typeof process.getuid === "function" && metadata.uid !== process.getuid()) ||
+      metadata.dev !== identity.device ||
+      metadata.ino !== identity.inode
     ) {
-      return;
+      return false;
     }
     await unlink(filePath);
+    return true;
   } catch (error) {
-    if (!isMissing(error)) throw error;
+    if (isMissing(error)) return true;
+    throw error;
   }
-}
-
-function scheduleRemove(exportRoot: string, filePath: string): void {
-  void safeRemoveExport(exportRoot, filePath);
-}
-
-async function safeRemoveExport(
-  exportRoot: string,
-  filePath: string,
-): Promise<void> {
-  await removeExport(exportRoot, filePath).catch(() => undefined);
 }
 
 function assertReviewUrlPlan(value: unknown, review: string): ReviewUrlPlan {
@@ -438,7 +490,17 @@ function assertReviewUrlPlan(value: unknown, review: string): ReviewUrlPlan {
 }
 
 function assertEditorLogPlan(value: unknown, job: string): EditorLogPlan {
-  exactKeys(value, ["status", "message", "job", "job_id", "argv", "content"]);
+  exactKeys(value, [
+    "status",
+    "message",
+    "job",
+    "job_id",
+    "argv",
+    "content",
+    "slot",
+    "token",
+    "export_name",
+  ]);
   const statuses = new Set<EditorPlanStatus>([
     "ready",
     "disabled",
@@ -446,7 +508,12 @@ function assertEditorLogPlan(value: unknown, job: string): EditorLogPlan {
     "malformed",
     "terminal_unsupported",
     "log_too_large",
+    "capacity_exceeded",
   ]);
+  const reservation =
+    typeof value.export_name === "string"
+      ? EXPORT_NAME.exec(value.export_name)
+      : null;
   if (
     typeof value.status !== "string" ||
     !statuses.has(value.status as EditorPlanStatus) ||
@@ -469,9 +536,24 @@ function assertEditorLogPlan(value: unknown, job: string): EditorLogPlan {
     (typeof value.content === "string" &&
       Buffer.byteLength(value.content, "utf8") > MAX_EDITOR_LOG_BYTES) ||
     (value.status === "ready" &&
-      (value.argv.length === 0 || typeof value.content !== "string")) ||
+      (value.argv.length === 0 ||
+        typeof value.content !== "string" ||
+        !Number.isSafeInteger(value.slot) ||
+        Number(value.slot) < 1 ||
+        Number(value.slot) > 8 ||
+        typeof value.token !== "string" ||
+        !/^[0-9a-f]{32}$/.test(value.token) ||
+        typeof value.export_name !== "string" ||
+        reservation === null ||
+        Number(reservation[1]) !== value.slot ||
+        Number(reservation[2]) !== value.job_id ||
+        reservation[3] !== value.token)) ||
     (value.status !== "ready" &&
-      (value.argv.length !== 0 || value.content !== null))
+      (value.argv.length !== 0 ||
+        value.content !== null ||
+        value.slot !== null ||
+        value.token !== null ||
+        value.export_name !== null))
   ) {
     throw new Error("Invalid editor log plan");
   }

@@ -83,7 +83,12 @@ async function runProof() {
       return child;
     };
     transport = new SidecarTransport(
-      { pythonExecutable, coreVersion, safeCwd: evidenceRoot },
+      {
+        pythonExecutable,
+        coreVersion,
+        safeCwd: evidenceRoot,
+        utilityExportRoot: exportRoot,
+      },
       2_000,
       10_000,
       5_000,

@@ -5,6 +5,7 @@ export interface DesktopLaunchConfig {
   readonly pythonExecutable: string;
   readonly coreVersion: string;
   readonly safeCwd: string;
+  readonly utilityExportRoot?: string;
 }
 
 export const SIDECAR_ARGUMENTS = Object.freeze([
@@ -35,6 +36,14 @@ export function validateLaunchConfig(
   const safeCwd = realpathSync(value.safeCwd);
   if (!statSync(safeCwd).isDirectory()) {
     throw new Error("The desktop safe working directory must exist");
+  }
+  if (
+    value.utilityExportRoot !== undefined &&
+    (!path.isAbsolute(value.utilityExportRoot) ||
+      value.utilityExportRoot.length > 4096 ||
+      value.utilityExportRoot.includes("\0"))
+  ) {
+    throw new Error("The desktop utility export root is invalid");
   }
   return Object.freeze({ ...value, safeCwd });
 }

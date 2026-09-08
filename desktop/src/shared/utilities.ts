@@ -36,4 +36,5 @@ export const UTILITY_PROTOCOL_METHODS = Object.freeze([
   "utilities.review_url",
   "utilities.cache_clear",
   "utilities.job_log_export",
+  "utilities.job_log_release",
 ] as const);

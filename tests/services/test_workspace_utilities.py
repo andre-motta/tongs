@@ -19,6 +19,7 @@ from tongs.services.models import (
 )
 from tongs.services.workspace_utilities import (
     EditorPlanStatus,
+    EditorReservation,
     WorkspaceUtilityService,
 )
 
@@ -65,6 +66,9 @@ class Calls:
         self.reviews: list[ReviewRef] = []
         self.jobs: list[JobRef] = []
         self.cache_clears = 0
+        self.reservations: list[tuple[int, str]] = []
+        self.releases: list[tuple[int, str]] = []
+        self.capacity = True
 
     async def get_review(self, review: ReviewRef) -> ReviewSnapshot:
         self.reviews.append(review)
@@ -76,6 +80,18 @@ class Calls:
 
     async def clear_cache(self) -> None:
         self.cache_clears += 1
+
+    async def reserve_editor_export(
+        self, job_id: int, token: str
+    ) -> EditorReservation | None:
+        self.reservations.append((job_id, token))
+        if not self.capacity:
+            return None
+        return EditorReservation(1, token, f"tongs-slot-1-job-{job_id}-{token}.log")
+
+    async def release_editor_export(self, slot: int, token: str) -> bool:
+        self.releases.append((slot, token))
+        return True
 
 
 def _service(
@@ -90,8 +106,11 @@ def _service(
         get_review=calls.get_review,
         get_job_log=calls.get_job_log,
         clear_cache=calls.clear_cache,
+        reserve_editor_export=calls.reserve_editor_export,
+        release_editor_export=calls.release_editor_export,
         environment={} if environment is None else environment,
         max_editor_log_bytes=max_bytes,
+        token_factory=lambda: "1" * 32,
     )
 
 
@@ -159,6 +178,9 @@ async def test_editor_configuration_outcomes_do_not_fetch_unless_ready(
 
     assert result.status is status
     assert calls.jobs == ([JOB] if status is EditorPlanStatus.READY else [])
+    assert calls.reservations == (
+        [(JOB.job_id, "1" * 32)] if status is EditorPlanStatus.READY else []
+    )
 
 
 @pytest.mark.asyncio
@@ -171,6 +193,9 @@ async def test_editor_plan_parses_arguments_without_a_shell() -> None:
     assert result.status is EditorPlanStatus.READY
     assert result.argv == ("code", "--wait", "--reuse-window")
     assert result.content == "line one\nline two\n"
+    assert result.reservation == EditorReservation(
+        1, "1" * 32, f"tongs-slot-1-job-{JOB.job_id}-{'1' * 32}.log"
+    )
     assert calls.jobs == [JOB]
 
 
@@ -187,8 +212,11 @@ async def test_editor_plan_rejects_oversized_log_without_truncation() -> None:
         get_review=calls.get_review,
         get_job_log=oversized,
         clear_cache=calls.clear_cache,
+        reserve_editor_export=calls.reserve_editor_export,
+        release_editor_export=calls.release_editor_export,
         environment={},
         max_editor_log_bytes=3,
+        token_factory=lambda: "1" * 32,
     )
 
     result = await service.prepare_editor_log(JOB)
@@ -196,3 +224,16 @@ async def test_editor_plan_rejects_oversized_log_without_truncation() -> None:
     assert result.status is EditorPlanStatus.LOG_TOO_LARGE
     assert result.content is None
     assert calls.jobs == [JOB]
+    assert calls.releases == [(1, "1" * 32)]
+
+
+@pytest.mark.asyncio
+async def test_editor_capacity_is_reserved_before_log_fetch() -> None:
+    calls = Calls()
+    calls.capacity = False
+
+    result = await _service(calls).prepare_editor_log(JOB)
+
+    assert result.status is EditorPlanStatus.CAPACITY_EXCEEDED
+    assert calls.reservations == [(JOB.job_id, "1" * 32)]
+    assert calls.jobs == []

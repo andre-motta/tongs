@@ -13,12 +13,16 @@ from tongs.desktop.protocol.messages import (
 )
 from tongs.desktop.protocol.state import HandleKind, HandleRegistry
 from tongs.services.models import JobRef, ReviewRef, ReviewSnapshot, ServiceEventKind
-from tongs.services.workspace_utilities import WorkspaceUtilityService
+from tongs.services.workspace_utilities import (
+    EditorReservation,
+    WorkspaceUtilityService,
+)
 
 UTILITY_CAPABILITY = "workspace_utilities"
 UTILITY_METHODS = (
     "utilities.cache_clear",
     "utilities.job_log_export",
+    "utilities.job_log_release",
     "utilities.review_url",
 )
 
@@ -40,6 +44,12 @@ class UtilitySession(Protocol):
     ) -> None: ...
 
 
+class EditorReservationAuthority(Protocol):
+    async def reserve(self, job_id: int, token: str) -> EditorReservation | None: ...
+
+    async def release(self, slot: int, token: str) -> bool: ...
+
+
 type UtilityHandler = Callable[[JsonObject, object], Awaitable[object]]
 
 
@@ -51,10 +61,12 @@ class UtilityOperations:
         *,
         session: UtilitySession,
         handles: HandleRegistry,
+        reservations: EditorReservationAuthority,
         environment: Mapping[str, str] | None = None,
     ) -> None:
         self._session = session
         self._handles = handles
+        self._reservations = reservations
         self._environment = environment
 
     @property
@@ -62,6 +74,7 @@ class UtilityOperations:
         return {
             "utilities.cache_clear": (self.cache_clear, True),
             "utilities.job_log_export": (self.job_log_export, False),
+            "utilities.job_log_release": (self.job_log_release, True),
             "utilities.review_url": (self.review_url, False),
         }
 
@@ -83,6 +96,7 @@ class UtilityOperations:
         handle = _handle(params["job"])
         job = self._handles.resolve(handle, HandleKind.JOB, JobRef)
         result = await self._service().prepare_editor_log(job)
+        reservation = result.reservation
         return {
             "status": result.status.value,
             "message": result.message,
@@ -90,7 +104,32 @@ class UtilityOperations:
             "job_id": job.job_id,
             "argv": list(result.argv),
             "content": result.content,
+            "slot": None if reservation is None else reservation.slot,
+            "token": None if reservation is None else reservation.token,
+            "export_name": None if reservation is None else reservation.export_name,
         }
+
+    async def job_log_release(self, params: JsonObject, _context: object) -> object:
+        if set(params) != {"slot", "token"}:
+            raise ProtocolError(
+                ProtocolErrorCode.INVALID_PARAMS,
+                "The editor reservation parameters are invalid.",
+            )
+        slot = params["slot"]
+        token = params["token"]
+        if (
+            not isinstance(slot, int)
+            or isinstance(slot, bool)
+            or slot not in range(1, 9)
+            or not isinstance(token, str)
+            or len(token) != 32
+            or any(character not in "0123456789abcdef" for character in token)
+        ):
+            raise ProtocolError(
+                ProtocolErrorCode.INVALID_PARAMS,
+                "The editor reservation parameters are invalid.",
+            )
+        return {"released": await self._reservations.release(slot, token)}
 
     def _service(self) -> WorkspaceUtilityService:
         return WorkspaceUtilityService(
@@ -98,6 +137,8 @@ class UtilityOperations:
             get_review=self._session.get_review,
             get_job_log=self._session.get_job_log,
             clear_cache=self._session.clear_cache,
+            reserve_editor_export=self._reservations.reserve,
+            release_editor_export=self._reservations.release,
             environment=self._environment,
         )
 

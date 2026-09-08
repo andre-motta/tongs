@@ -59,7 +59,14 @@ async function run(): Promise<void> {
   desktopSession.webRequest.onBeforeRequest((details, callback) =>
     callback({ cancel: !isAllowedAppUrl(details.url) }),
   );
-  transport = new SidecarTransport(launch);
+  const editorExportRoot = path.join(
+    app.getPath("temp"),
+    "tongs-editor-exports",
+  );
+  transport = new SidecarTransport({
+    ...launch,
+    utilityExportRoot: editorExportRoot,
+  });
   await transport.start();
   const assets = new AssetCatalog(transport, path.join(desktopRoot, "shell"));
   await assets.refresh();
@@ -86,7 +93,7 @@ async function run(): Promise<void> {
   const utilities = new WorkspaceUtilities(
     transport,
     clipboard,
-    path.join(app.getPath("temp"), "tongs-editor-exports"),
+    editorExportRoot,
   );
   controller = new DesktopIpcController(window, transport, assets, utilities);
   controller.register();

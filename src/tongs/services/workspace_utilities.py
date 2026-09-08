@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 import shlex
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ class EditorPlanStatus(str, Enum):
     MALFORMED = "malformed"
     TERMINAL_UNSUPPORTED = "terminal_unsupported"
     LOG_TOO_LARGE = "log_too_large"
+    CAPACITY_EXCEEDED = "capacity_exceeded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +56,16 @@ class EditorLogPlan:
     job: JobRef
     argv: tuple[str, ...] = ()
     content: str | None = None
+    reservation: EditorReservation | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EditorReservation:
+    """Opaque reservation bound to one slot and generated export basename."""
+
+    slot: int
+    token: str
+    export_name: str
 
 
 class WorkspaceUtilityService:
@@ -66,8 +78,13 @@ class WorkspaceUtilityService:
         get_review: Callable[[ReviewRef], Awaitable[ReviewSnapshot]],
         get_job_log: Callable[[JobRef], Awaitable[str]],
         clear_cache: Callable[[], Awaitable[None]],
+        reserve_editor_export: Callable[
+            [int, str], Awaitable[EditorReservation | None]
+        ],
+        release_editor_export: Callable[[int, str], Awaitable[bool]],
         environment: Mapping[str, str] | None = None,
         max_editor_log_bytes: int = MAX_EDITOR_LOG_BYTES,
+        token_factory: Callable[[], str] | None = None,
     ) -> None:
         if max_editor_log_bytes <= 0:
             raise ValueError("max_editor_log_bytes must be positive")
@@ -75,8 +92,11 @@ class WorkspaceUtilityService:
         self._get_review = get_review
         self._get_job_log = get_job_log
         self._clear_cache = clear_cache
+        self._reserve_editor_export = reserve_editor_export
+        self._release_editor_export = release_editor_export
         self._environment = os.environ if environment is None else environment
         self._max_editor_log_bytes = max_editor_log_bytes
+        self._token_factory = token_factory or _new_editor_token
 
     async def review_url(self, review: ReviewRef) -> ReviewUrl:
         """Return the current URL only when it belongs to the admitted forge."""
@@ -132,8 +152,21 @@ class WorkspaceUtilityService:
         if status is not EditorPlanStatus.READY:
             return EditorLogPlan(status, message, job)
 
-        content = await self._get_job_log(job)
+        token = self._token_factory()
+        reservation = await self._reserve_editor_export(job.job_id, token)
+        if reservation is None:
+            return EditorLogPlan(
+                EditorPlanStatus.CAPACITY_EXCEEDED,
+                "The private editor export limit was reached. Retry after older exports expire.",
+                job,
+            )
+        try:
+            content = await self._get_job_log(job)
+        except BaseException:
+            await self._release_editor_export(reservation.slot, reservation.token)
+            raise
         if not isinstance(content, str):
+            await self._release_editor_export(reservation.slot, reservation.token)
             raise ServiceError(
                 ServiceErrorCode.INVALID_RESPONSE,
                 "The forge returned an invalid job log.",
@@ -141,17 +174,26 @@ class WorkspaceUtilityService:
         try:
             byte_count = len(content.encode("utf-8"))
         except UnicodeEncodeError as error:
+            await self._release_editor_export(reservation.slot, reservation.token)
             raise ServiceError(
                 ServiceErrorCode.INVALID_RESPONSE,
                 "The job log could not be encoded safely.",
             ) from error
         if byte_count > self._max_editor_log_bytes:
+            await self._release_editor_export(reservation.slot, reservation.token)
             return EditorLogPlan(
                 EditorPlanStatus.LOG_TOO_LARGE,
                 "The job log is too large to export to an external editor.",
                 job,
             )
-        return EditorLogPlan(status, message, job, argv=argv, content=content)
+        return EditorLogPlan(
+            status,
+            message,
+            job,
+            argv=argv,
+            content=content,
+            reservation=reservation,
+        )
 
     def _editor_argv(self) -> tuple[EditorPlanStatus, str, tuple[str, ...]]:
         enabled = self._config.external_editor_enabled
@@ -247,10 +289,15 @@ def _utf8_length(value: str) -> int | None:
         return None
 
 
+def _new_editor_token() -> str:
+    return secrets.token_hex(16)
+
+
 __all__ = [
     "MAX_EDITOR_LOG_BYTES",
     "EditorLogPlan",
     "EditorPlanStatus",
+    "EditorReservation",
     "ReviewUrl",
     "WorkspaceUtilityService",
 ]

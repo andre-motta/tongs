@@ -12,7 +12,13 @@ from tongs.desktop.protocol.state import HandleKind, HandleRegistry
 from tongs.desktop.protocol.utility_operations import UtilityOperations
 from tongs.forges.models import CIStatus, ForgeHost, MRDetail, MRState, User
 from tongs.scanner.repo import ForgeType
-from tongs.services import JobRef, RepositoryRef, ReviewRef, ServiceEventKind
+from tongs.services import (
+    EditorReservation,
+    JobRef,
+    RepositoryRef,
+    ReviewRef,
+    ServiceEventKind,
+)
 from tongs.services.errors import ServiceError, ServiceErrorCode
 from tongs.services.models import ForgeCapabilities, ReviewSnapshot
 
@@ -77,16 +83,40 @@ class Session:
         self.events.append(kind)
 
 
+class Reservations:
+    def __init__(self) -> None:
+        self.reserved: list[tuple[int, str]] = []
+        self.released: list[tuple[int, str]] = []
+        self.available = True
+
+    async def reserve(self, job_id: int, token: str) -> EditorReservation | None:
+        self.reserved.append((job_id, token))
+        if not self.available:
+            return None
+        return EditorReservation(2, token, f"tongs-slot-2-job-{job_id}-{token}.log")
+
+    async def release(self, slot: int, token: str) -> bool:
+        self.released.append((slot, token))
+        return True
+
+
 def _operations(
     session: Session | None = None,
-) -> tuple[UtilityOperations, Session, str, str]:
+) -> tuple[UtilityOperations, Session, Reservations, str, str]:
     actual = session or Session()
+    reservations = Reservations()
     handles = HandleRegistry()
     review_handle = handles.issue(HandleKind.REVIEW, REVIEW)
     job_handle = handles.issue(HandleKind.JOB, JOB)
     return (
-        UtilityOperations(session=actual, handles=handles, environment={}),
+        UtilityOperations(
+            session=actual,
+            handles=handles,
+            reservations=reservations,
+            environment={},
+        ),
         actual,
+        reservations,
         review_handle,
         job_handle,
     )
@@ -94,7 +124,7 @@ def _operations(
 
 @pytest.mark.asyncio
 async def test_review_url_resolves_only_an_issued_review_handle() -> None:
-    operations, session, review_handle, _job_handle = _operations()
+    operations, session, _reservations, review_handle, _job_handle = _operations()
 
     result = await operations.review_url({"review": review_handle}, object())
 
@@ -110,7 +140,7 @@ async def test_review_url_resolves_only_an_issued_review_handle() -> None:
 
 @pytest.mark.asyncio
 async def test_cache_clear_uses_shared_cache_and_emits_resync() -> None:
-    operations, session, _review_handle, _job_handle = _operations()
+    operations, session, _reservations, _review_handle, _job_handle = _operations()
 
     result = await operations.cache_clear({}, object())
 
@@ -121,7 +151,7 @@ async def test_cache_clear_uses_shared_cache_and_emits_resync() -> None:
 
 @pytest.mark.asyncio
 async def test_editor_export_is_bound_to_exact_issued_job() -> None:
-    operations, session, _review_handle, job_handle = _operations()
+    operations, session, reservations, _review_handle, job_handle = _operations()
 
     result = await operations.job_log_export({"job": job_handle}, object())
 
@@ -132,13 +162,16 @@ async def test_editor_export_is_bound_to_exact_issued_job() -> None:
         "job_id": 31,
         "argv": ["code", "--wait"],
         "content": "safe log\n",
+        "slot": 2,
+        "token": reservations.reserved[0][1],
+        "export_name": (f"tongs-slot-2-job-31-{reservations.reserved[0][1]}.log"),
     }
     assert session.job_reads == [JOB]
 
 
 @pytest.mark.asyncio
 async def test_editor_disabled_is_reported_without_fetching_log() -> None:
-    operations, session, _review_handle, job_handle = _operations(
+    operations, session, _reservations, _review_handle, job_handle = _operations(
         Session(Config(editor_command="code --wait", external_editor_enabled=False))
     )
 
@@ -147,12 +180,29 @@ async def test_editor_disabled_is_reported_without_fetching_log() -> None:
     assert result["status"] == "disabled"  # type: ignore[index]
     assert result["argv"] == []  # type: ignore[index]
     assert result["content"] is None  # type: ignore[index]
+    assert result["slot"] is None  # type: ignore[index]
     assert session.job_reads == []
 
 
 @pytest.mark.asyncio
+async def test_editor_release_is_internal_token_scoped_mutation() -> None:
+    operations, _session, reservations, _review_handle, _job_handle = _operations()
+    token = "a" * 32
+
+    result = await operations.job_log_release({"slot": 2, "token": token}, object())
+
+    assert result == {"released": True}
+    assert reservations.released == [(2, token)]
+    with pytest.raises(ProtocolError) as caught:
+        await operations.job_log_release(
+            {"slot": 2, "token": token, "path": "/tmp/other"}, object()
+        )
+    assert caught.value.code is ProtocolErrorCode.INVALID_PARAMS
+
+
+@pytest.mark.asyncio
 async def test_malformed_utility_payload_fails_before_session_access() -> None:
-    operations, session, review_handle, _job_handle = _operations()
+    operations, session, _reservations, review_handle, _job_handle = _operations()
 
     with pytest.raises(ProtocolError) as caught:
         await operations.review_url(

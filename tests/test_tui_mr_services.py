@@ -515,6 +515,39 @@ async def test_cancelled_screen_mutation_retains_one_identity_and_never_replays(
 
 
 @pytest.mark.asyncio
+async def test_known_comment_releases_identity_for_a_deliberate_later_repeat(
+    tmp_path: Path,
+) -> None:
+    app, forge = _app(tmp_path)
+
+    async with app.run_test(notifications=True) as pilot:
+        await _settle(app)
+        table = app.screen.query_one("#reviews-table")
+        table.focus()
+        await pilot.press("enter")
+        await _settle(app)
+        screen = cast(MRDetailScreen, app.screen)
+
+        for _attempt in range(2):
+            screen.on_general_comment_submitted(
+                GeneralCommentSubmitted("deliberately repeated")
+            )
+            await _settle(app)
+
+        calls = [call for call in forge.calls if call[0] == "comment"]
+        assert len(calls) == 2
+        records = tuple(app.session.review_mutations._ledger.values())
+        assert len(records) == 2
+        assert all(
+            record.outcome is not None and record.outcome.status is MutationStatus.KNOWN
+            for record in records
+        )
+        operation_ids = {record.command.operation_id for record in records}
+        assert len(operation_ids) == 2
+        assert screen._mutation_intents == {}
+
+
+@pytest.mark.asyncio
 async def test_adapter_keeps_quick_writes_revision_bound_and_immediate(
     tmp_path: Path,
 ) -> None:

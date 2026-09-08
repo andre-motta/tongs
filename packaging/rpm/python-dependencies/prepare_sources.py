@@ -80,11 +80,14 @@ def _prepare_cargo(
         if lock_hash != companion["cargo"]["lock_sha256"]:
             raise RuntimeError(f"Cargo.lock hash mismatch: {lock_hash}")
         vendor = source_root / "vendor"
+        cargo_env = os.environ.copy()
+        cargo_env["CARGO_HOME"] = str(temp / "cargo-home")
         result = subprocess.run(
             ["cargo", "vendor", "--locked", str(vendor)],
             cwd=source_root,
             check=False,
             capture_output=True,
+            env=cargo_env,
             text=True,
         )
         if result.returncode != 0:
@@ -97,6 +100,7 @@ def _prepare_cargo(
             cwd=source_root,
             check=True,
             capture_output=True,
+            env=cargo_env,
             text=True,
         )
         packages = []

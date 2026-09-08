@@ -14,10 +14,12 @@ from mcp.client.stdio import stdio_client
 
 async def _verify() -> dict[str, object]:
     parameters = StdioServerParameters(command="/usr/bin/tongs-mcp")
-    async with stdio_client(parameters) as (reader, writer):
-        async with ClientSession(reader, writer) as session:
-            initialization = await session.initialize()
-            tools = await session.list_tools()
+    async with (
+        stdio_client(parameters) as (reader, writer),
+        ClientSession(reader, writer) as session,
+    ):
+        initialization = await session.initialize()
+        tools = await session.list_tools()
     names = sorted(tool.name for tool in tools.tools)
     expected = [
         "approve_mr",

@@ -80,8 +80,10 @@ def verify_metadata(packages: list[str], output: Path) -> None:
                 "-q",
                 name,
                 "--queryformat",
-                "[%{FILENAMES}|%{FILEMODES:perms}|%{FILEUSERNAME}|"
-                "%{FILEGROUPNAME}|%{FILEFLAGS:fflags}\\n]",
+                (
+                    "[%{FILENAMES}|%{FILEMODES:perms}|%{FILEUSERNAME}|"
+                    "%{FILEGROUPNAME}|%{FILEFLAGS:fflags}\\n]"
+                ),
             ]
         ).stdout.splitlines()
         records = []

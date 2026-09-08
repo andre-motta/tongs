@@ -65,7 +65,7 @@ def verify(
         failures.append("installed runtime path set differs from accepted payload")
     if importlib.metadata.version("tongs") != expected_version:
         failures.append("installed Python distribution version mismatch")
-    if sys.version_info < (3, 12):
+    if sys.version_info < (3, 12):  # noqa: UP036 - Verify installed RPM runtime.
         failures.append("system Python is below 3.12")
     if sys.executable != "/usr/bin/python3":
         failures.append(f"verification did not use /usr/bin/python3: {sys.executable}")

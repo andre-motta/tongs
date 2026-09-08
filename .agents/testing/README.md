@@ -25,16 +25,19 @@ Ruff unless the work item's approved profile says otherwise:
 ```bash
 .venv/bin/pytest tests/ --ignore=tests/test_mcp -v
 .venv/bin/pytest tests/test_mcp -v \
-  --junitxml=/tmp/tongs-mcp.junit.xml
+  --junitxml="/tmp/tongs-mcp-$$.junit.xml"
 .venv/bin/python tests/ci/verify_desktop_ci.py mcp-report \
-  --path /tmp/tongs-mcp.junit.xml
+  --path "/tmp/tongs-mcp-$$.junit.xml"
 .venv/bin/ruff check src/ tests/
 .venv/bin/ruff format --check src/ tests/
 ```
 
 The explicit MCP report check proves the optional tests ran and did not pass by
 import-error skip. Keep generated reports outside the checkout unless a fixture
-specifically requires a repository path.
+specifically requires a repository path. Use a process-scoped filename such as
+the shell's `$$` rather than a fixed name, since a fixed report path collides
+between concurrent worktrees; `ci.yml` writes to
+`"$RUNNER_TEMP/mcp-<python-version>.junit.xml"` for the same reason.
 
 Python test areas include:
 

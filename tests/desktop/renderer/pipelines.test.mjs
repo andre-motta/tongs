@@ -28,6 +28,82 @@ const { cleanup, fireEvent, render, waitFor } = desktopRequire(
 );
 afterEach(cleanup);
 
+test("initial pipeline failure does not claim that the review has no pipelines", async () => {
+  const bridge = baseBridge({
+    listReviewPipelines: () =>
+      read(
+        Promise.reject({
+          code: "service_error",
+          message: "safe pipeline failure",
+          retryable: false,
+        }),
+      ),
+  });
+  const view = renderFeature(bridge);
+
+  await view.findByText("The local service could not complete this read.");
+  assert.equal(
+    view.queryByText("No pipelines are available for this review."),
+    null,
+  );
+});
+
+test("initial job failure does not claim that the pipeline has no jobs", async () => {
+  const bridge = baseBridge({
+    listJobs: () =>
+      read(
+        Promise.reject({
+          code: "service_error",
+          message: "safe job failure",
+          retryable: false,
+        }),
+      ),
+  });
+  const view = renderFeature(bridge);
+
+  await view.findByText("The local service could not complete this read.");
+  assert.equal(view.queryByText("This pipeline has no jobs."), null);
+});
+
+test("failed pipeline refresh hides an empty state retained from a successful read", async () => {
+  let reads = 0;
+  const bridge = baseBridge({
+    listReviewPipelines: () =>
+      read(
+        reads++ === 0
+          ? { pipelines: [] }
+          : Promise.reject(new Error("refresh failed")),
+      ),
+  });
+  const view = renderFeature(bridge);
+
+  await view.findByText("No pipelines are available for this review.");
+  fireEvent.click(view.getByRole("button", { name: "Refresh CI" }));
+  await view.findByText("Refresh failed. Showing the previous pipeline list.");
+  assert.equal(
+    view.queryByText("No pipelines are available for this review."),
+    null,
+  );
+});
+
+test("failed job refresh hides an empty state retained from a successful read", async () => {
+  let reads = 0;
+  const bridge = baseBridge({
+    listJobs: () =>
+      read(
+        reads++ === 0
+          ? { jobs: [] }
+          : Promise.reject(new Error("refresh failed")),
+      ),
+  });
+  const view = renderFeature(bridge);
+
+  await view.findByText("This pipeline has no jobs.");
+  fireEvent.click(view.getByRole("button", { name: "Refresh jobs" }));
+  await view.findByText("Refresh failed. Showing previous jobs.");
+  assert.equal(view.queryByText("This pipeline has no jobs."), null);
+});
+
 test("pipeline panel renders hierarchy, inert paged logs, search, and keyboard selection", async () => {
   const jobReads = [];
   const bridge = baseBridge({

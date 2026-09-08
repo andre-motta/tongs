@@ -315,9 +315,14 @@ function PipelinesView({
             : safeError(pipelines.error)}
         </Notice>
       )}
-      {pipelineItems.length === 0 && !pipelines.loading && (
-        <Notice kind="empty">No pipelines are available for this review.</Notice>
-      )}
+      {pipelines.value !== null &&
+        !pipelines.error &&
+        pipelineItems.length === 0 &&
+        !pipelines.loading && (
+          <Notice kind="empty">
+            No pipelines are available for this review.
+          </Notice>
+        )}
       {pipelineItems.length > 0 && (
         <div className="ci-workspace">
           <PipelineList
@@ -512,9 +517,12 @@ function JobsPanel({
             : safeError(jobs.error)}
         </Notice>
       )}
-      {items.length === 0 && !jobs.loading && (
-        <Notice kind="empty">This pipeline has no jobs.</Notice>
-      )}
+      {jobs.value !== null &&
+        !jobs.error &&
+        items.length === 0 &&
+        !jobs.loading && (
+          <Notice kind="empty">This pipeline has no jobs.</Notice>
+        )}
       {items.length > 0 && (
         <div className="ci-job-layout">
           <div

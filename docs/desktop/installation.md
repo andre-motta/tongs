@@ -36,10 +36,12 @@ Those commands describe persistent installation choices. They do not create a
 public desktop release, and this page does not claim that the unreleased
 desktop package is currently available from PyPI.
 
-The initial native support target is Fedora 44 KDE on x86_64 using XWayland.
-Other distributions, desktop environments, operating systems, architectures,
-and native Wayland are outside this initial support boundary. Unsupported
-platforms are rejected explicitly by release metadata matching.
+The release contract currently matches Linux, Fedora 44, x86_64, and the GNU
+ABI for the per-user archive. The initial native acceptance policy covers
+Fedora 44 KDE on x86_64 using XWayland. Other distributions, desktop
+environments, operating systems, architectures, and native Wayland remain
+outside that native support policy. The release metadata check rejects an
+unsupported artifact target before download.
 
 ## Lifecycle commands
 
@@ -78,12 +80,11 @@ tongs desktop status [--json]
 tongs desktop uninstall
 ```
 
-Because the feature is unreleased, an install or update attempt cannot be used
-as proof that a public artifact exists. The future production path first finds
-an immutable stable `desktop-vX.Y.Z` release in the fixed Tongs repository. It
-then verifies the release manifest, archive digest, compatibility fields, and
-GitHub-managed Sigstore provenance before activation. No normal terminal start
-or background task performs this work.
+For the future production path, the installer first finds an immutable stable
+`desktop-vX.Y.Z` release in the fixed Tongs repository. It then verifies the
+release manifest, archive digest, compatibility fields, and GitHub-managed
+Sigstore provenance before activation. No normal terminal start or background
+task performs this work.
 
 ## Installing and launching
 
@@ -103,9 +104,9 @@ exactly bound invoking environment before remote staging begins.
 Activation extracts a complete per-user archive into private staging, checks
 its declared files and compatibility, and publishes one immutable version
 target. The previous target remains recorded while the new target is being
-published. A successful activation updates the per-user menu entry and state
-atomically, then drains obsolete owned payloads. It never changes a system RPM
-or a system application directory.
+published. A journaled, recoverable sequence records the menu and installation
+state transitions, then drains obsolete owned payloads after publication. It
+never changes a system RPM or a system application directory.
 
 After activation, launch the installed application with either form:
 
@@ -133,9 +134,10 @@ tongs desktop update
 ```
 
 The command selects the newest verified stable release. It uses the same
-persistent environment and atomic activation path as install. If the current
-installation has pending obsolete-payload cleanup, update stops before remote
-staging and asks you to repair first. If the active payload is bound to another
+persistent environment and journaled, recoverable activation sequence as
+install. If the current installation has pending obsolete-payload cleanup,
+update stops before remote staging and asks you to repair first. If the active
+payload is bound to another
 persistent Python environment, update stops before any download and asks you to
 run repair from the intended environment.
 
@@ -174,7 +176,7 @@ user-facing actions are:
 | `uninstalled` | No per-user activation is active. Install when a verified release is available. |
 | `activation-pending` | A verified activation was interrupted. Run `tongs desktop repair`. |
 | `menu-repair-required` | The owned menu entry is missing or changed. Run `tongs desktop repair`. |
-| `payload-repair-required` | The bound environment or payload no longer validates. Run repair from the recorded persistent environment, or use explicit `--redownload` if local recovery fails. |
+| `payload-repair-required` | The bound environment or payload no longer validates. Run repair from the intended persistent environment, or use explicit `--redownload` if local recovery fails. |
 | `cleanup-required` | The active payload can still launch, but an old owned payload remains to be removed. Run repair before another install or update. |
 
 Recovery is bounded to identities recorded in the private journal and state.
@@ -199,17 +201,20 @@ No per-user desktop installation is active.
 The JSON form exposes `installed`, `version`, `active_target`,
 `previous_target`, `ownership`, `environment`, `recovery`, `menu_registered`,
 `launch_ready`, `rpm_detected`, and `coexistence`. Paths are absolute when a
-target exists. Status uses a read-only inspection path and does not download,
-repair, register a menu entry, or remove a payload.
+target exists. Status acquires the per-user command lock and ensures its private
+roots exist, but it does not change activation, menu, or payload content. It
+does not download, repair, register a menu entry, or remove a payload.
 
-When a separately managed RPM installation is detected, status adds:
+When an active per-user installation and a separately managed RPM installation
+coexist, status adds:
 
 ```text
 A separate RPM installation is also present; this command selected the per-user installation.
 ```
 
-The RPM check looks for the conventional system launcher and menu paths. It
-does not make the RPM the active per-user target.
+The RPM check looks for the conventional system launcher and menu paths. RPM
+detection alone does not add the coexistence line, and it does not make the RPM
+the active per-user target.
 
 ## Per-user files and ownership
 
@@ -248,11 +253,10 @@ production gates are complete.
 
 ## Current boundary
 
-The implementation is ready for source-bound validation and independent review,
-not a declaration of release readiness. Hardware GPU acceleration, an installed
-production artifact, final packaging, and the main-branch release decision are
-separate gates. Do not treat the examples on this page as evidence that a
-public archive, production tag, or RPM is already available.
+Hardware GPU acceleration, an installed production artifact, final packaging,
+and the main-branch release decision are separate gates. Do not treat the
+examples on this page as evidence that a public archive, production tag, or RPM
+is already available.
 
 See the [desktop production design](../work/desktop-production.md) for the
 shared architecture and acceptance boundary.

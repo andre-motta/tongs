@@ -229,7 +229,8 @@ retain_verifier_python() {
         >"$evidence_dir/verifier-python-nevra.txt"
     record_verifier_python_reason \
         "$evidence_dir/verifier-python-reason-before.txt"
-    dnf mark user python3 2>&1 | tee "$evidence_dir/dnf-mark-verifier-python.log"
+    dnf --assumeyes mark user python3 \
+        2>&1 | tee "$evidence_dir/dnf-mark-verifier-python.log"
     assert_sentinels verifier-python-mark
     assert_verifier_python after-mark
 }

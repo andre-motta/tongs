@@ -187,7 +187,7 @@ dnf() {{
         else
             cat -- "$REASON_BEFORE"
         fi
-    elif [[ $1 == mark && $2 == user && $3 == python3 ]]; then
+    elif [[ $# -eq 4 && $1 == --assumeyes && $2 == mark && $3 == user && $4 == python3 ]]; then
         : >"$MARK_STATE"
         printf 'Package python3 marked as user installed.\n'
     else

@@ -60,12 +60,25 @@ Each privileged call resolves a handle and verifies its resource kind and curren
 session; caller-supplied hostname/project/number tuples cannot create authority.
 Plugin location bindings use the same registry. Handles expire on reconnection;
 the backend restores durable draft identities and reissues authorized handles.
-Reviews outside local checkouts remain accessible when returned by configured-forge
-inbox queries. Direct opening of another project requires explicit user selection
-through a validated host operation before issuing a handle. No renderer value
-chooses an API origin or arbitrary file. The Python service itself admits only
-configured hosts and registered repositories; trusted in-process plugins remain
-trusted code, not a separate adversarial security principal.
+The current desktop workspace defaults to repositories discovered on this machine
+under the configured scan root, normally `~/git`. Its repository navigation and
+default All reviews view stay within that discovered set, including after a
+discovery refresh. An empty workspace explains local cloning/configuration and
+offers discovery refresh; it does not offer online repository opening.
+
+Keep the existing backend capability to accept configured-forge inbox results
+and explicitly open another validated configured-host project. This capability
+does not imply frontend exposure: the CTO deferred all remote-opening forms,
+menus and commands from the current desktop release. A future explicit temporary
+repository workflow is tracked in
+[RFE #70](https://github.com/andre-motta/tongs/issues/70), outside this initiative's
+delivery requirements. Define its UX and lifetime when that RFE is planned.
+
+No renderer value chooses an API origin or arbitrary file. The Python service
+itself admits only configured hosts and registered repositories; trusted
+in-process plugins remain trusted code, not a separate adversarial security
+principal. Preserve this backend boundary while keeping the default frontend
+scoped to local discovery.
 
 Service groups are repositories/inbox, review/detail/discussion, diff, CI,
 drafts/submission, and plugin host. Reads return typed models and explicit partial

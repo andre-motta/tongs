@@ -34,6 +34,19 @@ from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.scanner.repo import ForgeType
 from tongs.services import JobRef, RepositoryRef, RepositorySnapshot, ServiceEvent
 
+_SOURCE_ROOT = Path(__file__).parents[2] / "src"
+
+
+def _actual_sidecar_command() -> list[str]:
+    source = str(_SOURCE_ROOT)
+    script = (
+        f"import runpy,sys;sys.path.insert(0,{source!r});"
+        "import tongs;"
+        f"assert tongs.__file__.startswith({source!r});"
+        "runpy.run_module('tongs.desktop.sidecar',run_name='__main__')"
+    )
+    return [sys.executable, "-E", "-P", "-c", script]
+
 
 def _frame(request_id: str, method: str, params: JsonObject) -> bytes:
     return (
@@ -394,12 +407,19 @@ async def test_plugin_read_outer_cancellation_drains_service_and_waiter_tasks() 
     assert cancellation.wait_finished.is_set()
 
 
-def test_actual_sidecar_exits_cleanly_on_eof() -> None:
+def test_actual_sidecar_exits_cleanly_on_eof(tmp_path: Path) -> None:
+    environment = os.environ.copy()
+    environment.update(
+        XDG_CACHE_HOME=str(tmp_path / "cache"),
+        XDG_CONFIG_HOME=str(tmp_path / "config"),
+        XDG_DATA_HOME=str(tmp_path / "data"),
+    )
     completed = subprocess.run(
-        [sys.executable, "-E", "-P", "-m", "tongs.desktop.sidecar"],
+        _actual_sidecar_command(),
         input=b"",
         capture_output=True,
         cwd="/tmp",
+        env=environment,
         timeout=10,
         check=False,
     )
@@ -410,8 +430,10 @@ def test_actual_sidecar_exits_cleanly_on_eof() -> None:
 
 
 def test_actual_sidecar_redirects_python_and_native_stdout_from_protocol() -> None:
-    script = """
+    script = f"""
 import os
+import sys
+sys.path.insert(0, {str(_SOURCE_ROOT)!r})
 from tongs.desktop import sidecar
 from tongs.desktop.protocol.messages import encode_response
 
@@ -419,7 +441,7 @@ class FixtureServer:
     async def run(self, _reader, writer):
         os.write(1, b'native-contamination\\n')
         print('python-contamination')
-        writer.write(encode_response('probe', result={'ok': True}))
+        writer.write(encode_response('probe', result={{'ok': True}}))
         await writer.drain()
 
 sidecar.DesktopSidecarServer = FixtureServer
@@ -450,13 +472,13 @@ async def test_actual_sidecar_handshake_read_shutdown_and_hostile_frame(
     tmp_path: Path,
 ) -> None:
     environment = os.environ.copy()
-    environment.update(XDG_CACHE_HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path))
+    environment.update(
+        XDG_CACHE_HOME=str(tmp_path / "cache"),
+        XDG_CONFIG_HOME=str(tmp_path / "config"),
+        XDG_DATA_HOME=str(tmp_path / "data"),
+    )
     process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-E",
-        "-P",
-        "-m",
-        "tongs.desktop.sidecar",
+        *_actual_sidecar_command(),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

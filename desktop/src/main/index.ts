@@ -43,6 +43,8 @@ if (
 
 const launch = parseLaunchArguments(process.argv);
 const smokePath = argumentValue(process.argv, "--tongs-smoke-report");
+const smokeReviewNumber = parseSmokeReviewNumber(process.argv);
+const smokeSourceCommit = parseSmokeSourceCommit(process.argv);
 const desktopRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -104,7 +106,7 @@ async function run(): Promise<void> {
     showFailure: async () => {
       if (window !== owner || owner.isDestroyed()) return;
       await owner.webContents.executeJavaScript(
-        "document.querySelector('#status').textContent = 'The local Tongs service is unavailable.'",
+        "document.querySelector('#service-status').textContent = 'The local Tongs service is unavailable.'",
       );
     },
   });
@@ -141,6 +143,32 @@ async function run(): Promise<void> {
 
 async function captureSmokeReport(outputPath: string): Promise<void> {
   if (!window || !transport) throw new Error("Desktop smoke started too early");
+  const uiProof =
+    smokeReviewNumber === null
+      ? null
+      : await navigateSmokeReview(smokeReviewNumber);
+  const uiScreenshotPath = outputPath.endsWith(".json")
+    ? `${outputPath.slice(0, -5)}.ui.png`
+    : `${outputPath}.ui.png`;
+  const narrowUiScreenshotPath = outputPath.endsWith(".json")
+    ? `${outputPath.slice(0, -5)}.narrow.ui.png`
+    : `${outputPath}.narrow.ui.png`;
+  if (uiProof !== null) {
+    await writeFile(
+      uiScreenshotPath,
+      (await window.webContents.capturePage()).toPNG(),
+      { mode: 0o600 },
+    );
+    window.setSize(900, 700);
+    await waitForRendererFrames(2);
+    await writeFile(
+      narrowUiScreenshotPath,
+      (await window.webContents.capturePage()).toPNG(),
+      { mode: 0o600 },
+    );
+    window.setSize(1180, 780);
+    await waitForRendererFrames(2);
+  }
   const reload = await reloadRendererSession();
   const rendererCrashRecovery = await crashRendererSession();
   const rendererProbe = rendererCrashRecovery.finalRendererProbe;
@@ -166,6 +194,7 @@ async function captureSmokeReport(outputPath: string): Promise<void> {
     { mode: 0o600 },
   );
   const report = {
+    sourceCommit: smokeSourceCommit,
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
@@ -175,6 +204,10 @@ async function captureSmokeReport(outputPath: string): Promise<void> {
     reload,
     rendererCrashRecovery,
     rendererProbe,
+    uiProof,
+    uiProofScreenshot: uiProof === null ? null : uiScreenshotPath,
+    narrowUiProofScreenshot:
+      uiProof === null ? null : narrowUiScreenshotPath,
     gpu,
     gpuFeatureStatus: app.getGPUFeatureStatus(),
     metrics,
@@ -195,6 +228,65 @@ async function captureSmokeReport(outputPath: string): Promise<void> {
   setTimeout(() => app.quit(), 500);
 }
 
+async function waitForRendererFrames(count: number): Promise<void> {
+  if (!window) throw new Error("Desktop smoke started too early");
+  await window.webContents.executeJavaScript(
+    `new Promise((resolve) => {
+      let remaining = ${count};
+      const next = () => {
+        remaining -= 1;
+        if (remaining <= 0) resolve();
+        else requestAnimationFrame(next);
+      };
+      requestAnimationFrame(next);
+    })`,
+    true,
+  );
+}
+
+async function navigateSmokeReview(reviewNumber: number): Promise<object> {
+  if (!window) throw new Error("Desktop UI proof started too early");
+  return (await window.webContents.executeJavaScript(
+    `(async () => {
+      const waitFor = async (label, select, timeout) => {
+        const started = Date.now();
+        while (Date.now() - started < timeout) {
+          const value = select();
+          if (value) return value;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw new Error("UI proof timeout: " + label + ": " + document.body.innerText.slice(0, 1000));
+      };
+      const repository = await waitFor("repository discovery", () => document.querySelector('.nav-item[data-forge="github"]'), 30000);
+      repository.click();
+      await waitFor("repository route", () => document.querySelector('#content .eyebrow')?.textContent?.toLowerCase() === 'github', 10000);
+      const closed = await waitFor("review state control", () => document.querySelector('[data-review-state="closed"]'), 10000);
+      closed.click();
+      const review = await waitFor("review list", () => [...document.querySelectorAll(".review-card")].find((item) => item.dataset.reviewNumber === ${JSON.stringify(String(reviewNumber))}), 30000);
+      const listedTitle = review.querySelector(".review-title")?.textContent ?? null;
+      review.click();
+      const diffTab = await waitFor("review detail", () => document.querySelector('[data-panel="diff"]'), 30000);
+      diffTab.click();
+      await waitFor("unified diff", () => document.querySelector('.diff-unified .diff-line'), 60000);
+      const unified = [...document.querySelectorAll('.diff-unified .line-content')].slice(0, 12).map((item) => item.textContent);
+      const splitButton = [...document.querySelectorAll('.diff-toolbar button')].find((item) => item.textContent === 'Split');
+      if (!splitButton) throw new Error("Split layout control missing");
+      splitButton.click();
+      await waitFor("split diff", () => document.querySelector('.diff-split .split-row'), 60000);
+      return {
+        provenance: "Actual read-only forge data rendered through the production bridge; smoke navigation is capture scaffolding",
+        reviewNumber: ${reviewNumber},
+        listedTitle,
+        selectedFile: document.querySelector('.file-item.nav-item-active')?.textContent ?? null,
+        revision: (() => { const item = document.querySelector('.revision'); return item ? { head_sha: item.dataset.headSha, base_sha: item.dataset.baseSha, start_sha: item.dataset.startSha || null } : null; })(),
+        unifiedSourceSample: unified,
+        splitSourceSample: [...document.querySelectorAll('.diff-split .line-content')].slice(0, 12).map((item) => item.textContent),
+      };
+    })()`,
+    true,
+  )) as object;
+}
+
 async function crashRendererSession(): Promise<{
   initialSessionGeneration: number;
   finalSessionGeneration: number;
@@ -202,7 +294,8 @@ async function crashRendererSession(): Promise<{
   injectedRendererPid: number;
   injection: "SIGKILL";
 }> {
-  if (!window || !transport) throw new Error("Desktop crash recovery started too early");
+  if (!window || !transport)
+    throw new Error("Desktop crash recovery started too early");
   const owner = window;
   const initialSessionGeneration = transport.sessionGeneration;
   const completed = waitForNewRendererLoad(owner, initialSessionGeneration);
@@ -235,7 +328,8 @@ async function reloadRendererSession(): Promise<{
   initialRendererProbe: object;
   finalRendererProbe: object;
 }> {
-  if (!window || !transport) throw new Error("Desktop reload started too early");
+  if (!window || !transport)
+    throw new Error("Desktop reload started too early");
   const owner = window;
   const initialSessionGeneration = transport.sessionGeneration;
   const initialRendererProbe = await rendererProbe();
@@ -262,7 +356,10 @@ function waitForNewRendererLoad(
       reject(new Error("renderer reload timeout"));
     }, 10_000);
     const onLoad = (): void => {
-      if (!transport || transport.sessionGeneration <= initialSessionGeneration) {
+      if (
+        !transport ||
+        transport.sessionGeneration <= initialSessionGeneration
+      ) {
         return;
       }
       clearTimeout(timer);
@@ -282,7 +379,9 @@ app
   .whenReady()
   .then(run)
   .catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : "Desktop startup failed");
+    console.error(
+      error instanceof Error ? error.message : "Desktop startup failed",
+    );
     app.exit(1);
   });
 app.on("before-quit", () => {
@@ -310,6 +409,28 @@ function argumentValue(argv: readonly string[], name: string): string | null {
   if (joined) return joined.slice(name.length + 1);
   const index = argv.indexOf(name);
   return index >= 0 ? (argv[index + 1] ?? null) : null;
+}
+
+function parseSmokeReviewNumber(argv: readonly string[]): number | null {
+  const raw = argumentValue(argv, "--tongs-smoke-review-number");
+  if (raw === null) return null;
+  const value = Number(raw);
+  if (!smokePath || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(
+      "The smoke review number requires a smoke report and a positive integer",
+    );
+  }
+  return value;
+}
+
+function parseSmokeSourceCommit(argv: readonly string[]): string | null {
+  const raw = argumentValue(argv, "--tongs-smoke-source-commit");
+  if (raw === null) return null;
+  if (!smokePath || !/^[a-f0-9]{40}$/.test(raw))
+    throw new Error(
+      "The smoke source commit requires a smoke report and a full Git commit",
+    );
+  return raw;
 }
 
 async function linuxSandbox(pid: number): Promise<object | null> {

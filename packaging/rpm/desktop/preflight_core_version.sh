@@ -21,6 +21,8 @@ done
 topdir=$(mktemp -d "${TMPDIR:-/tmp}/tongs-core-version-preflight.XXXXXX")
 trap 'rm -rf -- "$topdir"' EXIT
 mkdir -p -- "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+export XDG_CACHE_HOME="$topdir/cache"
+mkdir -p -- "$XDG_CACHE_HOME"
 cp -- "$prepared_dir"/SOURCES/* "$topdir/SOURCES/"
 cp -- "$prepared_dir/SPECS/python-tongs.spec" "$topdir/SPECS/"
 rpmbuild -bc --nodeps --define "_topdir $topdir" "$topdir/SPECS/python-tongs.spec" \

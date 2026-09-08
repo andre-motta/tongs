@@ -90,11 +90,7 @@ cp -- "$payload_manifest" "$output_dir/payload-input-contract.json"
 
 podman build --pull=never --tag "$source_builder" --file "$script_dir/Containerfile" "$script_dir" \
     2>&1 | tee "$output_dir/source-builder.log"
-podman build --pull=never --tag "$dependency_builder" \
-    --file "$repo_root/packaging/rpm/python-dependencies/Containerfile" \
-    "$repo_root/packaging/rpm/python-dependencies" 2>&1 | tee "$output_dir/dependency-builder.log"
 podman image inspect "$source_builder" >"$output_dir/source-builder.inspect.json"
-podman image inspect "$dependency_builder" >"$output_dir/dependency-builder.inspect.json"
 
 podman run --rm --cap-drop=all --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" --volume "$output_dir:/evidence:rw" \
@@ -120,6 +116,11 @@ podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
     /checkout/packaging/rpm/desktop/preflight_core_version.sh \
         --prepared-dir /prepared --expected-version "$core_version" \
         --output /evidence/core-version-preflight.log
+
+podman build --pull=never --tag "$dependency_builder" \
+    --file "$repo_root/packaging/rpm/python-dependencies/Containerfile" \
+    "$repo_root/packaging/rpm/python-dependencies" 2>&1 | tee "$output_dir/dependency-builder.log"
+podman image inspect "$dependency_builder" >"$output_dir/dependency-builder.inspect.json"
 
 podman run --rm --cap-drop=all --security-opt=no-new-privileges \
     --volume "$repo_root:/checkout:ro" --volume "$dependency_prepared:/prepared:rw" \

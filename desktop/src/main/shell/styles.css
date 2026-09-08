@@ -458,6 +458,54 @@ button {
   align-items: center;
   gap: 10px;
 }
+
+.utility-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(7 10 13 / 72%);
+}
+.utility-dialog {
+  width: min(520px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 18px 60px rgb(0 0 0 / 45%);
+  padding: 18px;
+}
+.utility-dialog p {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+.utility-actions,
+.utility-notice {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.utility-actions {
+  margin-top: 18px;
+}
+.utility-notice {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 31;
+  max-width: min(520px, calc(100vw - 36px));
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--success);
+  border-radius: 7px;
+  background: var(--panel);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 35%);
+  padding: 10px 12px;
+}
+.utility-notice-error {
+  border-left-color: var(--danger);
+}
 .ci-toolbar,
 .ci-section-heading,
 .ci-summary,

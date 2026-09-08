@@ -125,6 +125,10 @@ function PipelinesView({
   const [selectedJob, setSelectedJob] = useState<JobItemDto | null>(null);
   const [refreshEpoch, setRefreshEpoch] = useState(0);
   const [eventNotice, setEventNotice] = useState<string | null>(null);
+  const [forgeNotice, setForgeNotice] = useState<{
+    readonly kind: "status" | "error";
+    readonly message: string;
+  } | null>(null);
   const [mutation, setMutation] = useState<MutationState>({ kind: "idle" });
   const inFlightOperation = useRef<string | null>(null);
   const pipelineItems = pipelines.value?.pipelines ?? [];
@@ -151,8 +155,9 @@ function PipelinesView({
         if (!isPipelineRefreshEvent(event.name, event.data, selectedPipeline))
           return;
         setEventNotice(
-          event.name === "protocol.resync_required"
-            ? "An event gap was detected. Pipeline data was reloaded."
+          event.name === "protocol.resync_required" ||
+            isServiceResync(event.name, event.data)
+            ? "Shared cached data changed. Pipeline data was reloaded."
             : "Pipeline status changed. The current view was reloaded.",
         );
         refresh();
@@ -269,6 +274,23 @@ function PipelinesView({
     capabilities.error || capabilitiesMismatch
       ? null
       : (capabilities.value?.capabilities ?? null);
+  const openOnForge = useCallback(
+    async (url: string, label: string): Promise<void> => {
+      try {
+        if (!(await bridge.openExternal(url))) throw new Error("Open rejected");
+        setForgeNotice({
+          kind: "status",
+          message: `${label} link sent to your browser.`,
+        });
+      } catch {
+        setForgeNotice({
+          kind: "error",
+          message: `${label} could not be opened. Check the forge URL and retry.`,
+        });
+      }
+    },
+    [bridge],
+  );
 
   return (
     <section
@@ -292,6 +314,7 @@ function PipelinesView({
         </button>
       </div>
       {eventNotice && <Notice kind="loading">{eventNotice}</Notice>}
+      {forgeNotice && <Notice kind={forgeNotice.kind}>{forgeNotice.message}</Notice>}
       {capabilities.loading && !capabilities.value && (
         <Notice kind="loading">Checking CI action support…</Notice>
       )}
@@ -340,6 +363,7 @@ function PipelinesView({
                   capabilities={safeCapabilities}
                   actionsLocked={actionsLocked}
                   beginMutation={beginMutation}
+                  openOnForge={openOnForge}
                 />
                 <JobsPanel
                   key={selected.handle}
@@ -352,6 +376,7 @@ function PipelinesView({
                   selectedJob={selectedJob}
                   selectJob={setSelectedJob}
                   beginMutation={beginMutation}
+                  openOnForge={openOnForge}
                 />
               </>
             )}
@@ -408,6 +433,7 @@ function PipelineSummary({
   capabilities,
   actionsLocked,
   beginMutation,
+  openOnForge,
 }: {
   readonly pipeline: PipelineItemDto;
   readonly capabilities: CICapabilityFlags | null;
@@ -417,6 +443,7 @@ function PipelineSummary({
     pipeline: PipelineItemDto,
     job: JobItemDto | null,
   ) => void;
+  readonly openOnForge: (url: string, label: string) => Promise<void>;
 }): ReactNode {
   return (
     <section className="ci-summary" aria-label="Selected pipeline">
@@ -429,6 +456,12 @@ function PipelineSummary({
         </p>
       </div>
       <div className="ci-actions">
+        <button
+          className="button button-secondary"
+          onClick={() => void openOnForge(pipeline.value.web_url, "Pipeline")}
+        >
+          Open pipeline on forge
+        </button>
         <ActionButton
           label="Retry pipeline"
           supported={capabilities?.retry_pipeline === true}
@@ -458,6 +491,7 @@ function JobsPanel({
   selectedJob,
   selectJob,
   beginMutation,
+  openOnForge,
 }: {
   readonly bridge: DesktopBridge;
   readonly queries: QueryCoordinator;
@@ -472,6 +506,7 @@ function JobsPanel({
     pipeline: PipelineItemDto,
     job: JobItemDto | null,
   ) => void;
+  readonly openOnForge: (url: string, label: string) => Promise<void>;
 }): ReactNode {
   const begin = useCallback(
     () => bridge.listJobs(pipeline.handle),
@@ -547,6 +582,12 @@ function JobsPanel({
           {selected && (
             <div className="ci-job-detail">
               <div className="ci-actions">
+                <button
+                  className="button button-secondary"
+                  onClick={() => void openOnForge(selected.value.web_url, "Job")}
+                >
+                  Open job on forge
+                </button>
                 <ActionButton
                   label="Retry job"
                   supported={capabilities?.retry_job === true}
@@ -592,6 +633,12 @@ function LogPanel({
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
+  const [editorOpening, setEditorOpening] = useState(false);
+  const editorInFlight = useRef(false);
+  const [editorNotice, setEditorNotice] = useState<{
+    readonly kind: "status" | "error";
+    readonly message: string;
+  } | null>(null);
   useEffect(() => {
     let current = true;
     setLoading(true);
@@ -614,19 +661,61 @@ function LogPanel({
       void queries.cancel(`ci-log:${job.handle}`);
     };
   }, [bridge, job.handle, queries, refreshEpoch, reload]);
+  const openInEditor = useCallback(async (): Promise<void> => {
+    if (editorInFlight.current || loaded === null) return;
+    editorInFlight.current = true;
+    setEditorOpening(true);
+    setEditorNotice(null);
+    try {
+      const result = await bridge.openJobLogInEditor(job.handle);
+      setEditorNotice({
+        kind: result.outcome === "started" ? "status" : "error",
+        message: result.message,
+      });
+    } catch {
+      setEditorNotice({
+        kind: "error",
+        message: "The editor could not be started. Check the configured command and retry.",
+      });
+    } finally {
+      editorInFlight.current = false;
+      setEditorOpening(false);
+    }
+  }, [bridge, job.handle, loaded]);
 
   return (
-    <section className="ci-log" aria-label={`Log for ${job.value.name}`}>
+    <section
+      className="ci-log"
+      aria-label={`Log for ${job.value.name}`}
+      onKeyDown={(event) => {
+        if (event.key !== "F2" || loaded === null || editorOpening) return;
+        event.preventDefault();
+        void openInEditor();
+      }}
+    >
       <div className="ci-section-heading">
         <h3>Log · {job.value.name}</h3>
-        <button
-          className="button button-secondary"
-          disabled={loading}
-          onClick={() => setReload((current) => current + 1)}
-        >
-          Refresh log
-        </button>
+        <div className="ci-actions">
+          <button
+            className="button button-secondary"
+            disabled={loaded === null || editorOpening}
+            title="Starts the configured graphical editor with a private log export (F2)"
+            onClick={() => void openInEditor()}
+          >
+            {editorOpening ? "Starting editor…" : "Open log in editor"}
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={loading}
+            onClick={() => setReload((current) => current + 1)}
+          >
+            Refresh log
+          </button>
+        </div>
       </div>
+      {editorNotice && (
+        <Notice kind={editorNotice.kind}>{editorNotice.message}</Notice>
+      )}
       {loading && !loaded && <Notice kind="loading">Loading job log…</Notice>}
       {Boolean(error) && (
         <Notice kind="error">
@@ -1271,11 +1360,22 @@ function isPipelineRefreshEvent(
   if (name === "protocol.resync_required") return true;
   if (name !== "service.changed" || data === null || typeof data !== "object")
     return false;
+  if ("kind" in data && data.kind === "resync_required") return true;
   if (!("kind" in data) || data.kind !== "pipeline_changed") return false;
   return (
     !("resource" in data) ||
     data.resource === null ||
     data.resource === selectedPipeline
+  );
+}
+
+function isServiceResync(name: string, data: unknown): boolean {
+  return (
+    name === "service.changed" &&
+    data !== null &&
+    typeof data === "object" &&
+    "kind" in data &&
+    data.kind === "resync_required"
   );
 }
 

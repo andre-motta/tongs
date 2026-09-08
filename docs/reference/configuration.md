@@ -49,8 +49,16 @@ forge_type = "gitlab"
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `command` | string | `""` (uses `$EDITOR`) | Editor command for external editing. Falls back to `$EDITOR` / `$VISUAL` if empty. |
-| `external_editor_enabled` | boolean | `true` | Whether ++f2++ opens an external editor from the comment editor. |
+| `command` | string | `""` (uses `$VISUAL`) | Trusted editor command for external editing. Falls back to `$VISUAL`, then `$EDITOR`, if empty. |
+| `external_editor_enabled` | boolean | `true` | Whether ++f2++ opens configured external-editor workflows. |
+
+Tongs Desktop appends a private, bounded log export path to the configured editor
+command and starts it without a shell. Configure a wait-capable graphical editor,
+for example `code --wait` or `kate --block`. Known terminal-only editor commands are
+reported as unsupported because they cannot attach to the desktop window. Wrapper
+commands must themselves start a suitable graphical editor and wait for it. If the
+editor process starts, Tongs reports that start separately from confirmation that
+the editor read the file.
 
 ## `[ui]`
 

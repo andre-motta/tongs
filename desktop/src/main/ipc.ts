@@ -38,6 +38,8 @@ import {
   assertResult,
 } from "./security.js";
 import type { SidecarTransport } from "./sidecar.js";
+import { UTILITY_IPC_CHANNELS } from "../shared/utilities.js";
+import type { WorkspaceUtilities } from "./utilities.js";
 
 interface Invocation {
   readonly requestToken: string;
@@ -75,6 +77,7 @@ export class DesktopIpcController {
     private readonly window: BrowserWindow,
     private readonly transport: SidecarTransport,
     private readonly assets: AssetCatalog,
+    private readonly utilities: WorkspaceUtilities,
   ) {}
 
   register(): void {
@@ -115,6 +118,18 @@ export class DesktopIpcController {
     ipcMain.handle(IPC_CHANNELS.openExternal, (event, url) =>
       this.openExternal(event, url),
     );
+    ipcMain.handle(UTILITY_IPC_CHANNELS.copyReviewUrl, (event, review) => {
+      assertAuthorizedSender(event, this.window.webContents);
+      return this.utilities.copyReviewUrl(review);
+    });
+    ipcMain.handle(UTILITY_IPC_CHANNELS.clearCache, (event, params) => {
+      assertAuthorizedSender(event, this.window.webContents);
+      return this.utilities.clearCache(params);
+    });
+    ipcMain.handle(UTILITY_IPC_CHANNELS.openJobLogInEditor, (event, job) => {
+      assertAuthorizedSender(event, this.window.webContents);
+      return this.utilities.openJobLogInEditor(job);
+    });
     this.eventListener = (event) => {
       if (!this.window.isDestroyed()) {
         this.window.webContents.send(IPC_CHANNELS.event, event);
@@ -137,6 +152,7 @@ export class DesktopIpcController {
       IPC_CHANNELS.setLocation,
       IPC_CHANNELS.cancelRead,
       IPC_CHANNELS.openExternal,
+      ...Object.values(UTILITY_IPC_CHANNELS),
     ]) {
       ipcMain.removeHandler(channel);
     }

@@ -51,6 +51,11 @@ from tongs.desktop.protocol.state import (
     HandleRegistry,
     SnapshotStore,
 )
+from tongs.desktop.protocol.utility_operations import (
+    UTILITY_CAPABILITY,
+    UTILITY_METHODS,
+    UtilityOperations,
+)
 from tongs.diff.conversion import convert_forge_changes
 from tongs.forges.models import MRState, MRSummary, Pipeline, PipelineJob
 from tongs.plugins.desktop import (
@@ -102,6 +107,7 @@ SUPPORTED_CAPABILITIES = frozenset(
         "plugins",
         REVIEW_CAPABILITY,
         "split_diffs",
+        UTILITY_CAPABILITY,
     }
 )
 SUPPORTED_METHODS = (
@@ -122,6 +128,7 @@ SUPPORTED_METHODS = (
     "repositories.discover",
     "repositories.open",
     "review_pipelines.list",
+    *UTILITY_METHODS,
     *REVIEW_METHODS,
     "reviews.get",
     "reviews.list",
@@ -280,6 +287,7 @@ class DesktopSidecarServer:
         self._install_read_operations()
         self._install_ci_operations()
         self._install_review_operations()
+        self._install_utility_operations()
 
     @property
     def session_id(self) -> str:
@@ -389,6 +397,13 @@ class DesktopSidecarServer:
 
     def _install_review_operations(self) -> None:
         operations = ReviewOperations(session=self._session, handles=self._handles)
+        for method, (handler, mutation) in operations.handlers.items():
+            self.register_operation(
+                method, cast(OperationHandler, handler), mutation=mutation
+            )
+
+    def _install_utility_operations(self) -> None:
+        operations = UtilityOperations(session=self._session, handles=self._handles)
         for method, (handler, mutation) in operations.handlers.items():
             self.register_operation(
                 method, cast(OperationHandler, handler), mutation=mutation

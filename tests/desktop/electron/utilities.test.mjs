@@ -1,0 +1,258 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { WorkspaceUtilities } from "../../../desktop/dist/src/main/utilities.js";
+
+class FakeTransport {
+  constructor() {
+    this.reads = [];
+    this.mutations = [];
+    this.reviewUrl = "https://github.com/acme/widgets/pull/7";
+    this.editorPlan = {
+      status: "ready",
+      message: "ready",
+      job: "job-handle",
+      job_id: 31,
+      argv: ["code", "--wait"],
+      content: "safe log\n",
+    };
+  }
+  requestRead(method, params) {
+    this.reads.push([method, params]);
+    const value = method === "utilities.review_url"
+      ? { review: params.review, url: this.reviewUrl }
+      : this.editorPlan;
+    return { result: Promise.resolve(value) };
+  }
+  requestMutation(method, params) {
+    this.mutations.push([method, params]);
+    return { result: Promise.resolve({ cleared: true }) };
+  }
+}
+
+class FakeChild extends EventEmitter {
+  unrefCalls = 0;
+  unref() { this.unrefCalls += 1; }
+}
+
+async function fixture(t) {
+  const parent = await rmRoot();
+  const root = path.join(parent, "exports");
+  const transport = new FakeTransport();
+  const clipboard = { values: [], writeText(value) { this.values.push(value); } };
+  const launches = [];
+  const children = [];
+  const launch = (command, args) => {
+    launches.push([command, args]);
+    const child = new FakeChild();
+    children.push(child);
+    queueMicrotask(() => child.emit("spawn"));
+    return child;
+  };
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  return { parent, root, transport, clipboard, launches, children, utility: new WorkspaceUtilities(transport, clipboard, root, launch) };
+}
+
+async function rmRoot() {
+  return mkdtemp(path.join(os.tmpdir(), "tongs-utilities-"));
+}
+
+test("copy URL resolves an admitted review and writes only its validated HTTPS URL", async (t) => {
+  const { utility, transport, clipboard } = await fixture(t);
+
+  assert.deepEqual(await utility.copyReviewUrl("review-handle"), {
+    outcome: "copied",
+    message: "Review URL copied to the clipboard.",
+  });
+  assert.deepEqual(transport.reads, [["utilities.review_url", { review: "review-handle" }]]);
+  assert.deepEqual(clipboard.values, ["https://github.com/acme/widgets/pull/7"]);
+
+  transport.reviewUrl = "https://github.com";
+  assert.equal((await utility.copyReviewUrl("review-handle")).outcome, "copied");
+  assert.equal(clipboard.values.at(-1), "https://github.com");
+
+  transport.reviewUrl = "https://token@github.com/acme/widgets/pull/7";
+  assert.equal((await utility.copyReviewUrl("review-handle")).outcome, "failed");
+  assert.equal(clipboard.values.length, 2);
+});
+
+test("clipboard failure is reported without exposing or changing the URL", async (t) => {
+  const { root, transport } = await fixture(t);
+  const clipboard = { writeText() { throw new Error("clipboard unavailable"); } };
+  const utility = new WorkspaceUtilities(transport, clipboard, root, () => { throw new Error("unused"); });
+
+  const result = await utility.copyReviewUrl("review-handle");
+
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /clipboard access/);
+  assert.deepEqual(transport.reads, [["utilities.review_url", { review: "review-handle" }]]);
+});
+
+test("clear cache has no renderer-selected target", async (t) => {
+  const { utility, transport } = await fixture(t);
+
+  assert.equal((await utility.clearCache({})).outcome, "cleared");
+  assert.deepEqual(transport.mutations, [["utilities.cache_clear", {}]]);
+  assert.equal((await utility.clearCache({ draft: true })).outcome, "failed");
+  assert.equal(transport.mutations.length, 1);
+});
+
+test("editor export uses exact job, private file, safe argv, and exit cleanup", async (t) => {
+  const { utility, transport, root, launches, children } = await fixture(t);
+
+  const result = await utility.openJobLogInEditor("job-handle");
+
+  assert.equal(result.outcome, "started");
+  assert.match(result.message, /cannot confirm/);
+  assert.deepEqual(transport.reads, [["utilities.job_log_export", { job: "job-handle" }]]);
+  assert.equal(launches.length, 1);
+  assert.deepEqual(launches[0][0], "code");
+  assert.equal(launches[0][1][0], "--wait");
+  const exported = launches[0][1][1];
+  assert.equal(path.dirname(exported), root);
+  assert.match(path.basename(exported), /^tongs-job-31-.*\.log$/);
+  assert.equal(await readFile(exported, "utf8"), "safe log\n");
+  assert.equal((await lstat(root)).mode & 0o777, 0o700);
+  assert.equal((await lstat(exported)).mode & 0o777, 0o600);
+  assert.equal(children[0].unrefCalls, 1);
+
+  children[0].emit("exit", 0);
+  await waitForEmptyDirectory(root);
+  assert.deepEqual(await readdir(root), []);
+});
+
+async function waitForEmptyDirectory(directory) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if ((await readdir(directory)).length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+test("duplicate editor launch returns busy without replaying the job read", async (t) => {
+  const { utility, transport } = await fixture(t);
+  let release;
+  transport.requestRead = (method, params) => {
+    transport.reads.push([method, params]);
+    return { result: new Promise((resolve) => { release = () => resolve(transport.editorPlan); }) };
+  };
+
+  const first = utility.openJobLogInEditor("job-handle");
+  while (transport.reads.length === 0) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await utility.openJobLogInEditor("job-handle")).outcome, "busy");
+  assert.equal(transport.reads.length, 1);
+  release();
+  await first;
+});
+
+test("disabled editor outcome does not create a file or launch", async (t) => {
+  const { utility, transport, root, launches } = await fixture(t);
+  transport.editorPlan = {
+    status: "disabled",
+    message: "External editor access is disabled in Tongs configuration.",
+    job: "job-handle",
+    job_id: 31,
+    argv: [],
+    content: null,
+  };
+
+  const result = await utility.openJobLogInEditor("job-handle");
+
+  assert.equal(result.outcome, "disabled");
+  assert.equal(launches.length, 0);
+  assert.deepEqual(await readdir(root), []);
+});
+
+test("missing editor executable has an actionable failure and cleans the export", async (t) => {
+  const { root, transport, clipboard } = await fixture(t);
+  const launch = () => {
+    const child = new FakeChild();
+    queueMicrotask(() => child.emit("error", new Error("ENOENT")));
+    return child;
+  };
+  const utility = new WorkspaceUtilities(transport, clipboard, root, launch);
+
+  const result = await utility.openJobLogInEditor("job-handle");
+
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /executable is unavailable/);
+  assert.deepEqual(await readdir(root), []);
+});
+
+test("export count is bounded before the job log is fetched", async (t) => {
+  const { utility, root, transport } = await fixture(t);
+  await mkdir(root, { mode: 0o700 });
+  for (let index = 1; index <= 8; index += 1) {
+    const suffix = String(index).padStart(12, "0");
+    await writeFile(
+      path.join(root, `tongs-job-${index}-123e4567-e89b-42d3-a456-${suffix}.log`),
+      "retained",
+      { mode: 0o600 },
+    );
+  }
+
+  const result = await utility.openJobLogInEditor("job-handle");
+
+  assert.equal(result.outcome, "capacity_exceeded");
+  assert.equal(transport.reads.length, 0);
+});
+
+test("stale cleanup touches only strict owned export names", async (t) => {
+  const { utility, root, parent, transport } = await fixture(t);
+  await mkdir(root, { mode: 0o700 });
+  const stale = path.join(root, "tongs-job-31-123e4567-e89b-42d3-a456-426614174000.log");
+  const unrelated = path.join(root, "keep.txt");
+  await writeFile(stale, "old", { mode: 0o600 });
+  await writeFile(unrelated, "user", { mode: 0o600 });
+  await utimes(stale, 0, 0);
+  transport.editorPlan = { ...transport.editorPlan, status: "missing", argv: [], content: null };
+
+  await utility.openJobLogInEditor("job-handle");
+
+  assert.deepEqual(await readdir(root), ["keep.txt"]);
+
+  const symlinkRoot = path.join(parent, "link-root");
+  await symlink(root, symlinkRoot);
+  const guarded = new WorkspaceUtilities(transport, { writeText() {} }, symlinkRoot, () => { throw new Error("must not launch"); });
+  assert.equal((await guarded.openJobLogInEditor("job-handle")).outcome, "failed");
+});
+
+test("early nonzero editor exit is distinct and removes the export", async (t) => {
+  const { root, transport, clipboard } = await fixture(t);
+  const launch = () => {
+    const child = new FakeChild();
+    queueMicrotask(() => {
+      child.emit("spawn");
+      child.emit("exit", 9);
+    });
+    return child;
+  };
+  const utility = new WorkspaceUtilities(transport, clipboard, root, launch);
+
+  const result = await utility.openJobLogInEditor("job-handle");
+
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /exited with an error/);
+  assert.deepEqual(await readdir(root), []);
+});
+
+test("editor error after spawn is distinct and removes the export", async (t) => {
+  const { root, transport, clipboard } = await fixture(t);
+  const launch = () => {
+    const child = new FakeChild();
+    queueMicrotask(() => {
+      child.emit("spawn");
+      child.emit("error", new Error("launch failed"));
+    });
+    return child;
+  };
+  const utility = new WorkspaceUtilities(transport, clipboard, root, launch);
+
+  const result = await utility.openJobLogInEditor("job-handle");
+
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /reported an error/);
+  assert.deepEqual(await readdir(root), []);
+});

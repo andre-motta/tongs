@@ -1,0 +1,240 @@
+"""Narrow, UI-independent workspace utility authority."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import shlex
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import PurePath
+from urllib.parse import urlsplit
+
+from tongs.config import Config
+from tongs.services.errors import ServiceError, ServiceErrorCode
+from tongs.services.models import JobRef, ReviewRef, ReviewSnapshot
+
+MAX_EDITOR_LOG_BYTES = 4 * 1024 * 1024
+MAX_EDITOR_COMMAND_BYTES = 16 * 1024
+MAX_EDITOR_ARGUMENTS = 64
+MAX_EDITOR_ARGUMENT_BYTES = 4096
+MAX_REVIEW_URL_BYTES = 4096
+
+_TERMINAL_EDITORS = frozenset(
+    {"joe", "less", "micro", "more", "nano", "nvim", "pico", "vi", "vim"}
+)
+
+
+class EditorPlanStatus(str, Enum):
+    """Safe outcomes produced before Electron starts an editor process."""
+
+    READY = "ready"
+    DISABLED = "disabled"
+    MISSING = "missing"
+    MALFORMED = "malformed"
+    TERMINAL_UNSUPPORTED = "terminal_unsupported"
+    LOG_TOO_LARGE = "log_too_large"
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewUrl:
+    """Credential-free HTTPS URL bound to an admitted review."""
+
+    review: ReviewRef
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
+class EditorLogPlan:
+    """Trusted editor argv and bounded log content for the Electron main process."""
+
+    status: EditorPlanStatus
+    message: str
+    job: JobRef
+    argv: tuple[str, ...] = ()
+    content: str | None = None
+
+
+class WorkspaceUtilityService:
+    """Resolve renderer-safe identities into narrowly scoped local utilities."""
+
+    def __init__(
+        self,
+        *,
+        config: Config,
+        get_review: Callable[[ReviewRef], Awaitable[ReviewSnapshot]],
+        get_job_log: Callable[[JobRef], Awaitable[str]],
+        clear_cache: Callable[[], Awaitable[None]],
+        environment: Mapping[str, str] | None = None,
+        max_editor_log_bytes: int = MAX_EDITOR_LOG_BYTES,
+    ) -> None:
+        if max_editor_log_bytes <= 0:
+            raise ValueError("max_editor_log_bytes must be positive")
+        self._config = config
+        self._get_review = get_review
+        self._get_job_log = get_job_log
+        self._clear_cache = clear_cache
+        self._environment = os.environ if environment is None else environment
+        self._max_editor_log_bytes = max_editor_log_bytes
+
+    async def review_url(self, review: ReviewRef) -> ReviewUrl:
+        """Return the current URL only when it belongs to the admitted forge."""
+        snapshot = await self._get_review(review)
+        if snapshot.ref != review:
+            raise ServiceError(
+                ServiceErrorCode.INVALID_RESPONSE,
+                "The current review identity could not be confirmed.",
+            )
+        url = snapshot.detail.web_url
+        parsed = None
+        try:
+            parsed = urlsplit(url)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except (TypeError, ValueError):
+            hostname = None
+        if (
+            not isinstance(url, str)
+            or not url
+            or len(url.encode("utf-8")) > MAX_REVIEW_URL_BYTES
+            or any(ord(character) < 32 for character in url)
+            or parsed is None
+            or parsed.scheme != "https"
+            or parsed.username is not None
+            or parsed.password is not None
+            or hostname is None
+            or hostname.casefold() != review.repository.hostname.casefold()
+        ):
+            raise ServiceError(
+                ServiceErrorCode.INVALID_RESPONSE,
+                "The current review URL is not a permitted HTTPS forge URL.",
+            )
+        return ReviewUrl(review, url)
+
+    async def clear_shared_cache(self) -> None:
+        """Clear only the shared API cache, leaving durable review drafts intact."""
+        try:
+            await self._clear_cache()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            raise ServiceError(
+                ServiceErrorCode.INTERNAL,
+                "The shared API cache could not be cleared.",
+            ) from error
+
+    async def prepare_editor_log(self, job: JobRef) -> EditorLogPlan:
+        """Build a bounded launch plan for one admitted job identity."""
+        status, message, argv = self._editor_argv()
+        if status is not EditorPlanStatus.READY:
+            return EditorLogPlan(status, message, job)
+
+        content = await self._get_job_log(job)
+        if not isinstance(content, str):
+            raise ServiceError(
+                ServiceErrorCode.INVALID_RESPONSE,
+                "The forge returned an invalid job log.",
+            )
+        try:
+            byte_count = len(content.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise ServiceError(
+                ServiceErrorCode.INVALID_RESPONSE,
+                "The job log could not be encoded safely.",
+            ) from error
+        if byte_count > self._max_editor_log_bytes:
+            return EditorLogPlan(
+                EditorPlanStatus.LOG_TOO_LARGE,
+                "The job log is too large to export to an external editor.",
+                job,
+            )
+        return EditorLogPlan(status, message, job, argv=argv, content=content)
+
+    def _editor_argv(self) -> tuple[EditorPlanStatus, str, tuple[str, ...]]:
+        enabled = self._config.external_editor_enabled
+        if not isinstance(enabled, bool):
+            return (
+                EditorPlanStatus.MALFORMED,
+                "The external editor setting is malformed.",
+                (),
+            )
+        if not enabled:
+            return (
+                EditorPlanStatus.DISABLED,
+                "External editor access is disabled in Tongs configuration.",
+                (),
+            )
+
+        command = self._config.editor_command
+        if not isinstance(command, str):
+            return (
+                EditorPlanStatus.MALFORMED,
+                "The configured external editor command is malformed.",
+                (),
+            )
+        if not command:
+            command = self._environment.get("VISUAL", "") or self._environment.get(
+                "EDITOR", ""
+            )
+        if not command:
+            return (
+                EditorPlanStatus.MISSING,
+                "Configure [editor].command, $VISUAL, or $EDITOR to use an external editor.",
+                (),
+            )
+        if (
+            not isinstance(command, str)
+            or len(command.encode("utf-8")) > MAX_EDITOR_COMMAND_BYTES
+            or any(ord(character) < 32 for character in command)
+        ):
+            return (
+                EditorPlanStatus.MALFORMED,
+                "The configured external editor command is malformed.",
+                (),
+            )
+        try:
+            argv = tuple(shlex.split(command, posix=True))
+        except ValueError:
+            argv = ()
+        if (
+            not argv
+            or len(argv) > MAX_EDITOR_ARGUMENTS
+            or any(
+                not argument
+                or len(argument.encode("utf-8")) > MAX_EDITOR_ARGUMENT_BYTES
+                or any(ord(character) < 32 for character in argument)
+                for argument in argv
+            )
+        ):
+            return (
+                EditorPlanStatus.MALFORMED,
+                "The configured external editor command is malformed.",
+                (),
+            )
+
+        executable = PurePath(argv[0]).name.casefold()
+        terminal_only = executable in _TERMINAL_EDITORS or (
+            executable in {"emacs", "emacsclient"}
+            and any(argument in {"-nw", "-t", "--tty"} for argument in argv[1:])
+        )
+        if terminal_only:
+            return (
+                EditorPlanStatus.TERMINAL_UNSUPPORTED,
+                "Configure a wait-capable graphical editor; terminal editors cannot attach to Tongs Desktop.",
+                (),
+            )
+        return (
+            EditorPlanStatus.READY,
+            "The configured editor launch plan is ready.",
+            argv,
+        )
+
+
+__all__ = [
+    "MAX_EDITOR_LOG_BYTES",
+    "EditorLogPlan",
+    "EditorPlanStatus",
+    "ReviewUrl",
+    "WorkspaceUtilityService",
+]

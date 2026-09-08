@@ -44,6 +44,11 @@ import type {
   SubmissionProgressDto,
   VerdictParams,
 } from "../shared/review.js";
+import type {
+  ClearCacheResult,
+  CopyReviewUrlResult,
+  OpenJobLogEditorResult,
+} from "../shared/utilities.js";
 
 const IPC_CHANNELS = Object.freeze({
   discoverRepositories: "tongs:repositories.discover", openRepository: "tongs:repositories.open", listReviews: "tongs:reviews.list", getReview: "tongs:reviews.get",
@@ -83,6 +88,11 @@ const REVIEW_IPC_CHANNELS = Object.freeze({
   listSubmissions: "tongs:review-submissions.list",
   resumeSubmission: "tongs:review-submissions.resume",
   reconcileSubmission: "tongs:review-submissions.reconcile",
+} as const);
+const UTILITY_IPC_CHANNELS = Object.freeze({
+  copyReviewUrl: "tongs:utilities.copy-review-url",
+  clearCache: "tongs:utilities.clear-cache",
+  openJobLogInEditor: "tongs:utilities.open-job-log-in-editor",
 } as const);
 
 const owned = new Set<string>();
@@ -161,5 +171,8 @@ const bridge: DesktopBridge = Object.freeze({
     return () => ipcRenderer.removeListener(IPC_CHANNELS.event, wrapped);
   },
   openExternal: async (url: string): Promise<boolean> => await ipcRenderer.invoke(IPC_CHANNELS.openExternal, url) === true,
+  copyReviewUrl: async (review: string): Promise<CopyReviewUrlResult> => ipcRenderer.invoke(UTILITY_IPC_CHANNELS.copyReviewUrl, review) as Promise<CopyReviewUrlResult>,
+  clearCache: async (): Promise<ClearCacheResult> => ipcRenderer.invoke(UTILITY_IPC_CHANNELS.clearCache, {}) as Promise<ClearCacheResult>,
+  openJobLogInEditor: async (job: string): Promise<OpenJobLogEditorResult> => ipcRenderer.invoke(UTILITY_IPC_CHANNELS.openJobLogInEditor, job) as Promise<OpenJobLogEditorResult>,
 });
 contextBridge.exposeInMainWorld("tongs", bridge);

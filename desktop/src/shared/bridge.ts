@@ -1,10 +1,12 @@
 import type { CIDesktopBridge } from "./ci.js";
 import type { ReviewDesktopBridge } from "./review.js";
+import type { WorkspaceUtilityBridge } from "./utilities.js";
 
 export const PROTOCOL_MAJOR = 1 as const;
 export const REQUIRED_CAPABILITIES = Object.freeze([
   "assets", "cancellation", "ci_mutations", "events", "opaque_handles", "paged_diffs",
   "paged_logs", "plugins", "review_mutations",
+  "workspace_utilities",
 ] as const);
 
 export type JsonScalar = string | number | boolean | null;
@@ -88,7 +90,7 @@ export interface DesktopEvent { readonly sequence: number; readonly name: string
 export interface AssetDescriptor { readonly source: "core" | "plugin"; readonly asset_id: string; readonly plugin_id: string | null; readonly kind: string; readonly media_type: string; readonly byte_count: number; readonly sha256: string; readonly url: string; }
 export interface DesktopRead<T> { readonly requestToken: string; readonly result: Promise<T>; }
 
-export interface DesktopBridge extends CIDesktopBridge, ReviewDesktopBridge {
+export interface DesktopBridge extends CIDesktopBridge, ReviewDesktopBridge, WorkspaceUtilityBridge {
   discoverRepositories(): DesktopRead<RepositoryListResult>;
   openRepository(params: OpenRepositoryParams): DesktopRead<RepositoryDto>;
   listReviews(params: ListReviewsParams): DesktopRead<ReviewListResult>;

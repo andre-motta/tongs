@@ -404,11 +404,12 @@ class ReviewOperations:
             raise _redact_service_error(error) from None
         if receipt is None:
             return {"receipt": None}
-        if (
-            receipt.action is not action
-            or receipt.target.review != review
-            or receipt.target.revision != revision
-        ):
+        expected_target = ReviewActionTarget(
+            review,
+            revision,
+            MRState.CLOSED if action is MRAction.REOPEN else MRState.OPEN,
+        )
+        if receipt.action is not action or receipt.target != expected_target:
             raise ServiceError(
                 ServiceErrorCode.CONFLICT,
                 "The operation ID is bound to another review action.",

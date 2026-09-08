@@ -4,26 +4,35 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
+from contextlib import suppress
 from datetime import UTC, datetime
+from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 import pytest_asyncio
 
+from tongs.cache.store import CacheStore
+from tongs.config import Config
+from tongs.desktop.protocol import review_operations as review_operations_module
 from tongs.desktop.protocol.messages import JsonObject, ProtocolError, ProtocolErrorCode
 from tongs.desktop.protocol.review_operations import (
     REVIEW_CAPABILITY,
     REVIEW_METHODS,
     ReviewOperations,
 )
-from tongs.desktop.protocol.server import RequestContext
+from tongs.desktop.protocol.server import DesktopSidecarServer, RequestContext
 from tongs.desktop.protocol.state import HandleKind, HandleRegistry
 from tongs.errors import NetworkError
 from tongs.forges.base import ForgeClient
+from tongs.forges.github import GitHubClient
 from tongs.forges.models import (
     CIStatus,
     Discussion,
@@ -37,8 +46,10 @@ from tongs.forges.models import (
 )
 from tongs.forges.models import InlineComment as ForgeInlineComment
 from tongs.plugins.desktop import DesktopCancellation
+from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.scanner.repo import ForgeType
 from tongs.services import (
+    ApplicationSession,
     ForgeCapabilities,
     MRAction,
     MRActionOutcome,
@@ -159,6 +170,7 @@ def _client(**overrides: object) -> SimpleNamespace:
 
 class _Session:
     def __init__(self, store: DraftStore, client: SimpleNamespace) -> None:
+        self.config = Config()
         self.drafts = store
         self.client = client
         self.snapshots = {
@@ -187,6 +199,13 @@ class _Session:
             mutations=self.review_mutations,
             get_review=self.get_review,
         )
+
+    async def start(self) -> _Session:
+        return self
+
+    async def events(self):
+        if False:
+            yield None
 
     async def get_review(self, ref: ReviewRef) -> ReviewSnapshot:
         try:
@@ -463,6 +482,15 @@ async def test_stale_revision_and_hostile_payloads_fail_before_write(setup) -> N
                 "operation_id": True,
                 "review": handles["review"],
                 "body": "body",
+            },
+            _context(),
+        )
+    with pytest.raises(ProtocolError):
+        await operations.comment(
+            {
+                "operation_id": "oversized",
+                "review": handles["review"],
+                "body": "é" * 32_769,
             },
             _context(),
         )
@@ -858,6 +886,52 @@ async def test_submission_status_and_reconciliation_are_durable_and_scoped(
 
 
 @pytest.mark.asyncio
+async def test_reconnect_rediscovers_unknown_submission_without_attempt_id(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "data" / "drafts.db"
+    first_store = DraftStore(path)
+    await first_store.open()
+    first_session = _Session(first_store, _client())
+    draft = await first_store.create_draft(
+        REVIEW,
+        REVISION,
+        DraftContent(comments=(GeneralDraftComment(uuid4(), "pending"),)),
+    )
+    attempt = await first_store.lock_submission(draft.id, draft.version)
+    await first_store.mark_attempt_unknown(
+        attempt.id, step_id="comment:0", reason="connection_lost"
+    )
+    await first_session.close()
+
+    second_store = DraftStore(path)
+    await second_store.open()
+    second_session = _Session(second_store, _client())
+    handles = HandleRegistry()
+    review_handle = handles.issue(HandleKind.REVIEW, REVIEW)
+    operations = ReviewOperations(session=second_session, handles=handles)
+    try:
+        recovered = await operations.list_submissions(
+            {"review": review_handle, "max_items": 1}, _context()
+        )
+        recovered_attempt = recovered["attempts"][0]
+        status = await operations.submission_status(
+            {
+                "review": review_handle,
+                "attempt_id": recovered_attempt["attempt_id"],
+            },
+            _context(),
+        )
+    finally:
+        await second_session.close()
+
+    assert recovered["next_cursor"] is None
+    assert recovered_attempt["attempt_id"] == str(attempt.id)
+    assert recovered_attempt["outcome"] == "unknown"
+    assert status == recovered_attempt
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [
@@ -893,3 +967,374 @@ async def test_malformed_nested_drafts_fail_before_storage(
         )
 
     assert await session.drafts.list_drafts(review=REVIEW) == ()
+
+
+class _WireWriter:
+    def __init__(self) -> None:
+        self.frames: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+
+    def write(self, data: bytes) -> None:
+        self.frames.put_nowait(json.loads(data))
+
+    async def drain(self) -> None:
+        await asyncio.sleep(0)
+
+    async def response(self, request_id: str) -> dict[str, object]:
+        while True:
+            frame = await asyncio.wait_for(self.frames.get(), 2)
+            if frame.get("type") == "response" and frame.get("id") == request_id:
+                return frame
+
+
+def _frame(request_id: str, method: str, params: JsonObject) -> bytes:
+    return (
+        json.dumps(
+            {
+                "v": 1,
+                "type": "request",
+                "id": request_id,
+                "method": method,
+                "params": params,
+            }
+        ).encode()
+        + b"\n"
+    )
+
+
+def _github_pr() -> dict[str, object]:
+    return {
+        "id": 420,
+        "number": REVIEW.number,
+        "title": "Review",
+        "body": "description",
+        "state": "open",
+        "draft": False,
+        "user": {"login": "alice"},
+        "head": {"ref": "feature", "sha": REVISION.head_sha},
+        "base": {"ref": "main", "sha": REVISION.base_sha},
+        "created_at": "2026-09-07T12:00:00Z",
+        "updated_at": "2026-09-07T12:00:00Z",
+        "html_url": "https://github.com/acme/widgets/pull/42",
+        "comments": 0,
+        "review_comments": 0,
+        "mergeable_state": "clean",
+        "labels": [],
+        "requested_reviewers": [],
+        "assignees": [],
+        "changed_files": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_eof_settles_dispatched_quick_write_unknown_without_replay(
+    tmp_path: Path,
+) -> None:
+    entered = asyncio.Event()
+
+    async def hang(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    client = _client(add_comment=AsyncMock(side_effect=hang))
+    store = DraftStore(tmp_path / "data" / "drafts.db")
+    await store.open()
+    session = _Session(store, client)
+    server = DesktopSidecarServer(
+        session=cast(ApplicationSession, session),
+        plugin_registry=DesktopPluginRegistry(
+            entry_point_source=lambda _group: (), host_version="1.0"
+        ),
+        shutdown_timeout=1,
+    )
+    reader = asyncio.StreamReader()
+    writer = _WireWriter()
+    running = asyncio.create_task(server.run(reader, writer))
+
+    reader.feed_data(
+        _frame(
+            "handshake",
+            "handshake",
+            {
+                "protocol_major": 1,
+                "core_version": version("tongs"),
+                "capabilities": [REVIEW_CAPABILITY],
+            },
+        )
+    )
+    await writer.response("handshake")
+    review_handle = server._handles.issue(HandleKind.REVIEW, REVIEW)
+    reader.feed_data(
+        _frame(
+            "eof-comment",
+            "review_mutations.comment",
+            {
+                "operation_id": "eof:quick:1",
+                "review": review_handle,
+                "body": "may reach the forge",
+            },
+        )
+    )
+    await asyncio.wait_for(entered.wait(), 2)
+
+    reader.feed_eof()
+    await asyncio.wait_for(running, 3)
+
+    record = session.review_mutations._ledger["eof:quick:1"]
+    assert record.outcome is not None
+    assert record.outcome.status.value == "unknown"
+    assert record.outcome.resync_required is True
+    assert client.add_comment.await_count == 1
+
+
+class _TransportRegistry:
+    def __init__(self, client: GitHubClient) -> None:
+        self.client = client
+
+    def active_hostnames(self) -> list[str]:
+        return [REPOSITORY.hostname]
+
+    def get_host(self, hostname: str) -> ForgeHost | None:
+        if hostname == REPOSITORY.hostname:
+            return ForgeHost(hostname, ForgeType.GITHUB, "https://api.github.com")
+        return None
+
+    async def get_client(self, _hostname: str) -> ForgeClient:
+        return self.client
+
+    async def close_all(self) -> None:
+        await self.client.close()
+
+
+@pytest.mark.asyncio
+async def test_production_ndjson_roundtrip_uses_real_session_and_mock_transport(
+    tmp_path: Path,
+) -> None:
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.url.path == "/repos/acme/widgets/pulls":
+            page = int(request.url.params.get("page", "1"))
+            return httpx.Response(200, json=[_github_pr()] if page == 1 else [])
+        if request.url.path == "/repos/acme/widgets/pulls/42":
+            return httpx.Response(200, json=_github_pr())
+        if request.url.path == "/repos/acme/widgets/pulls/42/reviews":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/repos/acme/widgets/commits/head-42/check-runs":
+            return httpx.Response(200, json={"check_runs": []})
+        if request.url.path == "/repos/acme/widgets/issues/42/comments":
+            assert request.method == "POST"
+            assert json.loads(request.content) == {"body": "NDJSON comment"}
+            return httpx.Response(201, json={"id": 991})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
+    client = GitHubClient(
+        ForgeHost(REPOSITORY.hostname, ForgeType.GITHUB, "https://api.github.com"),
+        http,
+    )
+    cache_path = tmp_path / "cache" / "cache.db"
+    draft_path = tmp_path / "data" / "drafts.db"
+    session = ApplicationSession(
+        config=Config(),
+        cache=CacheStore(db_path=cache_path),
+        draft_store=DraftStore(draft_path),
+        forge_registry=cast(object, _TransportRegistry(client)),  # type: ignore[arg-type]
+    )
+    server = DesktopSidecarServer(
+        session=session,
+        plugin_registry=DesktopPluginRegistry(
+            entry_point_source=lambda _group: (), host_version="1.0"
+        ),
+    )
+    reader = asyncio.StreamReader()
+    writer = _WireWriter()
+    running = asyncio.create_task(server.run(reader, writer))
+    try:
+        reader.feed_data(
+            _frame(
+                "handshake",
+                "handshake",
+                {
+                    "protocol_major": 1,
+                    "core_version": version("tongs"),
+                    "capabilities": [REVIEW_CAPABILITY],
+                },
+            )
+        )
+        handshake = await writer.response("handshake")
+        result = cast(dict[str, object], handshake["result"])
+        assert result["accepted_capabilities"] == [REVIEW_CAPABILITY]
+        assert result["methods"] == [*sorted(server._operations), "shutdown"]
+        for method, (_handler, mutation) in ReviewOperations(
+            session=session, handles=server._handles
+        ).handlers.items():
+            assert server._operations[method].mutation is mutation
+
+        reader.feed_data(
+            _frame(
+                "repository",
+                "repositories.open",
+                {
+                    "hostname": REPOSITORY.hostname,
+                    "project_path": REPOSITORY.project_path,
+                },
+            )
+        )
+        repository = await writer.response("repository")
+        repository_handle = repository["result"]["handle"]  # type: ignore[index]
+        reader.feed_data(
+            _frame(
+                "reviews",
+                "reviews.list",
+                {
+                    "scope": "all_open",
+                    "repository": repository_handle,
+                },
+            )
+        )
+        reviews = await writer.response("reviews")
+        review_handle = reviews["result"]["items"][0]["handle"]  # type: ignore[index]
+
+        reader.feed_data(
+            _frame(
+                "transport-comment",
+                "review_mutations.comment",
+                {
+                    "operation_id": "application-comment",
+                    "review": review_handle,
+                    "body": "NDJSON comment",
+                },
+            )
+        )
+        comment = await writer.response("transport-comment")
+        assert comment["result"]["operation_id"] == "application-comment"  # type: ignore[index]
+        assert comment["result"]["outcome"] == "known"  # type: ignore[index]
+
+        reader.feed_data(
+            _frame(
+                "draft",
+                "drafts.create",
+                {
+                    "review": review_handle,
+                    "revision": _revision_wire(),
+                },
+            )
+        )
+        draft = await writer.response("draft")
+        assert draft["result"]["review"] == review_handle  # type: ignore[index]
+        assert draft["result"]["state"] == "editable"  # type: ignore[index]
+
+        reader.feed_data(_frame("shutdown", "shutdown", {}))
+        assert (await writer.response("shutdown"))["result"] == {"accepted": True}
+        await asyncio.wait_for(running, 2)
+    finally:
+        if not running.done():
+            reader.feed_eof()
+            with suppress(BaseException):
+                await asyncio.wait_for(running, 2)
+
+    assert requests.count(("POST", "/repos/acme/widgets/issues/42/comments")) == 1
+    assert cache_path.is_file()
+    assert draft_path.is_file()
+    assert oct(cache_path.stat().st_mode & 0o777) == "0o600"
+    assert oct(draft_path.stat().st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.asyncio
+async def test_exact_e_p_child_binds_candidate_and_registered_review_methods(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path(__file__).parents[3]
+        / "src"
+        / "tongs"
+        / "desktop"
+        / "protocol"
+        / "review_operations.py"
+    ).resolve()
+    assert Path(review_operations_module.__file__).resolve() == source
+
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(tmp_path / "must-not-bind")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    environment["XDG_CONFIG_HOME"] = str(tmp_path / "config")
+    environment["XDG_DATA_HOME"] = str(tmp_path / "data")
+    binding = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-E",
+        "-P",
+        "-c",
+        (
+            "from pathlib import Path;"
+            "import tongs.desktop.protocol.review_operations as module;"
+            "print(Path(module.__file__).resolve())"
+        ),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd="/tmp",
+        env=environment,
+    )
+    stdout, stderr = await asyncio.wait_for(binding.communicate(), 10)
+    assert binding.returncode == 0, stderr.decode()
+    assert Path(stdout.decode().strip()) == source
+
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-E",
+        "-P",
+        "-m",
+        "tongs.desktop.sidecar",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd="/tmp",
+        env=environment,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    try:
+        process.stdin.write(
+            _frame(
+                "unsupported",
+                "handshake",
+                {
+                    "protocol_major": 1,
+                    "core_version": version("tongs"),
+                    "capabilities": ["review_mutations.v2"],
+                },
+            )
+        )
+        await process.stdin.drain()
+        unsupported = json.loads(await asyncio.wait_for(process.stdout.readline(), 10))
+        assert unsupported["error"]["code"] == "unsupported_protocol"
+
+        process.stdin.write(
+            _frame(
+                "handshake",
+                "handshake",
+                {
+                    "protocol_major": 1,
+                    "core_version": version("tongs"),
+                    "capabilities": [REVIEW_CAPABILITY],
+                },
+            )
+        )
+        await process.stdin.drain()
+        handshake = json.loads(await asyncio.wait_for(process.stdout.readline(), 10))
+        assert REVIEW_CAPABILITY in handshake["result"]["accepted_capabilities"]
+        assert set(REVIEW_METHODS) <= set(handshake["result"]["methods"])
+
+        process.stdin.write(_frame("shutdown", "shutdown", {}))
+        await process.stdin.drain()
+        shutdown = json.loads(await asyncio.wait_for(process.stdout.readline(), 10))
+        assert shutdown["result"] == {"accepted": True}
+        assert await asyncio.wait_for(process.wait(), 10) == 0
+        assert await process.stderr.read() == b""
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()

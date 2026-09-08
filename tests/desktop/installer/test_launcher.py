@@ -64,6 +64,15 @@ def _payload(target_root: Path, launcher: Path) -> InstalledPayload:
     )
 
 
+def _process_is_running(pid: int) -> bool:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return False
+    state = stat[stat.rfind(")") + 2 :].split(maxsplit=1)[0]
+    return state not in {"X", "Z"}
+
+
 def test_venv_binding_preserves_lexical_interpreter_symlink(tmp_path: Path) -> None:
     prefix = tmp_path / "persistent venv"
     interpreter = prefix / "bin" / "python"
@@ -316,6 +325,7 @@ def test_probe_timeout_terminates_group_after_leader_exits(tmp_path: Path) -> No
     environment["TONGS_TEST_DESCENDANT_PID"] = os.fspath(pidfile)
     child_pid: int | None = None
     try:
+        assert _process_is_running(os.getpid())
         with pytest.raises(subprocess.TimeoutExpired):
             launcher_module._run_bounded_probe(
                 [
@@ -328,11 +338,7 @@ def test_probe_timeout_terminates_group_after_leader_exits(tmp_path: Path) -> No
             )
         child_pid = int(pidfile.read_text())
         deadline = time.monotonic() + 2.0
-        while True:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
-                break
+        while _process_is_running(child_pid):
             if time.monotonic() >= deadline:
                 pytest.fail("probe descendant remained alive after timeout cleanup")
             time.sleep(0.01)

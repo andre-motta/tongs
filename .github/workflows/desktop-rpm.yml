@@ -1,0 +1,49 @@
+name: Desktop Fedora RPM
+
+on:
+  pull_request:
+    branches: [feat/desktop-app]
+    paths:
+      - packaging/rpm/desktop/**
+      - tests/packaging/rpm/desktop/**
+      - src/tongs/mcp/plugin.py
+      - tests/test_plugins/test_plugin_system.py
+      - .github/workflows/desktop-rpm.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  fedora-44-rpm:
+    name: Fedora 44 source rebuild and lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TONGS_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out exact source without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ env.TONGS_HEAD_SHA }}
+          persist-credentials: false
+      - name: Record hosted runner and Podman versions
+        run: |
+          uname -a
+          podman version
+          gh version
+      - name: Build source RPMs and verify the package lifecycle
+        run: >-
+          packaging/rpm/desktop/run_hosted.sh
+          --output-dir "$RUNNER_TEMP/tongs-desktop-rpm"
+      - name: Upload RPMs and immutable evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fedora-44-tongs-rpms-${{ env.TONGS_HEAD_SHA }}
+          path: ${{ runner.temp }}/tongs-desktop-rpm
+          if-no-files-found: error
+          retention-days: 14

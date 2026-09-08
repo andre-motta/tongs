@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 0 ]; then
+    printf 'tongs-desktop does not accept command-line arguments\n' >&2
+    exit 64
+fi
+
+exec /usr/libexec/tongs-desktop/tongs-desktop \
+    --ozone-platform=x11 \
+    --tongs-python-executable /usr/bin/python3 \
+    --tongs-core-version @CORE_PEP440_VERSION@ \
+    --tongs-safe-cwd /usr/libexec/tongs-desktop

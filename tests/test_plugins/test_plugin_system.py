@@ -284,23 +284,38 @@ class TestPluginContext:
 
 class TestMCPPlugin:
     def test_mcp_plugin_available(self):
-        try:
-            from tongs.mcp.plugin import MCPPlugin
+        from tongs.mcp.plugin import MCPPlugin
 
-            p = MCPPlugin()
-            assert p.name == "mcp"
-            assert p.version == "0.2.0"
-        except ImportError:
-            pytest.skip("mcp not installed")
+        p = MCPPlugin()
+        assert p.name == "mcp"
+        assert p.version == "0.2.0"
 
-    def test_mcp_plugin_commands(self):
-        try:
-            from tongs.mcp.plugin import MCPPlugin
+    def test_mcp_plugin_commands(self, monkeypatch):
+        from tongs.mcp import plugin
 
-            commands = MCPPlugin().get_commands()
-            assert len(commands) == 1
-            assert commands[0][0] == "Start MCP Server"
-            assert commands[0][1]
-            assert callable(commands[0][2])
-        except ImportError:
-            pytest.skip("mcp not installed")
+        monkeypatch.setattr(plugin, "_mcp_available", lambda: True)
+
+        commands = plugin.MCPPlugin().get_commands()
+        assert len(commands) == 1
+        assert commands[0][0] == "Start MCP Server"
+        assert commands[0][1]
+        assert callable(commands[0][2])
+
+    def test_mcp_plugin_hides_command_when_dependency_is_missing(
+        self, monkeypatch
+    ):
+        from tongs.mcp import plugin
+
+        monkeypatch.setattr(plugin, "_mcp_available", lambda: False)
+
+        assert plugin.MCPPlugin().get_commands() == []
+
+    def test_mcp_plugin_refuses_launch_when_dependency_disappears(
+        self, monkeypatch
+    ):
+        from tongs.mcp import plugin
+
+        monkeypatch.setattr(plugin, "_mcp_available", lambda: False)
+
+        with pytest.raises(RuntimeError, match="optional MCP dependency"):
+            plugin.MCPPlugin()._start_server()

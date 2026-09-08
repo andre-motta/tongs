@@ -1,0 +1,96 @@
+%global debug_package %{nil}
+%global __brp_strip %{nil}
+%global __brp_strip_comment_note %{nil}
+%global __brp_strip_static_archive %{nil}
+
+Name:           tongs-desktop
+Version:        @DESKTOP_VERSION@
+Release:        @RPM_RELEASE@%{?dist}
+Summary:        Desktop application for Tongs
+License:        MIT AND LicenseRef-Electron-Bundled-Third-Party
+URL:            https://github.com/andre-motta/tongs
+Source0:        @DESKTOP_ARCHIVE@
+Source1:        desktop-install.json
+Source2:        desktop-manifest-v1.json
+Source3:        runtime-inventory.json
+Source4:        license-inventory.json
+Source5:        prepared-source-inventory.json
+Source6:        build-provenance.json
+Source7:        app-asar-inventory.json
+Source8:        SHA256SUMS
+Source9:        tongs.png
+Source10:       tongs.desktop
+Source11:       tongs-desktop
+Source12:       io.github.andre_motta.tongs.metainfo.xml
+Source13:       tongs-desktop.1
+Source14:       package_contract.py
+Source15:       manifest.json
+Source16:       prepared-inputs.json
+
+ExclusiveArch:  x86_64
+BuildRequires:  appstream
+BuildRequires:  coreutils
+BuildRequires:  desktop-file-utils
+BuildRequires:  python3 >= 3.12
+BuildRequires:  python3dist(packaging)
+BuildRequires:  tar
+Requires:       python3-tongs = @CORE_RPM_VERSION@-@RPM_RELEASE@%{?dist}
+Requires:       xorg-x11-server-Xwayland
+
+%description
+The Tongs desktop application packages the verified Electron runtime and uses
+the Fedora system Python and a matching python3-tongs package for its sidecar.
+
+%prep
+%{python3} %{SOURCE14} --manifest %{SOURCE15} --archive-dir %{_sourcedir}
+mkdir payload
+tar -xzf %{SOURCE0} -C payload
+
+%build
+# The Electron application is the byte-bound issue 51 prepared payload.
+
+%install
+install -d %{buildroot}%{_bindir}
+install -d %{buildroot}%{_libexecdir}/tongs-desktop
+cp -a payload/runtime/. %{buildroot}%{_libexecdir}/tongs-desktop/
+install -m 0755 %{SOURCE11} %{buildroot}%{_bindir}/tongs-desktop
+install -Dm 0644 %{SOURCE10} %{buildroot}%{_datadir}/applications/tongs.desktop
+install -Dm 0644 %{SOURCE9} %{buildroot}%{_datadir}/pixmaps/tongs.png
+install -Dm 0644 %{SOURCE12} %{buildroot}%{_metainfodir}/io.github.andre_motta.tongs.metainfo.xml
+install -Dm 0644 %{SOURCE13} %{buildroot}%{_mandir}/man1/tongs-desktop.1
+
+install -d %{buildroot}%{_licensedir}/tongs-desktop/runtime-licenses
+install -m 0644 payload/runtime/LICENSE %{buildroot}%{_licensedir}/tongs-desktop/Electron-LICENSE
+install -m 0644 payload/runtime/LICENSES.chromium.html %{buildroot}%{_licensedir}/tongs-desktop/
+install -m 0644 payload/runtime/LICENSES.json %{buildroot}%{_licensedir}/tongs-desktop/
+cp -a payload/runtime/licenses/. %{buildroot}%{_licensedir}/tongs-desktop/runtime-licenses/
+
+install -d %{buildroot}%{_docdir}/tongs-desktop
+install -m 0644 %{SOURCE3} %{SOURCE4} %{SOURCE5} %{SOURCE6} %{SOURCE7} \
+    %{buildroot}%{_docdir}/tongs-desktop/
+install -m 0644 %{SOURCE15} %{buildroot}%{_docdir}/tongs-desktop/rpm-payload-contract.json
+install -m 0644 %{SOURCE16} %{buildroot}%{_docdir}/tongs-desktop/rpm-source-pairing.json
+
+%check
+desktop-file-validate %{buildroot}%{_datadir}/applications/tongs.desktop
+appstreamcli validate --no-net %{buildroot}%{_metainfodir}/io.github.andre_motta.tongs.metainfo.xml
+test "$(stat -c '%%a' %{buildroot}%{_libexecdir}/tongs-desktop/chrome-sandbox)" = 755
+test ! -u %{buildroot}%{_libexecdir}/tongs-desktop/chrome-sandbox
+cmp %{SOURCE9} %{buildroot}%{_datadir}/pixmaps/tongs.png
+grep -Fx 'Exec=/usr/bin/tongs-desktop' %{buildroot}%{_datadir}/applications/tongs.desktop
+grep -F -- '--tongs-python-executable /usr/bin/python3' %{SOURCE11}
+grep -F -- '--tongs-core-version @CORE_PEP440_VERSION@' %{SOURCE11}
+
+%files
+%{_bindir}/tongs-desktop
+%{_libexecdir}/tongs-desktop
+%{_datadir}/applications/tongs.desktop
+%{_datadir}/pixmaps/tongs.png
+%{_metainfodir}/io.github.andre_motta.tongs.metainfo.xml
+%{_mandir}/man1/tongs-desktop.1*
+%license %{_licensedir}/tongs-desktop
+%doc %{_docdir}/tongs-desktop
+
+%changelog
+* Tue Sep 08 2026 Tongs release automation <noreply@tongs.tools> - @DESKTOP_VERSION@-@RPM_RELEASE@
+- Package the accepted issue 51 desktop payload for Fedora 44.

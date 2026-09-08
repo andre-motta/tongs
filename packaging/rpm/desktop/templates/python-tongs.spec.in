@@ -1,0 +1,79 @@
+Name:           python-tongs
+Version:        @CORE_RPM_VERSION@
+Release:        @RPM_RELEASE@%{?dist}
+Summary:        Multi-forge merge request and CI management TUI
+License:        MIT
+URL:            https://github.com/andre-motta/tongs
+Source0:        @SOURCE_ARCHIVE@
+
+BuildArch:      noarch
+BuildRequires:  pyproject-rpm-macros
+BuildRequires:  python3-devel >= 3.12
+BuildRequires:  python3-pip
+BuildRequires:  python3dist(hatchling)
+BuildRequires:  python3dist(hatch-vcs)
+BuildRequires:  python3dist(aiosqlite) >= 0.20
+BuildRequires:  python3dist(httpx) >= 0.27
+BuildRequires:  python3dist(packaging) >= 24
+BuildRequires:  python3dist(platformdirs) >= 4
+BuildRequires:  python3dist(pyperclip) >= 1.8
+BuildRequires:  python3dist(sigstore) >= 4.5
+BuildRequires:  python3dist(textual) >= 1
+
+%description
+Tongs is a terminal-native interface for reviewing GitHub and GitLab changes and
+managing their CI pipelines.
+
+%package -n python3-tongs
+Summary:        Multi-forge merge request and CI management TUI
+Requires:       python(abi) >= 3.12
+Requires:       python3dist(aiosqlite) >= 0.20
+Requires:       python3dist(httpx) >= 0.27
+Requires:       python3dist(packaging) >= 24
+Requires:       python3dist(platformdirs) >= 4
+Requires:       python3dist(pyperclip) >= 1.8
+Requires:       (python3dist(sigstore) >= 4.5 with python3dist(sigstore) < 5)
+Requires:       python3dist(textual) >= 1
+
+%description -n python3-tongs
+Tongs is a terminal-native interface for reviewing GitHub and GitLab changes and
+managing their CI pipelines. This package supplies the Python modules and the
+tongs command without the optional MCP server dependency.
+
+%package -n python3-tongs+mcp
+Summary:        MCP server command for Tongs
+Requires:       python3-tongs = %{version}-%{release}
+Requires:       (python3dist(mcp[cli]) >= 1 with python3dist(mcp[cli]) < 2)
+
+%description -n python3-tongs+mcp
+This optional subpackage supplies the tongs-mcp command and its MCP server
+dependency. The Python modules remain owned by python3-tongs.
+
+%prep
+%autosetup -n tongs-@CORE_PEP440_VERSION@
+
+%build
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS=@CORE_PEP440_VERSION@
+%pyproject_wheel
+
+%install
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS=@CORE_PEP440_VERSION@
+%pyproject_install
+%pyproject_save_files -l tongs
+
+%check
+export PYTHONPATH=%{buildroot}%{python3_sitelib}
+%{python3} -c 'import importlib.metadata; assert importlib.metadata.version("tongs") == "@CORE_PEP440_VERSION@"'
+%{python3} -c 'import tongs, tongs.app, tongs.desktop.sidecar'
+test -x %{buildroot}%{_bindir}/tongs
+test -x %{buildroot}%{_bindir}/tongs-mcp
+
+%files -n python3-tongs -f %{pyproject_files}
+%{_bindir}/tongs
+
+%files -n python3-tongs+mcp
+%{_bindir}/tongs-mcp
+
+%changelog
+* Tue Sep 08 2026 Tongs release automation <noreply@tongs.tools> - @CORE_RPM_VERSION@-@RPM_RELEASE@
+- Build the source-bound Fedora 44 candidate.

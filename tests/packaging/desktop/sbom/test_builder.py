@@ -6,9 +6,12 @@ import base64
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import sys
+import tarfile
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -50,12 +53,40 @@ def _digest(document: bytes) -> str:
 
 def _identity(root: Path) -> object:
     archive = next((root / "archive").glob("*.tar.gz"))
+    source_archive = root / "evidence/source.tar"
+    electron_archive = root / "evidence/electron-v44.2.0-linux-x64.zip"
     return sbom.ExpectedIdentity(
-        SOURCE_COMMIT,
-        SOURCE_TREE,
-        _digest(archive.read_bytes()),
-        GENERATOR_VERSION,
+        source_commit=SOURCE_COMMIT,
+        source_tree=SOURCE_TREE,
+        source_archive_sha256=_digest(source_archive.read_bytes()),
+        source_date_epoch=SOURCE_EPOCH,
+        archive_sha256=_digest(archive.read_bytes()),
+        electron_archive_sha256=_digest(electron_archive.read_bytes()),
+        generator_version=GENERATOR_VERSION,
     )
+
+
+def _source_archive(documents: dict[str, bytes]) -> bytes:
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        for path, document in sorted(documents.items()):
+            member = tarfile.TarInfo(path)
+            member.size = len(document)
+            member.mode = 0o644
+            member.mtime = SOURCE_EPOCH
+            member.pax_headers = {"comment": SOURCE_COMMIT}
+            archive.addfile(member, io.BytesIO(document))
+    return output.getvalue()
+
+
+def _source_documents(root: Path) -> dict[str, bytes]:
+    documents: dict[str, bytes] = {}
+    with tarfile.open(root / "evidence/source.tar", mode="r:") as archive:
+        for member in archive:
+            stream = archive.extractfile(member)
+            assert stream is not None
+            documents[member.name] = stream.read()
+    return documents
 
 
 def _fixture_root(tmp_path: Path) -> Path:
@@ -82,6 +113,23 @@ def _fixture_root(tmp_path: Path) -> Path:
         "license": "ISC",
         "dev": True,
     }
+    package_lock_bytes = _canonical(
+        {
+            "lockfileVersion": 3,
+            "name": "tongs-desktop-shell",
+            "packages": {
+                "": {"name": "tongs-desktop-shell", "version": "0.1.0"},
+                production["path"]: {
+                    key: value for key, value in production.items() if key != "path"
+                },
+                development["path"]: {
+                    key: value for key, value in development.items() if key != "path"
+                },
+            },
+            "requires": True,
+            "version": "0.1.0",
+        }
+    )
     licenses = {
         "schema_version": 1,
         "components": [
@@ -146,18 +194,42 @@ def _fixture_root(tmp_path: Path) -> Path:
             for path, (content, mode) in sorted(payload.items())
         ],
     }
+    electron_bytes = b"synthetic Electron ZIP"
+    electron_name = "electron-v44.2.0-linux-x64.zip"
+    electron_manifest_path = (
+        "packaging/desktop/archive/electron-runtime-44.2.0-linux-x64.json"
+    )
+    electron_manifest_bytes = _canonical(
+        {
+            "schema_version": 1,
+            "electron_version": "44.2.0",
+            "platform": "linux-x64",
+            "upstream_archive": {
+                "name": electron_name,
+                "sha256": _digest(electron_bytes),
+            },
+            "files": [],
+        }
+    )
+    source_documents = {
+        "LICENSE": b"tongs license\n",
+        "desktop/package-lock.json": package_lock_bytes,
+        electron_manifest_path: electron_manifest_bytes,
+    }
     prepared = {
         "schema_version": 1,
         "source_commit": SOURCE_COMMIT,
         "files": [
-            {"path": "LICENSE", "byte_count": 14, "sha256": "1" * 64},
             {
-                "path": "desktop/package-lock.json",
-                "byte_count": 42,
-                "sha256": "2" * 64,
-            },
+                "path": path,
+                "byte_count": len(document),
+                "sha256": _digest(document),
+            }
+            for path, document in sorted(source_documents.items())
         ],
-        "npm_packages": [production, development],
+        "npm_packages": sorted(
+            [production, development], key=lambda item: item["path"]
+        ),
     }
     asar = {
         "schema_version": 1,
@@ -165,10 +237,8 @@ def _fixture_root(tmp_path: Path) -> Path:
         "asar_byte_count": len(payload["runtime/resources/app.asar"][0]),
         "files": [{"path": "dist/app.js", "byte_count": 3, "sha256": "3" * 64}],
     }
-    electron_bytes = b"synthetic Electron ZIP"
-    electron_name = "electron-v44.2.0-linux-x64.zip"
     (evidence / electron_name).write_bytes(electron_bytes)
-    (evidence / "source.tar").write_bytes(b"source archive")
+    (evidence / "source.tar").write_bytes(_source_archive(source_documents))
     provenance = {
         "schema_version": 1,
         "candidate": "UNPUBLISHED",
@@ -180,7 +250,12 @@ def _fixture_root(tmp_path: Path) -> Path:
                 "name": electron_name,
                 "byte_count": len(electron_bytes),
                 "sha256": _digest(electron_bytes),
-            }
+            },
+            "inventory_sha256": _digest(electron_manifest_bytes),
+            "upstream_archive": {
+                "name": electron_name,
+                "sha256": _digest(electron_bytes),
+            },
         },
         "outputs": {
             "archive": {
@@ -292,12 +367,12 @@ def test_build_is_deterministic_schema_valid_and_semantically_bounded(
         (
             "archive/prepared-source-inventory.json",
             lambda value: value["npm_packages"][0].update(version="7.7.7"),
-            "license inventory disagrees",
+            "differs from the verified source package lock",
         ),
         (
             "archive/prepared-source-inventory.json",
             lambda value: value["npm_packages"][0].update(integrity="sha256-Zm9v"),
-            "not SHA-512",
+            "differs from the verified source package lock",
         ),
     ],
 )
@@ -321,6 +396,86 @@ def test_changed_license_manifest_bytes_are_rejected(tmp_path: Path) -> None:
         lambda value: value["components"][-1].update(version="7.7.7"),
     )
     with pytest.raises(sbom.SbomBuildError, match="archived runtime inventory"):
+        sbom.build_desktop_sbom(root, SCHEMA, _identity(root))
+
+
+def test_fabricated_registry_identity_rebound_in_producer_metadata_is_rejected(
+    tmp_path: Path,
+) -> None:
+    root = _fixture_root(tmp_path)
+
+    def fabricate(value: dict[str, object]) -> None:
+        package = value["npm_packages"][0]
+        assert isinstance(package, dict)
+        package["resolved"] = (
+            "https://registry.npmjs.org/fabricated/-/fabricated-9.9.9.tgz"
+        )
+        package["integrity"] = (
+            "sha512-"
+            + base64.b64encode(
+                hashlib.sha512(b"fabricated registry distribution").digest()
+            ).decode()
+        )
+
+    _mutate_json(root, "archive/prepared-source-inventory.json", fabricate)
+    with pytest.raises(sbom.SbomBuildError, match="verified source package lock"):
+        sbom.build_desktop_sbom(root, SCHEMA, _identity(root))
+
+
+def test_replaced_source_archive_with_rehashed_transfer_is_rejected(
+    tmp_path: Path,
+) -> None:
+    root = _fixture_root(tmp_path)
+    identity = _identity(root)
+    (root / "evidence/source.tar").write_bytes(b"not the expected source archive")
+    _rebind(root)
+    with pytest.raises(sbom.SbomBuildError, match="independently expected checkout"):
+        sbom.build_desktop_sbom(root, SCHEMA, identity)
+
+
+def test_verified_source_archive_must_contain_the_authoritative_lock(
+    tmp_path: Path,
+) -> None:
+    root = _fixture_root(tmp_path)
+    documents = _source_documents(root)
+    documents.pop("desktop/package-lock.json")
+    (root / "evidence/source.tar").write_bytes(_source_archive(documents))
+    _rebind(root)
+    identity = replace(
+        _identity(root),
+        source_archive_sha256=_digest((root / "evidence/source.tar").read_bytes()),
+    )
+    with pytest.raises(sbom.SbomBuildError, match="lacks a required"):
+        sbom.build_desktop_sbom(root, SCHEMA, identity)
+
+
+def test_replaced_electron_archive_with_rebound_producer_hashes_is_rejected(
+    tmp_path: Path,
+) -> None:
+    root = _fixture_root(tmp_path)
+    identity = _identity(root)
+    replacement = b"not the expected Electron ZIP"
+    electron_path = root / "evidence/electron-v44.2.0-linux-x64.zip"
+    electron_path.write_bytes(replacement)
+    provenance_path = root / "archive/build-provenance.json"
+    provenance = json.loads(provenance_path.read_bytes())
+    provenance["electron_input"]["archive"].update(
+        byte_count=len(replacement), sha256=_digest(replacement)
+    )
+    provenance_path.write_bytes(_canonical(provenance))
+    _rebind(root)
+    with pytest.raises(sbom.SbomBuildError, match="pinned source input"):
+        sbom.build_desktop_sbom(root, SCHEMA, identity)
+
+
+def test_rebound_producer_source_epoch_is_rejected(tmp_path: Path) -> None:
+    root = _fixture_root(tmp_path)
+    _mutate_json(
+        root,
+        "archive/build-provenance.json",
+        lambda value: value.update(source_date_epoch=SOURCE_EPOCH + 1),
+    )
+    with pytest.raises(sbom.SbomBuildError, match="source epoch is stale"):
         sbom.build_desktop_sbom(root, SCHEMA, _identity(root))
 
 
@@ -361,7 +516,13 @@ def test_license_closure_rejects_duplicate_missing_or_development_components(
     runtime = {item["path"]: item for item in runtime_document["files"]}
     mutate(licenses)
     with pytest.raises(sbom.SbomBuildError, match=message):
-        sbom._validate_license_and_lock_closure(prepared, licenses, runtime, "44.2.0")
+        sbom._validate_license_and_lock_closure(
+            prepared,
+            tuple(prepared["npm_packages"]),
+            licenses,
+            runtime,
+            "44.2.0",
+        )
 
 
 def test_stale_source_and_archive_identities_are_rejected(tmp_path: Path) -> None:
@@ -371,17 +532,13 @@ def test_stale_source_and_archive_identities_are_rejected(tmp_path: Path) -> Non
         sbom.build_desktop_sbom(
             root,
             SCHEMA,
-            sbom.ExpectedIdentity(
-                "f" * 40, SOURCE_TREE, good.archive_sha256, GENERATOR_VERSION
-            ),
+            replace(good, source_commit="f" * 40),
         )
     with pytest.raises(sbom.SbomBuildError, match="archive identity is stale"):
         sbom.build_desktop_sbom(
             root,
             SCHEMA,
-            sbom.ExpectedIdentity(
-                SOURCE_COMMIT, SOURCE_TREE, "f" * 64, GENERATOR_VERSION
-            ),
+            replace(good, archive_sha256="f" * 64),
         )
 
 
@@ -395,8 +552,24 @@ def test_unsafe_or_missing_transfer_input_is_rejected(tmp_path: Path) -> None:
         sbom.build_desktop_sbom(root, SCHEMA, _identity(root))
 
     root = _fixture_root(tmp_path / "missing")
+    identity = _identity(root)
     (root / "evidence/source.tar").unlink()
     with pytest.raises(sbom.SbomBuildError, match="missing"):
+        sbom.build_desktop_sbom(root, SCHEMA, identity)
+
+
+def test_transfer_size_bounds_are_checked_before_file_hashing(tmp_path: Path) -> None:
+    root = _fixture_root(tmp_path)
+    transfer_path = root / "candidate-attestation-transfer-v1.json"
+    transfer = json.loads(transfer_path.read_bytes())
+    record = next(
+        item
+        for item in transfer["files"]
+        if item["path"] == "archive/build-provenance.json"
+    )
+    record["size"] = sbom._MAX_JSON_BYTES + 1
+    transfer_path.write_bytes(_canonical(transfer))
+    with pytest.raises(sbom.SbomBuildError, match="exceeds its byte bound"):
         sbom.build_desktop_sbom(root, SCHEMA, _identity(root))
 
 
@@ -437,8 +610,14 @@ def test_cli_refuses_to_overwrite_an_existing_output(
             identity.source_commit,
             "--expected-source-tree",
             identity.source_tree,
+            "--expected-source-archive-sha256",
+            identity.source_archive_sha256,
+            "--expected-source-date-epoch",
+            str(identity.source_date_epoch),
             "--expected-archive-sha256",
             identity.archive_sha256,
+            "--expected-electron-archive-sha256",
+            identity.electron_archive_sha256,
             "--generator-version",
             identity.generator_version,
             "--schema",

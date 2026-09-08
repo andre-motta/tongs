@@ -10,6 +10,7 @@ import json
 import re
 import stat
 import sys
+import tarfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,6 +33,10 @@ _SCHEMA_SHA256: Final = (
 )
 _MAX_JSON_BYTES: Final = 4 * 1024 * 1024
 _MAX_ARCHIVE_BYTES: Final = 1024 * 1024 * 1024
+_MAX_SOURCE_ARCHIVE_BYTES: Final = 512 * 1024 * 1024
+_MAX_SOURCE_MEMBERS: Final = 8192
+_MAX_ELECTRON_ARCHIVE_BYTES: Final = 256 * 1024 * 1024
+_MAX_TRANSFER_TOTAL_BYTES: Final = 2 * 1024 * 1024 * 1024
 _MAX_TRANSFER_FILES: Final = 512
 _MAX_PACKAGES: Final = 4096
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
@@ -77,7 +82,10 @@ class ExpectedIdentity:
 
     source_commit: str
     source_tree: str
+    source_archive_sha256: str
+    source_date_epoch: int
     archive_sha256: str
+    electron_archive_sha256: str
     generator_version: str
 
     def validate(self) -> None:
@@ -86,8 +94,17 @@ class ExpectedIdentity:
             _fail("expected source commit is invalid")
         if _SHA1_RE.fullmatch(self.source_tree) is None:
             _fail("expected source tree is invalid")
+        if _SHA256_RE.fullmatch(self.source_archive_sha256) is None:
+            _fail("expected source archive SHA-256 is invalid")
+        if (
+            type(self.source_date_epoch) is not int
+            or not 0 <= self.source_date_epoch <= 0xFFFFFFFF
+        ):
+            _fail("expected source epoch is invalid")
         if _SHA256_RE.fullmatch(self.archive_sha256) is None:
             _fail("expected archive SHA-256 is invalid")
+        if _SHA256_RE.fullmatch(self.electron_archive_sha256) is None:
+            _fail("expected Electron archive SHA-256 is invalid")
         if _GENERATOR_VERSION_RE.fullmatch(self.generator_version) is None:
             _fail("generator version is invalid")
 
@@ -408,39 +425,88 @@ def _validate_producer_inputs(root: Path, identity: ExpectedIdentity) -> Produce
         _fail("external install manifest differs from the archive manifest")
 
     _validate_provenance(provenance, identity, artifact.name, artifact.byte_count)
-    _validate_source_inventory(prepared, identity.source_commit)
+    source_files = _validate_source_inventory(prepared, identity.source_commit)
+    source_archive = _root_file(root, "evidence/source.tar")
+    if source_archive.stat().st_size > _MAX_SOURCE_ARCHIVE_BYTES:
+        _fail("source archive exceeds its byte bound")
+    if _stream_sha256(source_archive) != identity.source_archive_sha256:
+        _fail("source archive does not match the independently expected checkout")
+    source_documents = _read_verified_source_documents(
+        source_archive,
+        external_install.electron_version,
+        identity.source_date_epoch,
+    )
+    _validate_prepared_source_documents(source_files, source_documents)
+    source_lock = _npm_inventory_from_lock(
+        source_documents["desktop/package-lock.json"]
+    )
     runtime_files = _validate_runtime_inventory(runtime, external_install)
     _validate_archived_license_inventory(root, runtime_files)
     asar_sha256 = _validate_asar_inventory(asar, runtime_files)
     npm_packages = _validate_license_and_lock_closure(
-        prepared, licenses, runtime_files, external_install.electron_version
+        prepared,
+        source_lock,
+        licenses,
+        runtime_files,
+        external_install.electron_version,
     )
 
-    source_archive_sha256 = _stream_sha256(_root_file(root, "evidence/source.tar"))
+    electron_config_path = (
+        "packaging/desktop/archive/electron-runtime-"
+        f"{external_install.electron_version}-linux-x64.json"
+    )
+    configured_electron = _validate_source_electron_manifest(
+        source_documents[electron_config_path],
+        external_install.electron_version,
+        identity.electron_archive_sha256,
+    )
+    electron_input = _object(provenance["electron_input"], "provenance electron input")
+    _require_exact_keys(
+        electron_input,
+        {"archive", "inventory_sha256", "upstream_archive"},
+        "provenance Electron input",
+    )
+    if electron_input["upstream_archive"] != configured_electron:
+        _fail("provenance Electron upstream identity is stale")
+    if electron_input["inventory_sha256"] != _sha256(
+        source_documents[electron_config_path]
+    ):
+        _fail("provenance Electron inventory identity is stale")
     electron = _object(
-        _object(provenance["electron_input"], "provenance electron input")["archive"],
+        electron_input["archive"],
         "provenance Electron archive",
+    )
+    _require_exact_keys(
+        electron, {"name", "sha256", "byte_count"}, "provenance Electron archive"
     )
     electron_archive_name = _string(electron, "name", "provenance Electron archive")
     electron_archive_sha256 = _digest(
         electron.get("sha256"), "provenance Electron archive SHA-256"
     )
+    if {
+        "name": electron_archive_name,
+        "sha256": electron_archive_sha256,
+    } != configured_electron:
+        _fail("provenance Electron archive differs from the pinned source input")
     electron_path = f"evidence/{electron_archive_name}"
     if electron_path not in transferred:
         _fail("transfer manifest is missing the declared Electron archive")
     _verify_transfer_identity(root, electron_path, transferred[electron_path])
-    if _stream_sha256(_root_file(root, electron_path)) != electron_archive_sha256:
+    electron_file = _root_file(root, electron_path)
+    if electron_file.stat().st_size != electron["byte_count"]:
+        _fail("Electron distribution archive byte count changed")
+    if _stream_sha256(electron_file) != identity.electron_archive_sha256:
         _fail("Electron distribution archive bytes changed")
 
     return ProducerInputs(
         release_version=release.release_version,
-        source_date_epoch=_integer(provenance, "source_date_epoch", "build provenance"),
+        source_date_epoch=identity.source_date_epoch,
         archive_name=archive_name,
         archive_sha256=identity.archive_sha256,
-        source_archive_sha256=source_archive_sha256,
+        source_archive_sha256=identity.source_archive_sha256,
         electron_version=external_install.electron_version,
         electron_archive_name=electron_archive_name,
-        electron_archive_sha256=electron_archive_sha256,
+        electron_archive_sha256=identity.electron_archive_sha256,
         asar_sha256=asar_sha256,
         npm_packages=npm_packages,
     )
@@ -681,6 +747,7 @@ def _validate_transfer_file_records(
     ):
         _fail("transfer file inventory size is invalid")
     records: dict[str, Mapping[str, object]] = {}
+    total_size = 0
     for raw in raw_records:
         record = _object(raw, "transfer file")
         _require_exact_keys(record, {"path", "sha256", "size"}, "transfer file")
@@ -690,10 +757,32 @@ def _validate_transfer_file_records(
             _fail("transfer file inventory contains a duplicate path")
         _digest(record["sha256"], "transfer file SHA-256")
         size = record["size"]
-        if type(size) is not int or size < 0:
+        if type(size) is not int or size < 1:
             _fail("transfer file size is invalid")
+        maximum = _transfer_file_maximum(path)
+        if size > maximum:
+            _fail(f"transfer file exceeds its byte bound: {path}")
+        total_size += size
+        if total_size > _MAX_TRANSFER_TOTAL_BYTES:
+            _fail("transfer file inventory exceeds its aggregate byte bound")
         records[path] = record
     return records
+
+
+def _transfer_file_maximum(path: str) -> int:
+    if path == "evidence/source.tar":
+        return _MAX_SOURCE_ARCHIVE_BYTES
+    if path.startswith("evidence/electron-v") and path.endswith("-linux-x64.zip"):
+        return _MAX_ELECTRON_ARCHIVE_BYTES
+    if path.startswith("evidence/"):
+        return _MAX_JSON_BYTES
+    if path.startswith("archive/"):
+        name = path.removeprefix("archive/")
+        if name.endswith(".tar.gz"):
+            return _MAX_ARCHIVE_BYTES
+        if name == "SHA256SUMS" or name in _REQUIRED_ARCHIVE_OUTPUTS:
+            return _MAX_JSON_BYTES
+    _fail(f"transfer file path is outside the supported producer layout: {path}")
 
 
 def _verify_transfer_identity(
@@ -783,9 +872,8 @@ def _validate_provenance(
         or provenance.get("source_commit") != identity.source_commit
     ):
         _fail("build provenance is not source-bound")
-    source_epoch = provenance.get("source_date_epoch")
-    if type(source_epoch) is not int or not 0 <= source_epoch <= 0xFFFFFFFF:
-        _fail("build provenance source epoch is invalid")
+    if provenance.get("source_date_epoch") != identity.source_date_epoch:
+        _fail("build provenance source epoch is stale")
     output = _object(
         _object(provenance.get("outputs"), "build provenance outputs").get("archive"),
         "build provenance archive",
@@ -800,7 +888,7 @@ def _validate_provenance(
 
 def _validate_source_inventory(
     prepared: Mapping[str, object], source_commit: str
-) -> None:
+) -> dict[str, Mapping[str, object]]:
     if (
         prepared.get("schema_version") != 1
         or prepared.get("source_commit") != source_commit
@@ -809,7 +897,7 @@ def _validate_source_inventory(
     files = prepared.get("files")
     if not isinstance(files, list) or not files:
         _fail("prepared source file inventory is empty")
-    observed: set[str] = set()
+    observed: dict[str, Mapping[str, object]] = {}
     for raw in files:
         item = _object(raw, "prepared source file")
         _require_exact_keys(
@@ -819,12 +907,127 @@ def _validate_source_inventory(
         _validate_relative_path(path)
         if path in observed:
             _fail("prepared source inventory has a duplicate path")
-        observed.add(path)
+        observed[path] = item
         _digest(item["sha256"], "prepared source file SHA-256")
         if type(item["byte_count"]) is not int or item["byte_count"] < 0:
             _fail("prepared source file byte count is invalid")
     if "desktop/package-lock.json" not in observed or "LICENSE" not in observed:
         _fail("prepared source inventory lacks required source inputs")
+    return observed
+
+
+def _read_verified_source_documents(
+    source_archive: Path,
+    electron_version: str,
+    source_date_epoch: int,
+) -> dict[str, bytes]:
+    """Read only the bounded source files needed for independent SBOM semantics."""
+    electron_path = (
+        f"packaging/desktop/archive/electron-runtime-{electron_version}-linux-x64.json"
+    )
+    required = {"LICENSE", "desktop/package-lock.json", electron_path}
+    observed: dict[str, bytes] = {}
+    try:
+        with tarfile.open(source_archive, mode="r:") as archive:
+            for count, member in enumerate(archive, start=1):
+                if count > _MAX_SOURCE_MEMBERS:
+                    _fail("source archive exceeds its member bound")
+                if member.name not in required:
+                    continue
+                if member.name in observed:
+                    _fail("source archive contains a duplicate required member")
+                if (
+                    not member.isfile()
+                    or member.size < 1
+                    or member.size > _MAX_JSON_BYTES
+                    or member.mtime != source_date_epoch
+                ):
+                    _fail("source archive required member is invalid")
+                stream = archive.extractfile(member)
+                if stream is None:
+                    _fail("source archive required member cannot be read")
+                document = stream.read(member.size + 1)
+                if len(document) != member.size:
+                    _fail("source archive required member size changed")
+                observed[member.name] = document
+    except (OSError, tarfile.TarError) as error:
+        raise SbomBuildError(
+            "source archive is not a supported Git tar archive"
+        ) from error
+    if set(observed) != required:
+        _fail("source archive lacks a required SBOM source input")
+    return observed
+
+
+def _validate_prepared_source_documents(
+    source_files: Mapping[str, Mapping[str, object]],
+    documents: Mapping[str, bytes],
+) -> None:
+    for path, document in documents.items():
+        prepared = source_files.get(path)
+        if prepared is None or prepared != {
+            "path": path,
+            "sha256": _sha256(document),
+            "byte_count": len(document),
+        }:
+            _fail(f"prepared source inventory differs from source archive: {path}")
+
+
+def _npm_inventory_from_lock(document: bytes) -> tuple[Mapping[str, object], ...]:
+    lock = _decode_json(document, "source package lock")
+    packages = lock.get("packages")
+    if not isinstance(packages, dict) or not 1 <= len(packages) <= _MAX_PACKAGES:
+        _fail("source package lock inventory is invalid or exceeds its bound")
+    values: list[Mapping[str, object]] = []
+    for path, raw in sorted(packages.items()):
+        if not path:
+            continue
+        if not isinstance(path, str):
+            _fail("source package lock path is invalid")
+        item = _object(raw, "source npm package")
+        values.append(
+            {
+                key: item[key]
+                for key in ("version", "resolved", "integrity", "license", "dev")
+                if key in item
+            }
+            | {"path": path}
+        )
+    if not values:
+        _fail("source package lock inventory is empty")
+    return tuple(values)
+
+
+def _validate_source_electron_manifest(
+    document: bytes, electron_version: str, electron_sha256: str
+) -> Mapping[str, object]:
+    manifest = _decode_json(document, "source Electron manifest")
+    _require_exact_keys(
+        manifest,
+        {"schema_version", "electron_version", "platform", "upstream_archive", "files"},
+        "source Electron manifest",
+    )
+    if (
+        manifest["schema_version"] != 1
+        or manifest["electron_version"] != electron_version
+        or manifest["platform"] != "linux-x64"
+    ):
+        _fail("source Electron manifest identity is stale")
+    upstream = _object(manifest["upstream_archive"], "source Electron upstream archive")
+    _require_exact_keys(
+        upstream, {"name", "sha256"}, "source Electron upstream archive"
+    )
+    name = _string(upstream, "name", "source Electron upstream archive")
+    if name != f"electron-v{electron_version}-linux-x64.zip":
+        _fail("source Electron upstream archive name is invalid")
+    if (
+        _digest(upstream.get("sha256"), "source Electron upstream archive SHA-256")
+        != electron_sha256
+    ):
+        _fail(
+            "source Electron archive does not match the independently expected digest"
+        )
+    return upstream
 
 
 def _validate_runtime_inventory(
@@ -910,6 +1113,7 @@ def _validate_archived_license_inventory(
 
 def _validate_license_and_lock_closure(
     prepared: Mapping[str, object],
+    source_lock: tuple[Mapping[str, object], ...],
     licenses: Mapping[str, object],
     runtime: Mapping[str, Mapping[str, object]],
     electron_version: str,
@@ -920,6 +1124,8 @@ def _validate_license_and_lock_closure(
     raw_components = licenses.get("components")
     if not isinstance(raw_packages, list) or not isinstance(raw_components, list):
         _fail("npm or license inventory is invalid")
+    if raw_packages != list(source_lock):
+        _fail("prepared npm inventory differs from the verified source package lock")
     if (
         not 1 <= len(raw_packages) <= _MAX_PACKAGES
         or not 3 <= len(raw_components) <= _MAX_PACKAGES
@@ -1040,6 +1246,9 @@ def _document_namespace(identity: ExpectedIdentity) -> str:
             "schema_sha256": _SCHEMA_SHA256,
             "source_commit": identity.source_commit,
             "source_tree": identity.source_tree,
+            "source_archive_sha256": identity.source_archive_sha256,
+            "source_date_epoch": identity.source_date_epoch,
+            "electron_archive_sha256": identity.electron_archive_sha256,
         }
     )
     return "https://tongs.tools/spdx/desktop/" + _sha256(material)
@@ -1140,10 +1349,29 @@ def _load_root_json(root: Path, relative: str) -> Mapping[str, object]:
 
 def _decode_json(document: bytes, label: str) -> Mapping[str, object]:
     try:
-        value = json.loads(document)
+        value = json.loads(
+            document,
+            object_pairs_hook=_object_without_duplicates,
+            parse_constant=_reject_json_constant,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise SbomBuildError(f"{label} is not valid UTF-8 JSON") from error
     return _object(value, label)
+
+
+def _object_without_duplicates(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            _fail(f"JSON object contains duplicate key: {key}")
+        value[key] = item
+    return value
+
+
+def _reject_json_constant(value: str) -> NoReturn:
+    _fail(f"JSON contains unsupported numeric constant: {value}")
 
 
 def _read_root_file(root: Path, relative: str, maximum: int) -> bytes:
@@ -1269,7 +1497,23 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-root", required=True, type=Path)
     parser.add_argument("--expected-source-commit", required=True)
     parser.add_argument("--expected-source-tree", required=True)
+    parser.add_argument(
+        "--expected-source-archive-sha256",
+        required=True,
+        help="SHA-256 independently computed from the exact checkout's git archive",
+    )
+    parser.add_argument(
+        "--expected-source-date-epoch",
+        required=True,
+        type=int,
+        help="commit epoch independently read from the exact checked-out source",
+    )
     parser.add_argument("--expected-archive-sha256", required=True)
+    parser.add_argument(
+        "--expected-electron-archive-sha256",
+        required=True,
+        help="SHA-256 from the reviewed Electron input configuration in source",
+    )
     parser.add_argument("--generator-version", required=True)
     parser.add_argument("--schema", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -1282,7 +1526,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     identity = ExpectedIdentity(
         source_commit=arguments.expected_source_commit,
         source_tree=arguments.expected_source_tree,
+        source_archive_sha256=arguments.expected_source_archive_sha256,
+        source_date_epoch=arguments.expected_source_date_epoch,
         archive_sha256=arguments.expected_archive_sha256,
+        electron_archive_sha256=arguments.expected_electron_archive_sha256,
         generator_version=arguments.generator_version,
     )
     try:

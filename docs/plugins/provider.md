@@ -35,12 +35,15 @@ The interpreter running Tongs discovers installed entry points. Installing a
 provider into another virtual environment, pipx environment, or Python
 installation will not make it visible to that Tongs installation.
 
-The example can be verified without making forge requests:
+Ordinary plugin installation does not require Tongs development dependencies.
+To run the example's tests in a clean environment, install the optional Tongs
+test dependencies from the repository root first:
 
 ```bash
-cd examples/desktop-plugin
-python -m pytest -q
-node --test tests/test_dashboard_module.mjs
+python -m pip install -e ".[dev]"
+python -m pip install ./examples/desktop-plugin
+python -m pytest -q examples/desktop-plugin/tests
+node --test examples/desktop-plugin/tests/test_dashboard_module.mjs
 ```
 
 The Python test exercises its manifest, lifecycle, call, event, and terminal

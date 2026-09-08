@@ -114,6 +114,46 @@ class ReceiptValidation:
     bound_files: tuple[BoundFile, ...]
 
 
+def read_bound_bytes(
+    evidence_root: Path, bound_file: BoundFile, maximum_size: int
+) -> bytes:
+    """Return immutable bytes that still match validated file metadata.
+
+    Receipt validation and semantic parsing are separate operations.  A staged
+    report, small artifact, or input receipt can be replaced between them, so
+    consumers must use this function instead of reopening ``bound_file.path``
+    directly.  The existing descriptor-based reader rejects unsafe path
+    components and nonregular files, detects replacement during the read, and
+    applies the consumer's byte limit.  Large artifacts stay on the streaming
+    validation path by selecting a smaller consumer limit.
+    """
+
+    _validate_positive_integer(maximum_size, "consumer maximum size")
+    if not isinstance(bound_file, BoundFile):
+        raise ReceiptValidationError("bound file must be validated metadata")
+    path = _require_text(bound_file.path, "bound file path")
+    _validate_relative_path(path, "bound file path")
+    _validate_size(bound_file.size, "bound file size")
+    _validate_sha256(bound_file.sha256, "bound file SHA-256")
+    kind = _require_text(bound_file.kind, "bound file kind")
+    if kind not in {"report", "artifact", "input"}:
+        raise ReceiptValidationError("bound file kind is unsupported")
+    if bound_file.size > maximum_size:
+        raise ReceiptValidationError("bound file exceeds the consumer size limit")
+
+    root = _prepare_evidence_root(evidence_root)
+    bound_bytes = _read_staged_bytes(root, path, maximum_size)
+    if len(bound_bytes) != bound_file.size:
+        raise ReceiptValidationError(
+            f"staged file {path!r} size no longer matches its binding"
+        )
+    if hashlib.sha256(bound_bytes).hexdigest() != bound_file.sha256:
+        raise ReceiptValidationError(
+            f"staged file {path!r} SHA-256 no longer matches its binding"
+        )
+    return bound_bytes
+
+
 def validate_receipt(
     receipt_bytes: bytes,
     *,

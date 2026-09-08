@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 
@@ -30,7 +31,22 @@ def _load_validator() -> ModuleType:
     return validator
 
 
+def _load_report_verifier() -> ModuleType:
+    script_path = (
+        Path(__file__).parents[3] / ".github" / "scripts" / "desktop_test_reports.py"
+    )
+    script_spec = importlib.util.spec_from_file_location(
+        "desktop_test_reports_for_bound_receipts", script_path
+    )
+    assert script_spec is not None and script_spec.loader is not None
+    verifier: ModuleType = importlib.util.module_from_spec(script_spec)
+    sys.modules[script_spec.name] = verifier
+    script_spec.loader.exec_module(verifier)
+    return verifier
+
+
 VERIFY = _load_validator()
+REPORTS = _load_report_verifier()
 
 COMMIT = "a" * 40
 TREE = "b" * 40
@@ -41,7 +57,11 @@ ATTEMPT = 1
 ENVIRONMENT = "ubuntu-24.04-python-3.12"
 PROVENANCE = "hosted"
 REPORT_PATH = "reports/junit.xml"
-REPORT_BYTES = b"<testsuite tests='1' failures='0' errors='0' skipped='0'/>\n"
+REPORT_BYTES = (
+    b'<testsuite tests="1" failures="0" errors="0" skipped="0">'
+    b'<testcase classname="tests.test_mcp.test_server" name="test_ok"/>'
+    b"</testsuite>\n"
+)
 
 
 def _policy(
@@ -135,6 +155,155 @@ def test_valid_receipt_binds_reports_artifacts_and_inputs(tmp_path: Path) -> Non
         "inputs/build.json",
     ]
     assert all(bound.size > 0 for bound in result.bound_files)
+
+
+def test_bound_report_bytes_are_immutable_and_parse_semantically(
+    tmp_path: Path,
+) -> None:
+    validation = _validate(tmp_path, _receipt_data(tmp_path))
+    bound_report = validation.bound_files[0]
+
+    report_bytes = VERIFY.read_bound_bytes(
+        tmp_path, bound_report, REPORTS.MAX_REPORT_BYTES
+    )
+
+    assert report_bytes == REPORT_BYTES
+    assert REPORTS.verify_pytest_junit(report_bytes).tests == 1
+
+
+@pytest.mark.parametrize("bound_index", [1, 2])
+def test_small_bound_artifact_and_input_bytes_can_be_parsed(
+    tmp_path: Path, bound_index: int
+) -> None:
+    validation = _validate(tmp_path, _receipt_data(tmp_path))
+    bound_file = validation.bound_files[bound_index]
+
+    value = VERIFY.read_bound_bytes(tmp_path, bound_file, VERIFY.MAX_RECEIPT_BYTES)
+
+    assert hashlib.sha256(value).hexdigest() == bound_file.sha256
+    if bound_file.kind == "artifact":
+        assert value == b"archive bytes\n"
+    else:
+        assert value == b'{"source":"fixture"}\n'
+        assert json.loads(value) == {"source": "fixture"}
+
+
+def test_bound_read_rejects_same_size_replacement_after_receipt_validation(
+    tmp_path: Path,
+) -> None:
+    validation = _validate(tmp_path, _receipt_data(tmp_path))
+    bound_report = validation.bound_files[0]
+    replacement = tmp_path / "reports" / "replacement.xml"
+    replacement.write_bytes(b"X" * len(REPORT_BYTES))
+    os.replace(replacement, tmp_path / REPORT_PATH)
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="SHA-256.*binding"):
+        VERIFY.read_bound_bytes(tmp_path, bound_report, REPORTS.MAX_REPORT_BYTES)
+
+
+@pytest.mark.parametrize("replacement_kind", ["symlink", "fifo", "directory"])
+def test_bound_read_rejects_nonregular_replacement_without_hanging(
+    tmp_path: Path, replacement_kind: str
+) -> None:
+    validation = _validate(tmp_path, _receipt_data(tmp_path))
+    bound_report = validation.bound_files[0]
+    report = tmp_path / REPORT_PATH
+    report.unlink()
+    if replacement_kind == "symlink":
+        target = tmp_path / "replacement.xml"
+        target.write_bytes(REPORT_BYTES)
+        report.symlink_to(target)
+    elif replacement_kind == "fifo":
+        os.mkfifo(report)
+    else:
+        report.mkdir()
+
+    with pytest.raises(VERIFY.ReceiptValidationError):
+        VERIFY.read_bound_bytes(tmp_path, bound_report, REPORTS.MAX_REPORT_BYTES)
+
+
+@pytest.mark.parametrize(
+    "bound_file",
+    [
+        object(),
+        VERIFY.BoundFile(
+            "../report.xml", len(REPORT_BYTES), _digest(REPORT_BYTES), "report"
+        ),
+        VERIFY.BoundFile(None, len(REPORT_BYTES), _digest(REPORT_BYTES), "report"),
+        VERIFY.BoundFile(REPORT_PATH, True, _digest(REPORT_BYTES), "report"),
+        VERIFY.BoundFile(REPORT_PATH, len(REPORT_BYTES), "invalid", "report"),
+        VERIFY.BoundFile(
+            REPORT_PATH, len(REPORT_BYTES), _digest(REPORT_BYTES), "unknown"
+        ),
+    ],
+)
+def test_bound_read_rejects_untrusted_bound_metadata(
+    tmp_path: Path, bound_file: object
+) -> None:
+    _write(tmp_path, REPORT_PATH, REPORT_BYTES)
+
+    with pytest.raises(VERIFY.ReceiptValidationError):
+        VERIFY.read_bound_bytes(tmp_path, bound_file, REPORTS.MAX_REPORT_BYTES)
+
+
+@pytest.mark.parametrize("mutation", ["size", "sha256"])
+def test_bound_read_rejects_metadata_that_no_longer_matches(
+    tmp_path: Path, mutation: str
+) -> None:
+    validation = _validate(tmp_path, _receipt_data(tmp_path))
+    bound_report = validation.bound_files[0]
+    if mutation == "size":
+        changed = replace(bound_report, size=bound_report.size + 1)
+    else:
+        changed = replace(bound_report, sha256="0" * 64)
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="binding"):
+        VERIFY.read_bound_bytes(tmp_path, changed, REPORTS.MAX_REPORT_BYTES)
+
+
+@pytest.mark.parametrize("maximum_size", [0, -1, True, VERIFY.MAX_INTEGER + 1, "1024"])
+def test_bound_read_rejects_invalid_consumer_limits(
+    tmp_path: Path, maximum_size: object
+) -> None:
+    validation = _validate(tmp_path, _receipt_data(tmp_path))
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="maximum size"):
+        VERIFY.read_bound_bytes(tmp_path, validation.bound_files[0], maximum_size)
+
+
+def test_bound_read_rejects_consumer_limit_before_file_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    validation = _validate(tmp_path, _receipt_data(tmp_path))
+    bound_report = validation.bound_files[0]
+
+    def unexpected_read(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("consumer limit must be checked before file access")
+
+    monkeypatch.setattr(VERIFY, "_read_staged_bytes", unexpected_read)
+    with pytest.raises(VERIFY.ReceiptValidationError, match="consumer size limit"):
+        VERIFY.read_bound_bytes(tmp_path, bound_report, bound_report.size - 1)
+
+
+def test_large_bound_artifact_is_rejected_before_byte_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _receipt_data(tmp_path)
+    artifact_bytes = b"a" * (VERIFY.MAX_RECEIPT_BYTES + 1)
+    artifact = tmp_path / "artifacts" / "archive.tar.gz"
+    artifact.write_bytes(artifact_bytes)
+    data["artifacts"][0].update(  # type: ignore[index]
+        {"size": len(artifact_bytes), "sha256": _digest(artifact_bytes)}
+    )
+    validation = _validate(tmp_path, data)
+    bound_artifact = validation.bound_files[1]
+
+    def unexpected_read(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("oversized artifact must not be read into memory")
+
+    monkeypatch.setattr(VERIFY, "_read_staged_bytes", unexpected_read)
+    with pytest.raises(VERIFY.ReceiptValidationError, match="consumer size limit"):
+        VERIFY.read_bound_bytes(tmp_path, bound_artifact, VERIFY.MAX_RECEIPT_BYTES)
 
 
 def test_receipt_file_must_be_below_staged_root(tmp_path: Path) -> None:

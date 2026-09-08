@@ -184,7 +184,7 @@ test("review result validators accept typed capabilities, receipts, drafts, and 
   assert.doesNotThrow(() => assertReviewResult("review_submissions.list", { cursor: 0, next_cursor: null, attempts: [submission] }));
 });
 
-test("review validators reject extra fields, byte overflow, stale inputs, and contradictory outcomes", () => {
+test("review validators reject extra fields, byte overflow, and contradictory outcomes", () => {
   assert.throws(
     () => assertReviewParams("review_mutations.comment", { operation_id: operation, review, body: "Note", raw_error: "secret" }),
     /fields/,
@@ -194,8 +194,8 @@ test("review validators reject extra fields, byte overflow, stale inputs, and co
     /byte limit/,
   );
   assert.throws(
-    () => assertReviewParams("drafts.create", { review, revision, content: { ...content, comments: [{ ...content.comments[0], anchor: { ...draftAnchor, stale: false } }] } }),
-    /fields/,
+    () => assertReviewParams("drafts.create", { review, revision, content: { ...content, comments: [{ ...content.comments[0], anchor: { ...draftAnchor, stale: "false" } }] } }),
+    /boolean/,
   );
   assert.throws(
     () => assertReviewResult("review_mutations.comment", { ...mutation, outcome: "unknown" }),
@@ -265,5 +265,178 @@ test("review validators reject extra fields, byte overflow, stale inputs, and co
   assert.throws(
     () => assertReviewResult("review_submissions.status", { ...submission, unknown_step_ids: ["comment:0"] }),
     /confirmed and unknown/,
+  );
+  assert.throws(
+    () => assertReviewResult("review_submissions.status", {
+      ...submission,
+      unknown_step_ids: ["verdict"],
+      resync_required: false,
+    }),
+    /requires resynchronization/,
+  );
+});
+
+test("request validation matches Python controls, bounds, canonical UUIDs, and sparse draft content", () => {
+  assert.doesNotThrow(() => assertReviewParams("drafts.create", { review, revision, content: {} }));
+  assert.doesNotThrow(() => assertReviewParams("drafts.save", {
+    review,
+    draft_id: draftId,
+    expected_version: 1,
+    content: { body: "only body" },
+  }));
+  assert.doesNotThrow(() => assertReviewParams("drafts.create", {
+    review,
+    revision,
+    content: {
+      comments: [{
+        id: commentId,
+        kind: "inline",
+        body: "Note",
+        anchor: {
+          revision,
+          old_path: "old.ts",
+          new_path: "new.ts",
+          old_line: null,
+          new_line: 1,
+          side: "new",
+          context_fingerprint: "a".repeat(64),
+        },
+      }],
+    },
+  }));
+  for (const invalid of [
+    { method: "drafts.get", params: { review, draft_id: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" } },
+    { method: "drafts.list", params: { review, cursor: 1_000_001 } },
+    { method: "drafts.list", params: { review, states: ["editable", "editable"] } },
+    { method: "review_mutations.reply", params: { operation_id: operation, review, revision, discussion_id: "bad\tthread", body: "ok" } },
+    { method: "review_actions.merge", params: { operation_id: operation, review, revision, source_cleanup: { branch: "bad\rbranch" } } },
+    { method: "review_mutations.comment", params: { operation_id: operation, review, body: "bad\rbody" } },
+    { method: "review_mutations.comment", params: { operation_id: operation, review, body: "bad\ud800body" } },
+  ]) {
+    assert.throws(() => assertReviewParams(invalid.method, invalid.params));
+  }
+  assert.throws(
+    () => assertReviewParams("review_actions.merge", {
+      operation_id: operation,
+      review,
+      revision,
+      source_cleanup: { branch: "x".repeat(501) },
+    }),
+    /text/,
+  );
+  assert.throws(
+    () => assertReviewParams("drafts.create", {
+      review,
+      revision,
+      content: {
+        comments: [
+          { id: commentId, kind: "general", body: "one" },
+          { id: commentId, kind: "general", body: "two" },
+        ],
+      },
+    }),
+    /Duplicate review draft comment ID/,
+  );
+});
+
+test("verdict and mutation outcomes enforce the Python service invariants", () => {
+  assert.throws(
+    () => assertReviewParams("review_mutations.verdict", {
+      operation_id: operation, review, revision, verdict: "comment",
+    }),
+    /requires a body or inline comment/,
+  );
+  assert.throws(
+    () => assertReviewParams("review_mutations.verdict", {
+      operation_id: operation, review, revision, verdict: "request_changes", body: "",
+    }),
+    /requires a body/,
+  );
+  assert.doesNotThrow(() => assertReviewParams("review_mutations.verdict", {
+    operation_id: operation,
+    review,
+    revision,
+    verdict: "comment",
+    inline_comments: [{ anchor: mutationAnchor, body: "inline" }],
+  }));
+  assert.throws(
+    () => assertReviewResult("review_mutations.comment", { ...mutation, reason: "claimed" }),
+    /known review mutation/,
+  );
+  for (const change of [
+    { receipt: mutation.receipt },
+    { reason: null },
+    { resync_required: false },
+  ]) {
+    assert.throws(
+      () => assertReviewResult("review_mutations.comment", {
+        ...mutation,
+        outcome: "unknown",
+        receipt: null,
+        reason: "timeout",
+        resync_required: true,
+        ...change,
+      }),
+      /unknown review mutation/,
+    );
+  }
+  assert.throws(
+    () => assertReviewResult("review_actions.reopen", {
+      ...actionReceipt,
+      action: "reopen",
+      expected_state: "open",
+    }),
+    /invalid expected state/,
+  );
+});
+
+test("submission evidence is exact and permits valid planless submitted recovery", () => {
+  assert.throws(
+    () => assertReviewResult("review_submissions.status", {
+      ...submission,
+      completed_step_ids: [],
+    }),
+    /must equal receipt steps/,
+  );
+  assert.throws(
+    () => assertReviewResult("review_submissions.status", {
+      ...submission,
+      steps: [
+        { id: "comment:0", kind: "inline_comment", comment_ids: [commentId, commentId] },
+        submission.steps[1],
+      ],
+    }),
+    /Duplicate review submission comment ID/,
+  );
+  const planless = {
+    ...submission,
+    state: "submitted",
+    outcome: "submitted",
+    steps: [],
+    receipts: [{
+      step_id: "github_review",
+      remote_id: "remote-review",
+      recorded_at: "2026-09-08T00:00:01+00:00",
+      resync_required: false,
+    }],
+    completed_step_ids: ["github_review"],
+    unknown_step_ids: [],
+    atomic: false,
+    resync_required: false,
+    failure: null,
+    plan_available: false,
+  };
+  assert.doesNotThrow(() => assertReviewResult("review_submissions.status", planless));
+  assert.doesNotThrow(() => assertReviewResult("review_submissions.status", {
+    ...planless,
+    unknown_step_ids: ["github_review", "github_review"],
+    resync_required: true,
+  }));
+  assert.throws(
+    () => assertReviewResult("review_submissions.status", {
+      ...planless,
+      completed_step_ids: [],
+    }),
+    /must equal receipt steps/,
   );
 });

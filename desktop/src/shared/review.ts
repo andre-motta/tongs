@@ -76,11 +76,14 @@ export interface DraftInlineAnchorInputDto {
   readonly new_line: number | null;
   readonly side: "old" | "new";
   readonly context_fingerprint: string;
-  readonly start_line: number | null;
-  readonly start_side: "old" | "new" | null;
+  readonly start_line?: number | null;
+  readonly start_side?: "old" | "new" | null;
+  readonly stale?: boolean;
 }
 
-export interface DraftInlineAnchorDto extends DraftInlineAnchorInputDto {
+export interface DraftInlineAnchorDto extends Omit<DraftInlineAnchorInputDto, "start_line" | "start_side" | "stale"> {
+  readonly start_line: number | null;
+  readonly start_side: "old" | "new" | null;
   readonly stale: boolean;
 }
 
@@ -115,6 +118,12 @@ export interface DraftContentInputDto {
   readonly body: string;
   readonly verdict: ReviewVerdict | null;
   readonly comments: readonly DraftCommentInputDto[];
+}
+
+export interface DraftContentParamsDto {
+  readonly body?: string;
+  readonly verdict?: ReviewVerdict | null;
+  readonly comments?: readonly DraftCommentInputDto[];
 }
 
 export interface DraftContentDto extends DraftContentInputDto {
@@ -238,7 +247,7 @@ export interface ActionReceiptParams extends RevisionOperationParams {
 }
 export interface CreateDraftParams extends ReviewOnlyParams {
   readonly revision: ReviewRevisionDto;
-  readonly content?: DraftContentInputDto;
+  readonly content?: DraftContentParamsDto;
 }
 export interface GetDraftParams extends ReviewOnlyParams {
   readonly draft_id: string;
@@ -250,7 +259,7 @@ export interface ListDraftsParams extends ReviewOnlyParams {
 }
 export interface SaveDraftParams extends GetDraftParams {
   readonly expected_version: number;
-  readonly content: DraftContentInputDto;
+  readonly content: DraftContentParamsDto;
 }
 export interface DiscardDraftParams extends GetDraftParams {
   readonly expected_version: number;

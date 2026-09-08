@@ -9,16 +9,20 @@ import {
   beginQuickIntent,
   beginSubmission,
   canStartSubmission,
+  canCaptureDraftInline,
   captureDraftAnchor,
   conflictDraftSave,
   contextFingerprint,
   createReviewWorkflowState,
   editDraft,
   finishDraftSave,
+  failDraftSave,
   finishSubmission,
+  forkDraftToCurrentRevision,
   keepLocalDraft,
   markQuickIntentUncertain,
   observeReviewRevision,
+  portableDraftContent,
   recoverSubmission,
   recoverQuickIntent,
   settleQuickIntent,
@@ -106,6 +110,20 @@ test("unknown quick intent survives refresh until explicit same-operation resolu
     () => recoverQuickIntent(refreshed, "other:1", actionOutcome("other:1", "known")),
     /matching uncertain/,
   );
+  assert.throws(
+    () => recoverQuickIntent(refreshed, "close:1", {
+      ...actionOutcome("close:1", "known"),
+      review: "another-review",
+    }),
+    /frozen target/,
+  );
+  assert.throws(
+    () => recoverQuickIntent(refreshed, "close:1", {
+      ...actionOutcome("close:1", "known"),
+      revision: { ...revision, head_sha: "other" },
+    }),
+    /frozen target/,
+  );
   const recovered = recoverQuickIntent(
     refreshed,
     "close:1",
@@ -141,6 +159,16 @@ test("draft conflict and edit-during-save preserve unsaved local text", () => {
   let state = adoptDraft(createReviewWorkflowState(review, revision), draft(1, "server"));
   state = editDraft(state, { body: "local", verdict: "comment", comments: [] });
   state = beginDraftSave(state);
+  assert.deepEqual(
+    {
+      review: state.draft.pendingSave.review,
+      draftId: state.draft.pendingSave.draftId,
+      revision: state.draft.pendingSave.revision,
+      expectedVersion: state.draft.pendingSave.expectedVersion,
+    },
+    { review, draftId, revision, expectedVersion: 1 },
+  );
+  assert.throws(() => beginDraftSave(state), /already pending/);
   state = editDraft(state, { body: "newer local", verdict: "comment", comments: [] });
   state = finishDraftSave(state, draft(2, "local"));
   assert.equal(state.draft.remote.version, 2);
@@ -157,13 +185,133 @@ test("draft conflict and edit-during-save preserve unsaved local text", () => {
   assert.equal(state.draft.dirty, true);
 });
 
+test("draft save results bind the same draft, revision, and version", () => {
+  let state = adoptDraft(createReviewWorkflowState(review, revision), draft(1, "server"));
+  state = beginDraftSave(editDraft(state, { body: "local", verdict: null, comments: [] }));
+  assert.throws(
+    () => finishDraftSave(state, { ...draft(2, "local"), id: "44444444-4444-4444-8444-444444444444" }),
+    /pending version/,
+  );
+  assert.throws(
+    () => finishDraftSave(state, { ...draft(2, "local"), revision: { ...revision, head_sha: "other" } }),
+    /pending version/,
+  );
+  assert.throws(() => finishDraftSave(state, draft(3, "local")), /pending version/);
+  assert.throws(() => conflictDraftSave(state, draft(1, "server")), /pending version/);
+});
+
+test("old-revision drafts load intact and stay blocked across either head-change order", () => {
+  const nextRevision = { ...revision, head_sha: "new-head" };
+  const stale = {
+    ...draft(4, "preserved body"),
+    comments: [{
+      id: "33333333-3333-4333-8333-333333333333",
+      kind: "inline",
+      body: "preserved inline",
+      anchor: {
+        revision,
+        old_path: "old.py",
+        new_path: "new.py",
+        old_line: null,
+        new_line: 2,
+        side: "new",
+        context_fingerprint: "a".repeat(64),
+        start_line: null,
+        start_side: null,
+        stale: true,
+      },
+    }],
+  };
+  let loadedAfter = observeReviewRevision(
+    createReviewWorkflowState(review, revision),
+    nextRevision,
+  );
+  loadedAfter = adoptDraft(loadedAfter, stale);
+  assert.equal(loadedAfter.draft.local.body, "preserved body");
+  assert.equal(loadedAfter.draft.local.comments[0].body, "preserved inline");
+  assert.equal(canStartSubmission(loadedAfter), false);
+  assert.equal(canCaptureDraftInline(loadedAfter), false);
+
+  let changedAfter = adoptDraft(createReviewWorkflowState(review, revision), {
+    ...stale,
+    comments: [],
+  });
+  assert.equal(canStartSubmission(changedAfter), true);
+  changedAfter = observeReviewRevision(changedAfter, nextRevision);
+  assert.equal(canStartSubmission(changedAfter), false);
+  assert.equal(canCaptureDraftInline(changedAfter), false);
+});
+
+test("explicit current-revision fork copies only portable content and preserves stale draft", () => {
+  const nextRevision = { ...revision, head_sha: "new-head" };
+  const stale = {
+    ...draft(2, "portable body"),
+    verdict: "approve",
+    comments: [
+      { id: "33333333-3333-4333-8333-333333333333", kind: "general", body: "general" },
+      { id: "44444444-4444-4444-8444-444444444444", kind: "reply", body: "reply", thread_id: "thread" },
+    ],
+  };
+  let state = adoptDraft(
+    observeReviewRevision(createReviewWorkflowState(review, revision), nextRevision),
+    stale,
+  );
+  assert.deepEqual(portableDraftContent(stale).comments.map((item) => item.kind), ["general"]);
+  const fresh = {
+    ...draft(1, "portable body"),
+    id: "55555555-5555-4555-8555-555555555555",
+    revision: nextRevision,
+    verdict: "approve",
+    comments: [{ id: "33333333-3333-4333-8333-333333333333", kind: "general", body: "general" }],
+  };
+  state = forkDraftToCurrentRevision(state, fresh);
+  assert.equal(state.draft.remote.id, fresh.id);
+  assert.equal(state.draft.preservedStaleDrafts[0].id, stale.id);
+  assert.equal(state.draft.preservedStaleDrafts[0].comments[1].body, "reply");
+  assert.equal(state.displayed.revision.head_sha, "new-head");
+});
+
+test("known save rejection clears pending state without inventing a version conflict", () => {
+  let state = adoptDraft(createReviewWorkflowState(review, revision), draft(1, "server"));
+  state = editDraft(state, { body: "local", verdict: null, comments: [] });
+  state = beginDraftSave(state);
+  state = failDraftSave(state);
+  assert.equal(state.draft.local.body, "local");
+  assert.equal(state.draft.dirty, true);
+  assert.equal(state.draft.pendingSave, null);
+  assert.equal(state.draft.conflict, null);
+});
+
 test("submission recovery distinguishes confirmed, paused, and unknown steps", () => {
   let state = adoptDraft(createReviewWorkflowState(review, revision), draft(1, "ready"));
   assert.equal(canStartSubmission(state), true);
   state = beginSubmission(state, "start");
+  assert.deepEqual(
+    {
+      kind: state.submission.pending.kind,
+      review: state.submission.pending.review,
+      draftId: state.submission.pending.draftId,
+      frozenVersion: state.submission.pending.frozenVersion,
+    },
+    { kind: "start", review, draftId, frozenVersion: 1 },
+  );
+  assert.throws(
+    () => finishSubmission(state, { ...progress("paused", [], ["comment:0"]), draft_id: "44444444-4444-4444-8444-444444444444" }),
+    /pending attempt/,
+  );
   state = finishSubmission(state, progress("paused", [], ["comment:0"]));
+  assert.equal(canStartSubmission(state), false);
+  assert.throws(
+    () => editDraft(state, { body: "unsafe", verdict: null, comments: [] }),
+    /locked by its durable submission/,
+  );
   assert.match(state.submission.message, /confirmed steps/);
-  assert.doesNotThrow(() => beginSubmission(state, "resume"));
+  const resuming = beginSubmission(state, "resume");
+  assert.equal(resuming.submission.pending.attemptId, attemptId);
+  assert.throws(
+    () => finishSubmission(resuming, { ...progress("submitted", [], ["comment:0"]), attempt_id: "44444444-4444-4444-8444-444444444444" }),
+    /pending attempt/,
+  );
 
   state = recoverSubmission(state, progress("unknown", ["verdict"], ["comment:0"]));
   assert.match(state.submission.message, /Reconcile before continuing/);

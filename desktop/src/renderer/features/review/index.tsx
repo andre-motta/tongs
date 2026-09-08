@@ -41,17 +41,22 @@ import {
   beginDraftSave,
   beginQuickIntent,
   beginSubmission,
+  canCaptureDraftInline,
   canStartSubmission,
   captureDraftAnchor,
   conflictDraftSave,
   createReviewWorkflowState,
+  draftNeedsRevisionRecovery,
   editDraft,
   failSubmission,
+  failDraftSave,
   finishDraftSave,
   finishSubmission,
+  forkDraftToCurrentRevision,
   keepLocalDraft,
   markQuickIntentUncertain,
   observeReviewRevision,
+  portableDraftContent,
   recoverSubmission,
   recoverQuickIntent,
   rejectQuickIntent,
@@ -62,7 +67,20 @@ import {
 
 const ACTIVE_DRAFT_STATES = ["editable", "submitting", "partial", "unknown"] as const;
 const workflowCache = new Map<string, ReviewWorkflowState>();
-type Confirmation = ReviewAction | "submit" | `verdict:${ReviewVerdict}`;
+type Confirmation =
+  | ReviewAction
+  | "submit"
+  | "migrate-draft"
+  | `verdict:${ReviewVerdict}`
+  | `reconcile:${ReconciliationResolution}`;
+
+interface ComposerBuffers {
+  general: string;
+  readonly inline: Map<string, string>;
+  readonly replies: Map<string, string>;
+}
+
+const composerCache = new Map<string, ComposerBuffers>();
 
 interface ReviewFeatureBridge extends DesktopBridge, ReviewDesktopBridge {}
 
@@ -124,8 +142,12 @@ function ReviewWorkflow({
   const workflowRef = useRef(workflow);
   const anchorRef = useRef(context.inlineAnchor);
   const [error, setError] = useState<string | null>(null);
-  const [generalBody, setGeneralBody] = useState("");
-  const [inlineBody, setInlineBody] = useState("");
+  const initialBuffers = buffersFor(review);
+  const initialAnchorKey = anchorIdentity(context.inlineAnchor);
+  const [generalBody, setGeneralBodyState] = useState(initialBuffers.general);
+  const [inlineBody, setInlineBodyState] = useState(
+    initialAnchorKey ? initialBuffers.inline.get(initialAnchorKey) ?? "" : "",
+  );
   const [reply, setReply] = useState<{ readonly id: string; readonly body: string } | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [mergeOptions, setMergeOptions] = useState({
@@ -134,9 +156,37 @@ function ReviewWorkflow({
   });
   const quickBlocked =
     workflow?.quick?.status === "sending" || workflow?.quick?.status === "unknown";
+  const setGeneralBody = (body: string): void => {
+    buffersFor(review).general = body;
+    setGeneralBodyState(body);
+  };
+  const setInlineBody = (body: string): void => {
+    const key = anchorIdentity(anchorRef.current);
+    if (key) buffersFor(review).inline.set(key, body);
+    setInlineBodyState(body);
+  };
+  const setReplyBuffer = (
+    value: { readonly id: string; readonly body: string } | null,
+  ): void => {
+    const next =
+      value && value.body === "" && reply?.id !== value.id
+        ? { ...value, body: buffersFor(review).replies.get(value.id) ?? "" }
+        : value;
+    if (next) buffersFor(review).replies.set(next.id, next.body);
+    setReply(next);
+  };
   useEffect(() => {
     anchorRef.current = context.inlineAnchor;
+    const key = anchorIdentity(context.inlineAnchor);
+    setInlineBodyState(key ? buffersFor(review).inline.get(key) ?? "" : "");
   }, [context.inlineAnchor]);
+  useEffect(() => {
+    const buffers = buffersFor(review);
+    setGeneralBodyState(buffers.general);
+    const key = anchorIdentity(context.inlineAnchor);
+    setInlineBodyState(key ? buffers.inline.get(key) ?? "" : "");
+    setReply(null);
+  }, [context.inlineAnchor, review]);
   const apply = useCallback(
     (change: (current: ReviewWorkflowState) => ReviewWorkflowState): ReviewWorkflowState => {
       const current = workflowRef.current;
@@ -230,8 +280,40 @@ function ReviewWorkflow({
       apply((latest) => finishDraftSave(latest, saved));
       setDraftCandidates([saved]);
     } catch (reason) {
-      const remoteDraft = await recoverDraft(bridge, review, remote.id);
-      if (remoteDraft) apply((latest) => conflictDraftSave(latest, remoteDraft));
+      if (isConflictError(reason)) {
+        const remoteDraft = await recoverDraft(bridge, review, remote.id);
+        if (remoteDraft)
+          apply((latest) => conflictDraftSave(latest, remoteDraft));
+        else apply(failDraftSave);
+      } else {
+        apply(failDraftSave);
+      }
+      setError(safeError(reason));
+    }
+  };
+
+  const migrateDraft = async (): Promise<void> => {
+    const current = workflowRef.current;
+    const stale = current?.draft.remote;
+    if (!current || !stale || !snapshot?.revision) return;
+    if (confirmation !== "migrate-draft") {
+      setConfirmation("migrate-draft");
+      return;
+    }
+    setError(null);
+    setConfirmation(null);
+    try {
+      const fresh = await bridge.createReviewDraft({
+        review,
+        revision: current.displayed.latestObservedRevision,
+        content: portableDraftContent(stale),
+      });
+      apply((state) => forkDraftToCurrentRevision(state, fresh));
+      setDraftCandidates((items) => [
+        fresh,
+        ...items.filter((item) => item.id !== fresh.id),
+      ]);
+    } catch (reason) {
       setError(safeError(reason));
     }
   };
@@ -320,6 +402,7 @@ function ReviewWorkflow({
           ],
         }),
       );
+      buffersFor(review).replies.delete(reply.id);
       setReply(null);
       return;
     }
@@ -336,6 +419,7 @@ function ReviewWorkflow({
     try {
       const outcome = await bridge.replyReviewDiscussion(command);
       apply((current) => settleQuickIntent(current, operationId, outcome));
+      buffersFor(review).replies.delete(reply.id);
       setReply(null);
     } catch (reason) {
       apply((current) =>
@@ -396,7 +480,18 @@ function ReviewWorkflow({
       apply((state) => finishSubmission(state, progress));
       setRecoveries([progress]);
     } catch (reason) {
-      apply((state) => failSubmission(state, safeError(reason)));
+      const recovered = await recoverLatestSubmission(
+        bridge,
+        review,
+        draft.id,
+        draft.version,
+      );
+      if (recovered) {
+        apply((state) => recoverSubmission(state, recovered));
+        setRecoveries((items) => [recovered, ...items.filter((item) => item.attempt_id !== recovered.attempt_id)]);
+      } else {
+        apply((state) => failSubmission(state, safeError(reason)));
+      }
       setError(safeError(reason));
     }
   };
@@ -408,6 +503,7 @@ function ReviewWorkflow({
     if (!workflow?.submission.progress) return;
     const attempt = workflow.submission.progress;
     apply((state) => beginSubmission(state, mode));
+    setConfirmation(null);
     try {
       const progress =
         mode === "resume"
@@ -418,8 +514,24 @@ function ReviewWorkflow({
               resolution: resolution ?? "retry_remaining",
             });
       apply((state) => finishSubmission(state, progress));
+      if (progress.outcome === "editable") {
+        const editable = await recoverDraft(bridge, review, progress.draft_id);
+        if (editable) {
+          apply((state) => adoptDraft(state, editable));
+          setDraftCandidates((items) => [
+            editable,
+            ...items.filter((item) => item.id !== editable.id),
+          ]);
+        }
+      }
     } catch (reason) {
-      apply((state) => failSubmission(state, safeError(reason)));
+      const recovered = await recoverSubmissionStatus(
+        bridge,
+        review,
+        attempt.attempt_id,
+      );
+      if (recovered) apply((state) => recoverSubmission(state, recovered));
+      else apply((state) => failSubmission(state, safeError(reason)));
       setError(safeError(reason));
     }
   };
@@ -477,13 +589,14 @@ function ReviewWorkflow({
       review,
       revision: workflow.displayed.revision,
       verdict,
-      body: "",
+      body: verdict === "approve" ? "" : generalBody,
     };
     apply((current) => beginQuickIntent(current, operationId, command));
     setConfirmation(null);
     try {
       const outcome = await bridge.submitReviewVerdict(command);
       apply((current) => settleQuickIntent(current, operationId, outcome));
+      if (verdict !== "approve") setGeneralBody("");
     } catch (reason) {
       apply((current) =>
         isUncertainError(reason)
@@ -568,6 +681,12 @@ function ReviewWorkflow({
         {recoveries.length > 0 && !workflow?.submission.progress && (
           <RecoveryList recoveries={recoveries} recover={(item) => apply((state) => recoverSubmission(state, item))} />
         )}
+        {draftCandidates.length > 1 && !workflow?.draft.remote && (
+          <DraftRecoveryList
+            drafts={draftCandidates}
+            recover={(item) => apply((state) => adoptDraft(state, item))}
+          />
+        )}
         <div className="review-workflow-grid">
           <section className="review-workflow-discussions">
             <h2>Discussions</h2>
@@ -582,7 +701,7 @@ function ReviewWorkflow({
                     canReply={mutationCapabilities?.reply === true && !quickBlocked}
                     canResolve={mutationCapabilities?.resolve === true && !quickBlocked}
                     reply={reply}
-                    setReply={setReply}
+                    setReply={setReplyBuffer}
                     sendReply={sendReply}
                     resolve={resolveDiscussion}
                   />
@@ -607,6 +726,7 @@ function ReviewWorkflow({
               <QuickVerdicts
                 capabilities={mutationCapabilities}
                 blocked={quickBlocked}
+                bodyAvailable={generalBody.length > 0}
                 confirmation={confirmation}
                 run={runQuickVerdict}
               />
@@ -619,14 +739,27 @@ function ReviewWorkflow({
                 mutationCapabilities?.inline_comment !== true ||
                 quickBlocked ||
                 context.inlineAnchor?.review !== review ||
-                (Boolean(workflow?.draft.remote) && context.inlineAnchor?.contextComplete !== true)
+                (Boolean(workflow?.draft.remote) &&
+                  (context.inlineAnchor?.contextComplete !== true ||
+                    !workflow ||
+                    !canCaptureDraftInline(workflow)))
               }
               disabledReason={
                 quickBlocked
                   ? "Resolve or acknowledge the previous action before another mutation."
-                  : inlineDisabledReason(mutationCapabilities, context.inlineAnchor, review, Boolean(workflow?.draft.remote))
+                  : inlineDisabledReason(
+                      mutationCapabilities,
+                      context.inlineAnchor,
+                      review,
+                      Boolean(workflow?.draft.remote),
+                      workflow,
+                    )
               }
               submit={() => void sendComment(inlineBody, context.inlineAnchor)}
+            />
+            <BufferedInlineNotes
+              entries={buffersFor(review).inline}
+              currentKey={anchorIdentity(context.inlineAnchor)}
             />
             {workflow?.draft.remote && (
               <DraftEditor
@@ -634,6 +767,7 @@ function ReviewWorkflow({
                 edit={(content) => apply((state) => editDraft(state, content))}
                 save={() => void saveDraft()}
                 keepLocal={() => apply(keepLocalDraft)}
+                migrate={() => void migrateDraft()}
                 submit={submitDraft}
                 confirmation={confirmation}
                 setConfirmation={setConfirmation}
@@ -647,6 +781,8 @@ function ReviewWorkflow({
                 pending={workflow.submission.pending !== null}
                 resume={() => void continueSubmission("resume")}
                 reconcile={(resolution) => void continueSubmission("reconcile", resolution)}
+                confirmation={confirmation}
+                setConfirmation={setConfirmation}
               />
             )}
           </aside>
@@ -760,11 +896,36 @@ function Composer({
   );
 }
 
+function BufferedInlineNotes({
+  entries,
+  currentKey,
+}: {
+  readonly entries: ReadonlyMap<string, string>;
+  readonly currentKey: string | null;
+}): ReactNode {
+  const retained = [...entries.entries()].filter(
+    ([key, body]) => key !== currentKey && body.length > 0,
+  );
+  if (retained.length === 0) return null;
+  return (
+    <section className="review-workflow-buffered-inline">
+      <strong>Unsent inline text kept on earlier selections</strong>
+      {retained.map(([key, body]) => (
+        <article key={key}>
+          <small>{inlineBufferLabel(key)}</small>
+          <p>{body}</p>
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function DraftEditor({
   workflow,
   edit,
   save,
   keepLocal,
+  migrate,
   submit,
   confirmation,
   setConfirmation,
@@ -774,15 +935,46 @@ function DraftEditor({
   readonly edit: (content: DraftContentInputDto) => void;
   readonly save: () => void;
   readonly keepLocal: () => void;
+  readonly migrate: () => void;
   readonly submit: () => Promise<void>;
   readonly confirmation: Confirmation | null;
   readonly setConfirmation: (value: Confirmation | null) => void;
   readonly capabilities: ReviewMutationCapabilitiesDto | null;
 }): ReactNode {
   const content = workflow.draft.local;
+  const stale = draftNeedsRevisionRecovery(workflow);
+  const generalCount = content.comments.filter((item) => item.kind === "general").length;
+  const inlineCount = content.comments.filter((item) => item.kind === "inline").length;
+  const replyCount = content.comments.filter((item) => item.kind === "reply").length;
+  const locked = Boolean(
+    workflow.submission.pending ||
+      (workflow.submission.progress && workflow.submission.progress.outcome !== "editable"),
+  );
   return (
     <section className="review-workflow-draft">
       <h2>Draft review</h2>
+      {stale && (
+        <Notice kind="warning">
+          <p>
+            This draft remains preserved at revision {workflow.draft.remote?.revision.head_sha}.
+            It cannot be submitted or receive a new inline anchor at the current revision.
+          </p>
+          <p>
+            A separate current-revision draft will copy the body, verdict, and {generalCount} general
+            comment(s). The {inlineCount} inline comment(s) and {replyCount} reply/replies remain on
+            this old draft for deliberate recreation after checking their current targets.
+          </p>
+          <button
+            className="button button-secondary"
+            disabled={workflow.draft.dirty || Boolean(workflow.draft.pendingSave) || Boolean(workflow.draft.conflict)}
+            onClick={migrate}
+          >
+            {confirmation === "migrate-draft"
+              ? "Confirm create separate current-revision draft"
+              : "Create current-revision draft"}
+          </button>
+        </Notice>
+      )}
       {workflow.draft.conflict && (
         <Notice kind="warning">
           The durable draft changed elsewhere. Your unsaved text is preserved.
@@ -791,12 +983,17 @@ function DraftEditor({
       )}
       <label>
         Review body
-        <textarea value={content.body} onChange={(event) => edit({ ...content, body: event.target.value })} />
+        <textarea
+          value={content.body}
+          disabled={locked}
+          onChange={(event) => edit({ ...content, body: event.target.value })}
+        />
       </label>
       <label>
         Verdict
         <select
           value={content.verdict ?? ""}
+          disabled={locked}
           onChange={(event) =>
             edit({ ...content, verdict: event.target.value === "" ? null : event.target.value as DraftContentInputDto["verdict"] })
           }
@@ -807,7 +1004,55 @@ function DraftEditor({
           <option value="request_changes" disabled={capabilities?.request_changes !== true}>Request changes</option>
         </select>
       </label>
-      <p>{content.comments.length} draft comment(s)</p>
+      <div className="review-workflow-draft-comments">
+        <strong>{content.comments.length} draft comment(s)</strong>
+        {content.comments.map((comment) => (
+          <article key={comment.id} className="review-workflow-draft-comment">
+            <p><strong>{draftCommentLabel(comment)}</strong></p>
+            <textarea
+              aria-label={`Edit draft comment ${comment.id}`}
+              value={comment.body}
+              disabled={locked}
+              onChange={(event) =>
+                edit({
+                  ...content,
+                  comments: content.comments.map((item) =>
+                    item.id === comment.id
+                      ? { ...item, body: event.target.value }
+                      : item,
+                  ),
+                })
+              }
+            />
+            <button
+              className="button button-secondary"
+              disabled={locked}
+              onClick={() =>
+                edit({
+                  ...content,
+                  comments: content.comments.filter((item) => item.id !== comment.id),
+                })
+              }
+            >
+              Remove draft comment
+            </button>
+          </article>
+        ))}
+      </div>
+      {workflow.draft.preservedStaleDrafts.map((draft) => (
+        <section key={draft.id} className="review-workflow-preserved-draft">
+          <strong>Preserved old draft {draft.id}</strong>
+          <p>Revision {draft.revision.head_sha}. Its content was not deleted or retargeted.</p>
+          {draft.comments
+            .filter((comment) => comment.kind !== "general")
+            .map((comment) => (
+              <article key={comment.id}>
+                <strong>{draftCommentLabel(comment)}</strong>
+                <p>{comment.body}</p>
+              </article>
+            ))}
+        </section>
+      ))}
       <div className="review-workflow-row">
         <button
           className="button button-secondary"
@@ -834,12 +1079,16 @@ function SubmissionProgress({
   pending,
   resume,
   reconcile,
+  confirmation,
+  setConfirmation,
 }: {
   readonly progress: SubmissionProgressDto;
   readonly message: string | null;
   readonly pending: boolean;
   readonly resume: () => void;
   readonly reconcile: (resolution: ReconciliationResolution) => void;
+  readonly confirmation: Confirmation | null;
+  readonly setConfirmation: (value: Confirmation | null) => void;
 }): ReactNode {
   return (
     <section className="review-workflow-progress" aria-live="polite">
@@ -848,15 +1097,71 @@ function SubmissionProgress({
       <p>{progress.completed_step_ids.length} confirmed · {progress.unknown_step_ids.length} unknown</p>
       {progress.failure && <Notice kind="error">{progress.failure.message}</Notice>}
       {progress.outcome === "paused" && (
-        <button className="button" disabled={pending} onClick={resume}>Resume confirmed attempt</button>
+        <>
+          <p>Confirmed steps stay excluded. Resume retries the next definitely unconfirmed step.</p>
+          <button className="button" disabled={pending} onClick={resume}>Resume confirmed attempt</button>
+        </>
       )}
       {progress.outcome === "unknown" && (
-        <div className="review-workflow-row">
-          <button className="button" disabled={pending} onClick={() => reconcile("retry_remaining")}>Retry only remaining steps</button>
-          <button className="button button-secondary" disabled={pending} onClick={() => reconcile("return_editable")}>Return draft to editing</button>
-          <button className="button button-secondary" disabled={pending} onClick={() => reconcile("mark_submitted")}>Mark submitted</button>
-        </div>
+        <>
+          <Notice kind="warning">
+            Retry remaining can repeat an unconfirmed remote write. Confirmed receipt steps stay excluded.
+            Mark submitted records your assertion after you inspect the forge; it is not a verified receipt.
+          </Notice>
+          <div className="review-workflow-row">
+            <button
+              className="button"
+              disabled={pending}
+              onClick={() =>
+                confirmation === "reconcile:retry_remaining"
+                  ? reconcile("retry_remaining")
+                  : setConfirmation("reconcile:retry_remaining")
+              }
+            >
+              {confirmation === "reconcile:retry_remaining"
+                ? "Confirm possible repeat of remaining writes"
+                : "Retry only remaining steps"}
+            </button>
+            <button className="button button-secondary" disabled={pending} onClick={() => reconcile("return_editable")}>Return draft to editing</button>
+            <button
+              className="button button-secondary"
+              disabled={pending}
+              onClick={() =>
+                confirmation === "reconcile:mark_submitted"
+                  ? reconcile("mark_submitted")
+                  : setConfirmation("reconcile:mark_submitted")
+              }
+            >
+              {confirmation === "reconcile:mark_submitted"
+                ? "Confirm inspected remote is submitted"
+                : "Mark submitted"}
+            </button>
+          </div>
+        </>
       )}
+    </section>
+  );
+}
+
+function DraftRecoveryList({
+  drafts,
+  recover,
+}: {
+  readonly drafts: readonly DraftSnapshotDto[];
+  readonly recover: (item: DraftSnapshotDto) => void;
+}): ReactNode {
+  return (
+    <section className="review-workflow-recovery">
+      <h2>Choose a preserved draft</h2>
+      {drafts.map((item) => (
+        <button
+          key={item.id}
+          className="button button-secondary"
+          onClick={() => recover(item)}
+        >
+          Draft {item.id} at {item.revision.head_sha}, version {item.version}
+        </button>
+      ))}
     </section>
   );
 }
@@ -950,11 +1255,13 @@ function ActionButtons({
 function QuickVerdicts({
   capabilities,
   blocked,
+  bodyAvailable,
   confirmation,
   run,
 }: {
   readonly capabilities: ReviewMutationCapabilitiesDto | null;
   readonly blocked: boolean;
+  readonly bodyAvailable: boolean;
   readonly confirmation: Confirmation | null;
   readonly run: (verdict: ReviewVerdict) => Promise<void>;
 }): ReactNode {
@@ -971,11 +1278,17 @@ function QuickVerdicts({
           <button
             key={verdict}
             className="button button-secondary"
-            disabled={supported !== true || blocked}
+            disabled={
+              supported !== true ||
+              blocked ||
+              (verdict !== "approve" && !bodyAvailable)
+            }
             title={
-              supported === true
-                ? undefined
-                : `${text} is unsupported for this review.`
+              supported !== true
+                ? `${text} is unsupported for this review.`
+                : verdict !== "approve" && !bodyAvailable
+                  ? "Enter a review body in the general composer first."
+                  : undefined
             }
             onClick={() => void run(verdict)}
           >
@@ -1037,11 +1350,43 @@ async function recoverDraft(
   }
 }
 
+async function recoverLatestSubmission(
+  bridge: ReviewDesktopBridge,
+  review: string,
+  draftId: string,
+  frozenVersion: number,
+): Promise<SubmissionProgressDto | null> {
+  try {
+    const result = await bridge.listReviewSubmissions({ review, max_items: 100 }).result;
+    return (
+      result.attempts.find(
+        (item) =>
+          item.draft_id === draftId && item.frozen_version === frozenVersion,
+      ) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function recoverSubmissionStatus(
+  bridge: ReviewDesktopBridge,
+  review: string,
+  attemptId: string,
+): Promise<SubmissionProgressDto | null> {
+  try {
+    return await bridge.getReviewSubmission({ review, attempt_id: attemptId }).result;
+  } catch {
+    return null;
+  }
+}
+
 function inlineDisabledReason(
   capabilities: ReviewMutationCapabilitiesDto | null,
   anchor: InlineAnchorSelection | null,
   review: string,
   durable: boolean,
+  workflow: ReviewWorkflowState | null,
 ): string | null {
   if (capabilities?.inline_comment !== true)
     return "Inline comments are unsupported for this review.";
@@ -1049,7 +1394,61 @@ function inlineDisabledReason(
     return "Select a source line in the current review diff.";
   if (durable && !anchor.contextComplete)
     return "The selected context is partial. Refresh the complete diff before drafting.";
+  if (durable && workflow && !canCaptureDraftInline(workflow))
+    return "The draft is bound to an earlier revision or a durable submission attempt.";
   return null;
+}
+
+function draftCommentLabel(comment: DraftCommentInputDto): string {
+  if (comment.kind === "general") return `General comment ${comment.id}`;
+  if (comment.kind === "reply")
+    return `Reply ${comment.id} to discussion ${comment.thread_id}`;
+  const line =
+    comment.anchor.side === "old"
+      ? comment.anchor.old_line
+      : comment.anchor.new_line;
+  const stale = comment.anchor.stale === true ? " · stale anchor" : "";
+  return `Inline ${comment.id} · ${comment.anchor.new_path} · ${comment.anchor.side} line ${line}${stale}`;
+}
+
+function buffersFor(review: string): ComposerBuffers {
+  let buffers = composerCache.get(review);
+  if (!buffers) {
+    buffers = { general: "", inline: new Map(), replies: new Map() };
+    composerCache.set(review, buffers);
+  }
+  return buffers;
+}
+
+function anchorIdentity(anchor: InlineAnchorSelection | null): string | null {
+  if (!anchor) return null;
+  return JSON.stringify({
+    review: anchor.review,
+    revision: anchor.revision,
+    oldPath: anchor.oldPath,
+    newPath: anchor.newPath,
+    side: anchor.side,
+    oldLine: anchor.oldLine,
+    newLine: anchor.newLine,
+    contextLines: anchor.contextLines,
+    contextComplete: anchor.contextComplete,
+  });
+}
+
+function inlineBufferLabel(key: string): string {
+  try {
+    const value = JSON.parse(key) as {
+      readonly newPath?: unknown;
+      readonly side?: unknown;
+      readonly oldLine?: unknown;
+      readonly newLine?: unknown;
+      readonly revision?: { readonly head_sha?: unknown };
+    };
+    const line = value.side === "old" ? value.oldLine : value.newLine;
+    return `${String(value.newPath)} · ${String(value.side)} line ${String(line)} · revision ${String(value.revision?.head_sha)}`;
+  } catch {
+    return "Earlier inline selection";
+  }
 }
 
 function capabilityReason(supported: boolean | undefined): string | null {
@@ -1064,6 +1463,14 @@ function isUncertainError(value: unknown): boolean {
       ? value.service_code
       : "";
   return code === "mutation_timeout" || code === "connection_lost" || serviceCode === "request_cancelled";
+}
+
+function isConflictError(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  return (
+    ("code" in value && value.code === "conflict") ||
+    ("service_code" in value && value.service_code === "conflict")
+  );
 }
 
 function isActionCommand(value: unknown): value is {

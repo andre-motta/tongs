@@ -119,9 +119,45 @@ test("submission needs confirmation and unknown progress exposes reconciliation 
   await view.findByText(/Remote status is unknown/);
   assert.equal(starts, 1);
   fireEvent.click(view.getByRole("button", { name: "Retry only remaining steps" }));
+  assert.match(view.getByText(/can repeat an unconfirmed remote write/).textContent, /Confirmed receipt steps stay excluded/);
+  assert.equal(reconciles, 0);
+  fireEvent.click(view.getByRole("button", { name: "Confirm possible repeat of remaining writes" }));
   await waitFor(() => assert.equal(reconciles, 1));
   assert.equal(starts, 1);
   await view.findByText("Review submitted.");
+});
+
+test("submission timeout recovers durable status without replaying start", async () => {
+  const review = "review-timeout-recovery";
+  let lists = 0;
+  let starts = 0;
+  const recovered = submission(review, "unknown");
+  const bridge = reviewBridge(review, {
+    listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [draft(review, 1, "ready")] }),
+    listReviewSubmissions: () => {
+      lists += 1;
+      return read({
+        cursor: 0,
+        next_cursor: null,
+        attempts: lists === 1 ? [] : [recovered],
+      });
+    },
+    startReviewSubmission: async () => {
+      starts += 1;
+      throw {
+        code: "mutation_timeout",
+        message: "The submission response timed out.",
+        retryable: true,
+      };
+    },
+  });
+  const view = renderFeature(bridge, review);
+  fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
+  fireEvent.click(await view.findByRole("button", { name: "Submit review" }));
+  fireEvent.click(view.getByRole("button", { name: "Confirm submit review" }));
+  await view.findByText(/Remote status is unknown/);
+  assert.equal(starts, 1);
+  assert.equal(lists, 2);
 });
 
 test("discussion controls explain unsupported actions and support keyboard focus", async () => {
@@ -182,7 +218,120 @@ test("quick verdict and merge cleanup require explicit confirmation with immutab
   assert.deepEqual(merges[0].source_cleanup, { branch: "feature" });
 });
 
-function renderFeature(bridge, review) {
+test("draft comments are reviewable, editable, and deliberately removable", async () => {
+  const review = "review-draft-comments";
+  const comments = [
+    { id: "33333333-3333-4333-8333-333333333333", kind: "general", body: "General text" },
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      kind: "inline",
+      body: "Inline text",
+      anchor: draftInlineAnchor(false),
+    },
+    { id: "55555555-5555-4555-8555-555555555555", kind: "reply", body: "Reply text", thread_id: "thread-1" },
+  ];
+  const bridge = reviewBridge(review, {
+    listReviewDrafts: () => read({
+      cursor: 0,
+      next_cursor: null,
+      drafts: [{ ...draft(review, 1, "body"), comments }],
+    }),
+  });
+  const view = renderFeature(bridge, review);
+  fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
+  await view.findByText(/src\/example.py · new line 4/);
+  await view.findByText(/Reply .* to discussion thread-1/);
+  const inlineEditor = view.getByLabelText(`Edit draft comment ${comments[1].id}`);
+  fireEvent.change(inlineEditor, { target: { value: "Updated inline text" } });
+  assert.equal(inlineEditor.value, "Updated inline text");
+  const removes = view.getAllByRole("button", { name: "Remove draft comment" });
+  fireEvent.click(removes[0]);
+  assert.equal(view.queryByText("General text"), null);
+  assert.ok(view.getByDisplayValue("Updated inline text"));
+});
+
+test("stale draft migration creates a separate draft and keeps inline and reply text recoverable", async () => {
+  const review = "review-stale-migration";
+  const oldRevision = { head_sha: "old-head", base_sha: "base", start_sha: null };
+  const currentRevision = { head_sha: "new-head", base_sha: "base", start_sha: null };
+  const staleComments = [
+    { id: "33333333-3333-4333-8333-333333333333", kind: "general", body: "Portable general" },
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      kind: "inline",
+      body: "Keep this inline text",
+      anchor: { ...draftInlineAnchor(true), revision: oldRevision },
+    },
+    { id: "55555555-5555-4555-8555-555555555555", kind: "reply", body: "Keep this reply", thread_id: "thread-old" },
+  ];
+  const stale = {
+    ...draft(review, 3, "Portable body"),
+    revision: oldRevision,
+    verdict: "approve",
+    comments: staleComments,
+  };
+  const creates = [];
+  const bridge = reviewBridge(review, {
+    getReview: () => read({ ...snapshot(review), revision: currentRevision }),
+    listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [stale] }),
+    createReviewDraft: async (params) => {
+      creates.push(params);
+      return {
+        ...draft(review, 1, params.content.body),
+        id: "66666666-6666-4666-8666-666666666666",
+        revision: currentRevision,
+        verdict: params.content.verdict,
+        comments: params.content.comments,
+      };
+    },
+  });
+  const view = renderFeature(bridge, review);
+  fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
+  await view.findByText(/remains preserved at revision old-head/);
+  assert.equal(view.getByRole("button", { name: "Submit review" }).disabled, true);
+  assert.equal(view.getByLabelText("Add selected line to draft").disabled, true);
+  fireEvent.click(view.getByRole("button", { name: "Create current-revision draft" }));
+  assert.equal(creates.length, 0);
+  fireEvent.click(view.getByRole("button", { name: "Confirm create separate current-revision draft" }));
+  await waitFor(() => assert.equal(creates.length, 1));
+  assert.equal(creates[0].revision.head_sha, "new-head");
+  assert.deepEqual(creates[0].content.comments.map((item) => item.kind), ["general"]);
+  await view.findByText("Keep this inline text");
+  await view.findByText("Keep this reply");
+  await view.findByText(/Preserved old draft 11111111/);
+});
+
+test("composer buffers survive panel navigation and remain bound to review and anchor", async () => {
+  const review = "review-navigation-buffer";
+  const anchor = inlineSelection(review, "head", 4);
+  const bridge = reviewBridge(review);
+  let view = renderFeature(bridge, review, { inlineAnchor: anchor });
+  const general = await view.findByLabelText("Quick comment");
+  const inline = view.getByLabelText("Quick inline comment");
+  fireEvent.change(general, { target: { value: "unsent general" } });
+  fireEvent.change(inline, { target: { value: "unsent inline" } });
+  view.unmount();
+
+  view = renderFeature(bridge, review, { inlineAnchor: anchor });
+  assert.equal((await view.findByLabelText("Quick comment")).value, "unsent general");
+  assert.equal(view.getByLabelText("Quick inline comment").value, "unsent inline");
+  view.unmount();
+
+  const changedAnchor = inlineSelection(review, "new-head", 8);
+  view = renderFeature(bridge, review, { inlineAnchor: changedAnchor });
+  assert.equal((await view.findByLabelText("Quick inline comment")).value, "");
+  await view.findByText("unsent inline");
+  view.unmount();
+
+  const otherReview = "review-navigation-other";
+  view = renderFeature(reviewBridge(otherReview), otherReview, {
+    inlineAnchor: inlineSelection(otherReview, "head", 4),
+  });
+  assert.equal((await view.findByLabelText("Quick comment")).value, "");
+  assert.equal(view.getByLabelText("Quick inline comment").value, "");
+});
+
+function renderFeature(bridge, review, contextChanges = {}) {
   const feature = createReviewFeature(bridge);
   const item = reviewItem(review);
   return render(
@@ -197,6 +346,7 @@ function renderFeature(bridge, review) {
         inlineAnchor: null,
         selectInlineAnchor: () => {},
         navigate: () => {},
+        ...contextChanges,
       },
       { kind: "review", item, panel: "discussions" },
     ),
@@ -213,6 +363,7 @@ function reviewBridge(review, changes = {}) {
       read({ review, capabilities: { merge: false, close: false, reopen: false, unapprove: false } }),
     listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [] }),
     listReviewSubmissions: () => read({ cursor: 0, next_cursor: null, attempts: [] }),
+    getReviewSubmission: () => read(submission(review, "unknown")),
     createReviewDraft: async () => draft(review, 1, ""),
     getReviewDraft: () => read(draft(review, 1, "")),
     saveReviewDraft: async (params) => draft(review, params.expected_version + 1, params.content.body),
@@ -316,6 +467,35 @@ function draft(review, version, body) {
     state: "editable",
     created_at: "2026-09-08T00:00:00+00:00",
     updated_at: "2026-09-08T00:00:00+00:00",
+  };
+}
+
+function draftInlineAnchor(stale) {
+  return {
+    revision: { head_sha: "head", base_sha: "base", start_sha: null },
+    old_path: "src/example.py",
+    new_path: "src/example.py",
+    old_line: null,
+    new_line: 4,
+    side: "new",
+    context_fingerprint: "a".repeat(64),
+    start_line: null,
+    start_side: null,
+    stale,
+  };
+}
+
+function inlineSelection(review, head, line) {
+  return {
+    review,
+    revision: { head_sha: head, base_sha: "base", start_sha: null },
+    oldPath: "src/example.py",
+    newPath: "src/example.py",
+    side: "new",
+    oldLine: null,
+    newLine: line,
+    contextLines: ["before", "selected", "after"],
+    contextComplete: true,
   };
 }
 

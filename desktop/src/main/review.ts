@@ -13,12 +13,13 @@ const MAX_OPERATION_ID = 128;
 const MAX_HANDLE = 2048;
 const MAX_BODY_BYTES = 65_536;
 const MAX_TEXT = 2048;
-const MAX_PATH = 4096;
+const MAX_PATH = 500;
 const MAX_COMMENTS = 200;
 const MAX_PAGE_ITEMS = 100;
 const MAX_SUBMISSION_STEPS = 204;
 const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_CURSOR = 1_000_000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const FINGERPRINT = /^[0-9a-f]{64}$/;
 
 export interface ReviewOperation {
@@ -103,6 +104,11 @@ export function assertReviewParams<M extends ReviewRpcMethod>(
       if (Object.hasOwn(params, "inline_comments")) {
         array(params.inline_comments, MAX_COMMENTS).forEach(verdictComment);
       }
+      validateVerdictContent(
+        params.verdict,
+        Object.hasOwn(params, "body") ? params.body : "",
+        Object.hasOwn(params, "inline_comments") ? params.inline_comments : [],
+      );
       return;
     case "review_actions.merge":
       keys(params, ["operation_id", "review", "revision"], ["squash", "source_cleanup"]);
@@ -141,8 +147,12 @@ export function assertReviewParams<M extends ReviewRpcMethod>(
     case "drafts.list":
       keys(params, ["review"], ["states", "cursor", "max_items"]);
       handle(params.review);
-      if (Object.hasOwn(params, "states"))
-        array(params.states, 5).forEach(draftState);
+      if (Object.hasOwn(params, "states")) {
+        const states = array(params.states, 5);
+        states.forEach(draftState);
+        if (new Set(states).size !== states.length)
+          throw new Error("Duplicate review draft state");
+      }
       optionalPage(params);
       return;
     case "drafts.save":
@@ -266,7 +276,11 @@ function attemptIdentity(value: Record<string, unknown>): void {
 }
 
 function optionalPage(value: Record<string, unknown>): void {
-  if (Object.hasOwn(value, "cursor")) nonnegativeInteger(value.cursor);
+  if (Object.hasOwn(value, "cursor")) {
+    nonnegativeInteger(value.cursor);
+    if ((value.cursor as number) > MAX_CURSOR)
+      throw new Error("Review page cursor exceeds the limit");
+  }
   if (Object.hasOwn(value, "max_items")) {
     positiveInteger(value.max_items);
     if ((value.max_items as number) > MAX_PAGE_ITEMS)
@@ -302,8 +316,10 @@ function draftAnchor(value: unknown, output: boolean): void {
   const anchor = record(value);
   keys(
     anchor,
-    ["revision", "old_path", "new_path", "old_line", "new_line", "side", "context_fingerprint", "start_line", "start_side"],
-    output ? ["stale"] : [],
+    output
+      ? ["revision", "old_path", "new_path", "old_line", "new_line", "side", "context_fingerprint", "start_line", "start_side", "stale"]
+      : ["revision", "old_path", "new_path", "old_line", "new_line", "side", "context_fingerprint"],
+    output ? [] : ["start_line", "start_side", "stale"],
   );
   revision(anchor.revision);
   path(anchor.old_path);
@@ -313,9 +329,11 @@ function draftAnchor(value: unknown, output: boolean): void {
   const selectedSide = oneOf(anchor.side, ["old", "new"]);
   if (typeof anchor.context_fingerprint !== "string" || !FINGERPRINT.test(anchor.context_fingerprint))
     throw new Error("Invalid review context fingerprint");
-  nullablePositiveInteger(anchor.start_line);
-  if (anchor.start_side !== null) oneOf(anchor.start_side, ["old", "new"]);
-  if ((anchor.start_line === null) !== (anchor.start_side === null))
+  const startLine = Object.hasOwn(anchor, "start_line") ? anchor.start_line : null;
+  const startSide = Object.hasOwn(anchor, "start_side") ? anchor.start_side : null;
+  nullablePositiveInteger(startLine);
+  if (startSide !== null) oneOf(startSide, ["old", "new"]);
+  if ((startLine === null) !== (startSide === null))
     throw new Error("Review draft multiline anchor is incomplete");
   if (
     (selectedSide === "old" && anchor.old_line === null) ||
@@ -323,7 +341,7 @@ function draftAnchor(value: unknown, output: boolean): void {
   ) {
     throw new Error("Review draft selected side has no line");
   }
-  if (output) bool(anchor.stale);
+  if (Object.hasOwn(anchor, "stale")) bool(anchor.stale);
 }
 
 function verdictComment(value: unknown): void {
@@ -335,10 +353,20 @@ function verdictComment(value: unknown): void {
 
 function draftContent(value: unknown, output: boolean): void {
   const content = record(value);
-  keys(content, ["body", "verdict", "comments"]);
-  body(content.body, true);
-  if (content.verdict !== null) verdict(content.verdict);
-  array(content.comments, MAX_COMMENTS).forEach((comment) => draftComment(comment, output));
+  keys(content, output ? ["body", "verdict", "comments"] : [], output ? [] : ["body", "verdict", "comments"]);
+  if (Object.hasOwn(content, "body")) body(content.body, true);
+  if (Object.hasOwn(content, "verdict") && content.verdict !== null)
+    verdict(content.verdict);
+  if (Object.hasOwn(content, "comments")) {
+    const commentIds = new Set<string>();
+    for (const commentValue of array(content.comments, MAX_COMMENTS)) {
+      draftComment(commentValue, output);
+      const comment = record(commentValue);
+      if (commentIds.has(comment.id as string))
+        throw new Error("Duplicate review draft comment ID");
+      commentIds.add(comment.id as string);
+    }
+  }
 }
 
 function draftComment(value: unknown, output: boolean): void {
@@ -372,8 +400,16 @@ function mutationOutcome(value: unknown): void {
   }
   nullableText(outcome.reason, MAX_TEXT);
   bool(outcome.resync_required);
-  if ((outcome.outcome === "known") !== (outcome.receipt !== null))
-    throw new Error("Invalid review mutation outcome state");
+  if (outcome.outcome === "known") {
+    if (outcome.receipt === null || outcome.reason !== null)
+      throw new Error("Invalid known review mutation outcome state");
+  } else if (
+    outcome.receipt !== null ||
+    outcome.reason === null ||
+    outcome.resync_required !== true
+  ) {
+    throw new Error("Invalid unknown review mutation outcome state");
+  }
 }
 
 function actionReceipt(value: unknown, expected?: ReviewAction): void {
@@ -395,6 +431,8 @@ function actionReceipt(value: unknown, expected?: ReviewAction): void {
   oneOf(receipt.source_cleanup, ["not_requested", "confirmed", "rejected", "unknown"]);
   if (receipt.error !== null) serviceError(receipt.error);
   bool(receipt.resync_required);
+  if (receipt.expected_state !== (actual === "reopen" ? "closed" : "open"))
+    throw new Error("Review action receipt has an invalid expected state");
   if (receipt.outcome === "known") {
     if (receipt.error !== null || receipt.remote_id === null)
       throw new Error("Invalid known review action receipt state");
@@ -449,6 +487,11 @@ function submission(value: unknown): void {
   draftState(progress.state);
   oneOf(progress.outcome, ["submitted", "paused", "unknown", "editable"]);
   const steps = array(progress.steps, MAX_SUBMISSION_STEPS);
+  bool(progress.plan_available);
+  if (progress.plan_available && steps.length === 0)
+    throw new Error("Review submission plan cannot be empty");
+  if (!progress.plan_available && steps.length !== 0)
+    throw new Error("Planless review submission cannot expose steps");
   const stepIds = new Set<string>();
   for (const item of steps) {
     const step = record(item);
@@ -457,7 +500,13 @@ function submission(value: unknown): void {
     if (stepIds.has(step.id as string)) throw new Error("Duplicate review submission step");
     stepIds.add(step.id as string);
     oneOf(step.kind, ["general_comment", "inline_comment", "reply", "body", "verdict", "github_review"]);
-    array(step.comment_ids, MAX_COMMENTS).forEach(uuid);
+    const commentIds = new Set<string>();
+    for (const commentId of array(step.comment_ids, MAX_COMMENTS)) {
+      uuid(commentId);
+      if (commentIds.has(commentId as string))
+        throw new Error("Duplicate review submission comment ID");
+      commentIds.add(commentId as string);
+    }
   }
   const receiptSteps = new Set<string>();
   for (const item of array(progress.receipts, MAX_SUBMISSION_STEPS)) {
@@ -467,36 +516,89 @@ function submission(value: unknown): void {
     text(receipt.remote_id, MAX_TEXT);
     timestamp(receipt.recorded_at);
     bool(receipt.resync_required);
-    if (!stepIds.has(receipt.step_id as string) || receiptSteps.has(receipt.step_id as string))
+    if (
+      (progress.plan_available && !stepIds.has(receipt.step_id as string)) ||
+      receiptSteps.has(receipt.step_id as string)
+    )
       throw new Error("Invalid review submission receipt step");
     receiptSteps.add(receipt.step_id as string);
   }
-  const completed = idList(progress.completed_step_ids, stepIds);
-  const unknown = idList(progress.unknown_step_ids, stepIds);
-  if ([...completed].some((id) => unknown.has(id)))
+  const completed = idList(
+    progress.completed_step_ids,
+    stepIds,
+    progress.plan_available,
+    true,
+  );
+  const unknownValues = array(progress.unknown_step_ids, MAX_SUBMISSION_STEPS);
+  const unknown = idList(
+    unknownValues,
+    stepIds,
+    progress.plan_available,
+    false,
+  );
+  if (!sameSet(completed, receiptSteps))
+    throw new Error("Completed review submission steps must equal receipt steps");
+  if (
+    progress.outcome !== "submitted" &&
+    [...completed].some((id) => unknown.has(id))
+  )
     throw new Error("Review submission step cannot be confirmed and unknown");
   bool(progress.atomic);
   bool(progress.resync_required);
-  if (progress.failure !== null) submissionFailure(progress.failure, stepIds);
-  bool(progress.plan_available);
+  if (progress.failure !== null)
+    submissionFailure(progress.failure, stepIds, progress.plan_available);
+  if (!progress.plan_available && progress.atomic !== false)
+    throw new Error("Planless review submission cannot claim atomic execution");
+  if (
+    (unknownValues.length > 0 ||
+      array(progress.receipts, MAX_SUBMISSION_STEPS).some(
+        (item) => record(item).resync_required === true,
+      )) &&
+    progress.resync_required !== true
+  ) {
+    throw new Error("Review submission evidence requires resynchronization");
+  }
+  const validState =
+    (progress.outcome === "submitted" && progress.state === "submitted") ||
+    (progress.outcome === "unknown" && progress.state === "unknown") ||
+    (progress.outcome === "editable" && progress.state === "unknown") ||
+    (progress.outcome === "paused" &&
+      (progress.state === "submitting" || progress.state === "partial"));
+  if (!validState) throw new Error("Invalid review submission state and outcome");
 }
 
-function submissionFailure(value: unknown, stepIds: ReadonlySet<string>): void {
+function submissionFailure(
+  value: unknown,
+  stepIds: ReadonlySet<string>,
+  planAvailable: boolean,
+): void {
   const failure = record(value);
   keys(failure, ["code", "message", "retryable", "step_id"]);
   text(failure.code, MAX_TEXT);
   text(failure.message, MAX_TEXT);
   bool(failure.retryable);
   nullableText(failure.step_id, MAX_TEXT);
-  if (failure.step_id !== null && !stepIds.has(failure.step_id as string))
+  if (
+    planAvailable &&
+    failure.step_id !== null &&
+    !stepIds.has(failure.step_id as string)
+  )
     throw new Error("Invalid review submission failure step");
 }
 
-function idList(value: unknown, valid: ReadonlySet<string>): Set<string> {
+function idList(
+  value: unknown,
+  valid: ReadonlySet<string>,
+  requirePlanReference: boolean,
+  requireUnique: boolean,
+): Set<string> {
   const result = new Set<string>();
   for (const item of array(value, MAX_SUBMISSION_STEPS)) {
     text(item, MAX_TEXT);
-    if (!valid.has(item) || result.has(item))
+    if (
+      (requirePlanReference && !valid.has(item)) ||
+      (requireUnique && result.has(item))
+    )
       throw new Error("Invalid review submission step reference");
     result.add(item);
   }
@@ -505,8 +607,12 @@ function idList(value: unknown, valid: ReadonlySet<string>): Set<string> {
 
 function page(value: Record<string, unknown>): void {
   nonnegativeInteger(value.cursor);
+  if ((value.cursor as number) > MAX_CURSOR)
+    throw new Error("Review page cursor exceeds the limit");
   if (value.next_cursor !== null) {
     positiveInteger(value.next_cursor);
+    if ((value.next_cursor as number) > MAX_CURSOR)
+      throw new Error("Review page cursor exceeds the limit");
     if ((value.next_cursor as number) <= (value.cursor as number))
       throw new Error("Review page cursor did not advance");
   }
@@ -566,19 +672,32 @@ function handle(value: unknown): void {
 
 function path(value: unknown): void {
   text(value, MAX_PATH);
-  if ((value as string).includes("\n") || (value as string).includes("\r"))
-    throw new Error("Invalid review path");
 }
 
 function body(value: unknown, allowEmpty: boolean): void {
   if (typeof value !== "string" || (!allowEmpty && value.length === 0))
     throw new Error("Invalid review body");
+  if (
+    hasInvalidUnicode(value) ||
+    [...value].some((character) => {
+      const code = character.codePointAt(0)!;
+      return code < 32 && character !== "\t" && character !== "\n";
+    })
+  ) {
+    throw new Error("Invalid review body");
+  }
   if (new TextEncoder().encode(value).length > MAX_BODY_BYTES)
     throw new Error("Review body exceeds the byte limit");
 }
 
 function text(value: unknown, limit: number): asserts value is string {
-  if (typeof value !== "string" || value.length === 0 || value.length > limit)
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    [...value].length > limit ||
+    hasInvalidUnicode(value) ||
+    [...value].some((character) => character.codePointAt(0)! < 32)
+  )
     throw new Error("Invalid review text");
 }
 
@@ -606,7 +725,12 @@ function nullablePositiveInteger(value: unknown): void {
 
 function timestamp(value: unknown): void {
   text(value, 64);
-  if (Number.isNaN(Date.parse(value))) throw new Error("Invalid review timestamp");
+  if (
+    Number.isNaN(Date.parse(value)) ||
+    !/(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(value)
+  ) {
+    throw new Error("Invalid review timestamp");
+  }
 }
 
 function array(value: unknown, limit: number): readonly unknown[] {
@@ -640,4 +764,35 @@ function record(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new Error("Review value must be an object");
   return value as Record<string, unknown>;
+}
+
+function validateVerdictContent(
+  verdictValue: unknown,
+  bodyValue: unknown,
+  inlineComments: unknown,
+): void {
+  const hasBody = typeof bodyValue === "string" && bodyValue.length > 0;
+  const hasInline = Array.isArray(inlineComments) && inlineComments.length > 0;
+  if (verdictValue === "comment" && !hasBody && !hasInline)
+    throw new Error("Comment verdict requires a body or inline comment");
+  if (verdictValue === "request_changes" && !hasBody)
+    throw new Error("Request changes verdict requires a body");
+}
+
+function hasInvalidUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && [...left].every((item) => right.has(item));
 }

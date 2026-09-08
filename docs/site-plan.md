@@ -1,5 +1,11 @@
 # tongs documentation site plan
 
+> **Superseded internal record.** This pre-implementation plan is kept for
+> history and is excluded from the published site. The site that actually
+> ships is built by `mkdocs.yml` and deployed to GitHub Pages at the host in
+> `docs/CNAME`. The hosting, domain, plugin, and navigation choices below were
+> not the ones implemented.
+
 Plan for the tongs documentation and landing page, hosted on GitLab Pages (or GitHub Pages).
 
 ## Technology

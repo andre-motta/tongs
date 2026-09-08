@@ -5,7 +5,7 @@ Tongs adopts Agent SDLC **0.1.0**, maintained in the private
 Source commit: `4e851d1b8a903aa8bebceea078860a21152ee8e8`.
 Read the installed `agent-sdlc` skill's `references/workflow.md` with this profile.
 Contributors without access to the private package can still follow the project
-review process in [CONTRIBUTING.md](https://github.com/andre-motta/tongs/blob/feat/desktop-app/CONTRIBUTING.md); the private skill is an
+review process in [CONTRIBUTING.md](https://github.com/andre-motta/tongs/blob/main/CONTRIBUTING.md); the private skill is an
 orchestration aid, not a prerequisite for ordinary contributions.
 
 ## Project settings
@@ -13,7 +13,7 @@ orchestration aid, not a prerequisite for ordinary contributions.
 | Setting | Value |
 | --- | --- |
 | Repository / tracker | `andre-motta/tongs`, GitHub Issues; reuse existing issues and native sub-issue/blocking links where available |
-| Integration target | Desktop: `feat/desktop-app`, owned by Astra. Final PR targets `main` for CTO review |
+| Integration target | Desktop: `feat/desktop-app`, owned by the orchestrator. Final PR targets `main` for CTO review |
 | Worktrees | Isolated worktree per item; desktop contributors use `feat/desktop-<issue>-<slug>`. Existing comparison `codex/` branches remain historical |
 | Runtime | Python 3.12+; current CI tests 3.12 and 3.13 |
 | Setup | Create checkout-local `.venv`; activate per shell call; install editable `.[dev]` plus Ruff; add `mcp` extra for MCP tests |
@@ -21,8 +21,8 @@ orchestration aid, not a prerequisite for ordinary contributions.
 | Integrated checks | `pytest`, `ruff check src/ tests/`, `ruff format --check src/ tests/`; include optional dependencies required by changed features |
 | Documentation checks | Local links, command examples, `git diff --check`; `mkdocs build --strict` for site inputs/navigation |
 | Functional proof | Exercise affected TUI/desktop workflows and attach observable evidence; distinguish mocked APIs from live forge calls |
-| Commit format | Title, blank line, one-line body; use `git commit -s`; Codex co-author uses `noreply@openai.com` |
-| Upstream path | Desktop agent PRs into `feat/desktop-app`, Astra integrates; final feature PR into `main`, CTO gates final acceptance and merge. Tags/releases/deployments need separate authority |
+| Commit format | Title, blank line, one-line body; use `git commit -s`; the co-author trailer uses the address of the vendor that produced the commit, `noreply@openai.com` for Codex or `noreply@anthropic.com` for Claude, and never claims the other |
+| Upstream path | Desktop agent PRs into `feat/desktop-app`, the orchestrator integrates; final feature PR into `main`, CTO gates final acceptance and merge. Tags/releases/deployments need separate authority |
 | Initiative records | `docs/work/<initiative>.md`; keep public-safe summaries and use access-appropriate locations for sensitive artifacts |
 
 Use `python -m pip install -e ".[dev,mcp]" ruff` in the activated environment for
@@ -31,10 +31,20 @@ need network access; a skipped optional test is not proof of that subsystem.
 
 ## Authority and integration
 
-Andre approved adoption of this workflow. Astra owns overarching architecture,
-design, writing direction, scheduling, and integration. Sol at `high` performs
-senior implementation and independent review; Luna at `xhigh` handles bounded
-assignments under Sol review. A Sol author has a separate Sol reviewer.
+The owner approved adoption of this workflow. Three roles are used, named by
+function rather than by any vendor's model codename:
+
+- **Orchestrator.** Owns overarching architecture, design, writing direction,
+  scheduling, and integration.
+- **Senior contributor** and **senior reviewer.** The same seniority level, used
+  for senior implementation and for independent review. A senior contributor's
+  work is reviewed by a different senior reviewer.
+- **Bounded contributor.** Handles well-specified assignments under senior
+  review.
+
+The reusable SDLC package is vendor neutral. This profile maps the roles onto
+whichever assistant install is orchestrating, and each pull request records the
+actual author model and effort setting used, rather than a codename.
 
 Approved initiatives allow signed-off local commits and validated local
 integration without per-commit approval. Preserve unrelated changes and dirty
@@ -50,38 +60,42 @@ promotion and per-push CTO gate for this initiative only. It does not change the
 reusable private SDLC package or other projects. Architecture scope approval and
 independent review still apply.
 
-Astra owns `feat/desktop-app` on GitHub as the shared integration branch and final
-engineering review gate. Initialize it from the independently reviewed comparison
+The orchestrator owns `feat/desktop-app` on GitHub as the shared integration branch
+and final engineering review gate. Initialize it from the independently reviewed comparison
 and evidence at `58cf120`, plus this reviewed policy update. This one-time bootstrap
 is explicitly recorded; subsequent contributor changes enter through PRs. Main's
 dirty checkout is preserved. No contributor may push directly to the integration
 branch or main, merge PRs, create releases, or change shared tracking independently.
 
-Contributors create `feat/<work-item>` branches from the latest verified integration
-commit in separate worktrees, commit with `git commit -s`, push their assigned
-branches and open PRs with base `feat/desktop-app`. No repeated CTO approval is
-needed for those scoped pushes or PRs. Use the actual assigned model, a title and
-one-line commit body, and the OpenAI co-author address. After review, agents push
+Contributors create `feat/desktop-<issue>-<slug>` branches from the latest verified
+integration commit in separate worktrees, commit with `git commit -s`, push their
+assigned branches and open PRs with base `feat/desktop-app`. No repeated CTO
+approval is needed for those scoped pushes or PRs. Use the actual assigned model,
+a title and one-line commit body, and the co-author trailer for the vendor that
+produced the commit: `Co-Authored-By: Codex <model> <noreply@openai.com>` or
+`Co-Authored-By: Claude <model> <noreply@anthropic.com>`, with the real model name
+and no context-window annotation. After review, agents push
 corrections to their own branches. Keep published history intact; prefer merging
 updated integration history rather than force-pushing shared or reviewed commits.
 
-Independent Sol high review is required, including for Luna work and another Sol's
-implementation. Astra reviews the resulting PR, directs corrections, checks that
-required checks and relevant functional evidence apply to the exact current head,
-and serializes integration. Only Astra merges to `feat/desktop-app`. Prefer merge
-commits to preserve signed-off contributor commits and dependency history. Astra
+Independent senior review is required, including for bounded contributor work and
+for another senior contributor's implementation. The orchestrator reviews the
+resulting PR, directs corrections, checks that required checks and relevant
+functional evidence apply to the exact current head, and serializes integration.
+Only the orchestrator merges to `feat/desktop-app`. Prefer merge commits to
+preserve signed-off contributor commits and dependency history. The orchestrator
 may resolve conflicts locally in an isolated worktree; resolutions invalidate
 affected checks/reviews and must be verified before the resolved result is pushed.
 Record the resolution and reviewer decision in the linked issue/PR. A changed PR
 head requires renewed affected review and checks; never merge an unreviewed head.
 
-These model roles are an agent workflow, not separate GitHub identities. Record
-Sol's independent findings and Astra's disposition in the PR even when tool calls
-share the owner's GitHub account. Do not claim GitHub-enforced branch protection
+These roles are an agent workflow, not separate GitHub identities. Record the
+independent reviewer's findings and the orchestrator's disposition in the PR even
+when tool calls share the owner's GitHub account. Do not claim GitHub-enforced branch protection
 unless it has actually been configured and verified.
 
-When the feature is complete, Astra opens a PR from `feat/desktop-app` into `main`
-for Andre's final review. Creating that PR is authorized; merging it, pushing main,
+When the feature is complete, the orchestrator opens a PR from `feat/desktop-app`
+into `main` for the CTO's final review. Creating that PR is authorized; merging it, pushing main,
 tagging, releasing or deploying is not. The final PR must retain or link durable
 acceptance artifacts: acceptance criteria and observed results; exact tested
 commits and artifact hashes; environment and commands; CI and native application
@@ -96,7 +110,7 @@ workflow/CI changes, design decisions, review corrections and conflict resolutio
 Use an existing scoped issue when appropriate; create a separate child when a change
 has its own acceptance, ownership or dependency boundary. Do not create a new issue
 for each incidental line edit. Each PR and substantive commit references its issue.
-Astra updates issue progress at assignment, handoff, review/correction, integration,
+The orchestrator updates issue progress at assignment, handoff, review/correction, integration,
 gate changes and interruption, including exact commits and next actions.
 
 Break initiatives into small, independently verifiable items to maximize useful
@@ -111,7 +125,7 @@ An item is ready only when its required design is approved, interfaces and owner
 are clear, and every prerequisite merge commit is present in `feat/desktop-app`
 and verified. Open/closed issue status alone is not a readiness signal. Independent
 investigations may proceed together when their inputs are stable, while their PRs
-still must satisfy required integration checks. Astra schedules ready items within
+still must satisfy required integration checks. The orchestrator schedules ready items within
 available concurrency, queues excess work, and reschedules after every integration
 or newly discovered dependency. A blocker is recorded separately from progress.
 
@@ -120,8 +134,8 @@ For this initiative, track:
 Record local candidate integration and the actual remote merge SHA separately.
 A merge to the feature branch is not delivery to main. The CTO authorized closing
 completed scoped work items after independent review, feature integration and
-required post-merge checks are verified. Astra, or an explicitly delegated tracker
-agent, checks the item's full acceptance criteria before closing it and records the
+required post-merge checks are verified. The orchestrator, or an explicitly
+delegated tracker agent, checks the item's full acceptance criteria before closing it and records the
 accepted PR head, merge commit and evidence. Closure means that scoped work is
 complete on `feat/desktop-app`; it does not imply CTO acceptance or main delivery.
 Keep the parent feature, incomplete work, deferred RFEs and outstanding production
@@ -132,7 +146,7 @@ Contributors continue using `Refs #...` in intermediate PRs and do not close iss
 automatically. Preserve rejected/interrupted worktrees, review findings,
 assignments, evidence and next actions for safe resumption.
 
-Use the [desktop PR template](https://github.com/andre-motta/tongs/blob/feat/desktop-app/.github/PULL_REQUEST_TEMPLATE/desktop.md)
+Use the [desktop PR template](https://github.com/andre-motta/tongs/blob/main/.github/PULL_REQUEST_TEMPLATE/desktop.md)
 for intermediate work. Baseline CI/lint/dependency failures remain unmet; branch
 creation does not waive them. CI readiness and hardware GPU work are separate,
 issue-tracked items that can be investigated independently after bootstrap.
@@ -141,15 +155,15 @@ issue-tracked items that can be investigated independently after bootstrap.
 
 The CTO authorized periodic cleanup in
 [issue #23](https://github.com/andre-motta/tongs/issues/23#issuecomment-5577199044).
-After three verified integrations, or when storage pressure warrants it, Astra
-allocates a bounded cleanup pass to Luna at `xhigh`. Use available capacity and
+After three verified integrations, or when storage pressure warrants it, the
+orchestrator allocates a bounded cleanup pass to a bounded contributor. Use available capacity and
 resume paused implementation promptly after the pass. This is maintenance within
 the initiative, not permission to clean unrelated projects.
 
 The agent first inventories exact branch tips, merged PRs, ancestry in the latest
 verified integration commit, checkout changes, ignored files and active users of
-each worktree. A separate Sol reviewer checks the proposed batch, and Astra
-authorizes the concrete list. Immediately before removal, recheck that those
+each worktree. A separate senior reviewer checks the proposed batch, and the
+orchestrator authorizes the concrete list. Immediately before removal, recheck that those
 facts still hold. Skip any changed or uncertain candidate.
 
 Protect main and integration, active or dirty work, pending corrections, unmerged
@@ -196,10 +210,13 @@ hardware acceleration proof.
 
 - Pushes to `main` or `feat/desktop-app`, and PRs targeting either, trigger CI.
   Hosted core CI does not replace the native Fedora GPU/application evidence.
-- Pushes to `main` trigger the MkDocs GitHub Pages deployment; documentation
-  under `docs/` is site input even when absent from navigation. Keep it public-safe.
+- Pushes to `main` trigger the MkDocs GitHub Pages deployment. Every Markdown file
+  under `docs/` is site input even when absent from navigation, unless `mkdocs.yml`
+  lists it under `exclude_docs`. This file, `docs/site-plan.md` and `docs/work/`
+  are excluded and stay repository-only; everything else under `docs/` must be
+  public-safe.
 - `v*` tag pushes trigger the PyPI publication workflow using the `pypi` environment.
-- Contributor PR pushes permit Astra integration into `feat/desktop-app` under
+- Contributor PR pushes permit orchestrator integration into `feat/desktop-app` under
   this override. The final main PR still requires CTO acceptance; release and
   deployment authority remains separate.
 

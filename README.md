@@ -20,7 +20,7 @@ Your team uses GitHub. Another uses GitLab. You live in the terminal. tongs give
 
 > lazygit is great for git operations. tongs picks up where it stops, at code review.
 
-**[Documentation](https://tongs.tools)** | **[PyPI](https://pypi.org/project/tongs/)** | **[Issues](https://github.com/andre-motta/tongs/issues)**
+**[Documentation](https://www.tongs.tools)** | **[PyPI](https://pypi.org/project/tongs/)** | **[Issues](https://github.com/andre-motta/tongs/issues)**
 
 ## Install
 
@@ -30,11 +30,21 @@ pipx install tongs
 # Or run directly in an isolated environment with uvx
 uvx tongs
 
+# Or install it persistently as a uv tool
+uv tool install tongs
+
 # Or plain pip
 pip install tongs
 ```
 
-Requires **Python 3.12+**. No other system dependencies.
+Optional extras:
+
+```bash
+pip install "tongs[mcp]"      # MCP server for AI assistants
+pip install "tongs[keyring]"  # system keyring as a credential source
+```
+
+Requires **Python 3.12+**. tongs needs no compiler and no system libraries of its own. It does read your forge credentials from the [`gh`](https://cli.github.com) and [`glab`](https://gitlab.com/gitlab-org/cli) CLIs when they are installed, falling back to `~/.netrc` and then the optional system keyring, so at least one of those credential sources has to be set up before the inbox can load. See [First-time auth setup](#first-time-auth-setup).
 
 ### From source
 
@@ -101,6 +111,7 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 - **Truncated diff handling** -- files too large for the API appear in the file tree with +/- stats and a "view in browser" prompt
 - **Markdown preview** -- toggle rendered preview for `.md` files with `m`
 - **File navigation** -- jump between files with `n` / `Shift+N`
+- **Unified or split view** -- press `v` to toggle; in split view `h` / `l` move focus between the old and new side
 
 ### Commenting
 
@@ -114,13 +125,15 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 - **Suggested changes** -- press `F3` to open your `$EDITOR` with the selected code; edit it, and tongs posts a suggestion block (GitHub `suggestion` / GitLab `suggestion:-0+N` syntax)
 - **External editor** -- press `F2` inside the comment editor to switch to your preferred editor
 - **General comments** -- press `c` from the overview tab to post a top-level MR comment
+- **Durable review drafts** -- press `Ctrl+G` to start review mode, collect comments locally, then submit them as one review with a verdict
 
 ### Desktop review workspace (unreleased)
 
-The terminal TUI remains the default interface. The current desktop workspace
-is an unreleased local-repository interface, documented in the [desktop
-workspace guide](docs/desktop/workspace.md); it does not add a separate
-installation or publication path.
+The terminal TUI remains the default interface. The desktop workspace is an
+unreleased optional interface over the same repositories, reviews, and drafts,
+documented in the [desktop workspace guide](docs/desktop/workspace.md). It has
+its own installation path, described in
+[Desktop application](#desktop-application-unreleased) below.
 
 The desktop sidebar scans the configured local `scan_root` and `scan_depth`.
 It supports display-name search, GitHub/GitLab filtering, and Name, Forge, or
@@ -186,6 +199,44 @@ activation.
 - **Copy URL** (`Ctrl+Y`) -- yank the MR URL to clipboard
 - **Refresh** (`Ctrl+R`) -- reload the current view
 
+## Desktop application (unreleased)
+
+> **No public desktop artifact exists yet.** There is no published archive, production tag, GitHub Release asset, RPM, or package repository to install from today. The commands and package names below describe the implemented contract that the first production release will use. Hardware-accelerated Electron on the supported Fedora host, packaging acceptance, and the release decision are separate gates that have not been met.
+
+The desktop application is optional. Plain `tongs` keeps scanning your repositories and opening the TUI; it never downloads, activates, or starts the desktop shell on its own.
+
+The release contract matches Linux, Fedora 44, x86_64, and the GNU ABI. The native acceptance policy covers Fedora 44 KDE on x86_64 using XWayland. Other distributions, desktop environments, operating systems, architectures, and native Wayland are outside that policy, and the release metadata check rejects an unsupported target before anything is downloaded.
+
+### Per-user archive
+
+```bash
+tongs --install-desktop                  # exactly the same as: tongs desktop install
+tongs desktop install --version 1.2.3    # install one exact release
+tongs desktop update                     # install the newest verified release
+tongs desktop status                     # inspect health; add --json for machine output
+tongs desktop repair                     # recover activation or menu state
+tongs desktop repair --redownload        # download a verified replacement if local recovery fails
+tongs desktop uninstall                  # remove only the per-user activation
+```
+
+The archive installs under `$XDG_DATA_HOME`, or `~/.local/share` when that variable is unset or relative. It needs no root, owns only its own menu entry, and never writes to `/usr`.
+
+Every release is verified before anything is extracted: fixed-repository release discovery, a GitHub-managed attestation bound to an exact workflow and tag identity, manifest and archive hashes, and a local downgrade guard. See [Security and signing](docs/reference/security.md) for the full contract and its limits, and the [desktop installation guide](docs/desktop/installation.md) for the recovery states and the `status` fields.
+
+### Fedora RPMs
+
+A separate, optional RPM path builds three packages:
+
+| Package | Owns |
+|---|---|
+| `python3-tongs` | `/usr/bin/tongs`, the Python modules, and their metadata |
+| `python3-tongs+mcp` | `/usr/bin/tongs-mcp` only, which keeps the MCP dependency out of the base closure |
+| `tongs-desktop` | the Electron runtime under `/usr/libexec/tongs-desktop`, its system launcher, desktop entry, icon, AppStream metadata, and man page |
+
+`tongs-desktop` requires the exact `python3-tongs` build it was made against, plus `xorg-x11-server-Xwayland`. When a repository is published, those are the names to install with `dnf`. None is published today: there is no COPR repository, no signed package, and no Fedora review submission. The packaging sources and the local rebuild harness are under [`packaging/rpm/`](packaging/rpm/).
+
+The two methods are independent. The per-user commands never install RPM packages, elevate privileges, write to `/usr`, or remove RPM-owned files, and `tongs desktop status` reports when a per-user activation and an RPM installation coexist.
+
 ## Keybindings
 
 The keybindings below describe the terminal TUI. The unreleased desktop
@@ -232,6 +283,8 @@ workspace uses labelled controls and does not change these terminal commands.
 | `M` | Merge (press twice) |
 | `X` | Close (press twice) |
 | `Ctrl+Y` | Copy MR URL |
+| `Ctrl+G` | Start review mode, or open the review draft screen once a draft exists |
+| `Alt+]` | Cycle to the next recovered review draft for this MR |
 
 ### Diff viewer
 
@@ -248,7 +301,10 @@ workspace uses labelled controls and does not change these terminal commands.
 | `F3` | Suggest changes (opens `$EDITOR`) |
 | `n` / `Shift+N` | Next / previous file |
 | `m` | Toggle Markdown preview |
+| `v` | Toggle unified/split diff mode |
 | `Escape` | Clear selection |
+
+In split diff mode, `h` and `l` move focus between the old and new side columns.
 
 ### Comment editor
 
@@ -257,6 +313,21 @@ workspace uses labelled controls and does not change these terminal commands.
 | `Ctrl+S` | Submit comment |
 | `Escape` | Cancel (press twice if text entered) |
 | `F2` | Open in external editor |
+
+### Review draft
+
+| Key | Action |
+|-----|--------|
+| `Escape` | Close (double-press to discard unsaved summary or verdict changes) |
+| `v` | Cycle verdict (Comment / Approve, plus Request changes on GitHub) |
+| `Ctrl+S` | Submit the review |
+| `e` | Edit the selected draft comment |
+| `x` | Remove the selected draft comment (press twice) |
+| `Shift+D` | Discard the local review draft (press twice) |
+| `Shift+N` | Start a new revision (only when the draft is stale) |
+| `r` | Resume a paused submission attempt |
+
+See the [full keybinding reference](https://www.tongs.tools/reference/keybindings/) for the three additional bindings that reconcile an interrupted submission.
 
 ### Discussion tab
 
@@ -284,7 +355,7 @@ workspace uses labelled controls and does not change these terminal commands.
 
 ## Configuration
 
-tongs uses `~/.config/tongs/config.toml` (or the platform-appropriate config directory). All settings have sensible defaults.
+tongs uses `~/.config/tongs/config.toml` (or the platform-appropriate config directory). All settings have sensible defaults. The [configuration reference](https://www.tongs.tools/reference/configuration/) documents every key, including three keys that older configs may still set and that no code currently reads.
 
 ```toml
 [general]
@@ -292,8 +363,6 @@ scan_root = "~/git"
 scan_depth = 5
 
 [ui]
-theme = "monokai"
-diff_style = "unified"
 ascii_mode = false          # Set true for minimal terminals
 
 [cache]
@@ -394,7 +463,9 @@ pip install "tongs[mcp]"
 tongs-mcp
 ```
 
-The server communicates over stdio, so you can wire it into any MCP-compatible client, including Codex, Claude Code, and Claude Desktop. It reuses the same forge configuration and auth tokens as the TUI. The MCP plugin also adds a "Start MCP Server" command to the command palette.
+The server communicates over stdio, so you can wire it into any MCP-compatible client, including Codex, Claude Code, and Claude Desktop. It reuses the same forge configuration and auth tokens as the TUI.
+
+When the `mcp` extra is installed, the built-in plugin also adds a **Start MCP Server** command to the command palette, which launches the server as `python -m tongs.mcp.server`. On a default install without the extra, the plugin contributes no command.
 
 ### Connect to Codex
 
@@ -423,6 +494,21 @@ command = "/absolute/path/to/tongs/.venv/bin/tongs-mcp"
 ```
 
 See the [official Codex MCP configuration guide](https://developers.openai.com/codex/mcp) for configuration options. Example request: "Use tongs to list open PRs for `github.com/acme/app`."
+
+### Connect to Claude Code
+
+```bash
+claude mcp add tongs -- tongs-mcp
+claude mcp list
+```
+
+Everything after `--` is the command Claude Code launches, so use an absolute path when `tongs-mcp` is not on `PATH`:
+
+```bash
+claude mcp add tongs -- "$PWD/.venv/bin/tongs-mcp"
+```
+
+`claude mcp add` defaults to the `local` scope, which applies to the current project only. Add `--scope user` to make the server available in all your projects, or `--scope project` to write a shared `.mcp.json` into the repository. Claude Desktop is a separate application with its own `claude_desktop_config.json`.
 
 ### Tools
 
@@ -461,28 +547,25 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 | Zero config auth | Yes | Yes | N/A |
 | Self-hosted forges | Yes | Yes | N/A |
 
-## Roadmap
+## Current state
 
-| Phase | What | Status |
-|-------|------|--------|
-| 1 | Scanner, forge abstraction, GitLab client, TUI shell, inbox, repo list | Done |
-| 2 | MR detail view, diff viewer, syntax highlighting, GitHub client, commits tab | Done |
-| 3 | MR actions (approve, merge, close), inline comments, suggested changes | Done |
-| 4 | Discussion threads (inline + card-based tab with diff snippets), command palette, comment navigation, cross-tab jump-to-diff | Done |
-| 5 | Pipeline/CI management (three-level drill-down, job logs, retry, cancel, log search) | Done |
-| 6 | Plugin system (entry-point-based, MCP refactored as plugin) | Done |
-| 7 | SQLite caching, MCP server, GitHub thread resolution, MkDocs site | Done |
-| 8 | CachedForgeClient, GitHub CI/approvals, rate limit retry, keyring auth, sort cycling, bulk highlighting, truncated diffs | Done |
+The terminal application is the released, supported product. The version you get from PyPI today provides the multi-forge inbox, the diff viewer, inline comments and suggested changes, discussion threads, MR actions, pipeline and CI drill-down, the SQLite cache, the plugin system, and the MCP server.
+
+Two terminal features described above are not in that release yet: the split diff view with its `v` toggle and `h` / `l` side focus, and durable review drafts with the `Ctrl+G` review flow. Both are implemented on the development branch and arrive with the next release.
+
+The desktop application, its per-user installer, and the Fedora RPM packaging are also implemented in this tree and unreleased. Hardware-accelerated Electron on the supported Fedora host, packaging acceptance, and the release decision remain separate, unmet gates.
+
+Track what is planned and what is blocked through the [open issues](https://github.com/andre-motta/tongs/issues) and their dependency links rather than through a phase table.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add forge backends. 618 tests and growing.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add forge backends, and the [Contributing page](https://www.tongs.tools/contributing/) for a summary of the checks a pull request has to pass.
 
-### Working on tongs with Codex
+### Working on tongs with a coding agent
 
-Open this checkout in Codex, or run `codex` from the repository root after the [source setup](#from-source). Codex reads [AGENTS.md](AGENTS.md) for the development workflow, validation commands, commit rules, and links to subsystem guides. See [OpenAI's AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md) for instruction discovery details.
+Run your agent from the repository root after the [source setup](#from-source). Both Codex and Claude Code read [AGENTS.md](AGENTS.md) for the development workflow, validation commands, commit rules, and links to the subsystem guides under `.agents/`. See [OpenAI's AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md) for how Codex discovers those instructions.
 
-The MCP connection above is optional for contributing to tongs. It exposes forge operations to Codex; repository development uses the local source tree and tests.
+The MCP connection above is optional for contributing to tongs. It exposes forge operations to the assistant; repository development itself uses the local source tree and tests.
 
 tongs is early enough that contributions shape the architecture. The [plugin system](#plugin-system) makes it easy to add new commands, screens, and lifecycle hooks without touching core code. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 

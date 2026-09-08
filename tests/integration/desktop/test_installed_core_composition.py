@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from tests.integration.desktop.installed_core_composition import (
     _entrypoint_interpreter,
+    _wheel_identity,
     sha256_file,
     validate_audit_records,
     validate_inputs,
+    validate_source_package,
 )
 from tests.integration.desktop.installed_core_sidecar_fixture import (
     validate_prior_ledger,
@@ -100,6 +105,59 @@ def test_input_contract_rejects_changed_wheel_hash(tmp_path: Path) -> None:
         validate_inputs(arguments)
 
 
+def test_complete_package_binding_rejects_previously_unselected_module(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "source/src/tongs"
+    package.mkdir(parents=True)
+    first = package / "__init__.py"
+    second = package / "forges.py"
+    first.write_text("version = 1\n")
+    second.write_text("backend = 1\n")
+    hashes = {
+        "tongs/__init__.py": sha256_file(first),
+        "tongs/forges.py": sha256_file(second),
+    }
+    validate_source_package(tmp_path / "source", hashes)
+    second.write_text("backend = 2\n")
+    with pytest.raises(RuntimeError, match=r"changed=\['tongs/forges.py'\]"):
+        validate_source_package(tmp_path / "source", hashes)
+
+
+def test_wheel_record_must_cover_every_archive_member(tmp_path: Path) -> None:
+    wheel = tmp_path / "fixture.whl"
+    payloads = {
+        "tongs/__init__.py": b"version = 1\n",
+        "tongs-1.dist-info/METADATA": b"Name: tongs\nVersion: 1\n",
+    }
+
+    def record_line(name: str, payload: bytes) -> str:
+        digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=")
+        return f"{name},sha256={digest.decode()},{len(payload)}"
+
+    record_path = "tongs-1.dist-info/RECORD"
+    record = "\n".join(
+        [
+            *(record_line(name, value) for name, value in payloads.items()),
+            f"{record_path},,",
+        ]
+    )
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, value in payloads.items():
+            archive.writestr(name, value)
+        archive.writestr(record_path, record)
+    identity = _wheel_identity(wheel)
+    assert identity["record_status"] == "complete_sha256_and_size_match"
+    assert set(identity["package_member_sha256"]) == {"tongs/__init__.py"}
+
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, value in payloads.items():
+            archive.writestr(name, value)
+        archive.writestr(record_path, f"{record_path},,\n")
+    with pytest.raises(RuntimeError, match="does not cover the complete archive"):
+        _wheel_identity(wheel)
+
+
 def test_entrypoint_provenance_uses_exact_versioned_shebang(tmp_path: Path) -> None:
     environment = tmp_path / "candidate"
     binary = environment / "bin/python3.14"
@@ -158,8 +216,15 @@ def test_audit_validation_rejects_forbidden_attempt_and_checkout_origin(
         )
 
 
-def test_checked_in_audit_hook_blocks_subprocess_and_marks_evidence(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("script", "event"),
+    [
+        ("import subprocess; subprocess.run(['true'])", "subprocess.Popen"),
+        ("import os; os.system('true')", "os.system"),
+    ],
+)
+def test_checked_in_audit_hook_blocks_process_attempt_and_marks_evidence(
+    tmp_path: Path, script: str, event: str
 ) -> None:
     audit_root = tmp_path / "audit"
     audit_root.mkdir()
@@ -174,7 +239,7 @@ def test_checked_in_audit_hook_blocks_subprocess_and_marks_evidence(
         "TONGS_INSTALLED_CORE_SOURCE_ROOT": str(Path(__file__).resolve().parents[3]),
     }
     completed = subprocess.run(
-        [sys.executable, "-c", "import subprocess; subprocess.run(['true'])"],
+        [sys.executable, "-c", script],
         cwd=tmp_path,
         env=environment,
         capture_output=True,
@@ -185,7 +250,7 @@ def test_checked_in_audit_hook_blocks_subprocess_and_marks_evidence(
     assert completed.returncode != 0
     records = [json.loads(line) for line in audit_path.read_text().splitlines()]
     blocked = [record for record in records if record.get("event") == "blocked"]
-    assert [record["audit_event"] for record in blocked] == ["subprocess.Popen"]
+    assert [record["audit_event"] for record in blocked] == [event]
 
 
 def test_restart_ledger_guard_rejects_missing_or_replayed_call(tmp_path: Path) -> None:

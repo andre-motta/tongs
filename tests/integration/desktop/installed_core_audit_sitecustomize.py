@@ -23,9 +23,14 @@ _FORBIDDEN_IMPORTS = (
 _FORBIDDEN_EVENTS = frozenset(
     {
         "os.exec",
+        "os.fork",
+        "os.forkpty",
         "os.posix_spawn",
         "os.spawn",
+        "os.system",
+        "socket.bind",
         "socket.connect",
+        "socket.sendto",
         "subprocess.Popen",
     }
 )

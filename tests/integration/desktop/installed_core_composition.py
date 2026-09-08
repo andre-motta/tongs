@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
 import hashlib
+import io
 import json
 import os
 import pty
@@ -18,7 +21,7 @@ import time
 import venv
 import zipfile
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 _HEX_40 = re.compile(r"[0-9a-f]{40}\Z")
 _HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -26,16 +29,13 @@ _ANSI = re.compile(
     rb"(?:\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_]))"
 )
 _MAX_CAPTURE_BYTES = 8 * 1024 * 1024
+_MAX_WHEEL_BYTES = 64 * 1024 * 1024
+_MAX_WHEEL_FILES = 4096
+_MAX_WHEEL_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 _SETUP_TIMEOUT_SECONDS = 180
 _STARTUP_TIMEOUT_SECONDS = 15
 _EXIT_TIMEOUT_SECONDS = 8
 _REQUIRED_SCREEN_TEXT = ("tongs", "My Reviews", "My MRs", "All Open")
-_WHEEL_MEMBERS = (
-    "tongs/__init__.py",
-    "tongs/__main__.py",
-    "tongs/app.py",
-    "tongs/desktop/protocol/server.py",
-)
 
 
 def sha256_file(path: Path) -> str:
@@ -222,15 +222,93 @@ def _source_identity(source_root: Path, expected_commit: str) -> dict[str, objec
     return {"commit": head, "tree": tree, "tracked_status": "clean"}
 
 
-def _wheel_hashes(wheel: Path) -> dict[str, str]:
-    result: dict[str, str] = {}
+def _wheel_identity(wheel: Path) -> dict[str, object]:
+    if wheel.stat().st_size > _MAX_WHEEL_BYTES:
+        raise RuntimeError("wheel exceeds the 64 MiB input limit")
     with zipfile.ZipFile(wheel) as archive:
-        names = frozenset(archive.namelist())
-        for member in _WHEEL_MEMBERS:
-            if member not in names:
-                raise RuntimeError(f"wheel is missing required member {member}")
-            result[member] = hashlib.sha256(archive.read(member)).hexdigest()
-    return result
+        infos = archive.infolist()
+        names = [info.filename for info in infos]
+        if len(names) != len(set(names)):
+            raise RuntimeError("wheel contains duplicate archive paths")
+        files = [info for info in infos if not info.is_dir()]
+        if not files or len(files) > _MAX_WHEEL_FILES:
+            raise RuntimeError("wheel file count is outside the bounded contract")
+        total_size = sum(info.file_size for info in files)
+        if total_size > _MAX_WHEEL_UNCOMPRESSED_BYTES:
+            raise RuntimeError("wheel uncompressed bytes exceed the 128 MiB limit")
+        hashes: dict[str, str] = {}
+        sizes: dict[str, int] = {}
+        contents: dict[str, bytes] = {}
+        for info in files:
+            member = PurePosixPath(info.filename)
+            if (
+                member.is_absolute()
+                or ".." in member.parts
+                or "\\" in info.filename
+                or not member.parts
+            ):
+                raise RuntimeError("wheel contains an unsafe archive path")
+            payload = archive.read(info)
+            hashes[info.filename] = hashlib.sha256(payload).hexdigest()
+            sizes[info.filename] = len(payload)
+            contents[info.filename] = payload
+
+    record_paths = [name for name in hashes if name.endswith(".dist-info/RECORD")]
+    if len(record_paths) != 1:
+        raise RuntimeError("wheel must contain exactly one dist-info RECORD")
+    record_path = record_paths[0]
+    rows: dict[str, tuple[str, str]] = {}
+    reader = csv.reader(io.StringIO(contents[record_path].decode("utf-8")))
+    for row in reader:
+        if len(row) != 3 or row[0] in rows:
+            raise RuntimeError("wheel RECORD contains an invalid or duplicate row")
+        rows[row[0]] = (row[1], row[2])
+    if set(rows) != set(hashes):
+        raise RuntimeError("wheel RECORD does not cover the complete archive")
+    for name, (record_hash, record_size) in rows.items():
+        if name == record_path:
+            if record_hash or record_size:
+                raise RuntimeError("wheel RECORD self-row must omit hash and size")
+            continue
+        if not record_hash.startswith("sha256=") or record_size != str(sizes[name]):
+            raise RuntimeError(f"wheel RECORD metadata does not match {name}")
+        expected = base64.urlsafe_b64encode(bytes.fromhex(hashes[name])).rstrip(b"=")
+        if record_hash[7:].encode("ascii") != expected:
+            raise RuntimeError(f"wheel RECORD hash does not match {name}")
+    package_hashes = {
+        name: digest for name, digest in hashes.items() if name.startswith("tongs/")
+    }
+    if not package_hashes:
+        raise RuntimeError("wheel contains no tongs package files")
+    return {
+        "archive_file_count": len(hashes),
+        "archive_member_sha256": hashes,
+        "package_member_sha256": package_hashes,
+        "record_path": record_path,
+        "record_status": "complete_sha256_and_size_match",
+        "uncompressed_bytes": total_size,
+    }
+
+
+def validate_source_package(source_root: Path, package_hashes: dict[str, str]) -> None:
+    source_package = source_root / "src/tongs"
+    source_files = {
+        "tongs/" + path.relative_to(source_package).as_posix(): sha256_file(path)
+        for path in source_package.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+    if source_files != package_hashes:
+        missing = sorted(set(source_files) - set(package_hashes))[:10]
+        added = sorted(set(package_hashes) - set(source_files))[:10]
+        changed = sorted(
+            name
+            for name in set(source_files) & set(package_hashes)
+            if source_files[name] != package_hashes[name]
+        )[:10]
+        raise RuntimeError(
+            "wheel package does not match exact source "
+            f"(missing={missing}, added={added}, changed={changed})"
+        )
 
 
 def _installed_identity(
@@ -239,15 +317,28 @@ def _installed_identity(
     expected_version: str,
     expected_wheel_sha256: str,
     source_root: Path,
-    wheel_hashes: dict[str, str],
+    package_hashes: dict[str, str],
 ) -> dict[str, object]:
     script = r"""import hashlib, importlib.metadata, importlib.util, json, os, pathlib, site, sys
 import tongs
 root = pathlib.Path(tongs.__file__).resolve().parent
 members = {}
-for name in ("__init__.py", "__main__.py", "app.py", "desktop/protocol/server.py"):
-    path = root / name
-    members["tongs/" + name] = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+generated = {}
+invalid_generated = []
+symlinks = []
+for path in root.rglob("*"):
+    if path.is_symlink():
+        symlinks.append(str(path))
+        continue
+    if not path.is_file():
+        continue
+    relative = path.relative_to(root)
+    record = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+    if "__pycache__" in relative.parts:
+        if path.suffix != ".pyc": invalid_generated.append(str(relative))
+        generated[str(relative)] = record
+    else:
+        members["tongs/" + relative.as_posix()] = record
 distribution = importlib.metadata.distribution("tongs")
 direct_url_text = distribution.read_text("direct_url.json")
 direct_url = json.loads(direct_url_text) if direct_url_text else None
@@ -257,6 +348,8 @@ print(json.dumps({
     "distribution_path": str(pathlib.Path(distribution._path).resolve()),
     "editable": bool(direct_url and direct_url.get("dir_info", {}).get("editable")),
     "executable": str(pathlib.Path(sys.executable).resolve()),
+    "generated_exclusions": {"policy": "only __pycache__/*.pyc", "files": generated},
+    "invalid_generated": invalid_generated,
     "mcp_available": importlib.util.find_spec("mcp") is not None,
     "package_root": str(root),
     "proc_self_exe": str(pathlib.Path("/proc/self/exe").resolve()),
@@ -264,6 +357,7 @@ print(json.dumps({
     "sys_prefix": str(pathlib.Path(sys.prefix).resolve()),
     "sys_path": [str(pathlib.Path(item or ".").resolve()) for item in sys.path],
     "system_python_target": str(pathlib.Path(sys._base_executable).resolve()),
+    "symlinks": symlinks,
     "tongs_version": distribution.version,
     "wheel_members": members,
 }, sort_keys=True))"""
@@ -285,6 +379,8 @@ print(json.dumps({
         raise RuntimeError("optional MCP dependency is installed")
     if identity["editable"] is not False:
         raise RuntimeError("installed core must not be editable")
+    if identity["invalid_generated"] or identity["symlinks"]:
+        raise RuntimeError("installed package contains unsupported generated files")
     direct_url = identity["direct_url"]
     if not isinstance(direct_url, dict) or "dir_info" in direct_url:
         raise RuntimeError("installed core lacks non-editable wheel origin metadata")
@@ -309,7 +405,9 @@ print(json.dumps({
         raise RuntimeError("installed package is outside recorded site-packages")
     if Path(identity["sys_prefix"]).resolve() != python.parent.parent.resolve():
         raise RuntimeError("installed sys.prefix does not match candidate environment")
-    for member, expected_hash in wheel_hashes.items():
+    if set(identity["wheel_members"]) != set(package_hashes):
+        raise RuntimeError("installed package file inventory differs from wheel")
+    for member, expected_hash in package_hashes.items():
         record = identity["wheel_members"][member]
         if record["sha256"] != expected_hash:
             raise RuntimeError(f"installed bytes differ from wheel member {member}")
@@ -465,11 +563,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     source_identity = _source_identity(
         paths["source_root"], args.expected_source_commit
     )
-    wheel_hashes = _wheel_hashes(paths["core_wheel"])
-    for member, wheel_hash in wheel_hashes.items():
-        source_member = paths["source_root"] / "src" / member
-        if not source_member.is_file() or sha256_file(source_member) != wheel_hash:
-            raise RuntimeError(f"wheel member does not match exact source: {member}")
+    wheel_identity = _wheel_identity(paths["core_wheel"])
+    package_hashes = wheel_identity["package_member_sha256"]
+    if not isinstance(package_hashes, dict) or not all(
+        isinstance(name, str) and isinstance(digest, str)
+        for name, digest in package_hashes.items()
+    ):
+        raise TypeError("wheel package identity is invalid")
+    validate_source_package(paths["source_root"], package_hashes)
     paths["evidence_root"].mkdir(parents=True, mode=0o700)
     commands: list[dict[str, object]] = []
     venv.EnvBuilder(with_pip=True, clear=False, symlinks=False).create(
@@ -493,7 +594,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         expected_version=args.expected_core_version,
         expected_wheel_sha256=args.expected_wheel_sha256,
         source_root=paths["source_root"],
-        wheel_hashes=wheel_hashes,
+        package_hashes=package_hashes,
     )
     package_root = Path(str(identity["package_root"])).resolve()
     executable = paths["environment_root"] / "bin/tongs"
@@ -560,14 +661,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "path": str(paths["sidecar_wrapper"]),
             "sha256": sha256_file(paths["sidecar_wrapper"]),
         },
-        "source": {**source_identity, "selected_member_sha256": wheel_hashes},
+        "source": {**source_identity, "package_member_sha256": package_hashes},
         "status": "pass",
         "tui": tui,
         "wheel": {
             "path": str(paths["core_wheel"]),
             "sha256": args.expected_wheel_sha256,
             "size": paths["core_wheel"].stat().st_size,
-            "selected_member_sha256": wheel_hashes,
+            **wheel_identity,
         },
     }
     report_path = paths["evidence_root"] / "installed-core-terminal.json"

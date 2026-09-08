@@ -1560,16 +1560,19 @@ def _verify_raw_process_argv(process: ProcessObservation) -> None:
         raise NativeAcceptanceError("raw process arguments exceed bounded limits")
     process_type = COMPACTED_PROCESS_ROLE_TYPES.get(process.role)
     expected_type = None if process_type is None else f"--type={process_type}"
+    is_browser = process.role == "browser"
     type_arguments = tuple(
         argument for argument in process.argv if argument.startswith("--type=")
     )
     # A zygote-forked child keeps the literal ``/proc/self/exe`` argv[0] it was
     # forked with, while Chromium's title rewrite emits the resolved executable
     # (audit: ``.worktrees/desktop-125-chromium-process-title-audit.md``). Both
-    # canonical forms are admitted, and neither can launder a compact title: one
-    # joined field is a single string containing spaces, so it equals neither the
-    # resolved executable nor ``/proc/self/exe``, and a first-observed compact
-    # title therefore still fails this canonical check.
+    # canonical forms are admitted for those four roles. The browser is
+    # exec-started from the installed launcher, so it must name the resolved
+    # executable and must carry no ``--type=`` token. Neither shape can launder a
+    # compact title: one joined field is a single string containing spaces, so it
+    # equals neither the resolved executable nor ``/proc/self/exe``, and a
+    # first-observed compact title therefore still fails this canonical check.
     if process_type is not None and (
         not process.argv
         or process.argv[0] not in (process.executable, CHROMIUM_ZYGOTE_ARGV0)
@@ -1578,10 +1581,16 @@ def _verify_raw_process_argv(process: ProcessObservation) -> None:
         raise NativeAcceptanceError(
             "process role differs from canonical type arguments"
         )
+    if is_browser and (
+        not process.argv or process.argv[0] != process.executable or type_arguments
+    ):
+        raise NativeAcceptanceError(
+            "process role differs from canonical type arguments"
+        )
     if raw == process.argv:
         return
     expected_raw = (" ".join((process.executable, *process.argv[1:])),)
-    if expected_type is None or raw != expected_raw:
+    if (expected_type is None and not is_browser) or raw != expected_raw:
         raise NativeAcceptanceError(
             "raw process arguments differ from canonical arguments"
         )
@@ -1680,14 +1689,23 @@ def _verify_process_observations(
                     "sidecar working directory differs from launch policy"
                 )
         else:
-            # As above, a zygote-forked child legitimately names the literal
-            # ``/proc/self/exe``. The browser is still pinned to the installed
-            # launcher by the separate check on ``main[0].argv`` and a compact
-            # one-field title matches neither accepted form.
-            if not process.argv or process.argv[0] not in (
-                process.executable,
-                CHROMIUM_ZYGOTE_ARGV0,
-            ):
+            # The literal ``/proc/self/exe`` is admitted only for the four
+            # zygote-forked Chromium roles, which are the only processes the
+            # pinned audit shows inheriting that argv[0] from the zygote. The
+            # browser is exec-started and every other Electron process observed
+            # here is untyped, so both must still name their resolved
+            # executable. Confining the allowance this way was chosen over
+            # admitting it for untyped helpers because no evidence shows an
+            # untyped descendant with that argv[0], and failing closed keeps the
+            # allowance tied to the audited set. The browser stays pinned to the
+            # installed launcher by the checks on ``main[0].argv`` above, and a
+            # compact one-field title matches no accepted form.
+            allowed_argv0 = (
+                (process.executable, CHROMIUM_ZYGOTE_ARGV0)
+                if process.role in COMPACTED_PROCESS_ROLE_TYPES
+                else (process.executable,)
+            )
+            if not process.argv or process.argv[0] not in allowed_argv0:
                 raise NativeAcceptanceError(
                     "Electron canonical argv does not name its executable"
                 )

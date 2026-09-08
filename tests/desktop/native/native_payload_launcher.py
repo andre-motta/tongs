@@ -556,8 +556,7 @@ def _validate_process_refresh(
         if previous.argv == current.argv and previous.raw_argv == current.raw_argv:
             return current
         if (
-            previous.role in COMPACTED_PROCESS_ROLE_TYPES
-            and current.role == "helper"
+            _is_compaction_role_transition(previous.role, current.role)
             and _is_exact_argv_storage_compaction(
                 previous.role,
                 previous.executable,
@@ -567,12 +566,14 @@ def _validate_process_refresh(
             and current.raw_argv == current.argv
             and previous.raw_argv in (previous.argv, current.argv)
         ):
-            # The compact title carries no ``--type=`` token of its own, so the
-            # current observation was necessarily reclassified as a generic
-            # helper. The role must come from the already validated canonical
-            # observation, not from the compact string, so that a compacted
-            # ``--type=gpu-process`` process still counts as the single
-            # out-of-process GPU process. See
+            # A compacted child title carries no ``--type=`` token of its own,
+            # so the current observation was necessarily reclassified as a
+            # generic helper. The role must come from the already validated
+            # canonical observation, not from the compact string, so that a
+            # compacted ``--type=gpu-process`` process still counts as the
+            # single out-of-process GPU process. Carrying the canonical argv
+            # forward also keeps the browser's installed-launcher and full main
+            # argv equality checks comparing canonical values. See
             # ``.worktrees/desktop-125-chromium-process-title-audit.md``.
             return replace(current, role=previous.role, argv=previous.argv)
     parent = observations.get(previous.ppid)
@@ -590,6 +591,18 @@ def _validate_process_refresh(
     )
 
 
+def _is_compaction_role_transition(previous_role: str, current_role: str) -> bool:
+    """Admit only the two observed role transitions of a title rewrite."""
+
+    if previous_role == "browser":
+        # The browser keeps its role across the rewrite because it is the root
+        # PID of the owned tree, which is how the collector classifies it.
+        return current_role == "browser"
+    # A compacted child title exposes no ``--type=`` token, so the collector
+    # necessarily reclassifies it as a generic helper.
+    return previous_role in COMPACTED_PROCESS_ROLE_TYPES and current_role == "helper"
+
+
 def _is_exact_argv_storage_compaction(
     role: str, executable: str, previous: tuple[str, ...], current: tuple[str, ...]
 ) -> bool:
@@ -599,23 +612,36 @@ def _is_exact_argv_storage_compaction(
     ``.worktrees/desktop-125-chromium-process-title-audit.md``,
     ``SetProcessTitleFromCommandLine`` resolves ``/proc/self/exe`` and writes the
     resolved executable followed by every canonical argument after argv[0],
-    separated by one ASCII space. A zygote-forked child therefore keeps canonical
-    argv[0] ``/proc/self/exe`` while its compact title starts with the resolved
-    executable, which is exactly the network-service utility case in failed
-    native attempt 6. Only that exact full-title equality is admitted: no
-    whitespace reconstruction, no prefix, and no re-parse of the compact field.
+    separated by one ASCII space. The audit places that call in
+    ``content_main.cc`` before the process type is dispatched, so it applies to
+    the browser process as well, which is the failed native attempt 7 case.
+
+    A zygote-forked child keeps canonical argv[0] ``/proc/self/exe`` while its
+    compact title starts with the resolved executable, which is the failed
+    native attempt 6 case. The browser is exec-started from the installed
+    launcher instead, so its canonical argv[0] is always the resolved executable
+    and it carries no ``--type=`` token at all.
+
+    Only exact full-title equality is admitted for either shape: no whitespace
+    reconstruction, no prefix, and no re-parse of the compact field.
     """
 
-    process_type = COMPACTED_PROCESS_ROLE_TYPES.get(role)
-    if process_type is None or not previous or len(current) != 1:
-        return False
-    if previous[0] not in (executable, CHROMIUM_ZYGOTE_ARGV0):
+    if not previous or len(current) != 1:
         return False
     type_arguments = tuple(
         argument for argument in previous if argument.startswith("--type=")
     )
-    if type_arguments != (f"--type={process_type}",):
-        return False
+    if role == "browser":
+        if previous[0] != executable or type_arguments:
+            return False
+    else:
+        process_type = COMPACTED_PROCESS_ROLE_TYPES.get(role)
+        if process_type is None:
+            return False
+        if previous[0] not in (executable, CHROMIUM_ZYGOTE_ARGV0):
+            return False
+        if type_arguments != (f"--type={process_type}",):
+            return False
     return current[0] == " ".join((executable, *previous[1:]))
 
 

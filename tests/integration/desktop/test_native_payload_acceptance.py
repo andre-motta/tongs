@@ -1067,25 +1067,108 @@ def test_final_verifier_rejects_other_raw_argv_claims(
         _verify(fixture)
 
 
-def test_final_verifier_rejects_raw_compaction_for_browser(
+def test_final_verifier_accepts_browser_argv_compaction_end_to_end(
     tmp_path: Path,
 ) -> None:
+    """Failed native attempt 7: the browser title rewrote in the second run."""
+
     fixture = _fixture(tmp_path)
-    first = fixture["observations"][0]
+    first, second = fixture["observations"]
     processes = tuple(
         replace(process, raw_argv=(" ".join(process.argv),))
         if process.role == "browser"
         else process
-        for process in first.processes
+        for process in second.processes
     )
-    fixture["observations"] = (
-        replace(first, processes=processes),
-        fixture["observations"][1],
+    fixture["observations"] = (first, replace(second, processes=processes))
+
+    assert _verify(fixture).validation == "controlled-fixture-structural-only"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "{joined} --extra",
+        "{joined}x",
+        "{joined} ",
+        " {joined}",
+        "{proc_self_exe} {tail}",
+    ],
+)
+def test_final_verifier_rejects_browser_compaction_differing_by_any_token(
+    tmp_path: Path, title: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    first, second = fixture["observations"]
+    browser = second.processes[0]
+    claimed = (
+        title.format(
+            joined=" ".join(browser.argv),
+            proc_self_exe=acceptance_module.CHROMIUM_ZYGOTE_ARGV0,
+            tail=" ".join(browser.argv[1:]),
+        ),
     )
+    processes = tuple(
+        replace(process, raw_argv=claimed) if process.role == "browser" else process
+        for process in second.processes
+    )
+    fixture["observations"] = (first, replace(second, processes=processes))
 
     with pytest.raises(
         NativeAcceptanceError,
         match="raw process arguments differ from canonical arguments",
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_browser_canonical_argv_from_proc_self_exe(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    canonical = (acceptance_module.CHROMIUM_ZYGOTE_ARGV0, *browser.argv[1:])
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="process role differs from canonical type arguments",
+    ):
+        acceptance_module._verify_raw_process_argv(
+            replace(browser, argv=canonical, raw_argv=canonical)
+        )
+
+
+def test_final_verifier_rejects_browser_observed_only_as_a_compact_title(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    compacted = (" ".join(browser.argv),)
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="process role differs from canonical type arguments",
+    ):
+        acceptance_module._verify_raw_process_argv(
+            replace(browser, argv=compacted, raw_argv=compacted)
+        )
+
+    observations = tuple(
+        replace(
+            observation,
+            processes=tuple(
+                replace(process, argv=compacted, raw_argv=compacted)
+                if process.role == "browser"
+                else process
+                for process in observation.processes
+            ),
+        )
+        for observation in fixture["observations"]
+    )
+    fixture["observations"] = observations
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="browser argv does not name the installed launcher",
     ):
         _verify(fixture)
 
@@ -1998,6 +2081,94 @@ def test_process_refresh_does_not_promote_a_compact_first_observation(
 
     with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
         launcher_module._validate_process_refresh(compact_first, previous, observations)
+
+
+def test_process_refresh_carries_browser_role_across_attempt_seven_compaction(
+    tmp_path: Path,
+) -> None:
+    """Failed native attempt 7: the browser argv storage compacted in place."""
+
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    compacted = (" ".join(browser.argv),)
+    current = replace(browser, argv=compacted, raw_argv=compacted)
+
+    normalized = launcher_module._validate_process_refresh(
+        browser, current, {browser.pid: browser}
+    )
+
+    assert normalized.role == "browser"
+    assert normalized.argv == browser.argv
+    assert normalized.argv[0] == browser.executable
+    assert normalized.raw_argv == compacted
+    assert (
+        normalized.pid,
+        normalized.start_time_ticks,
+        normalized.process_group,
+        normalized.ppid,
+    ) == (
+        browser.pid,
+        browser.start_time_ticks,
+        browser.process_group,
+        browser.ppid,
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "{joined} --extra",
+        "{joined}x",
+        "{joined} ",
+        " {joined}",
+        "{proc_self_exe} {tail}",
+    ],
+)
+def test_process_refresh_rejects_browser_compaction_differing_by_any_token(
+    tmp_path: Path, title: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    claimed = (
+        title.format(
+            joined=" ".join(browser.argv),
+            proc_self_exe=acceptance_module.CHROMIUM_ZYGOTE_ARGV0,
+            tail=" ".join(browser.argv[1:]),
+        ),
+    )
+    current = replace(browser, argv=claimed, raw_argv=claimed)
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(browser, current, {})
+
+
+def test_process_refresh_rejects_browser_canonical_argv_from_proc_self_exe(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    canonical = (acceptance_module.CHROMIUM_ZYGOTE_ARGV0, *browser.argv[1:])
+    previous = replace(browser, argv=canonical, raw_argv=canonical)
+    compacted = (" ".join((previous.executable, *canonical[1:])),)
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(
+            previous,
+            replace(previous, argv=compacted, raw_argv=compacted),
+            {},
+        )
+
+
+def test_process_refresh_rejects_a_compact_first_browser_observation(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    compacted = (" ".join(browser.argv),)
+    compact_first = replace(browser, argv=compacted, raw_argv=compacted)
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(compact_first, browser, {})
 
 
 def test_final_verifier_rejects_first_observed_compacted_utility_title(

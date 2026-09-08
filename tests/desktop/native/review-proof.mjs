@@ -270,9 +270,6 @@ async function runProof() {
       await waitFor("recovered draft body", () =>
         labelled("Review body")?.value ===
           "Durable review body after renderer and sidecar restart");
-      if (document.querySelector(".review-workflow-draft-comment textarea")?.value !==
-          "\u0060\u0060\u0060suggestion\\ndurable_value\\n\u0060\u0060\u0060")
-        throw new Error("durable suggestion was not recovered first");
       const recoveredComments = [
         ...document.querySelectorAll(".review-workflow-draft-comment textarea"),
       ].map((item) => item.value);

@@ -1,6 +1,8 @@
+import type { CIDesktopBridge } from "./ci.js";
+
 export const PROTOCOL_MAJOR = 1 as const;
 export const REQUIRED_CAPABILITIES = Object.freeze([
-  "assets", "cancellation", "events", "opaque_handles", "paged_diffs",
+  "assets", "cancellation", "ci_mutations", "events", "opaque_handles", "paged_diffs",
   "paged_logs", "plugins",
 ] as const);
 
@@ -85,7 +87,7 @@ export interface DesktopEvent { readonly sequence: number; readonly name: string
 export interface AssetDescriptor { readonly source: "core" | "plugin"; readonly asset_id: string; readonly plugin_id: string | null; readonly kind: string; readonly media_type: string; readonly byte_count: number; readonly sha256: string; readonly url: string; }
 export interface DesktopRead<T> { readonly requestToken: string; readonly result: Promise<T>; }
 
-export interface DesktopBridge {
+export interface DesktopBridge extends CIDesktopBridge {
   discoverRepositories(): DesktopRead<RepositoryListResult>;
   openRepository(params: OpenRepositoryParams): DesktopRead<RepositoryDto>;
   listReviews(params: ListReviewsParams): DesktopRead<ReviewListResult>;

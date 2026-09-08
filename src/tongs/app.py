@@ -101,6 +101,7 @@ class TongsApp(App):
         self.repos: list[Repo] = []
         self.plugin_registry = plugin_registry or PluginRegistry()
         self.startup_error: ServiceError | None = None
+        self.repository_generation = 0
         self._plugins_ready = False
 
     @property
@@ -157,8 +158,9 @@ class TongsApp(App):
             except NoMatches:
                 self.call_after_refresh(self._on_discovery_complete)
                 return
-            screen._loaded_tabs.clear()
-            screen.action_focus_tab("reviews")
+        self.repository_generation += 1
+        if isinstance(screen, InboxScreen):
+            screen.on_repositories_refreshed(self.repository_generation)
         if isinstance(screen, RepoListScreen):
             screen.refresh_rows()
 

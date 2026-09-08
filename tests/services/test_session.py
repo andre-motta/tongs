@@ -517,6 +517,20 @@ class TestReferences:
         with pytest.raises(ValueError):
             ReviewRef(RepositoryRef("github.com", "acme/widgets"), 0)
 
+    @pytest.mark.parametrize(
+        "hostnames",
+        [
+            ["github.com"],
+            ("GitHub.com",),
+            ("github.com", "github.com"),
+        ],
+    )
+    def test_review_query_rejects_invalid_host_restrictions(
+        self, hostnames: object
+    ) -> None:
+        with pytest.raises((TypeError, ValueError)):
+            ReviewQuery(ReviewScope.MY_REVIEWS, hostnames=hostnames)  # type: ignore[arg-type]
+
 
 class TestLifecycle:
     def test_draft_store_and_path_are_mutually_exclusive(self, tmp_path: Path) -> None:
@@ -1328,6 +1342,125 @@ class TestResourceIssuance:
 
 
 class TestReviewReads:
+    @pytest.mark.asyncio
+    async def test_personal_query_only_contacts_selected_discovered_host(
+        self, tmp_path: Path
+    ) -> None:
+        github = FakeClient()
+        github.my_reviews = [
+            make_summary(project="acme/widgets"),
+            make_summary(project="personal/elsewhere", number=9),
+        ]
+        gitlab = FakeClient(make_detail(GITLAB_HOST, start="start-1"))
+        gitlab.my_reviews = [make_summary(GITLAB_HOST, project="team/tools")]
+        registry = FakeRegistry({"github.com": github, "gitlab.com": gitlab})
+        session = await start_session(
+            registry,
+            discoverer=lambda *args, **kwargs: [make_repo(tmp_path)],
+        )
+        await session.discover_repositories()
+        registry.get_client_calls.clear()
+
+        page = await session.list_reviews(
+            ReviewQuery(ReviewScope.MY_REVIEWS, hostnames=("github.com",))
+        )
+
+        assert [item.ref.repository.project_path for item in page.items] == [
+            "acme/widgets",
+            "personal/elsewhere",
+        ]
+        assert registry.get_client_calls == ["github.com"]
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_empty_host_restriction_performs_no_forge_lookup(self) -> None:
+        registry = FakeRegistry({"github.com": FakeClient()})
+        session = await start_session(registry)
+
+        page = await session.list_reviews(
+            ReviewQuery(ReviewScope.MY_REVIEWS, hostnames=())
+        )
+
+        assert page.items == ()
+        assert page.failures == ()
+        assert registry.get_client_calls == []
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_unknown_host_restriction_fails_before_forge_lookup(self) -> None:
+        registry = FakeRegistry({"github.com": FakeClient()})
+        session = await start_session(registry)
+
+        with pytest.raises(ServiceError) as caught:
+            await session.list_reviews(
+                ReviewQuery(
+                    ReviewScope.MY_REVIEWS,
+                    hostnames=("enterprise.example",),
+                )
+            )
+
+        assert caught.value.code is ServiceErrorCode.INVALID_INPUT
+        assert registry.get_client_calls == []
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_repository_must_match_host_restriction_before_lookup(
+        self, tmp_path: Path
+    ) -> None:
+        registry = FakeRegistry(
+            {"github.com": FakeClient(), "gitlab.com": FakeClient()}
+        )
+        session = await start_session(
+            registry,
+            discoverer=lambda *args, **kwargs: [make_repo(tmp_path)],
+        )
+        repository = (await session.discover_repositories())[0].ref
+        registry.get_client_calls.clear()
+
+        with pytest.raises(ServiceError) as caught:
+            await session.list_reviews(
+                ReviewQuery(
+                    ReviewScope.MY_REVIEWS,
+                    repository=repository,
+                    hostnames=("gitlab.com",),
+                )
+            )
+
+        assert caught.value.code is ServiceErrorCode.INVALID_INPUT
+        assert registry.get_client_calls == []
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_all_open_host_restriction_uses_only_matching_issued_repositories(
+        self, tmp_path: Path
+    ) -> None:
+        github = FakeClient()
+        gitlab = FakeClient(make_detail(GITLAB_HOST, start="start-1"))
+        gitlab.repository_reviews = [make_summary(GITLAB_HOST, project="team/tools")]
+        registry = FakeRegistry({"github.com": github, "gitlab.com": gitlab})
+        session = await start_session(
+            registry,
+            discoverer=lambda *args, **kwargs: [
+                make_repo(tmp_path),
+                make_repo(
+                    tmp_path,
+                    hostname="gitlab.com",
+                    project="team/tools",
+                    forge_type=ForgeType.GITLAB,
+                ),
+            ],
+        )
+        await session.discover_repositories()
+        registry.get_client_calls.clear()
+
+        page = await session.list_reviews(
+            ReviewQuery(ReviewScope.ALL_OPEN, hostnames=("github.com",))
+        )
+
+        assert {item.ref.repository.hostname for item in page.items} == {"github.com"}
+        assert registry.get_client_calls == ["github.com"]
+        await session.close()
+
     @pytest.mark.asyncio
     async def test_inbox_preserves_success_when_other_host_fails(self) -> None:
         github = FakeClient()

@@ -586,6 +586,22 @@ class ApplicationSession:
     async def list_reviews(self, query: ReviewQuery) -> ReviewPage:
         """List reviews while preserving successful results from other hosts."""
         self._require_started()
+        if query.hostnames is not None:
+            if any(
+                hostname not in self._configured_hosts for hostname in query.hostnames
+            ):
+                raise ServiceError(
+                    ServiceErrorCode.INVALID_INPUT,
+                    "One or more review query hosts are not configured.",
+                )
+            if (
+                query.repository is not None
+                and query.repository.hostname not in query.hostnames
+            ):
+                raise ServiceError(
+                    ServiceErrorCode.INVALID_INPUT,
+                    "The repository does not match the review query hosts.",
+                )
         if query.repository is not None:
             self._require_repository(query.repository)
 
@@ -596,13 +612,18 @@ class ApplicationSession:
                 if query.repository is not None
                 else tuple(sorted(self._issued_repositories, key=repr))
             )
+            if query.hostnames is not None:
+                repositories = tuple(
+                    ref for ref in repositories if ref.hostname in query.hostnames
+                )
             operations.extend((ref.hostname, ref) for ref in repositories)
         else:
-            hostnames = (
-                (query.repository.hostname,)
-                if query.repository is not None
-                else tuple(sorted(self._configured_hosts))
-            )
+            if query.repository is not None:
+                hostnames = (query.repository.hostname,)
+            elif query.hostnames is not None:
+                hostnames = query.hostnames
+            else:
+                hostnames = tuple(sorted(self._configured_hosts))
             operations.extend((hostname, query.repository) for hostname in hostnames)
 
         semaphore = asyncio.Semaphore(cast(Config, self._config).max_parallel)

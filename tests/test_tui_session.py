@@ -296,6 +296,87 @@ async def test_empty_workspace_does_not_query_configured_forge(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_personal_tabs_only_contact_discovered_hosts(tmp_path: Path) -> None:
+    github = ForgeHost("github.com", ForgeType.GITHUB, "https://api.github.com")
+    gitlab = ForgeHost("gitlab.com", ForgeType.GITLAB, "https://gitlab.com/api/v4")
+    github_client = MockForgeClient(
+        github,
+        [
+            make_summary(github),
+            make_summary(github, "personal/elsewhere", number=9),
+        ],
+    )
+    gitlab_client = MockForgeClient(
+        gitlab, [make_summary(gitlab, "team/tools", number=10)]
+    )
+    registry = MockForgeRegistry(
+        {github.hostname: github_client, gitlab.hostname: gitlab_client}
+    )
+    app, _session, _cache = make_app(tmp_path, [make_repo(tmp_path)], registry)
+
+    async with app.run_test() as pilot:
+        await settle(app)
+        assert app.screen.query_one("#reviews-table", MRTable).row_count == 2
+        assert gitlab_client.calls == []
+
+        await pilot.press("2")
+        await settle(app)
+        assert app.screen.query_one("#my-mrs-table", MRTable).row_count == 2
+        assert gitlab_client.calls == []
+
+    assert github_client.calls == [("my_reviews", None), ("my_mrs", None)]
+
+
+@pytest.mark.asyncio
+async def test_successful_empty_refresh_clears_all_inbox_tabs(
+    tmp_path: Path,
+) -> None:
+    host = ForgeHost("github.com", ForgeType.GITHUB, "https://api.github.com")
+    client = MockForgeClient(host, [make_summary(host)])
+    registry = MockForgeRegistry({host.hostname: client})
+    repo = make_repo(tmp_path)
+    discovery_results = iter(([repo], []))
+
+    def discoverer(*args, **kwargs):
+        return next(discovery_results)
+
+    app, _session, _cache = make_app(tmp_path, [], registry, discoverer=discoverer)
+
+    async with app.run_test() as pilot:
+        await settle(app)
+        inbox = cast(InboxScreen, app.screen)
+        assert inbox.query_one("#reviews-table", MRTable).row_count == 1
+        await pilot.press("2")
+        await settle(app)
+        assert inbox.query_one("#my-mrs-table", MRTable).row_count == 1
+        await pilot.press("3")
+        await settle(app)
+        assert inbox.query_one("#all-open-table", MRTable).row_count == 1
+
+        await pilot.press("r")
+        await pilot.pause()
+        assert isinstance(app.screen, RepoListScreen)
+        app.refresh_repositories()
+        await settle(app)
+        assert app.repos == []
+        assert app.screen.query_one("#repo-table", DataTable).row_count == 0
+
+        await pilot.press("escape")
+        await settle(app)
+        assert app.screen is inbox
+        assert inbox.query_one("#reviews-table", MRTable).row_count == 0
+        assert inbox.query_one("#my-mrs-table", MRTable).row_count == 0
+        assert inbox.query_one("#all-open-table", MRTable).row_count == 0
+
+        await pilot.press("2")
+        await settle(app)
+        assert inbox.query_one("#my-mrs-table", MRTable).row_count == 0
+        await pilot.press("3")
+        await settle(app)
+        assert inbox.query_one("#all-open-table", MRTable).row_count == 0
+
+
+@pytest.mark.asyncio
 async def test_unconfigured_local_repository_stays_visible_but_cannot_open(
     tmp_path: Path,
 ) -> None:

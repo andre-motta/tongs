@@ -44,6 +44,7 @@ class InboxScreen(Screen):
         super().__init__()
         self.scoped_repo = repo
         self._loaded_tabs: set[str] = set()
+        self._repository_generation = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -57,6 +58,7 @@ class InboxScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._repository_generation = self.app.repository_generation
         show_repo = self.scoped_repo is None
         for table in self.query(MRTable):
             table.setup_columns(show_repo=show_repo)
@@ -64,6 +66,26 @@ class InboxScreen(Screen):
             table.zebra_stripes = True
         if self.scoped_repo:
             self.sub_title = self.scoped_repo.display_name
+
+    def on_screen_resume(self) -> None:
+        generation = self.app.repository_generation
+        if generation != self._repository_generation:
+            self.on_repositories_refreshed(generation)
+
+    def on_repositories_refreshed(self, generation: int) -> None:
+        """Reconcile inbox tabs with one successful repository refresh."""
+        self._repository_generation = generation
+        self._loaded_tabs.clear()
+        scoped_repo_removed = False
+        if self.scoped_repo is not None:
+            try:
+                self.app.services.repository_ref(self.scoped_repo)
+            except ServiceError:
+                scoped_repo_removed = True
+        if not self.app.repos or scoped_repo_removed:
+            for table in self.query(MRTable):
+                table.clear()
+        self.action_focus_tab("reviews")
 
     def action_refresh(self) -> None:
         tabbed = self.query_one(TabbedContent)
@@ -137,6 +159,7 @@ class InboxScreen(Screen):
         table.loading = True
         try:
             if not self.scoped_repo and not self.app.repos:
+                table.clear()
                 self.notify("[dim]No forges discovered yet[/]")
                 return
             await self._load_page(table, ReviewScope.MY_REVIEWS, "Reviews")
@@ -152,6 +175,7 @@ class InboxScreen(Screen):
         table.loading = True
         try:
             if not self.scoped_repo and not self.app.repos:
+                table.clear()
                 return
             await self._load_page(table, ReviewScope.MY_MRS, "My MRs")
         finally:
@@ -166,6 +190,7 @@ class InboxScreen(Screen):
         table.loading = True
         try:
             if not self.scoped_repo and not self.app.repos:
+                table.clear()
                 return
             await self._load_page(table, ReviewScope.ALL_OPEN, "All Open")
         finally:

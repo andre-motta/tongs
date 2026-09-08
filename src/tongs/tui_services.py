@@ -121,18 +121,12 @@ class TUIServiceAdapter:
         return page
 
     async def _list_personal(self, scope: ReviewScope) -> ReviewPage:
-        hostnames = {ref.hostname for ref in self._repository_refs.values()}
+        hostnames = tuple(
+            sorted({ref.hostname for ref in self._repository_refs.values()})
+        )
         if not hostnames:
             return ReviewPage((), ())
-        page = await self.session.list_reviews(ReviewQuery(scope))
-        return ReviewPage(
-            tuple(
-                item for item in page.items if item.ref.repository.hostname in hostnames
-            ),
-            tuple(
-                failure for failure in page.failures if failure.hostname in hostnames
-            ),
-        )
+        return await self.session.list_reviews(ReviewQuery(scope, hostnames=hostnames))
 
     async def _list_all_open(self) -> ReviewPage:
         refs_by_host: dict[str, list[RepositoryRef]] = {}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from textual.widgets import TextArea
+from textual.widgets import Static, TextArea
 
 from tongs.app import TongsApp
 from tongs.cache.store import CacheStore
@@ -39,13 +40,15 @@ from tongs.services.ci_mutations import CIMutationOutcome
 from tongs.services.mr_actions import MRActionOutcome
 from tongs.services.review_mutations import MutationStatus
 from tongs.services.session import ApplicationSession
+from tongs.state.drafts import DiffSide
 from tongs.views.mr_detail import MRDetailScreen
 from tongs.widgets.comment_editor import (
     CommentEditor,
     GeneralCommentSubmitted,
 )
-from tongs.widgets.diff_panel import CommentRequested
+from tongs.widgets.diff_panel import CommentRequested, DiffPanel
 from tongs.widgets.pipeline_panel import PipelinePanel, RetryJobRequested
+from tongs.widgets.split_diff import DiffViewMode, SplitDiffColumn, SplitDiffView
 
 NOW = datetime(2026, 9, 7, tzinfo=UTC)
 
@@ -308,6 +311,22 @@ async def _settle(app: TongsApp) -> None:
             await app.workers.wait_for_complete()
 
 
+async def _wait_until(
+    app: TongsApp,
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 2.0,
+) -> None:
+    """Wait for a UI-driven condition with a bounded message-pump barrier."""
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            delivered = asyncio.Event()
+            app.call_after_refresh(delivered.set)
+            await delivered.wait()
+            with suppress(Exception):
+                await app.workers.wait_for_complete()
+
+
 def _app(tmp_path: Path) -> tuple[TongsApp, _Forge]:
     host = ForgeHost("github.com", ForgeType.GITHUB, "https://api.github.com")
     forge = _Forge(host)
@@ -418,7 +437,7 @@ async def test_inline_comment_keeps_the_revision_displayed_when_line_was_selecte
         editor = screen.query_one("#comment-editor", CommentEditor)
         editor.query_one("#comment-input", TextArea).text = "selected on head-7"
         editor.action_submit()
-        await _settle(app)
+        await _wait_until(app, lambda: bool(app.session.review_mutations._ledger))
 
         assert not any(call[0] == "inline" for call in forge.calls)
         records = tuple(app.session.review_mutations._ledger.values())
@@ -431,6 +450,103 @@ async def test_inline_comment_keeps_the_revision_displayed_when_line_was_selecte
             "revision changed" in notification.message.lower()
             for notification in app._notifications
         )
+
+
+@pytest.mark.asyncio
+async def test_split_old_context_comment_displays_and_dispatches_old_coordinate(
+    tmp_path: Path,
+) -> None:
+    """Exercise split selection through the real screen/session service path."""
+    app, forge = _app(tmp_path)
+
+    async def renamed_diff(repo_path: str, number: int) -> list[dict[str, object]]:
+        forge.calls.append(("get_diff", repo_path, number))
+        return [
+            {
+                "filename": "after/widget.py",
+                "previous_filename": "before/widget.py",
+                "status": "renamed",
+                "patch": "@@ -10 +20 @@\n shared_context",
+                "additions": 0,
+                "deletions": 0,
+            }
+        ]
+
+    forge.get_mr_diff_fresh = renamed_diff  # type: ignore[method-assign]
+
+    async with app.run_test(size=(160, 40), notifications=True) as pilot:
+        await _settle(app)
+        table = app.screen.query_one("#reviews-table")
+        table.focus()
+        await pilot.press("enter")
+        await _settle(app)
+        screen = cast(MRDetailScreen, app.screen)
+
+        await pilot.press("2")
+        await _settle(app)
+        panel = screen.query_one("#diff-panel", DiffPanel)
+        state = panel.request_mode(DiffViewMode.SPLIT)
+        await pilot.pause()
+        assert state.effective is DiffViewMode.SPLIT
+
+        split = panel.query_one(SplitDiffView)
+        assert split.jump_to(10, DiffSide.OLD)
+        panel.query_one("#split-old", SplitDiffColumn).action_comment()
+        await pilot.pause()
+
+        editor = screen.query_one("#comment-editor", CommentEditor)
+        header = editor.query_one("#editor-header", Static)
+        assert "before/widget.py:10" in str(header.render())
+        assert editor._position is not None
+        assert editor._position.side == "LEFT"
+        assert editor._position.old_line == 10
+        assert screen._pending_inline_revision is not None
+        assert screen._pending_inline_revision.head_sha == "head-7"
+
+        editor.query_one("#comment-input", TextArea).text = "old-side context"
+        editor.action_submit()
+        old_call = (
+            "inline",
+            "acme/widgets",
+            7,
+            "after/widget.py",
+            10,
+            "LEFT",
+            "old-side context",
+            "head-7",
+        )
+        await _wait_until(app, lambda: old_call in forge.calls)
+        assert old_call in forge.calls
+        old_record = next(
+            record
+            for record in app.session.review_mutations._ledger.values()
+            if getattr(record.command, "body", None) == "old-side context"
+        )
+        assert old_record.command.anchor.old_path == "before/widget.py"  # type: ignore[union-attr]
+        assert old_record.command.anchor.new_path == "after/widget.py"  # type: ignore[union-attr]
+        assert old_record.command.anchor.side.value == "LEFT"  # type: ignore[union-attr]
+
+        line = screen._cached_diff_files[0].hunks[0].lines[0]
+        screen.on_comment_requested(
+            CommentRequested(file=screen._cached_diff_files[0], line=line)
+        )
+        assert "after/widget.py:20" in str(header.render())
+        assert editor._position is not None
+        assert editor._position.side == "RIGHT"
+        editor.query_one("#comment-input", TextArea).text = "unified context"
+        editor.action_submit()
+        unified_call = (
+            "inline",
+            "acme/widgets",
+            7,
+            "after/widget.py",
+            20,
+            "RIGHT",
+            "unified context",
+            "head-7",
+        )
+        await _wait_until(app, lambda: unified_call in forge.calls)
+        assert unified_call in forge.calls
 
 
 @pytest.mark.asyncio

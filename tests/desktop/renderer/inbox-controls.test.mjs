@@ -324,7 +324,9 @@ test("mounted repository controls retain filters and keyboard focus across disco
   assert.equal(view.getByLabelText("Forge").value, "gitlab");
   assert.equal(view.getByLabelText("Sort repositories").value, "name");
   assert.deepEqual(repositoryNames(view), ["Alpha renamed"]);
-  assert.equal(observed.at(-1)[0].display_name, "Alpha renamed");
+  await waitFor(() =>
+    assert.equal(observed.at(-1)?.[0]?.display_name, "Alpha renamed"),
+  );
 });
 
 function repository(handle, displayName, forge = "github", hostname) {

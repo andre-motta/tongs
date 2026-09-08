@@ -15,6 +15,7 @@ from uuid import UUID
 
 import pytest
 
+import tongs
 from tests.integration.desktop.draft_acceptance_sidecar import (
     CHANGED_REVISION,
     HOST,
@@ -39,9 +40,10 @@ from tongs.state.drafts import (
 from tongs.state.drafts.store import DraftStore
 from tongs.tui_services import TUIServiceAdapter
 
-_CHECKOUT_ROOT = Path(__file__).resolve().parents[3]
 _SIDECAR = Path(__file__).with_name("draft_acceptance_sidecar.py")
 _TIMEOUT = 10.0
+_TONGS_PACKAGE_ROOT = Path(tongs.__file__).resolve().parent
+_TONGS_IMPORT_ROOT = _TONGS_PACKAGE_ROOT.parent
 
 
 def _frame(request_id: str, method: str, params: dict[str, object]) -> bytes:
@@ -97,6 +99,8 @@ class _DesktopProcess:
             TONGS_DRAFT_ACCEPTANCE_ROOT=str(evidence_root),
             TONGS_DRAFT_ACCEPTANCE_HEAD=revision.head_sha,
             TONGS_DRAFT_ACCEPTANCE_FORGE_MODE=forge_mode,
+            TONGS_DRAFT_ACCEPTANCE_IMPORT_ROOT=str(_TONGS_IMPORT_ROOT),
+            TONGS_DRAFT_ACCEPTANCE_PACKAGE_ROOT=str(_TONGS_PACKAGE_ROOT),
         )
         process = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -121,7 +125,7 @@ class _DesktopProcess:
             assert handshake["result"]["accepted_capabilities"] == [REVIEW_CAPABILITY]
             events = _read_jsonl(evidence_root / "process-events.jsonl")
             assert events[-1]["event"] == "session_started"
-            assert events[-1]["source_root"] == str(_CHECKOUT_ROOT / "src")
+            assert events[-1]["source_root"] == str(_TONGS_IMPORT_ROOT)
             assert events[-1]["forge_mode"] == forge_mode
         except BaseException:
             await client.kill()
@@ -181,20 +185,24 @@ class _DesktopProcess:
     async def close(self) -> None:
         if self.process.returncode is not None:
             return
-        response = await self.request("shutdown", {})
-        assert response["result"] == {"accepted": True}
-        stdin = self.process.stdin
-        assert stdin is not None
-        stdin.close()
-        await stdin.wait_closed()
-        assert await asyncio.wait_for(self.process.wait(), _TIMEOUT) == 0
-        stderr = self.process.stderr
-        assert stderr is not None
-        assert await stderr.read() == b""
+        try:
+            response = await self.request("shutdown", {})
+            assert response["result"] == {"accepted": True}
+            stdin = self.process.stdin
+            assert stdin is not None
+            stdin.close()
+            await stdin.wait_closed()
+            assert await asyncio.wait_for(self.process.wait(), _TIMEOUT) == 0
+            stderr = self.process.stderr
+            assert stderr is not None
+            assert await stderr.read() == b""
+        finally:
+            await self.kill()
 
     async def kill(self) -> None:
         if self.process.returncode is None:
-            self.process.kill()
+            with suppress(ProcessLookupError):
+                self.process.kill()
             await asyncio.wait_for(self.process.wait(), _TIMEOUT)
 
 
@@ -216,18 +224,23 @@ async def _tui_adapter(evidence_root: Path, revision):
         revision,
         discoverer=lambda *_args, **_kwargs: (repo,),
     )
-    await session.start()
-    adapter = TUIServiceAdapter(session)
-    discovered = await adapter.discover_repositories()
-    assert discovered.repositories == (repo,)
-    page = await adapter.list_reviews(ReviewScope.ALL_OPEN, repository=repo)
-    assert not page.failures
-    assert len(page.items) == 1
-    summary = page.items[0].summary
-    snapshot = await adapter.get_review(summary)
-    assert snapshot.revision == revision
-    target = adapter.draft_target(summary, revision)
-    return session, adapter, target
+    try:
+        await session.start()
+        adapter = TUIServiceAdapter(session)
+        discovered = await adapter.discover_repositories()
+        assert discovered.repositories == (repo,)
+        page = await adapter.list_reviews(ReviewScope.ALL_OPEN, repository=repo)
+        assert not page.failures
+        assert len(page.items) == 1
+        summary = page.items[0].summary
+        snapshot = await adapter.get_review(summary)
+        assert snapshot.revision == revision
+        target = adapter.draft_target(summary, revision)
+        return session, adapter, target
+    except BaseException:
+        with suppress(BaseException):
+            await asyncio.wait_for(session.close(), _TIMEOUT)
+        raise
 
 
 @pytest.mark.asyncio

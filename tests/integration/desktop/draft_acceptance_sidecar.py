@@ -10,9 +10,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-_CHECKOUT_ROOT = Path(__file__).resolve().parents[3]
-_SOURCE_ROOT = _CHECKOUT_ROOT / "src"
-sys.path.insert(0, str(_SOURCE_ROOT))
+if __name__ == "__main__":
+    _IMPORT_ROOT = os.environ.get("TONGS_DRAFT_ACCEPTANCE_IMPORT_ROOT")
+    if _IMPORT_ROOT is None:
+        raise RuntimeError("acceptance fixture import root is required")
+    sys.path.insert(0, _IMPORT_ROOT)
 
 import tongs
 from tongs.config import Config
@@ -39,6 +41,8 @@ REVIEW_NUMBER = 106
 ORIGINAL_REVISION = ReviewRevision("a" * 40, "b" * 40)
 CHANGED_REVISION = ReviewRevision("c" * 40, "b" * 40)
 NOW = datetime(2026, 9, 8, tzinfo=UTC)
+_TONGS_PACKAGE_ROOT = Path(tongs.__file__).resolve().parent
+_TONGS_IMPORT_ROOT = _TONGS_PACKAGE_ROOT.parent
 
 
 def _append_jsonl(path: Path, record: dict[str, object]) -> None:
@@ -177,7 +181,7 @@ class _BoundedCache:
                     "event": "session_started",
                     "forge_mode": self._forge_mode,
                     "pid": os.getpid(),
-                    "source_root": str(_SOURCE_ROOT),
+                    "source_root": str(_TONGS_IMPORT_ROOT),
                 },
             )
 
@@ -216,10 +220,10 @@ def build_session(
 
 
 async def run() -> None:
-    expected_source = _SOURCE_ROOT / "tongs"
+    expected_source = Path(os.environ["TONGS_DRAFT_ACCEPTANCE_PACKAGE_ROOT"]).resolve()
     actual_source = Path(tongs.__file__).resolve().parent
     if actual_source != expected_source:
-        raise RuntimeError("acceptance fixture imported tongs from the wrong checkout")
+        raise RuntimeError("acceptance fixture imported tongs from the wrong runtime")
 
     evidence_root = Path(os.environ["TONGS_DRAFT_ACCEPTANCE_ROOT"]).resolve()
     revision = ReviewRevision(

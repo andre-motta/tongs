@@ -160,6 +160,7 @@ class ReviewQuery:
     repository: RepositoryRef | None = None
     state: MRState = MRState.OPEN
     per_page: int = 100
+    hostnames: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, ReviewScope) or not isinstance(
@@ -176,6 +177,13 @@ class ReviewQuery:
             or not 1 <= self.per_page <= 100
         ):
             raise ValueError("per_page must be between 1 and 100")
+        if self.hostnames is not None:
+            if not isinstance(self.hostnames, tuple):
+                raise TypeError("hostnames must be a tuple")
+            for hostname in self.hostnames:
+                validate_hostname(hostname)
+            if len(self.hostnames) != len(set(self.hostnames)):
+                raise ValueError("hostnames must not contain duplicates")
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import webbrowser
+from contextlib import suppress
 from pathlib import Path
 from typing import ClassVar
 
 from textual import work
 from textual.app import App
 from textual.binding import Binding
+from textual.css.query import NoMatches
 from textual.reactive import reactive
+from textual.worker import WorkerCancelled, WorkerFailed
 
-from tongs.cache.store import CacheStore
 from tongs.commands import TongsCommandProvider
 from tongs.config import Config, load_config
-from tongs.forges.registry import ForgeRegistry
 from tongs.plugins.registry import PluginRegistry
-from tongs.scanner.discovery import discover_repos
 from tongs.scanner.repo import Repo
+from tongs.services.errors import ServiceError
+from tongs.services.session import (
+    ApplicationSession,
+    CacheResource,
+    ForgeRegistryResource,
+)
 from tongs.state.app_state import MRFilter, ReviewDraft
+from tongs.tui_services import TUIServiceAdapter
 from tongs.views.inbox import InboxScreen
 from tongs.views.repo_list import RepoListScreen
 
@@ -83,46 +90,79 @@ class TongsApp(App):
         self,
         config: Config | None = None,
         config_path: Path | None = None,
-    ):
+        *,
+        session: ApplicationSession | None = None,
+        plugin_registry: PluginRegistry | None = None,
+    ) -> None:
         super().__init__()
         self.config = config or load_config(config_path)
-        self.cache = CacheStore(max_size_mb=self.config.max_cache_size_mb)
-        self.forge_registry = ForgeRegistry(
-            extra_gitlab_hosts=self.config.extra_gitlab_hosts,
-            extra_github_hosts=self.config.extra_github_hosts,
-            request_timeout=self.config.request_timeout,
-            cache=self.cache,
-            mr_list_ttl=self.config.mr_list_ttl,
-            diff_ttl=self.config.diff_ttl,
-        )
+        self.session = session or ApplicationSession(config=self.config)
+        self.services = TUIServiceAdapter(self.session)
         self.repos: list[Repo] = []
-        self.plugin_registry = PluginRegistry()
+        self.plugin_registry = plugin_registry or PluginRegistry()
+        self.startup_error: ServiceError | None = None
+        self.repository_generation = 0
+        self._plugins_ready = False
+
+    @property
+    def cache(self) -> CacheResource:
+        """Compatibility alias for the cache owned by the shared session."""
+        return self.session.cache
+
+    @property
+    def forge_registry(self) -> ForgeRegistryResource:
+        """Compatibility alias for the registry owned by the shared session."""
+        return self.session.forge_registry
 
     async def on_mount(self) -> None:
-        await self.cache.open()
+        try:
+            await self.session.start()
+        except ServiceError as error:
+            self.startup_error = error
+            self.notify(error.message, severity="error")
+            self.exit()
+            return
+        self.config = self.session.config
         self.plugin_registry.discover(self.config.plugin_config)
         await self.plugin_registry.on_app_ready(self)
-        self.push_screen("inbox")
-        self._discover_repos()
+        self._plugins_ready = True
+        await self.push_screen("inbox")
+        self.refresh_repositories()
 
-    @work(thread=True, group="discovery")
-    def _discover_repos(self) -> None:
+    @work(exclusive=True, group="discovery")
+    async def _discover_repos(self) -> None:
         """Run repo discovery in a background thread to avoid blocking the UI."""
-        self.repos = discover_repos(
-            self.config.scan_root_path,
-            max_depth=self.config.scan_depth,
-            extra_gitlab_hosts=self.config.extra_gitlab_hosts,
-            extra_github_hosts=self.config.extra_github_hosts,
-        )
-        self.call_from_thread(self._on_discovery_complete)
+        try:
+            result = await self.services.discover_repositories()
+        except ServiceError as error:
+            self.notify(
+                f"Repository discovery: {error.message}",
+                severity="warning",
+            )
+            return
+        if result.stale:
+            return
+        self.repos[:] = result.repositories
+        self._on_discovery_complete()
+
+    def refresh_repositories(self) -> None:
+        """Start a new local discovery generation."""
+        self._discover_repos()
 
     def _on_discovery_complete(self) -> None:
         """Trigger inbox load after repo discovery finishes."""
         screen = self.screen
-        if hasattr(screen, "_loaded_tabs"):
-            screen._loaded_tabs.clear()
-        if hasattr(screen, "action_focus_tab"):
-            screen.action_focus_tab("reviews")
+        if isinstance(screen, InboxScreen):
+            try:
+                screen.query_one("#reviews-table")
+            except NoMatches:
+                self.call_after_refresh(self._on_discovery_complete)
+                return
+        self.repository_generation += 1
+        if isinstance(screen, InboxScreen):
+            screen.on_repositories_refreshed(self.repository_generation)
+        if isinstance(screen, RepoListScreen):
+            screen.refresh_rows()
 
     def get_repo_hostnames(self) -> list[str]:
         """Return unique hostnames from discovered repos (not hardcoded)."""
@@ -138,9 +178,17 @@ class TongsApp(App):
             webbrowser.open(url)
 
     async def on_unmount(self) -> None:
-        await self.plugin_registry.on_app_shutdown(self)
-        await self.forge_registry.close_all()
-        await self.cache.close()
+        self.services.invalidate_discovery()
+        workers = list(self.workers)
+        self.workers.cancel_all()
+        for worker in workers:
+            with suppress(WorkerCancelled, WorkerFailed):
+                await worker.wait()
+        try:
+            if self._plugins_ready:
+                await self.plugin_registry.on_app_shutdown(self)
+        finally:
+            await self.session.close()
 
     def action_help(self) -> None:
         self.notify("Help: press ? for keybindings, Ctrl+P for command palette")

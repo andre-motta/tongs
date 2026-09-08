@@ -11,6 +11,7 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Input, Static
 
 from tongs.scanner.repo import ForgeType, Repo
+from tongs.services.errors import ServiceError
 
 
 def _forge_label(forge_type: ForgeType | None) -> str:
@@ -161,12 +162,21 @@ class RepoListScreen(Screen):
         self._apply_filters()
 
     def action_refresh(self) -> None:
+        self.app.refresh_repositories()
+
+    def refresh_rows(self) -> None:
+        """Render the latest repository inventory after discovery."""
         self._apply_filters()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         key = str(event.row_key.value)
         repo = self._repo_data.get(key)
         if repo:
+            try:
+                self.app.services.repository_ref(repo)
+            except ServiceError as error:
+                self.notify(error.message, severity="warning")
+                return
             from tongs.views.inbox import InboxScreen
 
             self.app.push_screen(InboxScreen(repo=repo))

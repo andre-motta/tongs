@@ -136,6 +136,8 @@ class ApplicationSession:
         self._configured_hosts: frozenset[str] = frozenset()
         self._issued_repositories: set[RepositoryRef] = set()
         self._repositories: dict[RepositoryRef, RepositorySnapshot] = {}
+        self._local_repositories: tuple[Repo, ...] = ()
+        self._discovery_generation = 0
         self._subscribers: set[asyncio.Queue[ServiceEvent | object]] = set()
         self._sequence = 0
         self._state = _SessionState.NEW
@@ -196,6 +198,28 @@ class ApplicationSession:
         """Return the loaded configuration after startup."""
         self._require_started()
         return cast(Config, self._config)
+
+    @property
+    def cache(self) -> CacheResource:
+        """Return the session-owned cache after startup."""
+        self._require_started()
+        return cast(CacheResource, self._cache)
+
+    @property
+    def forge_registry(self) -> ForgeRegistryResource:
+        """Return the session-owned forge registry after startup."""
+        self._require_started()
+        return cast(ForgeRegistryResource, self._registry)
+
+    @property
+    def local_repositories(self) -> tuple[Repo, ...]:
+        """Return the latest actual local repositories from discovery.
+
+        Local paths and remotes stay in this trusted in-process view. They are not
+        added to renderer-safe ``RepositorySnapshot`` values.
+        """
+        self._require_started()
+        return self._local_repositories
 
     @property
     def shutdown_error(self) -> ServiceError | None:
@@ -441,6 +465,8 @@ class ApplicationSession:
                 self._close_event_streams()
                 self._issued_repositories.clear()
                 self._repositories.clear()
+                self._local_repositories = ()
+                self._discovery_generation += 1
                 self._state = _SessionState.CLOSED
         if failures:
             self._shutdown_error = ServiceError(
@@ -469,6 +495,8 @@ class ApplicationSession:
     async def discover_repositories(self) -> tuple[RepositorySnapshot, ...]:
         """Discover local repositories and issue their semantic references."""
         self._require_started()
+        self._discovery_generation += 1
+        generation = self._discovery_generation
         config = cast(Config, self._config)
         try:
             repos = await asyncio.to_thread(
@@ -497,8 +525,16 @@ class ApplicationSession:
                 self._require_started()
             raise translate_error(error, operation="discover_repositories") from None
 
+        if generation != self._discovery_generation:
+            return tuple(
+                sorted(
+                    self._repositories.values(),
+                    key=lambda item: item.display_name.lower(),
+                )
+            )
         changed = snapshots != self._repositories
         self._repositories = snapshots
+        self._local_repositories = tuple(repos)
         self._issued_repositories.update(snapshots)
         if changed:
             self._emit(ServiceEventKind.REPOSITORIES_CHANGED)
@@ -550,6 +586,22 @@ class ApplicationSession:
     async def list_reviews(self, query: ReviewQuery) -> ReviewPage:
         """List reviews while preserving successful results from other hosts."""
         self._require_started()
+        if query.hostnames is not None:
+            if any(
+                hostname not in self._configured_hosts for hostname in query.hostnames
+            ):
+                raise ServiceError(
+                    ServiceErrorCode.INVALID_INPUT,
+                    "One or more review query hosts are not configured.",
+                )
+            if (
+                query.repository is not None
+                and query.repository.hostname not in query.hostnames
+            ):
+                raise ServiceError(
+                    ServiceErrorCode.INVALID_INPUT,
+                    "The repository does not match the review query hosts.",
+                )
         if query.repository is not None:
             self._require_repository(query.repository)
 
@@ -560,13 +612,18 @@ class ApplicationSession:
                 if query.repository is not None
                 else tuple(sorted(self._issued_repositories, key=repr))
             )
+            if query.hostnames is not None:
+                repositories = tuple(
+                    ref for ref in repositories if ref.hostname in query.hostnames
+                )
             operations.extend((ref.hostname, ref) for ref in repositories)
         else:
-            hostnames = (
-                (query.repository.hostname,)
-                if query.repository is not None
-                else tuple(sorted(self._configured_hosts))
-            )
+            if query.repository is not None:
+                hostnames = (query.repository.hostname,)
+            elif query.hostnames is not None:
+                hostnames = query.hostnames
+            else:
+                hostnames = tuple(sorted(self._configured_hosts))
             operations.extend((hostname, query.repository) for hostname in hostnames)
 
         semaphore = asyncio.Semaphore(cast(Config, self._config).max_parallel)

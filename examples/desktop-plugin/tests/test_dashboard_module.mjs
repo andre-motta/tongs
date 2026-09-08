@@ -124,5 +124,74 @@ test("dashboard mounts, handles events and refresh, and cleans every binding", a
   assert.equal(container.children.length, 0);
   assert.equal(fixture.listeners.size, 0);
   assert.equal(fixture.bindings.length, 0);
+  assert.equal(buttons[0].listeners.size, 0);
+  assert.equal(buttons[1].listeners.size, 0);
   assert.equal(fixture.api.signal.aborted, true);
+  await buttons[0].click();
+  await buttons[1].click();
+  assert.deepEqual(fixture.navigations, ["dashboard"]);
+  assert.deepEqual(fixture.calls, [["refresh", {}]]);
+  assert.deepEqual(fixture.notices, [["Example dashboard refreshed", "information"]]);
+});
+
+function makeDeferredApi(container) {
+  const fixture = makeApi(container);
+  const deferred = [];
+  fixture.api = Object.freeze({
+    ...fixture.api,
+    invoke: (method, params) => {
+      fixture.calls.push([method, params]);
+      const entry = { resolve: null, reject: null, promise: null };
+      entry.promise = new Promise((resolve, reject) => {
+        entry.resolve = resolve;
+        entry.reject = reject;
+      });
+      deferred.push(entry);
+      return entry.promise;
+    },
+  });
+  fixture.deferred = deferred;
+  return fixture;
+}
+
+test("a refresh that resolves after cleanup cannot touch detached DOM or notify", async () => {
+  globalThis.document = { createElement: (tagName) => new MockElement(tagName) };
+  const container = new MockElement("main");
+  const fixture = makeDeferredApi(container);
+  const cleanup = mount(container, fixture.api);
+  const navigate = container.children.at(-2);
+  const refresh = container.children.at(-1);
+  const refreshPromise = refresh.click();
+
+  assert.equal(fixture.calls.length, 1);
+  cleanup();
+  await navigate.click();
+  await refresh.click();
+  assert.deepEqual(fixture.navigations, []);
+  assert.equal(fixture.calls.length, 1);
+  fixture.deferred[0].resolve({
+    summary: { open_reviews: 99, waiting_on_me: 99, ci_passing: 99 },
+    reviews: [{ title: "Detached row" }],
+  });
+  await refreshPromise;
+
+  assert.deepEqual(fixture.notices, []);
+  assert.equal(container.children.length, 0);
+  assert.equal(refresh.disabled, true);
+});
+
+test("a refresh that rejects after cleanup is consumed without notification", async () => {
+  globalThis.document = { createElement: (tagName) => new MockElement(tagName) };
+  const container = new MockElement("main");
+  const fixture = makeDeferredApi(container);
+  const cleanup = mount(container, fixture.api);
+  const refresh = container.children.at(-1);
+  const refreshPromise = refresh.click();
+
+  cleanup();
+  fixture.deferred[0].reject(new Error("late failure"));
+  await refreshPromise;
+
+  assert.deepEqual(fixture.notices, []);
+  assert.equal(container.children.length, 0);
 });

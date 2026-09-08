@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from tongs_example_dashboard.desktop import ExampleDashboardProvider
 
@@ -71,8 +72,6 @@ def test_manifest_declares_stable_example_surface() -> None:
 
 
 def test_terminal_surface_does_not_import_desktop_module() -> None:
-    import sys
-
     sys.modules.pop("tongs_example_dashboard.desktop", None)
     from tongs_example_dashboard.terminal import ExampleDashboardTerminalPlugin
 

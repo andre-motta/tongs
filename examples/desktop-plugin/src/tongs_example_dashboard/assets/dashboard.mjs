@@ -25,6 +25,8 @@ function renderSnapshot(elements, snapshot) {
 }
 
 export function mount(container, api) {
+  let mounted = true;
+  let generation = 0;
   const heading = document.createElement("h2");
   text(heading, "Example dashboard");
 
@@ -58,28 +60,37 @@ export function mount(container, api) {
   const navigate = document.createElement("button");
   navigate.type = "button";
   text(navigate, "Open dashboard");
-  navigate.addEventListener("click", () => {
-    if (!api.signal.aborted) api.navigate("dashboard");
-  });
+  const onNavigate = () => {
+    if (mounted && !api.signal.aborted) api.navigate("dashboard");
+  };
+  navigate.addEventListener("click", onNavigate);
   const refresh = document.createElement("button");
   refresh.type = "button";
   text(refresh, "Refresh dashboard");
-  refresh.addEventListener("click", async () => {
-    if (api.signal.aborted) return;
+  const onRefresh = async () => {
+    if (!mounted || api.signal.aborted) return;
+    const requestGeneration = ++generation;
     refresh.disabled = true;
     try {
-      renderSnapshot(elements, await api.invoke(REFRESH_METHOD, {}));
+      const snapshot = await api.invoke(REFRESH_METHOD, {});
+      if (!mounted || api.signal.aborted || generation !== requestGeneration) return;
+      renderSnapshot(elements, snapshot);
       api.notify("Example dashboard refreshed", "information");
     } catch {
+      if (!mounted || api.signal.aborted || generation !== requestGeneration) return;
       api.notify("Example dashboard refresh failed", "error");
     } finally {
-      refresh.disabled = false;
+      if (mounted && !api.signal.aborted && generation === requestGeneration) {
+        refresh.disabled = false;
+      }
     }
-  });
+  };
+  refresh.addEventListener("click", onRefresh);
 
   const elements = { openReviews, waitingOnMe, ciPassing, reviews };
   const unsubscribeEvent = api.on(DASHBOARD_EVENT, (snapshot) => renderSnapshot(elements, snapshot));
   const onAbort = () => {
+    generation += 1;
     refresh.disabled = true;
   };
   api.signal.addEventListener("abort", onAbort, { once: true });
@@ -88,6 +99,11 @@ export function mount(container, api) {
   renderSnapshot(elements, { summary: {}, reviews: [] });
 
   return () => {
+    if (!mounted) return;
+    mounted = false;
+    generation += 1;
+    navigate.removeEventListener("click", onNavigate);
+    refresh.removeEventListener("click", onRefresh);
     unsubscribeEvent();
     unbindSummary();
     api.signal.removeEventListener("abort", onAbort);

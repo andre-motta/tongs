@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tongs-example-dashboard"
+version = "0.1.0"
+description = "Installable deterministic dashboard example for the Tongs desktop plugin SDK"
+requires-python = ">=3.12"
+dependencies = ["tongs"]
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Tongs contributors" }]
+
+[project.entry-points."tongs.desktop_plugins"]
+example_dashboard = "tongs_example_dashboard.desktop:ExampleDashboardProvider"
+
+[project.entry-points."tongs.plugins"]
+example_dashboard = "tongs_example_dashboard.terminal:ExampleDashboardTerminalPlugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tongs_example_dashboard = ["assets/*.mjs", "assets/*.css", "assets/*.md"]

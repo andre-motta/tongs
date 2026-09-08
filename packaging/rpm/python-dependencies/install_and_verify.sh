@@ -32,6 +32,8 @@ done
 packaging_dir="$checkout/packaging/rpm/python-dependencies"
 manifest="$packaging_dir/manifest.json"
 
+dnf install --assumeyes --setopt=install_weak_deps=False python3 \
+    2>&1 | tee "$evidence_dir/dnf-python-bootstrap.log"
 mapfile -t requirements < <(
     python3 - "$manifest" <<'PY'
 from __future__ import annotations
@@ -44,7 +46,10 @@ for item in manifest["system_requirements"]:
     print(item["requirement"])
 PY
 )
-mapfile -t binary_rpms < <(find "$rpm_dir" -maxdepth 1 -type f -name '*.rpm' ! -name '*.src.rpm' -print | sort)
+mapfile -t binary_rpms < <(
+    find "$rpm_dir" -maxdepth 1 -type f -name 'python3-*.rpm' \
+        ! -name '*-debuginfo-*' -print | sort
+)
 [[ ${#binary_rpms[@]} -eq 7 ]] || {
     printf 'expected seven binary companion RPMs, found %s\n' "${#binary_rpms[@]}" >&2
     exit 1
@@ -52,7 +57,7 @@ mapfile -t binary_rpms < <(find "$rpm_dir" -maxdepth 1 -type f -name '*.rpm' ! -
 
 dnf install --assumeyes --setopt=install_weak_deps=False \
     "${requirements[@]}" "${binary_rpms[@]}" 2>&1 | tee "$evidence_dir/dnf-install.log"
-dnf repoquery --installed --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{from_repo}' \
+dnf repoquery --installed --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{from_repo}\n' \
     | sort >"$evidence_dir/installed-packages.txt"
 rpm -qa --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
     | sort >"$evidence_dir/rpm-installed.txt"

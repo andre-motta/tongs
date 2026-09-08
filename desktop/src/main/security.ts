@@ -143,7 +143,18 @@ function assertUser(value: unknown): void {
   assertKeys(value, ["username", "display_name"]); text(value.username);
   if (typeof value.display_name !== "string" || value.display_name.length > MAX_TEXT) throw new Error("Invalid desktop user display name");
 }
-function assertRepository(value: unknown): void { assertKeys(value, ["handle", "display_name", "forge_type"]); text(value.handle); text(value.display_name); if (value.forge_type !== "github" && value.forge_type !== "gitlab") throw new Error("Invalid forge type"); }
+function assertRepository(value: unknown): void {
+  if (!isRecord(value)) throw new Error("Invalid desktop result shape");
+  const keys = Object.hasOwn(value, "hostname")
+    ? ["handle", "display_name", "forge_type", "hostname"]
+    : ["handle", "display_name", "forge_type"];
+  assertKeys(value, keys);
+  text(value.handle);
+  text(value.display_name);
+  if (value.forge_type !== "github" && value.forge_type !== "gitlab")
+    throw new Error("Invalid forge type");
+  if (Object.hasOwn(value, "hostname")) text(value.hostname, 253);
+}
 function assertRevision(value: unknown): void { assertKeys(value, ["head_sha", "base_sha", "start_sha"]); text(value.head_sha); text(value.base_sha); nullableText(value.start_sha); }
 function assertServiceError(value: unknown): void { assertKeys(value, ["code", "message", "retryable"]); text(value.code); text(value.message); bool(value.retryable); }
 const SUMMARY_KEYS = ["number", "title", "author", "state", "is_draft", "source_branch", "target_branch", "ci_status", "created_at", "updated_at", "web_url", "comment_count", "has_conflicts", "labels", "review_decision", "additions", "deletions"] as const;

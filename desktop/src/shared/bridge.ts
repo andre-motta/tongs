@@ -16,7 +16,13 @@ export interface ServiceErrorDto { readonly code: string; readonly message: stri
 export interface UserDto { readonly username: string; readonly display_name: string; }
 export interface ReviewRevisionDto { readonly head_sha: string; readonly base_sha: string; readonly start_sha: string | null; }
 export interface ForgeCapabilitiesDto { readonly batched_review: boolean; readonly thread_resolution: boolean; readonly draft_notes: boolean; readonly unapprove: boolean; readonly job_cancel: boolean; }
-export interface RepositoryDto { readonly handle: OpaqueHandle; readonly display_name: string; readonly forge_type: "github" | "gitlab"; }
+export interface RepositoryDto {
+  readonly handle: OpaqueHandle;
+  readonly display_name: string;
+  readonly forge_type: "github" | "gitlab";
+  /** Origin host from current sidecars. Older protocol-major-1 sidecars may omit it. */
+  readonly hostname?: string;
+}
 export interface RepositoryListResult { readonly repositories: readonly RepositoryDto[]; }
 export interface OpenRepositoryParams { readonly hostname: string; readonly project_path: string; }
 

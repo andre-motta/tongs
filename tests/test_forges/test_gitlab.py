@@ -21,6 +21,7 @@ from tongs.forges.models import (
     ForgeHost,
     MRState,
     ReviewDecision,
+    SourceCleanupStatus,
 )
 from tongs.scanner.repo import ForgeType
 
@@ -460,7 +461,7 @@ class TestGitLabClientAsync:
 
         def handler(req: httpx.Request) -> httpx.Response:
             requests_made.append(req)
-            return httpx.Response(200, json={})
+            return httpx.Response(200, json={"id": 420, "iid": 42, "state": "closed"})
 
         client, http = _make_gitlab_client(handler)
         async with http:
@@ -627,3 +628,131 @@ class TestGitLabClientAsync:
         async with http:
             await client.approve_mr("acme/widgets", 42, head_sha="captured-head")
         assert json.loads(requests_made[0].content) == {"sha": "captured-head"}
+
+
+class TestGitLabLifecycleActions:
+    @pytest.mark.asyncio
+    async def test_merge_binds_head_and_reports_cleanup_as_unknown(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "id": 420,
+                    "iid": 42,
+                    "state": "merged",
+                    "source_branch": "feature",
+                    "target_branch": "main",
+                    "merge_commit_sha": "merge-sha",
+                    "squash_commit_sha": None,
+                    "should_remove_source_branch": True,
+                },
+            )
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            result = await client.merge_mr(
+                "acme/widgets",
+                42,
+                True,
+                True,
+                head_sha="captured-head",
+                expected_source_repository="acme/widgets",
+                expected_source_branch="feature",
+                expected_target_branch="main",
+            )
+
+        assert result.remote_id == "420"
+        assert result.merge_sha == "merge-sha"
+        assert result.source_cleanup is SourceCleanupStatus.UNKNOWN
+        assert json.loads(requests[0].content) == {
+            "squash": True,
+            "should_remove_source_branch": True,
+            "sha": "captured-head",
+        }
+
+    @pytest.mark.asyncio
+    async def test_merge_without_cleanup_uses_squash_commit_identity(self) -> None:
+        client, http = _make_gitlab_client(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "id": 420,
+                    "iid": 42,
+                    "state": "merged",
+                    "source_branch": "feature",
+                    "target_branch": "main",
+                    "merge_commit_sha": None,
+                    "squash_commit_sha": "squash-sha",
+                },
+            )
+        )
+        async with http:
+            result = await client.merge_mr(
+                "acme/widgets",
+                42,
+                delete_branch=False,
+                expected_target_branch="main",
+            )
+
+        assert result.merge_sha == "squash-sha"
+        assert result.source_cleanup is SourceCleanupStatus.NOT_REQUESTED
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("identity", [True, 1.0, 0, -1, "42"])
+    async def test_merge_rejects_malformed_native_identity(
+        self, identity: object
+    ) -> None:
+        client, http = _make_gitlab_client(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "id": 420,
+                    "iid": identity,
+                    "state": "merged",
+                    "source_branch": "feature",
+                    "target_branch": "main",
+                    "merge_commit_sha": "merge-sha",
+                },
+            )
+        )
+        async with http:
+            with pytest.raises(ValueError, match="merge response"):
+                await client.merge_mr("acme/widgets", 42)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("identity", [True, 1.0, 0, -1, "42"])
+    async def test_state_action_rejects_malformed_native_identity(
+        self, identity: object
+    ) -> None:
+        client, http = _make_gitlab_client(
+            lambda _: httpx.Response(
+                200, json={"id": 420, "iid": identity, "state": "closed"}
+            )
+        )
+        async with http:
+            with pytest.raises(ValueError, match="action response"):
+                await client.close_mr("acme/widgets", 42)
+
+    @pytest.mark.asyncio
+    async def test_close_reopen_and_unapprove_validate_native_results(self) -> None:
+        responses = iter(
+            [
+                {"id": 420, "iid": 42, "state": "closed"},
+                {"id": 420, "iid": 42, "state": "opened"},
+                {"id": 420, "iid": 42, "state": "opened"},
+            ]
+        )
+        client, http = _make_gitlab_client(
+            lambda _: httpx.Response(200, json=next(responses))
+        )
+        async with http:
+            closed = await client.close_mr("acme/widgets", 42)
+            reopened = await client.reopen_mr("acme/widgets", 42)
+            unapproved = await client.unapprove_mr("acme/widgets", 42)
+
+        assert closed.remote_id == "420"
+        assert reopened.remote_id == "420"
+        assert unapproved.remote_id == "420"

@@ -17,6 +17,7 @@ from tongs.forges.models import (
     Commit,
     Discussion,
     ForgeHost,
+    ForgeMergeResult,
     ForgeMutationResult,
     InlineComment,
     MRDetail,
@@ -25,6 +26,7 @@ from tongs.forges.models import (
     Pipeline,
     PipelineJob,
     ReviewDecision,
+    SourceCleanupStatus,
     User,
 )
 
@@ -32,6 +34,24 @@ from tongs.forges.models import (
 def _encode_project(repo_path: str) -> str:
     """URL-encode a GitLab project path (e.g. 'group/repo' -> 'group%2Frepo')."""
     return urlquote(repo_path, safe="")
+
+
+def _gitlab_action_result(
+    value: dict | list,
+    number: int,
+    *,
+    expected_state: str | None = None,
+) -> ForgeMutationResult:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("iid")) is not int
+        or value.get("iid") != number
+        or type(value.get("id")) is not int
+        or value["id"] <= 0
+        or (expected_state is not None and value.get("state") != expected_state)
+    ):
+        raise ValueError("invalid GitLab merge request action response")
+    return ForgeMutationResult(str(value["id"]))
 
 
 def _gitlab_line_code(path: str, old_line: int | None, new_line: int | None) -> str:
@@ -488,13 +508,14 @@ class GitLabClient(ForgeClient):
         )
         return ForgeMutationResult(str(data.get("id", number)))
 
-    async def unapprove_mr(self, repo_path: str, number: int) -> None:
+    async def unapprove_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         project = _encode_project(repo_path)
-        await request(
+        data = await request(
             self._http,
             "POST",
             f"/projects/{project}/merge_requests/{number}/unapprove",
         )
+        return _gitlab_action_result(data, number)
 
     @property
     def supports_unapprove(self) -> bool:
@@ -506,35 +527,76 @@ class GitLabClient(ForgeClient):
         number: int,
         squash: bool = False,
         delete_branch: bool = True,
-    ) -> None:
+        *,
+        head_sha: str | None = None,
+        expected_source_repository: str | None = None,
+        expected_source_branch: str | None = None,
+        expected_target_branch: str | None = None,
+    ) -> ForgeMergeResult:
+        if (
+            expected_source_repository is not None
+            and expected_source_repository != repo_path
+        ):
+            raise ValueError("cross-project source cleanup is unsupported")
         project = _encode_project(repo_path)
-        await request(
+        data = await request(
             self._http,
             "PUT",
             f"/projects/{project}/merge_requests/{number}/merge",
             json={
                 "squash": squash,
                 "should_remove_source_branch": delete_branch,
+                **({"sha": head_sha} if head_sha is not None else {}),
             },
         )
+        if (
+            not isinstance(data, dict)
+            or type(data.get("iid")) is not int
+            or data.get("iid") != number
+            or data.get("state") != "merged"
+            or type(data.get("id")) is not int
+            or data["id"] <= 0
+        ):
+            raise ValueError("invalid GitLab merge response")
+        if (
+            expected_source_branch is not None
+            and data.get("source_branch") != expected_source_branch
+        ):
+            raise ValueError("GitLab merge response source branch changed")
+        if (
+            expected_target_branch is not None
+            and data.get("target_branch") != expected_target_branch
+        ):
+            raise ValueError("GitLab merge response target branch changed")
+        merge_sha = data.get("merge_commit_sha") or data.get("squash_commit_sha")
+        if not isinstance(merge_sha, str) or not merge_sha:
+            raise ValueError("invalid GitLab merge response")
+        cleanup = (
+            SourceCleanupStatus.UNKNOWN
+            if delete_branch
+            else SourceCleanupStatus.NOT_REQUESTED
+        )
+        return ForgeMergeResult(str(data["id"]), merge_sha, cleanup)
 
-    async def close_mr(self, repo_path: str, number: int) -> None:
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         project = _encode_project(repo_path)
-        await request(
+        data = await request(
             self._http,
             "PUT",
             f"/projects/{project}/merge_requests/{number}",
             json={"state_event": "close"},
         )
+        return _gitlab_action_result(data, number, expected_state="closed")
 
-    async def reopen_mr(self, repo_path: str, number: int) -> None:
+    async def reopen_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         project = _encode_project(repo_path)
-        await request(
+        data = await request(
             self._http,
             "PUT",
             f"/projects/{project}/merge_requests/{number}",
             json={"state_event": "reopen"},
         )
+        return _gitlab_action_result(data, number, expected_state="opened")
 
     async def add_comment(
         self, repo_path: str, number: int, body: str

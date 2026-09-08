@@ -1,6 +1,6 @@
 # Pipelines
 
-The Pipeline tab (++4++ from MR detail) shows CI/CD pipelines associated with the
+The Pipeline tab (++5++ from MR detail) shows CI/CD pipelines associated with the
 current merge request. It provides a three-level drill-down from pipeline to job
 to log.
 

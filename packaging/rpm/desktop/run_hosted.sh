@@ -74,6 +74,15 @@ podman version --format json >"$output_dir/podman-version.json"
 podman info --format json >"$output_dir/podman-info.json"
 podman pull --quiet "$base_image" >"$output_dir/base-image.pull.txt"
 podman image inspect "$base_image" >"$output_dir/base-image.inspect.json"
+podman run --rm --network=none --cap-drop=all --security-opt=no-new-privileges \
+    --entrypoint /bin/bash "$base_image" -euo pipefail -c '
+        required=(bash cat cut dnf find grep install mkdir rpm sed sha256sum sort stat tee)
+        for command in "${required[@]}"; do
+            resolved=$(command -v "$command")
+            test -n "$resolved"
+            printf "%s|%s\n" "$command" "$resolved"
+        done
+    ' >"$output_dir/base-prerequisite-probe.txt"
 
 fixture_arguments=()
 if [[ -n "$accepted_input" ]]; then

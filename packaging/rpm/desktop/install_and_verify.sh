@@ -61,8 +61,14 @@ mapfile -t companion_rpms < <(
 sort "$companion_contract" >"$evidence_dir/expected-companion-packages.txt"
 rpm -qp --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
     "${companion_rpms[@]}" | sort >"$evidence_dir/selected-companion-packages.txt"
-cmp "$evidence_dir/expected-companion-packages.txt" \
-    "$evidence_dir/selected-companion-packages.txt"
+expected_companion_sha=$(sha256sum "$evidence_dir/expected-companion-packages.txt" \
+    | cut -d ' ' -f 1)
+selected_companion_sha=$(sha256sum "$evidence_dir/selected-companion-packages.txt" \
+    | cut -d ' ' -f 1)
+[[ "$selected_companion_sha" == "$expected_companion_sha" ]] || {
+    printf 'selected companion RPM identities do not match their contract\n' >&2
+    exit 1
+}
 mapfile -t core_python_abis < <(
     rpm -qp --requires "$final_core" \
         | sed -nE 's/^python\(abi\) = (3\.[0-9]+)$/\1/p'
@@ -194,7 +200,8 @@ for package in python3-tongs 'python3-tongs+mcp' tongs-desktop \
 done
 
 dnf install --assumeyes --setopt=install_weak_deps=False \
-    appstream desktop-file-utils libcap xorg-x11-server-Xvfb xorg-x11-xauth util-linux \
+    appstream desktop-file-utils diffutils libcap xorg-x11-server-Xvfb \
+    xorg-x11-xauth util-linux \
     2>&1 | tee "$evidence_dir/dnf-bootstrap.log"
 assert_sentinels after-bootstrap
 dnf install --assumeyes --setopt=install_weak_deps=False --enablerepo=tongs-final \

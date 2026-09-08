@@ -90,6 +90,12 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert "|tongs-final" in installer
     assert "companion-consumer-rpms" in harness
     assert "select_companion_rpms.py" in harness
+    assert "base-prerequisite-probe.txt" in harness
+    assert harness.index("base-prerequisite-probe.txt") < harness.index(
+        "podman build --pull=never"
+    )
+    assert 'sha256sum "$evidence_dir/expected-companion-packages.txt"' in installer
+    assert "diffutils" in installer
 
 
 def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:

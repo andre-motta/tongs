@@ -230,6 +230,13 @@ function boundedPreview(source: string): {
   return { preview, omitted: false };
 }
 
+export function safeMarkdownPresentationBytes(source: string): number {
+  const presented = utf8Exceeds(source, MAX_INPUT_BYTES)
+    ? boundedPreview(source).preview
+    : source;
+  return utf8ByteLength(presented);
+}
+
 function transformMarkdownUrl(url: string, key: string): string {
   if (key !== "href") return "";
   return admitMarkdownExternalUrl(url) ?? "";
@@ -281,4 +288,24 @@ function utf8Exceeds(source: string, limit: number): boolean {
     if (bytes > limit) return true;
   }
   return false;
+}
+
+function utf8ByteLength(source: string): number {
+  let bytes = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const code = source.charCodeAt(index);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      index + 1 < source.length &&
+      source.charCodeAt(index + 1) >= 0xdc00 &&
+      source.charCodeAt(index + 1) <= 0xdfff
+    ) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
 }

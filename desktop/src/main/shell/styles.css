@@ -584,6 +584,10 @@ button {
 .safe-markdown-fallback pre {
   max-height: 260px;
 }
+.safe-markdown-aggregate-omission {
+  color: var(--muted);
+  font-style: italic;
+}
 .fact {
   display: flex;
   justify-content: space-between;

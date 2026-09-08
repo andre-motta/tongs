@@ -5,6 +5,7 @@ import test, { afterEach } from "node:test";
 import {
   SafeMarkdown,
   admitMarkdownExternalUrl,
+  safeMarkdownPresentationBytes,
 } from "../../../desktop/dist/src/renderer/core/safe-markdown.js";
 
 const desktopRequire = createRequire(
@@ -208,6 +209,13 @@ test("uses bounded plain-text fallbacks without parsing truncated Markdown", () 
   const deeplyNested = `${"> ".repeat(34)}deep`;
   const depthView = renderMarkdown(deeplyNested);
   assert.match(depthView.getByRole("status").textContent, /structure exceeds/);
+});
+
+test("reports the exact source or preview allocation used by aggregate budgets", () => {
+  assert.equal(safeMarkdownPresentationBytes("x".repeat(4096)), 4096);
+  assert.equal(safeMarkdownPresentationBytes("😀".repeat(1024)), 4096);
+  assert.equal(safeMarkdownPresentationBytes("x".repeat(5000)), 4096);
+  assert.equal(safeMarkdownPresentationBytes("😀".repeat(4096)), 16_384);
 });
 
 test("handles Unicode, CRLF, trailing breaks, empty code, and incomplete Markdown", () => {

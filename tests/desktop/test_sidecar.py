@@ -210,7 +210,7 @@ async def test_eof_cancels_pending_read_and_closes_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_repository_read_returns_only_session_handle() -> None:
+async def test_repository_read_returns_handle_and_safe_display_metadata() -> None:
     session = _FakeSession()
     session.release_read.set()
     server = DesktopSidecarServer(
@@ -221,8 +221,9 @@ async def test_repository_read_returns_only_session_handle() -> None:
     )
     repository = cast(dict[str, object], result)["repositories"][0]  # type: ignore[index]
 
-    assert set(repository) == {"handle", "display_name", "forge_type"}
-    assert "git.example.com" not in json.dumps(repository)
+    assert set(repository) == {"handle", "display_name", "forge_type", "hostname"}
+    assert repository["hostname"] == "git.example.com"
+    assert "team/project" not in json.dumps(repository)
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,38 @@ import { formatDate, safeError } from "../../core/presentation.js";
 import type { CoordinatedRead } from "../../core/query.js";
 import { useRetainedRead } from "../../core/use-read.js";
 
+export type ReviewScope = "my_reviews" | "my_mrs" | "all_open";
+export type ReviewSort = "updated" | "title" | "ci" | "author";
+
+const REVIEW_SCOPES: readonly {
+  readonly value: ReviewScope;
+  readonly label: string;
+}[] = Object.freeze([
+  { value: "my_reviews", label: "My Reviews" },
+  { value: "my_mrs", label: "My MRs" },
+  { value: "all_open", label: "All Open" },
+]);
+
+const REVIEW_SORTS: readonly {
+  readonly value: ReviewSort;
+  readonly label: string;
+}[] = Object.freeze([
+  { value: "updated", label: "Updated" },
+  { value: "title", label: "Title" },
+  { value: "ci", label: "CI status" },
+  { value: "author", label: "Author" },
+]);
+
+const CI_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
+  failed: 0,
+  running: 1,
+  pending: 2,
+  success: 3,
+  canceled: 4,
+  skipped: 5,
+  unknown: 6,
+});
+
 export function createInboxFeature(): FeatureContribution {
   return {
     id: "reviews.inbox",
@@ -52,25 +84,14 @@ function InboxView({
   readonly navigate: (route: AppRoute) => void;
 }): ReactNode {
   const repository = route.repository;
+  const [reviewScope, setReviewScope] = useState<ReviewScope>("all_open");
   const [reviewState, setReviewState] = useState<"open" | "closed">("open");
-  const begin = useCallback(
-    () =>
-      repository
-        ? bridge.listReviews({
-            scope: "all_open",
-            state: reviewState,
-            repository: repository.handle,
-          })
-        : listDiscoveredReviews(bridge, repositories, reviewState),
-    [bridge, repositories, repository, reviewState],
-  );
-  const state = useRetainedRead(
-    queries,
-    `inbox:${repository?.handle ?? "all"}:${reviewState}`,
-    begin,
-    [repository?.handle, repositoryGeneration, reviewState],
-    repositoriesReady,
-  );
+  const [reviewSort, setReviewSort] = useState<ReviewSort>("updated");
+  const selectScope = (next: ReviewScope): void => {
+    setReviewScope(next);
+    if (next !== "all_open") setReviewState("open");
+  };
+  const queryIdentity = `${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`;
   const title = repository?.display_name ?? "All reviews";
   return (
     <>
@@ -79,30 +100,141 @@ function InboxView({
           <p className="eyebrow">{repository?.forge_type ?? "Workspace"}</p>
           <h1 className="view-title">{title}</h1>
         </div>
-        <div className="header-actions">
-          <button
-            className={`button ${reviewState === "open" ? "button-active" : "button-secondary"}`}
-            data-review-state="open"
-            onClick={() => setReviewState("open")}
-          >
-            Open
-          </button>
-          <button
-            className={`button ${reviewState === "closed" ? "button-active" : "button-secondary"}`}
-            data-review-state="closed"
-            onClick={() => setReviewState("closed")}
-          >
-            Closed & merged
-          </button>
-          <button
-            className="button button-secondary"
-            disabled={state.loading}
-            onClick={state.refresh}
-          >
-            {state.loading && state.value ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
       </header>
+      <div className="inbox-controls" aria-label="Review list controls">
+        <fieldset className="control-group review-scope-control">
+          <legend>Review scope</legend>
+          <div className="segmented-control">
+            {REVIEW_SCOPES.map((option) => (
+              <button
+                key={option.value}
+                className={`button ${reviewScope === option.value ? "button-active" : "button-secondary"}`}
+                data-review-scope={option.value}
+                aria-pressed={reviewScope === option.value}
+                onClick={() => selectScope(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset className="control-group review-state-control">
+          <legend>Review state</legend>
+          <div className="segmented-control">
+            <button
+              className={`button ${reviewState === "open" ? "button-active" : "button-secondary"}`}
+              data-review-state="open"
+              aria-pressed={reviewState === "open"}
+              onClick={() => setReviewState("open")}
+            >
+              Open
+            </button>
+            <button
+              className={`button ${reviewState === "closed" ? "button-active" : "button-secondary"}`}
+              data-review-state="closed"
+              aria-pressed={reviewState === "closed"}
+              disabled={reviewScope !== "all_open"}
+              title={
+                reviewScope === "all_open"
+                  ? undefined
+                  : "Closed and merged reviews are available in All Open."
+              }
+              onClick={() => setReviewState("closed")}
+            >
+              Closed &amp; merged
+            </button>
+          </div>
+        </fieldset>
+        <label className="control-field">
+          <span>Sort reviews</span>
+          <select
+            value={reviewSort}
+            onChange={(event) =>
+              setReviewSort(event.currentTarget.value as ReviewSort)
+            }
+          >
+            {REVIEW_SORTS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <InboxResults
+        key={queryIdentity}
+        bridge={bridge}
+        queries={queries}
+        repository={repository}
+        repositories={repositories}
+        repositoriesReady={repositoriesReady}
+        repositoryGeneration={repositoryGeneration}
+        reviewScope={reviewScope}
+        reviewState={reviewState}
+        reviewSort={reviewSort}
+        navigate={navigate}
+      />
+    </>
+  );
+}
+
+function InboxResults({
+  bridge,
+  queries,
+  repository,
+  repositories,
+  repositoriesReady,
+  repositoryGeneration,
+  reviewScope,
+  reviewState,
+  reviewSort,
+  navigate,
+}: {
+  readonly bridge: DesktopBridge;
+  readonly queries: FeatureParameters["queries"];
+  readonly repository: Extract<AppRoute, { kind: "inbox" }>["repository"];
+  readonly repositories: FeatureParameters["repositories"];
+  readonly repositoriesReady: boolean;
+  readonly repositoryGeneration: number;
+  readonly reviewScope: ReviewScope;
+  readonly reviewState: "open" | "closed";
+  readonly reviewSort: ReviewSort;
+  readonly navigate: (route: AppRoute) => void;
+}): ReactNode {
+  const begin = useCallback(
+    () =>
+      repository
+        ? bridge.listReviews({
+            scope: reviewScope,
+            state: reviewState,
+            repository: repository.handle,
+          })
+        : listDiscoveredReviews(
+            bridge,
+            repositories,
+            reviewScope,
+            reviewState,
+          ),
+    [bridge, repositories, repository, reviewScope, reviewState],
+  );
+  const state = useRetainedRead(
+    queries,
+    `inbox:${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`,
+    begin,
+    [repository?.handle, repositoryGeneration, reviewScope, reviewState],
+    repositoriesReady,
+  );
+  return (
+    <>
+      <div className="view-actions">
+        <button
+          className="button button-secondary"
+          disabled={state.loading}
+          onClick={state.refresh}
+        >
+          {state.loading && state.value ? "Refreshing…" : "Refresh reviews"}
+        </button>
+      </div>
       {state.loading && !state.value && (
         <Notice kind="loading">
           {repositoriesReady
@@ -121,11 +253,8 @@ function InboxView({
         <ReviewList
           result={state.value}
           navigate={navigate}
-          emptyLabel={
-            reviewState === "open"
-              ? "No open reviews match this repository scope."
-              : "No closed or merged reviews match this repository scope."
-          }
+          sort={reviewSort}
+          emptyLabel={emptyReviewLabel(reviewScope, reviewState)}
         />
       )}
     </>
@@ -135,11 +264,12 @@ function InboxView({
 export function listDiscoveredReviews(
   bridge: DesktopBridge,
   repositories: readonly { readonly handle: string }[],
+  scope: ReviewScope,
   state: "open" | "closed",
 ): CoordinatedRead<ReviewListResult> {
   const reads = repositories.map((repository) =>
     bridge.listReviews({
-      scope: "all_open",
+      scope,
       state,
       repository: repository.handle,
     }),
@@ -148,10 +278,7 @@ export function listDiscoveredReviews(
     requestTokens: reads.map((read) => read.requestToken),
     result: Promise.all(reads.map((read) => read.result)).then((results) => ({
       items: results
-        .flatMap((result) => result.items)
-        .sort((left, right) =>
-          right.summary.updated_at.localeCompare(left.summary.updated_at),
-        ),
+        .flatMap((result) => result.items),
       failures: results.flatMap((result) => result.failures),
     })),
   };
@@ -162,15 +289,23 @@ type FeatureParameters = Parameters<FeatureContribution["render"]>[0];
 function ReviewList({
   result,
   navigate,
+  sort,
   emptyLabel,
 }: {
   readonly result: ReviewListResult;
   readonly navigate: (route: AppRoute) => void;
+  readonly sort: ReviewSort;
   readonly emptyLabel: string;
 }): ReactNode {
   const presentation = inboxPresentation(result);
   const moveFocus = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    if (
+      event.key !== "ArrowDown" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    )
+      return;
     const buttons = [
       ...event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
     ];
@@ -179,10 +314,14 @@ function ReviewList({
     );
     const direction = event.key === "ArrowDown" ? 1 : -1;
     const target =
-      buttons[
-        (current < 0 ? 0 : current + direction + buttons.length) %
-          buttons.length
-      ];
+      event.key === "Home"
+        ? buttons[0]
+        : event.key === "End"
+          ? buttons.at(-1)
+          : buttons[
+              (current < 0 ? 0 : current + direction + buttons.length) %
+                buttons.length
+            ];
     if (target) {
       event.preventDefault();
       target.focus();
@@ -200,14 +339,69 @@ function ReviewList({
       {presentation.empty ? (
         <Notice kind="empty">{emptyLabel}</Notice>
       ) : (
-        <div className="review-list" role="list" onKeyDown={moveFocus}>
-          {result.items.map((item) => (
+        <div
+          className="review-list"
+          role="list"
+          aria-label="Review results"
+          onKeyDown={moveFocus}
+        >
+          {sortReviewItems(result.items, sort).map((item) => (
             <ReviewCard key={item.handle} item={item} navigate={navigate} />
           ))}
         </div>
       )}
     </>
   );
+}
+
+export function sortReviewItems(
+  items: readonly ReviewListItemDto[],
+  sort: ReviewSort,
+): readonly ReviewListItemDto[] {
+  const sorted = [...items];
+  sorted.sort((left, right) => {
+    const leftSummary = left.summary;
+    const rightSummary = right.summary;
+    let order = 0;
+    if (sort === "title")
+      order = leftSummary.title.localeCompare(rightSummary.title, undefined, {
+        sensitivity: "base",
+      });
+    else if (sort === "ci")
+      order =
+        (CI_PRIORITY[leftSummary.ci_status] ?? 9) -
+          (CI_PRIORITY[rightSummary.ci_status] ?? 9) ||
+        leftSummary.title.localeCompare(rightSummary.title, undefined, {
+          sensitivity: "base",
+        });
+    else if (sort === "author")
+      order =
+        leftSummary.author.username.localeCompare(
+          rightSummary.author.username,
+          undefined,
+          { sensitivity: "base" },
+        ) ||
+        leftSummary.title.localeCompare(rightSummary.title, undefined, {
+          sensitivity: "base",
+        });
+    else
+      order = (rightSummary.updated_at || rightSummary.created_at).localeCompare(
+        leftSummary.updated_at || leftSummary.created_at,
+      );
+    return order || left.handle.localeCompare(right.handle);
+  });
+  return Object.freeze(sorted);
+}
+
+function emptyReviewLabel(
+  scope: ReviewScope,
+  state: "open" | "closed",
+): string {
+  if (scope === "my_reviews") return "No open reviews are waiting for you.";
+  if (scope === "my_mrs") return "You have no open merge requests.";
+  return state === "open"
+    ? "No open reviews match this repository scope."
+    : "No closed or merged reviews match this repository scope.";
 }
 
 function ReviewCard({

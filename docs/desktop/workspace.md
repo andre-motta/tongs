@@ -273,8 +273,9 @@ Started plugins contribute their declared navigation entries below their title.
 Select an entry to open its installed module. The module view identifies the
 plugin and version, shows **Loading plugin module…** while it starts, and
 provides **Reload plugin**. A plugin can also contribute a command button in
-the top application bar, alongside the built-in commands described below. The module may publish notifications; dismiss a
-notification with its close control.
+the top application bar, alongside the built-in commands described under
+[Application bar commands](#application-bar-commands) above. The module may
+publish notifications; dismiss a notification with its close control.
 
 The module's declared help appears under **Plugin help**. If the help asset
 cannot be loaded, the workspace shows **Plugin help is unavailable.** A module

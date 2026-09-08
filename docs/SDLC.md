@@ -21,7 +21,7 @@ orchestration aid, not a prerequisite for ordinary contributions.
 | Integrated checks | `pytest`, `ruff check src/ tests/`, `ruff format --check src/ tests/`; include optional dependencies required by changed features |
 | Documentation checks | Local links, command examples, `git diff --check`; `mkdocs build --strict` for site inputs/navigation |
 | Functional proof | Exercise affected TUI/desktop workflows and attach observable evidence; distinguish mocked APIs from live forge calls |
-| Commit format | Title, blank line, one-line body; use `git commit -s`; Codex co-author uses `noreply@openai.com` |
+| Commit format | Title, blank line, one-line body; use `git commit -s`; the co-author trailer uses the address of the vendor that produced the commit, `noreply@openai.com` for Codex or `noreply@anthropic.com` for Claude, and never claims the other |
 | Upstream path | Desktop agent PRs into `feat/desktop-app`, the orchestrator integrates; final feature PR into `main`, CTO gates final acceptance and merge. Tags/releases/deployments need separate authority |
 | Initiative records | `docs/work/<initiative>.md`; keep public-safe summaries and use access-appropriate locations for sensitive artifacts |
 

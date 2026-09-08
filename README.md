@@ -549,9 +549,11 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 
 ## Current state
 
-The terminal application is the released, supported product: multi-forge inbox, diff viewer, inline comments and suggestions, discussion threads, durable review drafts, MR actions, pipeline and CI drill-down, the SQLite cache, the plugin system, and the MCP server are all implemented and shipping.
+The terminal application is the released, supported product. The version you get from PyPI today provides the multi-forge inbox, the diff viewer, inline comments and suggested changes, discussion threads, MR actions, pipeline and CI drill-down, the SQLite cache, the plugin system, and the MCP server.
 
-The desktop application, its per-user installer, and the Fedora RPM packaging are implemented in this tree but unreleased. Hardware-accelerated Electron on the supported Fedora host, packaging acceptance, and the release decision remain separate, unmet gates.
+Two terminal features described above are not in that release yet: the split diff view with its `v` toggle and `h` / `l` side focus, and durable review drafts with the `Ctrl+G` review flow. Both are implemented on the development branch and arrive with the next release.
+
+The desktop application, its per-user installer, and the Fedora RPM packaging are also implemented in this tree and unreleased. Hardware-accelerated Electron on the supported Fedora host, packaging acceptance, and the release decision remain separate, unmet gates.
 
 Track what is planned and what is blocked through the [open issues](https://github.com/andre-motta/tongs/issues) and their dependency links rather than through a phase table.
 

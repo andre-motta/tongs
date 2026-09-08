@@ -106,10 +106,21 @@ def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     assert "diffutils" in installer
     assert "dnf_transaction_options=(" in installer
     assert "--setopt=tsflags=" in installer
+    assert "clean_requirements_on_remove=False" not in installer
     assert "dnf-lifecycle-policy.txt" in installer
     assert '"$evidence_dir/$label.exit-status"' in installer
     for label in ("sidecar-plugin", "mcp-command", "post-mcp-sidecar-plugin"):
         assert f"run_bounded_check {label} 20s" in installer
+    mark_index = installer.index("dnf mark user python3")
+    assert installer.index("run_desktop_smoke hosted-launch") < mark_index
+    assert mark_index < installer.index("snapshot before-mcp")
+    assert "grep -Fx dependency" in installer
+    assert "grep -Fx user" in installer
+    assert "assert_verifier_python final-cycle-remove" in installer
+    assert "assert_verifier_python final-uninstall" in installer
+    assert "assert_tongs_import_absent final-cycle-remove" in installer
+    assert "assert_tongs_import_absent final-uninstall" in installer
+    assert "final-cycle-remove-absence.json" in installer
     transactions = re.findall(
         r"^dnf (?:install|reinstall|upgrade|remove) [^\n]+$", installer, re.MULTILINE
     )

@@ -174,6 +174,34 @@ installed_closure() {
         --queryformat '%{name}|%{epoch}|%{version}|%{release}|%{arch}|%{from_repo}\n' \
         | sort >"$1"
 }
+assert_verifier_python() {
+    local name=$1
+    [[ -x /usr/bin/python3 ]] || {
+        printf 'lifecycle verifier Python executable is absent: %s\n' "$name" >&2
+        return 1
+    }
+    rpm -q python3 \
+        --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
+        >"$evidence_dir/$name-verifier-python-nevra.txt"
+    cmp "$evidence_dir/verifier-python-nevra.txt" \
+        "$evidence_dir/$name-verifier-python-nevra.txt"
+    dnf repoquery --installed --queryformat '%{reason}\n' python3 \
+        >"$evidence_dir/$name-verifier-python-reason.txt"
+    grep -Fx user "$evidence_dir/$name-verifier-python-reason.txt"
+}
+assert_tongs_import_absent() {
+    local name=$1
+    /usr/bin/python3 -E -P - >"$evidence_dir/$name-tongs-import-absence.txt" <<'PY'
+try:
+    import tongs
+except ModuleNotFoundError as error:
+    if error.name != "tongs":
+        raise
+    print("tongs package is absent from the system interpreter")
+else:
+    raise RuntimeError("removed Tongs package remains importable")
+PY
+}
 dnf_transaction_options=(
     --assumeyes
     --setopt=install_weak_deps=False
@@ -357,6 +385,16 @@ run_desktop_smoke hosted-launch
 printf 'This hosted Xvfb smoke proves launcher/runtime liveness only; it makes no hardware GPU claim.\n' \
     >"$evidence_dir/hosted-launch-scope.txt"
 
+rpm -q python3 \
+    --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n' \
+    >"$evidence_dir/verifier-python-nevra.txt"
+dnf repoquery --installed --queryformat '%{reason}\n' python3 \
+    >"$evidence_dir/verifier-python-reason-before.txt"
+grep -Fx dependency "$evidence_dir/verifier-python-reason-before.txt"
+dnf mark user python3 2>&1 | tee "$evidence_dir/dnf-mark-verifier-python.log"
+assert_sentinels verifier-python-mark
+assert_verifier_python after-mark
+
 snapshot before-mcp
 installed_closure "$evidence_dir/mcp-closure-before.txt"
 dnf install "${dnf_transaction_options[@]}" --enablerepo=tongs-final \
@@ -423,10 +461,17 @@ dnf remove "${dnf_transaction_options[@]}" \
     tongs-desktop-test-plugin tongs-desktop python3-tongs \
     2>&1 | tee "$evidence_dir/dnf-final-cycle-remove.log"
 assert_sentinels final-cycle-remove
+assert_verifier_python final-cycle-remove
 /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-installed \
     --absent python3-tongs --absent 'python3-tongs+mcp' --absent tongs-desktop \
     --absent tongs-desktop-test-plugin \
     --output "$evidence_dir/final-cycle-remove-installed-state.json"
+/usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-absent \
+    --inventory "$evidence_dir/owned-path-inventory.json" \
+    --package python3-tongs --package 'python3-tongs+mcp' \
+    --package tongs-desktop --package tongs-desktop-test-plugin \
+    --output "$evidence_dir/final-cycle-remove-absence.json"
+assert_tongs_import_absent final-cycle-remove
 snapshot after-final-cycle-remove
 
 dnf install "${dnf_transaction_options[@]}" --enablerepo=tongs-previous \
@@ -539,9 +584,11 @@ dnf remove "${dnf_transaction_options[@]}" \
     tongs-desktop-test-plugin tongs-desktop python3-tongs \
     2>&1 | tee "$evidence_dir/dnf-uninstall.log"
 assert_sentinels final-uninstall
+assert_verifier_python final-uninstall
 /usr/bin/python3 -E -P "$packaging_dir/verify_rpm_state.py" assert-absent \
     --inventory "$evidence_dir/owned-path-inventory.json" \
     --package python3-tongs --package 'python3-tongs+mcp' \
     --package tongs-desktop --package tongs-desktop-test-plugin \
     --output "$evidence_dir/final-uninstall-absence.json"
+assert_tongs_import_absent final-uninstall
 snapshot after-uninstall

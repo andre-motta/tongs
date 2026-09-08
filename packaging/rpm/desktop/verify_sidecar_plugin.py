@@ -11,6 +11,9 @@ import importlib.util
 import json
 import os
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -44,11 +47,31 @@ def _request(
     raise RuntimeError(f"sidecar exited before responding to {method}")
 
 
+@contextmanager
+def _isolated_sidecar_environment() -> Iterator[tuple[dict[str, str], Path]]:
+    """Provide private desktop state without reading or changing user state."""
+
+    with tempfile.TemporaryDirectory(prefix="tongs-rpm-sidecar-", dir="/tmp") as value:
+        root = Path(value)
+        environment = os.environ.copy()
+        for variable, name in (
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("XDG_DATA_HOME", "data"),
+        ):
+            state_dir = root / name
+            state_dir.mkdir(mode=0o700)
+            environment[variable] = os.fspath(state_dir)
+        environment["PYTHONNOUSERSITE"] = "1"
+        yield environment, root
+
+
 def verify(expected_version: str, expected_module: Path, output_path: Path) -> None:
     command = ["/usr/bin/python3", "-E", "-P", "-m", "tongs.desktop.sidecar"]
-    environment = os.environ.copy()
-    environment["PYTHONNOUSERSITE"] = "1"
-    with output_path.open("w") as output:
+    with (
+        _isolated_sidecar_environment() as (environment, state_root),
+        output_path.open("w") as output,
+    ):
         process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -122,7 +145,24 @@ def verify(expected_version: str, expected_module: Path, output_path: Path) -> N
                 process.wait()
             assert process.stderr is not None
             stderr = process.stderr.read()
-            output.write(json.dumps({"command": command, "stderr": stderr}) + "\n")
+            output.write(
+                json.dumps(
+                    {
+                        "command": command,
+                        "isolated_state": {
+                            variable: environment[variable]
+                            for variable in (
+                                "XDG_CACHE_HOME",
+                                "XDG_CONFIG_HOME",
+                                "XDG_DATA_HOME",
+                            )
+                        },
+                        "state_root": os.fspath(state_root),
+                        "stderr": stderr,
+                    }
+                )
+                + "\n"
+            )
 
     distribution = importlib.metadata.distribution("tongs-desktop-test-plugin")
     module = importlib.util.find_spec("tongs_rpm_test_plugin")

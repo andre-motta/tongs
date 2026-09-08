@@ -40,6 +40,7 @@ def test_workflow_has_minimal_permissions_and_retains_artifacts() -> None:
     workflow = WORKFLOW.read_text()
 
     assert "permissions:\n  contents: read" in workflow
+    assert "ref: ${{ env.TONGS_HEAD_SHA }}" in workflow
     assert "persist-credentials: false" in workflow
     assert "actions/upload-artifact@v7" in workflow
     assert "secrets" not in workflow

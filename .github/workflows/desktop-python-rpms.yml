@@ -23,6 +23,7 @@ jobs:
       - name: Check out source without persisted credentials
         uses: actions/checkout@v6
         with:
+          ref: ${{ env.TONGS_HEAD_SHA }}
           persist-credentials: false
       - name: Record hosted runner and Podman versions
         run: |

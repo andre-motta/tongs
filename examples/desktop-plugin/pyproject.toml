@@ -23,3 +23,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 tongs_example_dashboard = ["assets/*.mjs", "assets/*.css", "assets/*.md"]
+
+[tool.ruff]
+src = ["src"]

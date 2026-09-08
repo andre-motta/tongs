@@ -1,0 +1,16 @@
+dist/shell/app.js
+dist/shell/icon.png
+dist/shell/index.html
+dist/shell/styles.css
+dist/src/main/assets.js
+dist/src/main/ci.js
+dist/src/main/index.js
+dist/src/main/ipc.js
+dist/src/main/launch.js
+dist/src/main/renderer_lifecycle.js
+dist/src/main/security.js
+dist/src/main/sidecar.js
+dist/src/preload/index.cjs
+dist/src/shared/bridge.js
+dist/src/shared/ci.js
+package.json

@@ -306,6 +306,9 @@ class _FixtureSession:
             ),
         )
 
+    async def get_raw_diff(self, review: ReviewRef) -> RawDiffSnapshot:
+        return await self._get_diff(review)
+
     async def _get_client(self, review: ReviewRef, _operation: str) -> ForgeClient:
         await self.get_review(review)
         return cast(ForgeClient, self._client)

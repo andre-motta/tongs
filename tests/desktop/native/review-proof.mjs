@@ -66,6 +66,7 @@ async function runProof() {
       "drafts.db-shm",
       "drafts.db-wal",
       "mock-forge-actions.jsonl",
+      "native-review-proof.json",
     ]) await rm(path.join(evidenceRoot, name), { force: true });
     const sourceBinding = await verifySourceBinding();
 
@@ -478,10 +479,11 @@ async function runProof() {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
     process.exitCode = 1;
   } finally {
+    const exitCode = process.exitCode ?? 0;
     controller?.dispose();
     if (window && !window.isDestroyed()) window.destroy();
     if (transport) await transport.stop().catch(() => undefined);
-    app.quit();
+    app.exit(exitCode);
   }
 }
 

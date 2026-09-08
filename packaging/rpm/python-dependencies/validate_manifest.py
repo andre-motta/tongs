@@ -9,6 +9,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_RPM_NAME = re.compile(r"^python3-[a-z0-9][a-z0-9+-]*$")
+_RPM_RELEASE = re.compile(r"^[1-9][0-9]*\.fc44$")
 
 
 def validate(manifest: dict[str, Any]) -> None:
@@ -28,7 +30,24 @@ def validate(manifest: dict[str, Any]) -> None:
         raise ValueError("duplicate companion distribution")
     if manifest["build_order"] != names:
         raise ValueError("companions must be listed in build order")
+    binary_names = [item["binary_rpm"]["name"] for item in companions]
+    if binary_names != list(dict.fromkeys(binary_names)):
+        raise ValueError("duplicate companion binary RPM name")
     for item in companions:
+        binary = item["binary_rpm"]
+        if not _RPM_NAME.fullmatch(binary["name"]):
+            raise ValueError(f"invalid binary RPM name for {item['distribution']}")
+        if binary["epoch"] != 0:
+            raise ValueError(f"unexpected binary RPM epoch for {item['distribution']}")
+        if not _RPM_RELEASE.fullmatch(binary["release"]):
+            raise ValueError(f"invalid binary RPM release for {item['distribution']}")
+        expected_arch = (
+            "x86_64" if item["distribution"] == "rfc3161-client" else "noarch"
+        )
+        if binary["architecture"] != expected_arch:
+            raise ValueError(
+                f"invalid binary RPM architecture for {item['distribution']}"
+            )
         source = item["source"]
         parsed = urlparse(source["url"])
         if parsed.scheme != "https" or parsed.hostname != "files.pythonhosted.org":

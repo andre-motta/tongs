@@ -4,7 +4,7 @@ import pytest
 
 from tongs.desktop.protocol.messages import ProtocolError, ProtocolErrorCode
 from tongs.desktop.protocol.state import HandleKind, HandleRegistry, SnapshotStore
-from tongs.services import RepositoryRef, ReviewRef
+from tongs.services import JobRef, PipelineRef, RepositoryRef, ReviewRef
 
 
 def test_handles_are_stable_session_local_and_kind_bound() -> None:
@@ -25,6 +25,24 @@ def test_handles_are_stable_session_local_and_kind_bound() -> None:
     with pytest.raises(ProtocolError) as other_session:
         second.resolve(handle, HandleKind.REVIEW, ReviewRef)
     assert other_session.value.code is ProtocolErrorCode.INVALID_HANDLE
+
+
+def test_job_handles_retain_exact_parent_without_breaking_value_resolution() -> None:
+    repository = RepositoryRef("git.example.com", "team/project")
+    first_pipeline = PipelineRef(repository, 10)
+    second_pipeline = PipelineRef(repository, 11)
+    job = JobRef(repository, 20)
+    handles = HandleRegistry()
+
+    first = handles.issue(HandleKind.JOB, job, parent=first_pipeline)
+    second = handles.issue(HandleKind.JOB, job, parent=second_pipeline)
+
+    assert first != second
+    assert handles.resolve(first, HandleKind.JOB, JobRef) == job
+    assert handles.resolve_with_parent(first, HandleKind.JOB, JobRef, PipelineRef) == (
+        job,
+        first_pipeline,
+    )
 
 
 def test_snapshot_owns_nested_input_and_returns_copy_safe_pages() -> None:

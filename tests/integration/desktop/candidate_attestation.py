@@ -107,6 +107,13 @@ _EXPECTED_TRANSFER_FILES: Final = _ARCHIVE_FILES | _EVIDENCE_FILES
 _SHA1_RE: Final = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _DECIMAL_RE: Final = re.compile(r"^[1-9][0-9]*$")
+_PULL_REQUEST_REF_RE: Final = re.compile(r"^refs/pull/[1-9][0-9]*/merge$")
+_REPOSITORY_RE: Final = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/"
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"
+)
+_MAX_IDENTITY_BYTES: Final = 512
+_MAX_IDENTITY_INTEGER: Final = 2**63 - 1
 _MAX_JSON_BYTES: Final = 4 * 1024 * 1024
 _MAX_BUNDLE_BYTES: Final = InstallerLimits().max_bundle_bytes
 _MAX_ARCHIVE_BYTES: Final = InstallerLimits().max_archive_bytes
@@ -115,6 +122,57 @@ _HASH_CHUNK_BYTES: Final = 1024 * 1024
 
 class CandidateAttestationError(ValueError):
     """Reject an incomplete, stale, or semantically invalid candidate."""
+
+
+@dataclass(frozen=True, slots=True)
+class UnsignedTransferIdentity:
+    """Caller-owned unsigned source and execution identity for one transfer."""
+
+    repository: str
+    repository_id: str
+    repository_owner_id: str
+    ref: str
+    source_commit: str
+    source_tree: str
+    event: str
+    run_id: str
+    run_attempt: int
+
+    def __post_init__(self) -> None:
+        """Reject malformed workflow identity without granting signing trust."""
+        if (
+            not isinstance(self.repository, str)
+            or _REPOSITORY_RE.fullmatch(self.repository) is None
+        ):
+            _fail("transfer repository is invalid")
+        for label, value in (
+            ("repository ID", self.repository_id),
+            ("owner ID", self.repository_owner_id),
+            ("run ID", self.run_id),
+        ):
+            if (
+                not isinstance(value, str)
+                or _DECIMAL_RE.fullmatch(value) is None
+                or len(value) > 19
+                or int(value) > _MAX_IDENTITY_INTEGER
+            ):
+                _fail(f"transfer {label} is invalid")
+        if (
+            not isinstance(self.source_commit, str)
+            or _SHA1_RE.fullmatch(self.source_commit) is None
+        ):
+            _fail("transfer source commit is invalid")
+        if (
+            not isinstance(self.source_tree, str)
+            or _SHA1_RE.fullmatch(self.source_tree) is None
+        ):
+            _fail("transfer source tree is invalid")
+        if (
+            type(self.run_attempt) is not int
+            or not 1 <= self.run_attempt <= _MAX_IDENTITY_INTEGER
+        ):
+            _fail("transfer run attempt is invalid")
+        _validate_transfer_event_ref(self.event, self.ref)
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +257,20 @@ class CandidateIdentity:
             builder_id=self.builder_id,
         )
 
+    def transfer_identity(self) -> UnsignedTransferIdentity:
+        """Return unsigned transfer fields without certificate trust claims."""
+        return UnsignedTransferIdentity(
+            repository=self.repository,
+            repository_id=self.repository_id,
+            repository_owner_id=self.repository_owner_id,
+            ref=self.ref,
+            source_commit=self.source_commit,
+            source_tree=self.source_tree,
+            event=self.event,
+            run_id=self.run_id,
+            run_attempt=self.run_attempt,
+        )
+
 
 def candidate_verification_policy(identity: CandidateIdentity) -> AllOf:
     """Build the test-only certificate policy for one candidate invocation."""
@@ -223,10 +295,11 @@ def candidate_verification_policy(identity: CandidateIdentity) -> AllOf:
 def prepare_transfer_manifest(
     root: Path,
     destination: Path,
-    identity: CandidateIdentity,
+    identity: UnsignedTransferIdentity,
     source_archive: Path,
 ) -> dict[str, Any]:
     """Bind the complete producer output before the immutable artifact upload."""
+    _require_transfer_identity(identity)
     if destination.parent != root or destination.name != TRANSFER_MANIFEST_NAME:
         _fail("transfer manifest must use its fixed name at the transfer root")
     files = _validate_transfer_files(root, source_archive)
@@ -258,10 +331,11 @@ def prepare_transfer_manifest(
 def validate_transfer_manifest(
     root: Path,
     manifest_path: Path,
-    identity: CandidateIdentity,
+    identity: UnsignedTransferIdentity,
     source_archive: Path,
 ) -> dict[str, Any]:
     """Rebind the downloaded producer output to consumer-owned run identity."""
+    _require_transfer_identity(identity)
     document = _load_json(manifest_path)
     expected_fields = {
         "schema_version",
@@ -865,7 +939,73 @@ def _fail(message: str) -> NoReturn:
     raise CandidateAttestationError(message)
 
 
-def _identity_from_arguments(arguments: argparse.Namespace) -> CandidateIdentity:
+def _require_transfer_identity(identity: object) -> None:
+    if not isinstance(identity, UnsignedTransferIdentity):
+        _fail("unsigned transfer identity is required")
+
+
+def _validate_transfer_event_ref(event: object, ref: object) -> None:
+    if not isinstance(event, str) or not isinstance(ref, str):
+        _fail("transfer event or ref is invalid")
+    try:
+        ref_size = len(ref.encode("utf-8", errors="strict"))
+    except UnicodeEncodeError as error:
+        raise CandidateAttestationError("transfer ref is invalid") from error
+    if not 0 < ref_size <= _MAX_IDENTITY_BYTES:
+        _fail("transfer ref is invalid")
+    if event == "pull_request":
+        if _PULL_REQUEST_REF_RE.fullmatch(ref) is None:
+            _fail("pull request transfer ref is invalid")
+        return
+    if event == "push":
+        if not _valid_branch_ref(ref):
+            _fail("push transfer ref is invalid")
+        return
+    _fail("transfer event is unsupported")
+
+
+def _valid_branch_ref(ref: str) -> bool:
+    if not ref.startswith("refs/heads/"):
+        return False
+    branch = ref.removeprefix("refs/heads/")
+    if (
+        not branch
+        or branch == "@"
+        or branch.startswith("/")
+        or branch.endswith(("/", "."))
+        or "//" in branch
+        or ".." in branch
+        or "@{" in branch
+        or any(
+            char in " ~^:?*[\\" or ord(char) < 32 or ord(char) == 127 for char in branch
+        )
+    ):
+        return False
+    return all(
+        component and not component.startswith(".") and not component.endswith(".lock")
+        for component in branch.split("/")
+    )
+
+
+def _transfer_identity_from_arguments(
+    arguments: argparse.Namespace,
+) -> UnsignedTransferIdentity:
+    return UnsignedTransferIdentity(
+        repository=arguments.repository,
+        repository_id=arguments.repository_id,
+        repository_owner_id=arguments.repository_owner_id,
+        ref=arguments.ref,
+        source_commit=arguments.source_commit,
+        source_tree=arguments.source_tree,
+        event=arguments.event,
+        run_id=arguments.run_id,
+        run_attempt=arguments.run_attempt,
+    )
+
+
+def _candidate_identity_from_arguments(
+    arguments: argparse.Namespace,
+) -> CandidateIdentity:
     return CandidateIdentity.official(
         repository=arguments.repository,
         repository_id=arguments.repository_id,
@@ -914,20 +1054,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the fail-closed candidate transfer or verification command."""
     arguments = _parser().parse_args(argv)
     try:
-        identity = _identity_from_arguments(arguments)
-        root = arguments.root.resolve(strict=True)
-        manifest_path = root / TRANSFER_MANIFEST_NAME
-        if arguments.command == "prepare-transfer":
-            prepare_transfer_manifest(
-                root, manifest_path, identity, arguments.source_archive
-            )
-            print("candidate transfer manifest prepared")
-        elif arguments.command == "validate-transfer":
-            validate_transfer_manifest(
-                root, manifest_path, identity, arguments.source_archive
-            )
-            print("candidate transfer identity and files verified")
-        else:
+        if arguments.command == "verify":
+            identity = _candidate_identity_from_arguments(arguments)
+            root = arguments.root.resolve(strict=True)
             verify_candidate(
                 root,
                 arguments.bundle,
@@ -935,6 +1064,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 identity,
             )
             print("real unpublished candidate attestation verified")
+        else:
+            identity = _transfer_identity_from_arguments(arguments)
+            root = arguments.root.resolve(strict=True)
+            manifest_path = root / TRANSFER_MANIFEST_NAME
+            if arguments.command == "prepare-transfer":
+                prepare_transfer_manifest(
+                    root, manifest_path, identity, arguments.source_archive
+                )
+                print("candidate transfer manifest prepared")
+            else:
+                validate_transfer_manifest(
+                    root, manifest_path, identity, arguments.source_archive
+                )
+                print("candidate transfer identity and files verified")
     except (CandidateAttestationError, OSError) as error:
         if arguments.command == "verify":
             arguments.report_root.mkdir(mode=0o755, parents=True, exist_ok=True)

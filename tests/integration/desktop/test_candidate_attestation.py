@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sigstore.errors import VerificationError
@@ -22,6 +23,10 @@ from tongs.desktop.installer.models import InstallerLimits
 SOURCE_COMMIT = "a" * 40
 SOURCE_TREE = "b" * 40
 REF = "refs/heads/feat/desktop-120-candidate-attestation"
+PR_REF = "refs/pull/138/merge"
+PUSH_TRANSFER_MANIFEST_SHA256 = (
+    "504b4cbfeb93d7769a67de10b8dc0aec809932e8761fd50a52ad948df32e4230"
+)
 
 
 def _identity() -> candidate.CandidateIdentity:
@@ -36,6 +41,53 @@ def _identity() -> candidate.CandidateIdentity:
         run_id="123456",
         run_attempt=1,
     )
+
+
+def _transfer_identity() -> candidate.UnsignedTransferIdentity:
+    return _identity().transfer_identity()
+
+
+def _pull_request_identity() -> candidate.UnsignedTransferIdentity:
+    return candidate.UnsignedTransferIdentity(
+        repository="andre-motta/tongs",
+        repository_id="1305350434",
+        repository_owner_id="30708955",
+        ref=PR_REF,
+        source_commit=SOURCE_COMMIT,
+        source_tree=SOURCE_TREE,
+        event="pull_request",
+        run_id="654321",
+        run_attempt=2,
+    )
+
+
+def _transfer_cli_arguments(command: str, root: Path, source: Path) -> list[str]:
+    identity = _pull_request_identity()
+    return [
+        command,
+        "--root",
+        str(root),
+        "--source-archive",
+        str(source),
+        "--repository",
+        identity.repository,
+        "--repository-id",
+        identity.repository_id,
+        "--repository-owner-id",
+        identity.repository_owner_id,
+        "--ref",
+        identity.ref,
+        "--source-commit",
+        identity.source_commit,
+        "--source-tree",
+        identity.source_tree,
+        "--event",
+        identity.event,
+        "--run-id",
+        identity.run_id,
+        "--run-attempt",
+        str(identity.run_attempt),
+    ]
 
 
 def _digest(value: bytes) -> str:
@@ -262,12 +314,233 @@ def test_official_identity_rejects_every_untrusted_boundary(
         candidate.CandidateIdentity.official(**values)  # type: ignore[arg-type]
 
 
+def test_unsigned_pull_request_transfer_roundtrips_through_cli(tmp_path: Path) -> None:
+    root = tmp_path / "candidate"
+    source = _write_output(root)
+
+    assert (
+        candidate.main(_transfer_cli_arguments("prepare-transfer", root, source)) == 0
+    )
+    manifest_path = root / candidate.TRANSFER_MANIFEST_NAME
+    prepared_bytes = manifest_path.read_bytes()
+    prepared = json.loads(prepared_bytes)
+    assert prepared["execution"] == {
+        "repository": "andre-motta/tongs",
+        "repository_id": "1305350434",
+        "repository_owner_id": "30708955",
+        "ref": PR_REF,
+        "event": "pull_request",
+        "run_id": "654321",
+        "run_attempt": 2,
+    }
+    assert (
+        candidate.main(_transfer_cli_arguments("validate-transfer", root, source)) == 0
+    )
+    assert manifest_path.read_bytes() == prepared_bytes
+
+
+def test_unsigned_pull_request_transfer_roundtrips_through_callables(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "candidate"
+    source = _write_output(root)
+    identity = _pull_request_identity()
+    manifest = root / candidate.TRANSFER_MANIFEST_NAME
+
+    prepared = candidate.prepare_transfer_manifest(root, manifest, identity, source)
+    validated = candidate.validate_transfer_manifest(root, manifest, identity, source)
+
+    assert validated == prepared
+    assert validated["source"] == {
+        "commit": SOURCE_COMMIT,
+        "tree": SOURCE_TREE,
+    }
+    assert validated["execution"]["ref"] == PR_REF
+    assert validated["execution"]["event"] == "pull_request"
+
+
+def test_official_push_conversion_preserves_manifest_bytes(tmp_path: Path) -> None:
+    root = tmp_path / "candidate"
+    source = _write_output(root)
+    official = _identity()
+
+    candidate.prepare_transfer_manifest(
+        root,
+        root / candidate.TRANSFER_MANIFEST_NAME,
+        official.transfer_identity(),
+        source,
+    )
+
+    manifest = (root / candidate.TRANSFER_MANIFEST_NAME).read_bytes()
+    assert len(manifest) == 3171
+    assert _digest(manifest) == PUSH_TRANSFER_MANIFEST_SHA256
+    assert json.loads(manifest)["execution"] == {
+        "repository": official.repository,
+        "repository_id": official.repository_id,
+        "repository_owner_id": official.repository_owner_id,
+        "ref": official.ref,
+        "event": official.event,
+        "run_id": official.run_id,
+        "run_attempt": official.run_attempt,
+    }
+
+
+@pytest.mark.parametrize(
+    ("event", "ref"),
+    [
+        ("pull_request", "refs/heads/feature"),
+        ("pull_request", "refs/pull/0/merge"),
+        ("pull_request", "refs/pull/01/merge"),
+        ("pull_request", "refs/pull/1/head"),
+        ("push", PR_REF),
+        ("push", "refs/heads/feature..branch"),
+        ("push", "refs/heads/feature@{upstream"),
+        ("push", "refs/heads/feature.lock"),
+        ("push", "refs/heads/.hidden"),
+        ("push", "refs/heads/feature/.hidden"),
+        ("push", "refs/heads/feature/nested.lock"),
+        ("push", "refs/heads/feature//nested"),
+        ("push", "refs/heads/feature/"),
+        ("push", "refs/heads/feature branch"),
+        ("push", "refs/heads/feature~1"),
+        ("push", f"refs/heads/{'a' * 600}"),
+        ("workflow_dispatch", "refs/heads/feature"),
+    ],
+)
+def test_unsigned_transfer_rejects_invalid_event_ref_pairs(
+    event: str, ref: str
+) -> None:
+    with pytest.raises(candidate.CandidateAttestationError):
+        replace(_pull_request_identity(), event=event, ref=ref)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("repository", "missing-slash"),
+        ("repository_id", "0"),
+        ("repository_owner_id", "not-decimal"),
+        ("source_commit", "short"),
+        ("source_tree", "A" * 40),
+        ("run_id", "0"),
+        ("run_id", "9" * 20),
+        ("repository_id", "9" * 20),
+        ("repository_owner_id", "9" * 20),
+        ("repository", f"owner/{'r' * 101}"),
+        ("run_attempt", 0),
+        ("run_attempt", 2**63),
+        ("run_attempt", True),
+    ],
+)
+def test_unsigned_transfer_rejects_malformed_identity_fields(
+    field: str, value: str | int | bool
+) -> None:
+    with pytest.raises(candidate.CandidateAttestationError):
+        replace(_pull_request_identity(), **{field: value})
+
+
+@pytest.mark.parametrize("identity_kind", ["candidate", "duck"])
+def test_transfer_callable_requires_explicit_unsigned_identity(
+    tmp_path: Path, identity_kind: str
+) -> None:
+    root = tmp_path / "candidate"
+    source = _write_output(root)
+    official = _identity()
+    identity = (
+        official
+        if identity_kind == "candidate"
+        else SimpleNamespace(**asdict(official.transfer_identity()))
+    )
+
+    with pytest.raises(candidate.CandidateAttestationError, match="unsigned"):
+        candidate.prepare_transfer_manifest(
+            root,
+            root / candidate.TRANSFER_MANIFEST_NAME,
+            identity,  # type: ignore[arg-type]
+            source,
+        )
+    assert not (root / candidate.TRANSFER_MANIFEST_NAME).exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("repository", "someone/tongs"),
+        ("source_commit", "c" * 40),
+        ("source_tree", "c" * 40),
+        ("ref", "refs/pull/139/merge"),
+        ("run_id", "654322"),
+        ("run_attempt", 3),
+    ],
+)
+def test_pull_request_transfer_rejects_mismatched_caller_identity(
+    tmp_path: Path, field: str, value: str | int
+) -> None:
+    root = tmp_path / "candidate"
+    source = _write_output(root)
+    identity = _pull_request_identity()
+    manifest = root / candidate.TRANSFER_MANIFEST_NAME
+    candidate.prepare_transfer_manifest(root, manifest, identity, source)
+
+    with pytest.raises(candidate.CandidateAttestationError, match="stale"):
+        candidate.validate_transfer_manifest(
+            root, manifest, replace(identity, **{field: value}), source
+        )
+
+
+def test_official_and_verify_cli_reject_pull_request_identity(tmp_path: Path) -> None:
+    values = {
+        "repository": "andre-motta/tongs",
+        "repository_id": "1305350434",
+        "repository_owner_id": "30708955",
+        "ref": PR_REF,
+        "source_commit": SOURCE_COMMIT,
+        "source_tree": SOURCE_TREE,
+        "event": "pull_request",
+        "run_id": "654321",
+        "run_attempt": 2,
+    }
+    with pytest.raises(candidate.CandidateAttestationError):
+        candidate.CandidateIdentity.official(**values)
+
+    root = tmp_path / "missing-candidate"
+    report = tmp_path / "report"
+    arguments = [
+        "verify",
+        "--root",
+        str(root),
+        "--bundle",
+        str(tmp_path / "unused.sigstore.json"),
+        "--report-root",
+        str(report),
+    ]
+    for flag, key in (
+        ("--repository", "repository"),
+        ("--repository-id", "repository_id"),
+        ("--repository-owner-id", "repository_owner_id"),
+        ("--ref", "ref"),
+        ("--source-commit", "source_commit"),
+        ("--source-tree", "source_tree"),
+        ("--event", "event"),
+        ("--run-id", "run_id"),
+        ("--run-attempt", "run_attempt"),
+    ):
+        arguments.extend((flag, str(values[key])))
+
+    assert candidate.main(arguments) == 1
+    failure = json.loads(
+        (report / "candidate-attestation-results.json").read_text(encoding="utf-8")
+    )
+    assert failure["result"] == "fail"
+    assert "explicitly allowed branch" in failure["error"]
+
+
 def test_transfer_manifest_binds_exact_paths_source_and_subjects(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "candidate"
     source = _write_output(root)
-    identity = _identity()
+    identity = _transfer_identity()
 
     prepared = candidate.prepare_transfer_manifest(
         root, root / candidate.TRANSFER_MANIFEST_NAME, identity, source
@@ -290,7 +563,7 @@ def test_transfer_rejects_path_byte_and_source_mutation(
 ) -> None:
     root = tmp_path / "candidate"
     source = _write_output(root)
-    identity = _identity()
+    identity = _transfer_identity()
     manifest = root / candidate.TRANSFER_MANIFEST_NAME
     candidate.prepare_transfer_manifest(root, manifest, identity, source)
     if mutation == "extra":
@@ -309,7 +582,7 @@ def test_transfer_rejects_path_byte_and_source_mutation(
 def test_transfer_rejects_stale_identity_and_symlink(tmp_path: Path) -> None:
     root = tmp_path / "candidate"
     source = _write_output(root)
-    identity = _identity()
+    identity = _transfer_identity()
     manifest = root / candidate.TRANSFER_MANIFEST_NAME
     candidate.prepare_transfer_manifest(root, manifest, identity, source)
 
@@ -367,7 +640,10 @@ def test_full_harness_requires_positive_baselines_and_records_each_stage(
     source = _write_output(root)
     identity = _identity()
     candidate.prepare_transfer_manifest(
-        root, root / candidate.TRANSFER_MANIFEST_NAME, identity, source
+        root,
+        root / candidate.TRANSFER_MANIFEST_NAME,
+        identity.transfer_identity(),
+        source,
     )
     subjects = {
         "desktop-manifest-v1.json": _digest(

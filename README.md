@@ -115,6 +115,41 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 - **External editor** -- press `F2` inside the comment editor to switch to your preferred editor
 - **General comments** -- press `c` from the overview tab to post a top-level MR comment
 
+### Desktop review workspace (unreleased)
+
+The terminal TUI remains the default interface. The current desktop workspace
+is an unreleased local-repository interface, documented in the [desktop
+workspace guide](docs/desktop/workspace.md); it does not add a separate
+installation or publication path.
+
+The desktop sidebar scans the configured local `scan_root` and `scan_depth`.
+It supports display-name search, GitHub/GitLab filtering, and Name, Forge, or
+Host sorting, while retaining entries whose host is missing. Its inbox uses
+the labels **My Reviews**, **My MRs**, **All Open**, **Open**, and **Closed &
+merged**. **All Open** is the scope that provides closed and merged reviews.
+Refreshing retains the current context and available review data; a partial
+repository failure leaves successful results visible. Selecting another
+repository resets the inbox query to that repository's default context.
+
+In the desktop Discussions panel, **Quick comment** and **Quick inline
+comment** act immediately. **Start review** or **Resume review** opens a
+durable draft. Draft edits are revision-bound, and a stale-version conflict
+keeps unsaved text for deliberate resolution. Submissions report partial or
+unknown outcomes and require explicit reconciliation when the remote result
+cannot be established. Uncertain writes are not replayed automatically.
+
+Desktop suggestions require a complete current diff selection containing
+contiguous new-side lines. **Unified** and **Split** are display layouts;
+deletions, old-side lines, partial diffs, unavailable files, and earlier
+revisions cannot be suggested. The replacement remains editable and uses the
+forge's supported suggestion syntax for GitHub or GitLab.
+
+Desktop descriptions and discussions render ordinary Markdown while keeping
+raw HTML inert and images as text placeholders. Large or complex content can
+fall back to a bounded plain-text preview, and an aggregate discussion budget
+can omit later Markdown. HTTPS links open externally only after explicit
+activation.
+
 ### Pipeline / CI
 
 - **Three-level drill-down** -- browse pipelines, drill into jobs grouped by stage, drill into full job logs
@@ -152,6 +187,9 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab auth tok
 - **Refresh** (`Ctrl+R`) -- reload the current view
 
 ## Keybindings
+
+The keybindings below describe the terminal TUI. The unreleased desktop
+workspace uses labelled controls and does not change these terminal commands.
 
 ### Global
 

@@ -17,6 +17,7 @@ const caps = [
   "paged_logs",
   "plugins",
   "review_mutations",
+  "workspace_utilities",
 ];
 const methods = [
   "assets.list",
@@ -60,6 +61,9 @@ const methods = [
   "review_submissions.status",
   "reviews.get",
   "reviews.list",
+  "utilities.cache_clear",
+  "utilities.job_log_export",
+  "utilities.review_url",
   "drafts.create",
   "drafts.discard",
   "drafts.get",

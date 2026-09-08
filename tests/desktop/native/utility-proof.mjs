@@ -163,6 +163,65 @@ async function runProof() {
     await waitForFile(editorEvidence);
     const editorRecord = JSON.parse(await readFile(editorEvidence, "utf8"));
     await waitForEmpty(exportRoot);
+    const layout = await evaluate(`
+      const roundedRect = (element) => {
+        const value = element.getBoundingClientRect();
+        return {
+          left: Math.round(value.left * 100) / 100,
+          right: Math.round(value.right * 100) / 100,
+          top: Math.round(value.top * 100) / 100,
+          bottom: Math.round(value.bottom * 100) / 100,
+        };
+      };
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      const actions = [...document.querySelectorAll(".ci-detail .ci-actions button")]
+        .map((element) => {
+          const buttonRect = roundedRect(element);
+          const owner = element.closest(
+            ".ci-summary, .ci-job-detail, .ci-log, .ci-confirmation, .ci-mutation-result",
+          );
+          return {
+            label: element.textContent.trim(),
+            button: buttonRect,
+            owner: owner ? roundedRect(owner) : null,
+            visible: buttonRect.bottom > 0 && buttonRect.top < viewport.height,
+          };
+        })
+        .filter((item) => item.visible);
+      const violations = actions.flatMap((item) => {
+        if (!item.owner) return [item.label + ": missing owner"];
+        if (
+          item.button.left < 0 ||
+          item.button.right > viewport.width ||
+          item.button.top < 0 ||
+          item.button.bottom > viewport.height
+        )
+          return [item.label + ": outside viewport"];
+        if (
+          item.button.left < item.owner.left - 0.5 ||
+          item.button.right > item.owner.right + 0.5 ||
+          item.button.top < item.owner.top - 0.5 ||
+          item.button.bottom > item.owner.bottom + 0.5
+        )
+          return [item.label + ": outside owning panel"];
+        return [];
+      });
+      const jobList = roundedRect(document.querySelector(".ci-job-list"));
+      const jobDetail = roundedRect(document.querySelector(".ci-job-detail"));
+      const jobPanelsOverlap = !(
+        jobList.bottom <= jobDetail.top + 0.5 ||
+        jobDetail.bottom <= jobList.top + 0.5 ||
+        jobList.right <= jobDetail.left + 0.5 ||
+        jobDetail.right <= jobList.left + 0.5
+      );
+      if (viewport.width !== 1180 || violations.length || jobPanelsOverlap) {
+        throw new Error(
+          "Native utility geometry failed: " +
+            JSON.stringify({ viewport, violations, jobList, jobDetail, jobPanelsOverlap }),
+        );
+      }
+      return { viewport, actions, violations, jobList, jobDetail, jobPanelsOverlap };
+    `);
     const screenshot = await capture("utility-workflows.png");
     const actions = (await readFile(path.join(evidenceRoot, "mock-forge-actions.jsonl"), "utf8"))
       .trim()
@@ -188,6 +247,7 @@ async function runProof() {
       cache,
       editor,
       editorRecord,
+      layout,
       actions,
       exportFilesAfterEditorExit: (await readdir(exportRoot)).filter((name) =>
         /^tongs-slot-[1-8]-job-/.test(name)),

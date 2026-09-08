@@ -557,6 +557,10 @@ button {
   align-items: center;
   gap: 10px;
 }
+.ci-actions {
+  min-width: 0;
+  flex-wrap: wrap;
+}
 
 .utility-dialog-backdrop {
   position: fixed;
@@ -1087,6 +1091,27 @@ button {
     background: #edf0f4;
   }
 }
+@media (max-width: 1200px) {
+  .ci-workspace {
+    grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+  }
+  .ci-job-layout {
+    grid-template-columns: 1fr;
+  }
+  .ci-job-list {
+    max-height: 150px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .ci-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .ci-summary > .ci-actions,
+  .ci-job-detail > .ci-actions {
+    justify-content: flex-start;
+  }
+}
 @media (max-width: 900px) {
   .app-layout {
     grid-template-columns: 190px minmax(570px, 1fr);
@@ -1100,18 +1125,6 @@ button {
   .plugin-module {
     padding: 16px;
   }
-  .ci-workspace {
-    grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
-  }
-  .ci-job-layout {
-    grid-template-columns: 1fr;
-  }
-  .ci-job-list {
-    max-height: 150px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .ci-summary,
   .ci-confirmation {
     align-items: flex-start;
     flex-direction: column;

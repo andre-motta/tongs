@@ -95,6 +95,21 @@ assert.deepEqual(
 );
 assert.match(report.cache.notice, /Draft reviews were preserved\./);
 assert.match(report.editor.notice, /Tongs cannot confirm/);
+assert.deepEqual(report.layout.viewport, { width: 1180, height: 780 });
+assert.deepEqual(report.layout.violations, []);
+assert.equal(report.layout.jobPanelsOverlap, false);
+assert.ok(report.layout.actions.length >= 8);
+for (const action of report.layout.actions) {
+  assert.ok(action.button.left >= 0);
+  assert.ok(action.button.right <= report.layout.viewport.width);
+  assert.ok(action.button.top >= 0);
+  assert.ok(action.button.bottom <= report.layout.viewport.height);
+  assert.ok(action.owner);
+  assert.ok(action.button.left >= action.owner.left - 0.5);
+  assert.ok(action.button.right <= action.owner.right + 0.5);
+  assert.ok(action.button.top >= action.owner.top - 0.5);
+  assert.ok(action.button.bottom <= action.owner.bottom + 0.5);
+}
 const screenshotPath = path.resolve(report.screenshot.path);
 assert.equal(path.dirname(screenshotPath), evidenceRoot);
 const screenshotBytes = await readFile(screenshotPath);

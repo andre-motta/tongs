@@ -44,6 +44,8 @@ export interface InlineAnchorSelection {
   readonly oldLine: number | null;
   readonly newLine: number | null;
   readonly lineType: string;
+  readonly contextLines: readonly string[];
+  readonly contextComplete: boolean;
 }
 
 export interface ReviewPanelContribution {

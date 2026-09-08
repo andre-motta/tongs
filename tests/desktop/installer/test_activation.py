@@ -24,6 +24,7 @@ from tongs.desktop.installer.activation import (
     validate_installed_payload,
 )
 from tongs.desktop.installer.extract import extract_verified_archive
+from tongs.desktop.installer.menu import render_desktop_entry
 from tongs.desktop.installer.models import (
     AcceptedReleaseState,
     InstallerError,
@@ -426,6 +427,44 @@ def test_prepublication_failures_leave_prior_state_launchable(
         f"Icon={_installed_icon_path(first.activated.payload.target_path)}\n"
         in original_menu.decode()
     )
+
+
+def test_prepublication_failure_restores_a_legacy_menu_without_icon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    environment = _environment(tmp_path)
+    first_stage = _stage_with_icon(store, b"first-icon")
+    original_icon_path = activation_module._payload_icon_path
+    monkeypatch.setattr(activation_module, "_payload_icon_path", lambda _payload: None)
+    with store.transaction() as transaction:
+        first = activate_staged_artifact(transaction, first_stage, environment)
+    legacy_menu = store.paths.menu_path.read_bytes()
+    assert legacy_menu == render_desktop_entry(environment.console_path)
+    monkeypatch.setattr(activation_module, "_payload_icon_path", original_icon_path)
+
+    second_stage = _stage_with_icon(store, b"second-icon")
+    original_write = activation_module._write_private_document
+
+    def fail_state(path: Path, document: bytes) -> None:
+        if path == store.paths.state_path:
+            raise InstallerError(
+                activation_module.InstallerErrorCode.STATE_CONFLICT,
+                "injected state failure",
+            )
+        original_write(path, document)
+
+    monkeypatch.setattr(activation_module, "_write_private_document", fail_state)
+    with store.transaction() as transaction, pytest.raises(InstallerError):
+        activate_staged_artifact(transaction, second_stage, environment)
+    monkeypatch.undo()
+
+    with store.transaction() as transaction:
+        persisted = transaction.read_state()
+    assert persisted == first.state
+    assert persisted is not None
+    assert hashlib.sha256(legacy_menu).hexdigest() == persisted.menu_sha256
+    assert store.paths.menu_path.read_bytes() == legacy_menu
 
 
 def test_lock_contention_is_bounded_and_retryable(tmp_path: Path) -> None:

@@ -1040,10 +1040,11 @@ def _restore_previous_menu(
                 transaction.paths.menu_path, expected_digest=candidate_digest
             )
         else:
+            icon_path = _recorded_menu_icon_path(current.active, current.menu_sha256)
             install_user_menu(
                 transaction.paths.menu_path,
                 current.active.environment.console_path,
-                icon_path=_payload_icon_path(current.active.payload),
+                icon_path=icon_path,
                 replace_digest=candidate_digest,
             )
     except (InstallerError, OSError):
@@ -1102,6 +1103,24 @@ def _payload_icon_path(payload: InstalledPayload) -> Path | None:
     if any(declared.path == _DESKTOP_ICON_PATH for declared in payload.files):
         return payload.target_path / _DESKTOP_ICON_PATH
     return None
+
+
+def _recorded_menu_icon_path(
+    target: InstallationTarget, expected_digest: str | None
+) -> Path | None:
+    """Select the icon form whose bytes are owned by the persisted menu digest."""
+    icon_path = _payload_icon_path(target.payload)
+    candidates = (icon_path, None) if icon_path is not None else (None,)
+    for candidate in candidates:
+        document = render_desktop_entry(
+            target.environment.console_path, icon_path=candidate
+        )
+        if hashlib.sha256(document).hexdigest() == expected_digest:
+            return candidate
+    raise InstallerError(
+        InstallerErrorCode.STATE_CONFLICT,
+        "The recorded desktop menu identity is inconsistent.",
+    )
 
 
 def _menu_replacement_digest(

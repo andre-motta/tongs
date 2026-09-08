@@ -173,7 +173,7 @@ test("opens an admitted link only on activation and reports bridge refusal", asy
 });
 
 test("uses bounded plain-text fallbacks without parsing truncated Markdown", () => {
-  const oversized = `${"😀".repeat(4096)}${"x".repeat(49_153)}`;
+  const oversized = `${"😀".repeat(1024)}${"x".repeat(5000)}`;
   const inputView = renderMarkdown(oversized);
   assert.match(inputView.getByRole("status").textContent, /safe input limit/);
   assert.equal(
@@ -186,9 +186,23 @@ test("uses bounded plain-text fallbacks without parsing truncated Markdown", () 
   );
   cleanup();
 
-  const manyNodes = "*x* ".repeat(1_500);
-  const nodeView = renderMarkdown(manyNodes);
-  assert.match(nodeView.getByRole("status").textContent, /structure exceeds/);
+  const pathologicalDelimiters = `${"[".repeat(32_768)}${"]".repeat(32_768)}`;
+  const delimiterView = renderMarkdown(pathologicalDelimiters);
+  assert.match(
+    delimiterView.getByRole("status").textContent,
+    /safe input limit/,
+  );
+  cleanup();
+
+  const boundaryView = renderMarkdown("x".repeat(4 * 1024));
+  assert.equal(boundaryView.queryByRole("status"), null);
+  cleanup();
+
+  const overBoundaryView = renderMarkdown("x".repeat(4 * 1024 + 1));
+  assert.match(
+    overBoundaryView.getByRole("status").textContent,
+    /safe input limit/,
+  );
   cleanup();
 
   const deeplyNested = `${"> ".repeat(34)}deep`;

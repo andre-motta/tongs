@@ -8,7 +8,9 @@ import {
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-const MAX_INPUT_BYTES = 64 * 1024;
+// Dense link delimiters make synchronous CommonMark parsing nonlinear. Bounded
+// child measurements take about 60 ms at this ceiling and seconds at 64 KiB.
+const MAX_INPUT_BYTES = 4 * 1024;
 const MAX_AST_NODES = 4096;
 const MAX_AST_DEPTH = 32;
 const MAX_PREVIEW_CODE_POINTS = 4096;
@@ -127,7 +129,6 @@ export const SafeMarkdown = memo(function SafeMarkdown({
       />
     );
   }
-
   try {
     return (
       <div className="safe-markdown">

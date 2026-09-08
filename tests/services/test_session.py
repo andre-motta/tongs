@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -515,6 +516,20 @@ class TestReferences:
     def test_review_number_must_be_positive(self) -> None:
         with pytest.raises(ValueError):
             ReviewRef(RepositoryRef("github.com", "acme/widgets"), 0)
+
+    @pytest.mark.parametrize(
+        "hostnames",
+        [
+            ["github.com"],
+            ("GitHub.com",),
+            ("github.com", "github.com"),
+        ],
+    )
+    def test_review_query_rejects_invalid_host_restrictions(
+        self, hostnames: object
+    ) -> None:
+        with pytest.raises((TypeError, ValueError)):
+            ReviewQuery(ReviewScope.MY_REVIEWS, hostnames=hostnames)  # type: ignore[arg-type]
 
 
 class TestLifecycle:
@@ -1131,6 +1146,37 @@ class TestLifecycle:
 
 
 class TestResourceIssuance:
+    def test_owned_resource_accessors_require_started_session(self) -> None:
+        session = ApplicationSession(
+            config=Config(),
+            cache=FakeCache(),
+            draft_store=FakeDraftStore(),  # type: ignore[arg-type]
+            forge_registry=FakeRegistry(),
+        )
+
+        for accessor in ("cache", "forge_registry", "local_repositories"):
+            with pytest.raises(ServiceError) as caught:
+                getattr(session, accessor)
+            assert caught.value.code is ServiceErrorCode.NOT_STARTED
+
+    @pytest.mark.asyncio
+    async def test_owned_resource_accessors_return_exact_session_objects(
+        self,
+    ) -> None:
+        cache = FakeCache()
+        registry = FakeRegistry()
+        session = await start_session(registry, cache=cache)
+
+        assert session.cache is cache
+        assert session.forge_registry is registry
+        assert session.local_repositories == ()
+
+        await session.close()
+        for accessor in ("cache", "forge_registry", "local_repositories"):
+            with pytest.raises(ServiceError) as caught:
+                getattr(session, accessor)
+            assert caught.value.code is ServiceErrorCode.CLOSED
+
     @pytest.mark.asyncio
     async def test_well_formed_unissued_same_host_fails_before_forge_call(self) -> None:
         registry = FakeRegistry()
@@ -1160,6 +1206,116 @@ class TestResourceIssuance:
         await session.close()
 
     @pytest.mark.asyncio
+    async def test_discovery_preserves_actual_local_inventory_without_admitting_unknown_host(
+        self, tmp_path: Path
+    ) -> None:
+        admitted = make_repo(tmp_path)
+        local_only = make_repo(
+            tmp_path,
+            hostname="code.example.test",
+            project="internal/tools",
+            forge_type=ForgeType.GITLAB,
+        )
+
+        session = await start_session(
+            FakeRegistry(), discoverer=lambda *args, **kwargs: [local_only, admitted]
+        )
+        snapshots = await session.discover_repositories()
+
+        assert session.local_repositories == (local_only, admitted)
+        assert session.local_repositories[0] is local_only
+        assert session.local_repositories[1] is admitted
+        assert [snapshot.ref for snapshot in snapshots] == [
+            RepositoryRef("github.com", "acme/widgets")
+        ]
+        assert not hasattr(snapshots[0], "local_path")
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_late_discovery_cannot_replace_newer_inventory(
+        self, tmp_path: Path
+    ) -> None:
+        old_repo = make_repo(tmp_path, project="acme/old")
+        new_repo = make_repo(tmp_path, project="acme/new")
+        first_started = threading.Event()
+        release_first = threading.Event()
+        calls = 0
+
+        def discoverer(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_started.set()
+                assert release_first.wait(timeout=2)
+                return [old_repo]
+            return [new_repo]
+
+        session = await start_session(FakeRegistry(), discoverer=discoverer)
+        first = asyncio.create_task(session.discover_repositories())
+        assert await asyncio.to_thread(first_started.wait, 2)
+        second_result = await session.discover_repositories()
+        release_first.set()
+        first_result = await first
+
+        expected = RepositoryRef("github.com", "acme/new")
+        assert [snapshot.ref for snapshot in second_result] == [expected]
+        assert [snapshot.ref for snapshot in first_result] == [expected]
+        assert session.local_repositories == (new_repo,)
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_failed_refresh_preserves_last_usable_local_inventory(
+        self, tmp_path: Path
+    ) -> None:
+        repo = make_repo(tmp_path)
+        calls = 0
+
+        def discoverer(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return [repo]
+            raise RuntimeError("private scanner detail")
+
+        session = await start_session(FakeRegistry(), discoverer=discoverer)
+        await session.discover_repositories()
+
+        with pytest.raises(ServiceError) as caught:
+            await session.discover_repositories()
+
+        assert caught.value.code is ServiceErrorCode.INTERNAL
+        assert "private scanner detail" not in str(caught.value)
+        assert session.local_repositories == (repo,)
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_discovery_finishing_after_close_cannot_publish(
+        self, tmp_path: Path
+    ) -> None:
+        repo = make_repo(tmp_path)
+        started = threading.Event()
+        release = threading.Event()
+
+        def discoverer(*args, **kwargs):
+            started.set()
+            assert release.wait(timeout=2)
+            return [repo]
+
+        session = await start_session(FakeRegistry(), discoverer=discoverer)
+        discovery = asyncio.create_task(session.discover_repositories())
+        assert await asyncio.to_thread(started.wait, 2)
+
+        await session.close()
+        release.set()
+        with pytest.raises(ServiceError) as caught:
+            await discovery
+
+        assert caught.value.code is ServiceErrorCode.CLOSED
+        with pytest.raises(ServiceError) as local_access:
+            _ = session.local_repositories
+        assert local_access.value.code is ServiceErrorCode.CLOSED
+
+    @pytest.mark.asyncio
     async def test_discovery_collapses_duplicate_repository_identity(
         self, tmp_path: Path
     ) -> None:
@@ -1186,6 +1342,125 @@ class TestResourceIssuance:
 
 
 class TestReviewReads:
+    @pytest.mark.asyncio
+    async def test_personal_query_only_contacts_selected_discovered_host(
+        self, tmp_path: Path
+    ) -> None:
+        github = FakeClient()
+        github.my_reviews = [
+            make_summary(project="acme/widgets"),
+            make_summary(project="personal/elsewhere", number=9),
+        ]
+        gitlab = FakeClient(make_detail(GITLAB_HOST, start="start-1"))
+        gitlab.my_reviews = [make_summary(GITLAB_HOST, project="team/tools")]
+        registry = FakeRegistry({"github.com": github, "gitlab.com": gitlab})
+        session = await start_session(
+            registry,
+            discoverer=lambda *args, **kwargs: [make_repo(tmp_path)],
+        )
+        await session.discover_repositories()
+        registry.get_client_calls.clear()
+
+        page = await session.list_reviews(
+            ReviewQuery(ReviewScope.MY_REVIEWS, hostnames=("github.com",))
+        )
+
+        assert [item.ref.repository.project_path for item in page.items] == [
+            "acme/widgets",
+            "personal/elsewhere",
+        ]
+        assert registry.get_client_calls == ["github.com"]
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_empty_host_restriction_performs_no_forge_lookup(self) -> None:
+        registry = FakeRegistry({"github.com": FakeClient()})
+        session = await start_session(registry)
+
+        page = await session.list_reviews(
+            ReviewQuery(ReviewScope.MY_REVIEWS, hostnames=())
+        )
+
+        assert page.items == ()
+        assert page.failures == ()
+        assert registry.get_client_calls == []
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_unknown_host_restriction_fails_before_forge_lookup(self) -> None:
+        registry = FakeRegistry({"github.com": FakeClient()})
+        session = await start_session(registry)
+
+        with pytest.raises(ServiceError) as caught:
+            await session.list_reviews(
+                ReviewQuery(
+                    ReviewScope.MY_REVIEWS,
+                    hostnames=("enterprise.example",),
+                )
+            )
+
+        assert caught.value.code is ServiceErrorCode.INVALID_INPUT
+        assert registry.get_client_calls == []
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_repository_must_match_host_restriction_before_lookup(
+        self, tmp_path: Path
+    ) -> None:
+        registry = FakeRegistry(
+            {"github.com": FakeClient(), "gitlab.com": FakeClient()}
+        )
+        session = await start_session(
+            registry,
+            discoverer=lambda *args, **kwargs: [make_repo(tmp_path)],
+        )
+        repository = (await session.discover_repositories())[0].ref
+        registry.get_client_calls.clear()
+
+        with pytest.raises(ServiceError) as caught:
+            await session.list_reviews(
+                ReviewQuery(
+                    ReviewScope.MY_REVIEWS,
+                    repository=repository,
+                    hostnames=("gitlab.com",),
+                )
+            )
+
+        assert caught.value.code is ServiceErrorCode.INVALID_INPUT
+        assert registry.get_client_calls == []
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_all_open_host_restriction_uses_only_matching_issued_repositories(
+        self, tmp_path: Path
+    ) -> None:
+        github = FakeClient()
+        gitlab = FakeClient(make_detail(GITLAB_HOST, start="start-1"))
+        gitlab.repository_reviews = [make_summary(GITLAB_HOST, project="team/tools")]
+        registry = FakeRegistry({"github.com": github, "gitlab.com": gitlab})
+        session = await start_session(
+            registry,
+            discoverer=lambda *args, **kwargs: [
+                make_repo(tmp_path),
+                make_repo(
+                    tmp_path,
+                    hostname="gitlab.com",
+                    project="team/tools",
+                    forge_type=ForgeType.GITLAB,
+                ),
+            ],
+        )
+        await session.discover_repositories()
+        registry.get_client_calls.clear()
+
+        page = await session.list_reviews(
+            ReviewQuery(ReviewScope.ALL_OPEN, hostnames=("github.com",))
+        )
+
+        assert {item.ref.repository.hostname for item in page.items} == {"github.com"}
+        assert registry.get_client_calls == ["github.com"]
+        await session.close()
+
     @pytest.mark.asyncio
     async def test_inbox_preserves_success_when_other_host_fails(self) -> None:
         github = FakeClient()

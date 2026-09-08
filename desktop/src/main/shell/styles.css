@@ -125,7 +125,7 @@ button {
 .nav-item-active {
   background: var(--panel-2);
   outline: none;
-  color: white;
+  color: var(--text);
 }
 .content {
   overflow: auto;
@@ -606,6 +606,9 @@ button {
     --muted: #5f6f80;
     --accent: #0969da;
     --accent-2: #dbeafe;
+    --success: #147d4a;
+    --danger: #c62828;
+    --warning: #8a5a00;
     --addition: #dcfce7;
     --deletion: #fee2e2;
   }

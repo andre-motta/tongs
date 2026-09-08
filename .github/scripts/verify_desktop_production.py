@@ -59,12 +59,23 @@ class ReceiptPolicy:
 
     expected_commit: str
     expected_tree: str
+    expected_repository: str
+    expected_run_id: str
+    expected_attempt: int
+    expected_environment: str
+    expected_provenance: str
     required_check_ids: Collection[str]
     report_formats: Mapping[str, frozenset[str]]
 
     def __post_init__(self) -> None:
         _validate_sha1(self.expected_commit, "expected commit")
         _validate_sha1(self.expected_tree, "expected tree")
+        _validate_text(self.expected_repository, "expected repository")
+        _validate_decimal_string(self.expected_run_id, "expected run ID")
+        _validate_positive_integer(self.expected_attempt, "expected attempt")
+        _validate_text(self.expected_environment, "expected environment")
+        if self.expected_provenance not in _PROVENANCES:
+            raise ReceiptValidationError("expected provenance is unsupported")
         check_ids = tuple(self.required_check_ids)
         if not check_ids:
             raise ReceiptValidationError("required check IDs must not be empty")
@@ -287,17 +298,25 @@ def _validate_structure(
         {"repository", "run_id", "attempt", "environment", "provenance"},
         "execution",
     )
-    _require_text(execution["repository"], "execution.repository")
+    repository = _require_text(execution["repository"], "execution.repository")
     run_id = _require_text(execution["run_id"], "execution.run_id")
-    if _DECIMAL_RE.fullmatch(run_id) is None:
-        raise ReceiptValidationError("execution.run_id must be a decimal string")
+    _validate_decimal_string(run_id, "execution.run_id")
     attempt = execution["attempt"]
-    if type(attempt) is not int or attempt < 1 or attempt > MAX_INTEGER:
-        raise ReceiptValidationError("execution.attempt must be a positive integer")
-    _require_text(execution["environment"], "execution.environment")
+    _validate_positive_integer(attempt, "execution.attempt")
+    environment = _require_text(execution["environment"], "execution.environment")
     provenance = _require_text(execution["provenance"], "execution.provenance")
     if provenance not in _PROVENANCES:
         raise ReceiptValidationError("execution.provenance is unsupported")
+    if (
+        repository != policy.expected_repository
+        or run_id != policy.expected_run_id
+        or attempt != policy.expected_attempt
+        or environment != policy.expected_environment
+        or provenance != policy.expected_provenance
+    ):
+        raise ReceiptValidationError(
+            "receipt execution identity does not match the consumer expectation"
+        )
 
     result = _require_text(document["result"], "result")
     if result not in {"success", "failure"}:
@@ -428,6 +447,17 @@ def _validate_size(value: Any, label: str) -> int:
     if type(value) is not int or value < 0 or value > MAX_INTEGER:
         raise ReceiptValidationError(f"{label} must be a nonnegative integer")
     return value
+
+
+def _validate_positive_integer(value: Any, label: str) -> int:
+    if type(value) is not int or value < 1 or value > MAX_INTEGER:
+        raise ReceiptValidationError(f"{label} must be a positive integer")
+    return value
+
+
+def _validate_decimal_string(value: str, label: str) -> None:
+    if not isinstance(value, str) or _DECIMAL_RE.fullmatch(value) is None:
+        raise ReceiptValidationError(f"{label} must be a decimal string")
 
 
 def _validate_nonzero_size(value: Any, label: str) -> int:
@@ -651,7 +681,12 @@ def _parse_policy(arguments: argparse.Namespace) -> ReceiptPolicy:
     return ReceiptPolicy(
         expected_commit=arguments.commit,
         expected_tree=arguments.tree,
-        required_check_ids=frozenset(arguments.check_id),
+        expected_repository=arguments.repository,
+        expected_run_id=arguments.run_id,
+        expected_attempt=arguments.attempt,
+        expected_environment=arguments.environment,
+        expected_provenance=arguments.provenance,
+        required_check_ids=tuple(arguments.check_id),
         report_formats=formats,
     )
 
@@ -667,6 +702,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evidence-root", type=Path, required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--tree", required=True)
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--attempt", required=True, type=int)
+    parser.add_argument("--environment", required=True)
+    parser.add_argument("--provenance", required=True, choices=sorted(_PROVENANCES))
     parser.add_argument("--check-id", action="append", required=True)
     parser.add_argument(
         "--format",

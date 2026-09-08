@@ -34,6 +34,11 @@ VERIFY = _load_validator()
 COMMIT = "a" * 40
 TREE = "b" * 40
 CHECK_ID = "desktop-python-312"
+REPOSITORY = "andre-motta/tongs"
+RUN_ID = "123456"
+ATTEMPT = 1
+ENVIRONMENT = "ubuntu-24.04-python-3.12"
+PROVENANCE = "hosted"
 REPORT_PATH = "reports/junit.xml"
 REPORT_BYTES = b"<testsuite tests='1' failures='0' errors='0' skipped='0'/>\n"
 
@@ -48,6 +53,11 @@ def _policy(
     return VERIFY.ReceiptPolicy(
         expected_commit=commit,
         expected_tree=tree,
+        expected_repository=REPOSITORY,
+        expected_run_id=RUN_ID,
+        expected_attempt=ATTEMPT,
+        expected_environment=ENVIRONMENT,
+        expected_provenance=PROVENANCE,
         required_check_ids=frozenset({check_id}),
         report_formats={check_id: frozenset({report_format})},
     )
@@ -76,11 +86,11 @@ def _receipt_data(root: Path) -> dict[str, object]:
         "check_id": CHECK_ID,
         "source": {"commit": COMMIT, "tree": TREE},
         "execution": {
-            "repository": "andre-motta/tongs",
-            "run_id": "123456",
-            "attempt": 1,
-            "environment": "ubuntu-24.04-python-3.12",
-            "provenance": "hosted",
+            "repository": REPOSITORY,
+            "run_id": RUN_ID,
+            "attempt": ATTEMPT,
+            "environment": ENVIRONMENT,
+            "provenance": PROVENANCE,
         },
         "result": "success",
         "reports": [
@@ -155,6 +165,36 @@ def test_consumer_identity_rejects_stale_receipt(tmp_path: Path) -> None:
         _validate(tmp_path, data, _policy(commit="c" * 40))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("repository", "andre-motta/other-repository"),
+        ("run_id", "654321"),
+        ("attempt", 2),
+        ("environment", "ubuntu-24.04-python-3.13"),
+        ("provenance", "local"),
+    ],
+)
+def test_consumer_execution_identity_rejects_each_mismatch(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    data = _receipt_data(tmp_path)
+    data["execution"][field] = value  # type: ignore[index]
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="execution identity"):
+        _validate(tmp_path, data)
+
+
+def test_consumer_hosted_expectation_rejects_local_provenance(
+    tmp_path: Path,
+) -> None:
+    data = _receipt_data(tmp_path)
+    data["execution"]["provenance"] = "local"  # type: ignore[index]
+
+    with pytest.raises(VERIFY.ReceiptValidationError, match="execution identity"):
+        _validate(tmp_path, data, _policy())
+
+
 def test_consumer_check_id_and_format_are_independent(tmp_path: Path) -> None:
     data = _receipt_data(tmp_path)
     data["check_id"] = "desktop-python-313"
@@ -168,6 +208,11 @@ def test_consumer_required_check_ids_reject_duplicates() -> None:
         VERIFY.ReceiptPolicy(
             expected_commit=COMMIT,
             expected_tree=TREE,
+            expected_repository=REPOSITORY,
+            expected_run_id=RUN_ID,
+            expected_attempt=ATTEMPT,
+            expected_environment=ENVIRONMENT,
+            expected_provenance=PROVENANCE,
             required_check_ids=[CHECK_ID, CHECK_ID],
             report_formats={CHECK_ID: frozenset({VERIFY.PYTEST_JUNIT_FORMAT})},
         )
@@ -321,6 +366,16 @@ def test_cli_does_not_advertise_structural_validation_as_production_success(
             COMMIT,
             "--tree",
             TREE,
+            "--repository",
+            REPOSITORY,
+            "--run-id",
+            RUN_ID,
+            "--attempt",
+            str(ATTEMPT),
+            "--environment",
+            ENVIRONMENT,
+            "--provenance",
+            PROVENANCE,
             "--check-id",
             CHECK_ID,
             "--format",

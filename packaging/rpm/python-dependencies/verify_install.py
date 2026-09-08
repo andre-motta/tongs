@@ -70,6 +70,16 @@ def verify(manifest: dict[str, Any], fixture_dir: Path) -> dict[str, Any]:
     cargo_inventory = json.loads(
         (CARGO_LICENSE_ROOT / "cargo-inventory.json").read_text()
     )
+    rust_manifest = next(
+        item
+        for item in manifest["companions"]
+        if item["distribution"] == "rfc3161-client"
+    )
+    if (
+        cargo_inventory["upstream_cargo_lock_sha256"]
+        != rust_manifest["cargo"]["lock_sha256"]
+    ):
+        raise RuntimeError("installed Cargo inventory lock hash mismatch")
     resolved_cargo = [
         package
         for package in cargo_inventory["packages"]

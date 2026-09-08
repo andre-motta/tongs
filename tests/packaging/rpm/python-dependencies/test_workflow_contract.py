@@ -45,6 +45,7 @@ def test_rust_spec_uses_locked_sources_and_fedora_openssl() -> None:
     assert "rfc3161-client-%{version}-cargo-vendor.tar.gz" in spec
     assert "OPENSSL_NO_VENDOR=1" in spec
     assert 'openssl = "0.10.80"' in spec
+    assert "cp Cargo.system-openssl.lock Cargo.lock" in spec
     assert "CARGO_NET_OFFLINE=true" in spec
     assert "rfc3161-cargo-inventory.json" in spec
     assert "cargo-licenses.tar.gz" in spec
@@ -88,6 +89,7 @@ def test_clean_install_verifies_license_file_flags_and_inventory() -> None:
 
     assert "license-file-flags.txt" in installer
     assert "cargo-inventory.json" in verifier
+    assert "upstream_cargo_lock_sha256" in verifier
     assert "resolved Cargo package lacks bundled license" in verifier
     assert "vendored OpenSSL appears" in verifier
 

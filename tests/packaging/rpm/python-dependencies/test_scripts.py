@@ -124,3 +124,18 @@ def test_download_accepts_same_https_host() -> None:
         "https://files.pythonhosted.org/source.tar.gz",
         "https://files.pythonhosted.org/redirected/source.tar.gz",
     )
+
+
+def test_cargo_package_identity_excludes_temporary_path_id() -> None:
+    package = {
+        "id": "path+file:///tmp/random/rfc3161#1.0.8",
+        "name": "rfc3161-client",
+        "version": "1.0.8",
+        "source": None,
+    }
+
+    assert prepare_sources._cargo_package_identity(package) == (
+        "rfc3161-client",
+        "1.0.8",
+        None,
+    )

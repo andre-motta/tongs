@@ -99,6 +99,10 @@ def _license_candidates(package_dir: Path) -> list[Path]:
     )
 
 
+def _cargo_package_identity(package: dict[str, Any]) -> tuple[str, str, str | None]:
+    return package["name"], package["version"], package.get("source")
+
+
 def _prepare_cargo(
     companion: dict[str, Any], source_archive: Path, output: Path
 ) -> dict[str, Any]:
@@ -115,7 +119,6 @@ def _prepare_cargo(
         lock_hash = _sha256(lock_path)
         if lock_hash != companion["cargo"]["lock_sha256"]:
             raise RuntimeError(f"Cargo.lock hash mismatch: {lock_hash}")
-        _use_system_openssl(source_root)
         vendor = source_root / "vendor"
         cargo_env = os.environ.copy()
         cargo_env["CARGO_HOME"] = str(temp / "cargo-home")
@@ -134,11 +137,31 @@ def _prepare_cargo(
         (cargo_dir / "config.toml").write_text(
             _relativize_vendor_config(result.stdout, vendor)
         )
-        metadata = subprocess.run(
+        upstream_metadata = subprocess.run(
             [
                 "cargo",
                 "metadata",
                 "--locked",
+                "--offline",
+                "--format-version",
+                "1",
+            ],
+            cwd=source_root,
+            check=True,
+            capture_output=True,
+            env=cargo_env,
+            text=True,
+        )
+        upstream_metadata_report = json.loads(upstream_metadata.stdout)
+        upstream_package_identities = {
+            _cargo_package_identity(package)
+            for package in upstream_metadata_report["packages"]
+        }
+        _use_system_openssl(source_root)
+        metadata = subprocess.run(
+            [
+                "cargo",
+                "metadata",
                 "--offline",
                 "--filter-platform",
                 "x86_64-unknown-linux-gnu",
@@ -152,11 +175,27 @@ def _prepare_cargo(
             text=True,
         )
         metadata_report = json.loads(metadata.stdout)
-        resolved_ids = {node["id"] for node in metadata_report["resolve"]["nodes"]}
+        resolved_identities = {
+            _cargo_package_identity(package)
+            for package in metadata_report["packages"]
+            if package["id"]
+            in {node["id"] for node in metadata_report["resolve"]["nodes"]}
+        }
+        unexpected_packages = resolved_identities - upstream_package_identities
+        if unexpected_packages:
+            raise RuntimeError(
+                "system OpenSSL re-resolution introduced unlocked packages: "
+                f"{sorted(unexpected_packages)}"
+            )
+        system_openssl_lock = source_root / "Cargo.system-openssl.lock"
+        shutil.copyfile(lock_path, system_openssl_lock)
+        system_openssl_lock_hash = _sha256(system_openssl_lock)
+        if system_openssl_lock_hash == lock_hash:
+            raise RuntimeError("system OpenSSL re-resolution did not update Cargo.lock")
         packages = []
         license_root = source_root / "cargo-licenses"
         license_root.mkdir()
-        for package in metadata_report["packages"]:
+        for package in upstream_metadata_report["packages"]:
             license_value = package.get("license")
             license_file = package.get("license_file")
             if not license_value and package["name"] in {"rfc3161-client", "tsp-asn1"}:
@@ -166,7 +205,7 @@ def _prepare_cargo(
                 raise RuntimeError(
                     f"Cargo dependency lacks license metadata: {package['name']} {package['version']}"
                 )
-            resolved = package["id"] in resolved_ids
+            resolved = _cargo_package_identity(package) in resolved_identities
             package_license_files = []
             if resolved:
                 package_dir = Path(package["manifest_path"]).parent
@@ -215,7 +254,14 @@ def _prepare_cargo(
         inventory_path = output / "rfc3161-cargo-inventory.json"
         inventory_path.write_text(
             json.dumps(
-                {"schema_version": 1, "packages": packages}, indent=2, sort_keys=True
+                {
+                    "schema_version": 1,
+                    "upstream_cargo_lock_sha256": lock_hash,
+                    "system_openssl_cargo_lock_sha256": system_openssl_lock_hash,
+                    "packages": packages,
+                },
+                indent=2,
+                sort_keys=True,
             )
             + "\n"
         )
@@ -236,6 +282,7 @@ def _prepare_cargo(
                 str(archive_path),
                 "vendor",
                 ".cargo/config.toml",
+                "Cargo.system-openssl.lock",
             ],
             cwd=source_root,
             env=env,
@@ -264,6 +311,7 @@ def _prepare_cargo(
             raise RuntimeError("vendored OpenSSL remains in the Fedora resolved graph")
         return {
             "cargo_lock_sha256": lock_hash,
+            "system_openssl_lock_sha256": system_openssl_lock_hash,
             "cargo_packages": len(packages),
             "vendor_archive": archive_path.name,
             "vendor_archive_sha256": _sha256(archive_path),

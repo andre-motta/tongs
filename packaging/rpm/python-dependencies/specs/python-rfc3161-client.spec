@@ -30,6 +30,7 @@ Python API and Rust implementation for RFC 3161 timestamp requests and responses
 tar -xzf %{SOURCE1}
 tar -xzf %{SOURCE3}
 sed -i 's/openssl = { version = "0\.10\.80", features = \["vendored"\] }/openssl = "0.10.80"/' rust/Cargo.toml
+cp Cargo.system-openssl.lock Cargo.lock
 
 %build
 export CARGO_NET_OFFLINE=true

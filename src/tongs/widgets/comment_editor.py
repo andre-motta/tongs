@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 from contextlib import suppress
+from dataclasses import replace
 from typing import ClassVar
 
 from textual.app import ComposeResult
@@ -19,6 +20,7 @@ from textual.widgets import Static, TextArea
 
 from tongs.diff.models import DiffFile, DiffLine
 from tongs.diff.position import DiffPosition, position_from_diff_line
+from tongs.state.drafts import DiffSide
 
 
 class CommentSubmitted(Message):
@@ -126,18 +128,38 @@ class CommentEditor(Widget):
         self.display = True
         text_area.focus()
 
-    def open_inline(self, file: DiffFile, line: DiffLine) -> None:
+    def open_inline(
+        self,
+        file: DiffFile,
+        line: DiffLine,
+        *,
+        side: DiffSide | None = None,
+    ) -> None:
         """Open for an inline comment on a specific diff line."""
         self._save_focus_and_open()
         self._cancel_pending = False
         self._mode = "inline"
         self._file = file
         self._line = line
-        self._position = position_from_diff_line(file, line)
-        old = line.old_lineno or ""
-        new = line.new_lineno or ""
+        position = position_from_diff_line(file, line)
+        if side is DiffSide.OLD:
+            if line.old_lineno is None:
+                raise ValueError("old-side comments require an old line number")
+            position = replace(position, side="LEFT")
+            display_path = file.old_path
+            display_line = line.old_lineno
+        elif side is DiffSide.NEW:
+            if line.new_lineno is None:
+                raise ValueError("new-side comments require a new line number")
+            position = replace(position, side="RIGHT")
+            display_path = file.new_path
+            display_line = line.new_lineno
+        else:
+            display_path = file.new_path
+            display_line = line.new_lineno or line.old_lineno or ""
+        self._position = position
         header = self.query_one("#editor-header", Static)
-        header.update(f"[bold]Comment on {file.new_path}:{new or old}[/]")
+        header.update(f"[bold]Comment on {display_path}:{display_line}[/]")
         text_area = self.query_one("#comment-input", TextArea)
         text_area.clear()
         self.display = True

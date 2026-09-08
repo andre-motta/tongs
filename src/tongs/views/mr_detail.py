@@ -30,6 +30,7 @@ from tongs.services.ci_mutations import CIMutationOutcome
 from tongs.services.models import ReviewRevision
 from tongs.services.mr_actions import MRActionOutcome
 from tongs.services.review_mutations import MutationOutcome, MutationStatus
+from tongs.state.drafts import DiffSide
 from tongs.tui_services import TUIDiffResult
 from tongs.views.suggestion import (
     build_suggestion_template,
@@ -811,7 +812,7 @@ class MRDetailScreen(Screen):
                 )
                 return
             self._pending_inline_revision = self._displayed_diff_revision
-            editor.open_inline(event.file, event.line)
+            editor.open_inline(event.file, event.line, side=event.side)
         else:
             self._pending_inline_revision = None
             editor.open_general()
@@ -823,6 +824,10 @@ class MRDetailScreen(Screen):
         import shutil
         import subprocess
         import tempfile
+
+        if event.side is DiffSide.OLD:
+            self.notify("Suggestions are available on the new side only")
+            return
 
         revision = self._displayed_diff_revision
         if revision is None:

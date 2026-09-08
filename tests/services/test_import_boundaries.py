@@ -29,6 +29,12 @@ def _fresh_environment() -> dict[str, str]:
             "from tongs.state.drafts import DraftStore; "
             "assert DraftStore and ApplicationSession and ReviewSubmissionService"
         ),
+        (
+            "from tongs.services import (ApplicationSession, CloseReviewCommand, "
+            "MRActionService, ReviewActionTarget); "
+            "assert ApplicationSession and CloseReviewCommand and "
+            "MRActionService and ReviewActionTarget"
+        ),
     ],
 )
 def test_public_import_orders_work_in_fresh_interpreter(

@@ -48,6 +48,7 @@ from tongs.services.models import (
     ServiceEventKind,
     validate_hostname,
 )
+from tongs.services.mr_actions import MRActionService
 from tongs.services.review_mutations import ReviewMutationService
 from tongs.services.review_submission import ReviewSubmissionService
 from tongs.state.drafts.store import DraftStore
@@ -171,6 +172,11 @@ class ApplicationSession:
             get_pipeline_jobs=self.get_pipeline_jobs,
             emit_change=self.emit_change,
         )
+        self._mr_actions = MRActionService(
+            get_client=self._client_for_review,
+            get_review=self.get_review,
+            emit_change=self.emit_change,
+        )
 
     async def __aenter__(self) -> Self:
         return await self.start()
@@ -241,6 +247,11 @@ class ApplicationSession:
     def ci_mutations(self) -> CIMutationService:
         """Return the session-scoped, bounded CI mutation service."""
         return self._ci_mutations
+
+    @property
+    def mr_actions(self) -> MRActionService:
+        """Return revision-bound merge request lifecycle actions."""
+        return self._mr_actions
 
     @property
     def issued_repositories(self) -> frozenset[RepositoryRef]:
@@ -382,6 +393,16 @@ class ApplicationSession:
                     "One or more application resources did not close cleanly.",
                 )
                 raise self._shutdown_error
+            try:
+                await asyncio.wait_for(
+                    self._mr_actions.close(), timeout=self._shutdown_timeout
+                )
+            except asyncio.CancelledError:
+                failures.append(RuntimeError("MR action cleanup cancelled"))
+                mutation_cleanup_failed = True
+            except Exception as error:  # noqa: BLE001 - Continue owned cleanup.
+                failures.append(error)
+                mutation_cleanup_failed = True
             try:
                 await asyncio.wait_for(
                     self._ci_mutations.close(), timeout=self._shutdown_timeout

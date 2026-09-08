@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import fields
 from datetime import UTC, datetime
+from urllib.parse import quote as urlquote
 
 import httpx
 
-from tongs.errors import ForgeError, NetworkError, redact_credentials
+from tongs.errors import (
+    ConflictError,
+    ForgeError,
+    NetworkError,
+    redact_credentials,
+)
 from tongs.forges.base import ForgeClient
 from tongs.forges.http import map_http_error, paginate, request
 from tongs.forges.models import (
@@ -15,6 +22,7 @@ from tongs.forges.models import (
     Commit,
     Discussion,
     ForgeHost,
+    ForgeMergeResult,
     ForgeMutationResult,
     InlineComment,
     MRDetail,
@@ -23,6 +31,7 @@ from tongs.forges.models import (
     Pipeline,
     PipelineJob,
     ReviewDecision,
+    SourceCleanupStatus,
     User,
 )
 
@@ -89,6 +98,90 @@ def _split_repo_path(repo_path: str) -> tuple[str, str]:
     if len(parts) != 2:
         return repo_path, ""
     return parts[0], parts[1]
+
+
+def _github_cleanup_target(
+    value: dict | list,
+    *,
+    repo_path: str,
+    head_sha: str | None,
+    expected_source_repository: str | None,
+    expected_source_branch: str | None,
+    expected_target_branch: str | None,
+) -> tuple[str | None, str | None, SourceCleanupStatus]:
+    if not isinstance(value, dict):
+        raise TypeError("invalid GitHub pull request response")
+    head = value.get("head")
+    base = value.get("base")
+    if not isinstance(head, dict) or not isinstance(base, dict):
+        raise TypeError("invalid GitHub pull request response")
+    head_repo = head.get("repo")
+    base_repo = base.get("repo")
+    if not isinstance(head_repo, dict) or not isinstance(base_repo, dict):
+        raise TypeError("invalid GitHub pull request response")
+    source_repository = head_repo.get("full_name")
+    source_branch = head.get("ref")
+    source_head = head.get("sha")
+    target_repository = base_repo.get("full_name")
+    target_branch = base.get("ref")
+    default_branch = base_repo.get("default_branch")
+    if not all(
+        isinstance(item, str) and item
+        for item in (
+            source_repository,
+            source_branch,
+            source_head,
+            target_repository,
+            target_branch,
+        )
+    ):
+        raise ValueError("invalid GitHub pull request response")
+    if target_repository.casefold() != repo_path.casefold():
+        raise ConflictError("GitHub pull request target repository changed")
+    if head_sha is not None and source_head != head_sha:
+        raise ConflictError("GitHub pull request head changed")
+    if (
+        expected_source_repository is not None
+        and source_repository.casefold() != expected_source_repository.casefold()
+    ):
+        raise ConflictError("GitHub pull request source repository changed")
+    if expected_source_branch is not None and source_branch != expected_source_branch:
+        raise ConflictError("GitHub pull request source branch changed")
+    if expected_target_branch is not None and target_branch != expected_target_branch:
+        raise ConflictError("GitHub pull request target branch changed")
+    if (
+        source_repository.casefold() != repo_path.casefold()
+        or source_branch == target_branch
+        or not isinstance(default_branch, str)
+        or not default_branch
+        or source_branch == default_branch
+    ):
+        return None, None, SourceCleanupStatus.REJECTED
+    return source_branch, source_head, SourceCleanupStatus.UNKNOWN
+
+
+def _github_ref_sha(value: dict | list) -> str:
+    if not isinstance(value, dict) or not isinstance(value.get("object"), dict):
+        raise TypeError("invalid GitHub reference response")
+    sha = value["object"].get("sha")
+    if not isinstance(sha, str) or not sha:
+        raise ValueError("invalid GitHub reference response")
+    return sha
+
+
+def _github_state_result(
+    value: dict | list, number: int, expected_state: str
+) -> ForgeMutationResult:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("number")) is not int
+        or value.get("number") != number
+        or value.get("state") != expected_state
+        or type(value.get("id")) is not int
+        or value["id"] <= 0
+    ):
+        raise ValueError("invalid GitHub pull request state response")
+    return ForgeMutationResult(str(value["id"]))
 
 
 class GitHubClient(ForgeClient):
@@ -514,51 +607,95 @@ class GitHubClient(ForgeClient):
         number: int,
         squash: bool = False,
         delete_branch: bool = True,
-    ) -> None:
+        *,
+        head_sha: str | None = None,
+        expected_source_repository: str | None = None,
+        expected_source_branch: str | None = None,
+        expected_target_branch: str | None = None,
+    ) -> ForgeMergeResult:
         owner, repo = _split_repo_path(repo_path)
         merge_method = "squash" if squash else "merge"
-        await request(
+        cleanup = SourceCleanupStatus.NOT_REQUESTED
+        cleanup_branch: str | None = None
+        cleanup_head: str | None = None
+        if delete_branch:
+            pr_data = await request(
+                self._http,
+                "GET",
+                f"/repos/{owner}/{repo}/pulls/{number}",
+            )
+            cleanup_branch, cleanup_head, cleanup = _github_cleanup_target(
+                pr_data,
+                repo_path=repo_path,
+                head_sha=head_sha,
+                expected_source_repository=expected_source_repository,
+                expected_source_branch=expected_source_branch,
+                expected_target_branch=expected_target_branch,
+            )
+        data = await request(
             self._http,
             "PUT",
             f"/repos/{owner}/{repo}/pulls/{number}/merge",
-            json={"merge_method": merge_method},
+            json={
+                "merge_method": merge_method,
+                **({"sha": head_sha} if head_sha is not None else {}),
+            },
         )
-        if delete_branch:
+        if not isinstance(data, dict):
+            raise TypeError("invalid GitHub merge response")
+        if data.get("merged") is not True:
+            if data.get("merged") is False and isinstance(data.get("message"), str):
+                raise ConflictError("GitHub rejected the pull request merge")
+            raise ValueError("invalid GitHub merge response")
+        merge_sha = data.get("sha")
+        if not isinstance(merge_sha, str) or not merge_sha:
+            raise ValueError("invalid GitHub merge response")
+        if cleanup_branch is not None and cleanup_head is not None:
             try:
-                pr_data = await request(
+                ref_data = await request(
                     self._http,
                     "GET",
-                    f"/repos/{owner}/{repo}/pulls/{number}",
+                    f"/repos/{owner}/{repo}/git/ref/heads/"
+                    f"{urlquote(cleanup_branch, safe='/')}",
                 )
-                head = pr_data.get("head", {})
-                head_repo = head.get("repo", {}).get("full_name", "")
-                branch = head.get("ref", "")
-                if branch and head_repo == repo_path:
+                if _github_ref_sha(ref_data) != cleanup_head:
+                    cleanup = SourceCleanupStatus.REJECTED
+                else:
                     await request(
                         self._http,
                         "DELETE",
-                        f"/repos/{owner}/{repo}/git/refs/heads/{branch}",
+                        f"/repos/{owner}/{repo}/git/refs/heads/"
+                        f"{urlquote(cleanup_branch, safe='/')}",
                     )
-            except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
-                return
+                    cleanup = SourceCleanupStatus.CONFIRMED
+            except (
+                asyncio.CancelledError,
+                ForgeError,
+                ValueError,
+                TypeError,
+            ):
+                cleanup = SourceCleanupStatus.UNKNOWN
+        return ForgeMergeResult(merge_sha, merge_sha, cleanup)
 
-    async def close_mr(self, repo_path: str, number: int) -> None:
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         owner, repo = _split_repo_path(repo_path)
-        await request(
+        data = await request(
             self._http,
             "PATCH",
             f"/repos/{owner}/{repo}/pulls/{number}",
             json={"state": "closed"},
         )
+        return _github_state_result(data, number, "closed")
 
-    async def reopen_mr(self, repo_path: str, number: int) -> None:
+    async def reopen_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         owner, repo = _split_repo_path(repo_path)
-        await request(
+        data = await request(
             self._http,
             "PATCH",
             f"/repos/{owner}/{repo}/pulls/{number}",
             json={"state": "open"},
         )
+        return _github_state_result(data, number, "open")
 
     async def add_comment(
         self, repo_path: str, number: int, body: str

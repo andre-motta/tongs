@@ -34,12 +34,14 @@ from tongs.scanner.repo import ForgeType, Remote, Repo
 from tongs.services import (
     ApplicationSession,
     CancelPipelineCommand,
+    CloseReviewCommand,
     GeneralComment,
     JobRef,
     MutationStatus,
     PipelineMutationTarget,
     PipelineRef,
     RepositoryRef,
+    ReviewActionTarget,
     ReviewQuery,
     ReviewRef,
     ReviewRevision,
@@ -339,6 +341,50 @@ class CancellationResistantReviewClient(FakeClient):
         return ForgeMutationResult("note-1", comment_id="note-1")
 
 
+class BlockingMRActionClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mr_action_started = asyncio.Event()
+
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
+        self.mr_action_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("blocked MR action unexpectedly resumed")
+
+
+class FirstCancelResistantMRActionClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mr_action_started = asyncio.Event()
+        self.mr_action_cancellations = 0
+
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
+        self.mr_action_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.mr_action_cancellations += 1
+            await asyncio.Event().wait()
+        raise AssertionError("blocked MR action unexpectedly resumed")
+
+
+class CancellationResistantMRActionClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mr_action_started = asyncio.Event()
+        self.mr_action_release = asyncio.Event()
+        self.mr_action_cancellations = 0
+
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
+        self.mr_action_started.set()
+        while not self.mr_action_release.is_set():
+            try:
+                await self.mr_action_release.wait()
+            except asyncio.CancelledError:
+                self.mr_action_cancellations += 1
+        return ForgeMutationResult("review-7")
+
+
 class BlockingReviewClient(FakeClient):
     def __init__(self, detail: MRDetail | None = None) -> None:
         super().__init__(detail)
@@ -565,6 +611,9 @@ class TestLifecycle:
         session.review_submissions.close = AsyncMock(
             side_effect=lambda: order.append("submissions")
         )
+        session.mr_actions.close = AsyncMock(
+            side_effect=lambda: order.append("mr_actions")
+        )
         session.ci_mutations.close = AsyncMock(
             side_effect=lambda: order.append("ci_mutations")
         )
@@ -576,6 +625,7 @@ class TestLifecycle:
 
         assert order == [
             "submissions",
+            "mr_actions",
             "ci_mutations",
             "review_mutations",
             "drafts",
@@ -610,6 +660,7 @@ class TestLifecycle:
         assert cache.close_calls == 0
         assert session.ci_mutations._closed is False
         assert session.review_mutations._closed is False
+        assert session.mr_actions._closed is False
 
         await session.close()
 
@@ -731,6 +782,101 @@ class TestLifecycle:
         assert record.receipt is not None
         assert record.receipt.outcome.value == "unknown"
         assert session.ci_mutations._owner_tasks == set()
+        assert registry.close_calls == 1
+        assert cache.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_close_cancels_mr_action_before_shared_resources(self) -> None:
+        cache = FakeCache()
+        client = BlockingMRActionClient()
+        registry = FakeRegistry({"github.com": client})
+        session = await start_session(registry, cache=cache)
+        repository = await session.open_repository("github.com", "acme/widgets")
+        review = ReviewRef(repository.ref, 7)
+        snapshot = await session.get_review(review)
+        assert snapshot.revision is not None
+        command = CloseReviewCommand(
+            "session-close-mr-action",
+            ReviewActionTarget(review, snapshot.revision, MRState.OPEN),
+        )
+        owner = asyncio.create_task(session.mr_actions.execute(command))
+        await client.mr_action_started.wait()
+
+        await session.close()
+
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+        record = session.mr_actions._operations[command.operation_id]
+        assert record.receipt is not None
+        assert record.receipt.outcome.value == "unknown"
+        assert session.mr_actions._owner_tasks == set()
+        assert registry.close_calls == 1
+        assert cache.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_close_retries_mr_action_owner_before_shared_resources(self) -> None:
+        cache = FakeCache()
+        client = FirstCancelResistantMRActionClient()
+        registry = FakeRegistry({"github.com": client})
+        session = await start_session(registry, cache=cache)
+        session.mr_actions._close_timeout = 0.01
+        repository = await session.open_repository("github.com", "acme/widgets")
+        review = ReviewRef(repository.ref, 7)
+        snapshot = await session.get_review(review)
+        assert snapshot.revision is not None
+        command = CloseReviewCommand(
+            "session-close-resistant-mr-action",
+            ReviewActionTarget(review, snapshot.revision, MRState.OPEN),
+        )
+        owner = asyncio.create_task(session.mr_actions.execute(command))
+        await client.mr_action_started.wait()
+
+        await session.close()
+
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+        assert client.mr_action_cancellations == 1
+        assert session.mr_actions._owner_tasks == set()
+        assert registry.close_calls == 1
+        assert cache.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_uncooperative_mr_action_preserves_resources_until_retry(
+        self,
+    ) -> None:
+        cache = FakeCache()
+        client = CancellationResistantMRActionClient()
+        registry = FakeRegistry({"github.com": client})
+        session = await start_session(registry, cache=cache)
+        session.mr_actions._close_timeout = 0.01
+        repository = await session.open_repository("github.com", "acme/widgets")
+        review = ReviewRef(repository.ref, 7)
+        snapshot = await session.get_review(review)
+        assert snapshot.revision is not None
+        command = CloseReviewCommand(
+            "session-close-uncooperative-mr-action",
+            ReviewActionTarget(review, snapshot.revision, MRState.OPEN),
+        )
+        owner = asyncio.create_task(session.mr_actions.execute(command))
+        await client.mr_action_started.wait()
+
+        with pytest.raises(ServiceError) as raised:
+            await asyncio.wait_for(session.close(), timeout=0.2)
+
+        assert raised.value.code is ServiceErrorCode.SHUTDOWN_FAILED
+        assert client.mr_action_cancellations == 2
+        assert owner in session.mr_actions._owner_tasks
+        assert registry.close_calls == 0
+        assert cache.close_calls == 0
+
+        client.mr_action_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+        record = session.mr_actions._operations[command.operation_id]
+        assert record.receipt is not None
+        assert record.receipt.outcome.value == "known"
+        await session.close()
+        assert session.mr_actions._owner_tasks == set()
         assert registry.close_calls == 1
         assert cache.close_calls == 1
 

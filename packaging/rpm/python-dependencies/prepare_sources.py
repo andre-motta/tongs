@@ -83,10 +83,12 @@ def _prepare_cargo(
         result = subprocess.run(
             ["cargo", "vendor", "--locked", str(vendor)],
             cwd=source_root,
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(f"cargo vendor failed:\n{result.stderr.strip()}")
         cargo_dir = source_root / ".cargo"
         cargo_dir.mkdir()
         (cargo_dir / "config.toml").write_text(result.stdout)

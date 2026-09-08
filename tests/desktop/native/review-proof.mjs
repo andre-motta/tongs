@@ -229,9 +229,6 @@ async function runProof() {
       return snapshot();
     `);
     const conflictScreenshot = await capture("05-known-conflict.png");
-    await clickButton("Merge");
-    await clickButton("Confirm Merge");
-    await waitForAction("merge", 1);
 
     nativeTheme.themeSource = "light";
     window.setSize(900, 720);
@@ -240,7 +237,13 @@ async function runProof() {
       const alerts = [
         ...document.querySelectorAll('.review-workflow-shell [role="alert"]'),
       ];
-      if (alerts.length !== 1) throw new Error("known conflict must render one alert");
+      if (alerts.length !== 1)
+        throw new Error(
+          "known conflict must render one alert; found " +
+            alerts.length +
+            ": " +
+            alerts.map((item) => item.textContent).join(" | "),
+        );
       const alert = alerts[0];
       if (!alert.textContent.includes("The review changed remotely."))
         throw new Error("known conflict alert is not actionable");
@@ -271,6 +274,9 @@ async function runProof() {
       };
     `);
     const finalScreenshot = await capture("06-review-light-narrow.png");
+    await clickButton("Merge");
+    await clickButton("Confirm Merge");
+    await waitForAction("merge", 1);
     const finalUi = await evaluate("return snapshot();");
     const actions = await readActions();
     assert.equal(

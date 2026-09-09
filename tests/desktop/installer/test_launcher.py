@@ -28,8 +28,12 @@ from tongs.desktop.installer.launcher import (
     classify_current_environment,
     launch_desktop,
     validate_bound_launch,
+    validate_environment_binding,
 )
-from tongs.desktop.installer.models import InstallerError
+from tongs.desktop.installer.models import (
+    PERSISTENT_INSTALL_GUIDANCE,
+    InstallerError,
+)
 
 
 def _executable(path: Path, content: str) -> Path:
@@ -63,6 +67,17 @@ def _payload(target_root: Path, launcher: Path) -> InstalledPayload:
             parent.as_posix()
             for parent in reversed(launcher.relative_to(target_root).parents[:-1])
         ),
+    )
+
+
+def _patch_script_roots(
+    monkeypatch: pytest.MonkeyPatch, system_scripts: Path, user_scripts: Path
+) -> None:
+    monkeypatch.setattr(launcher_module, "_user_script_root", lambda: user_scripts)
+    monkeypatch.setattr(
+        launcher_module,
+        "_persistent_script_roots",
+        lambda: {system_scripts, user_scripts},
     )
 
 
@@ -176,6 +191,194 @@ def test_mismatched_console_shebang_is_unsupported(tmp_path: Path) -> None:
     )
 
     assert result.kind is EnvironmentKind.UNSUPPORTED
+
+
+def test_pipx_isolation_shebang_binds_the_exact_interpreter(tmp_path: Path) -> None:
+    prefix = tmp_path / "pipx" / "venvs" / "tongs"
+    interpreter = prefix / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(sys.executable)
+    installed_console = _executable(
+        prefix / "bin" / "tongs", f"#!{interpreter} -E\nraise SystemExit\n"
+    )
+    exposed = tmp_path / "bin" / "tongs"
+    exposed.parent.mkdir()
+    exposed.symlink_to(installed_console)
+
+    result = classify_current_environment(
+        exposed,
+        interpreter_path=interpreter,
+        prefix=prefix,
+        base_prefix=Path(sys.base_prefix),
+        environ={},
+        core_version="1.2.3",
+    )
+
+    assert result.kind is EnvironmentKind.PIPX
+    assert result.interpreter_path == interpreter
+    assert result.console_path == exposed
+    assert result.console_real_path == installed_console
+
+
+def test_pip_user_shebang_binds_without_interpreter_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "usr"
+    interpreter = _executable(base / "bin" / "python3", "#!/bin/sh\n")
+    user_scripts = tmp_path / "userbase" / "bin"
+    console = _executable(user_scripts / "tongs", f"#!{interpreter}\n")
+    _patch_script_roots(monkeypatch, base / "bin", user_scripts)
+
+    result = classify_current_environment(
+        console,
+        interpreter_path=interpreter,
+        prefix=base,
+        base_prefix=base,
+        environ={},
+        core_version="1.2.3",
+    )
+
+    assert result.kind is EnvironmentKind.USER_SITE
+    assert result.interpreter_path == interpreter
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "/usr/bin/env python3",
+        "/usr/bin/env python3 -E",
+        "python3",
+        "python3 -E",
+        "{interpreter} -X dev",
+        "{interpreter} -E -E",
+        "{interpreter} -I",
+        "{interpreter} -s",
+        "{interpreter}\xa0-E",
+        "{interpreter}\x0b-E",
+        "{interpreter}\r-E",
+        "{interpreter}\x1f-E",
+        "{interpreter}\u2028-E",
+        "{interpreter}\u3000-E",
+    ],
+)
+def test_unsupported_console_shebangs_stay_rejected(
+    tmp_path: Path, declaration: str
+) -> None:
+    prefix = tmp_path / "env"
+    interpreter = _executable(prefix / "bin" / "python", "#!/bin/sh\n")
+    console = _executable(
+        prefix / "bin" / "tongs",
+        f"#!{declaration.format(interpreter=interpreter)}\n",
+    )
+
+    with pytest.raises(InstallerError) as failure:
+        classify_current_environment(
+            console,
+            interpreter_path=interpreter,
+            prefix=prefix,
+            base_prefix=Path(sys.base_prefix),
+            environ={},
+            core_version="1.2.3",
+        )
+
+    assert "must name one absolute Python interpreter path" in failure.value.message
+
+
+def test_rejected_shebang_message_agrees_with_persistent_install_guidance(
+    tmp_path: Path,
+) -> None:
+    prefix = tmp_path / "env"
+    interpreter = _executable(prefix / "bin" / "python", "#!/bin/sh\n")
+    console = _executable(prefix / "bin" / "tongs", "#!/usr/bin/env python3\n")
+
+    with pytest.raises(InstallerError) as failure:
+        classify_current_environment(
+            console,
+            interpreter_path=interpreter,
+            prefix=prefix,
+            base_prefix=Path(sys.base_prefix),
+            environ={},
+            core_version="1.2.3",
+        )
+
+    message = failure.value.message
+    assert message.endswith(PERSISTENT_INSTALL_GUIDANCE)
+    assert "pipx install tongs" in PERSISTENT_INSTALL_GUIDANCE
+    assert "tongs desktop repair" not in message
+
+
+_TRAMPOLINE_PREFIX = "'''exec' "
+_TRAMPOLINE_SUFFIX = ' "$0" "$@"'
+
+
+@pytest.mark.parametrize(
+    "trampoline",
+    [
+        'exec "/usr/bin/python3"' + _TRAMPOLINE_SUFFIX,
+        _TRAMPOLINE_PREFIX + '"/usr/bin/python3" "$0"',
+        _TRAMPOLINE_PREFIX + '"/usr/bin/python3" -E' + _TRAMPOLINE_SUFFIX,
+        _TRAMPOLINE_PREFIX + '"python3"' + _TRAMPOLINE_SUFFIX,
+        _TRAMPOLINE_PREFIX + '""' + _TRAMPOLINE_SUFFIX,
+    ],
+)
+def test_malformed_shell_trampolines_are_rejected(
+    tmp_path: Path, trampoline: str
+) -> None:
+    prefix = tmp_path / "env"
+    interpreter = _executable(prefix / "bin" / "python", "#!/bin/sh\n")
+    console = _executable(prefix / "bin" / "tongs", f"#!/bin/sh\n{trampoline}\n' '''\n")
+
+    with pytest.raises(InstallerError) as failure:
+        classify_current_environment(
+            console,
+            interpreter_path=interpreter,
+            prefix=prefix,
+            base_prefix=Path(sys.base_prefix),
+            environ={},
+            core_version="1.2.3",
+        )
+
+    message = failure.value.message
+    assert "shell trampoline must exec one absolute" in message
+    assert message.endswith(PERSISTENT_INSTALL_GUIDANCE)
+    assert "tongs desktop repair" not in message
+    assert "-E" not in message
+
+
+def test_pipx_isolation_shebang_survives_binding_and_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_root = tmp_path / "payload"
+    launcher = _executable(target_root / "runtime/tongs-desktop", "#!/bin/sh\n")
+    interpreter = Path(sys.executable)
+    console = _executable(
+        tmp_path / "pipx/venvs/tongs/bin/tongs",
+        f"#!{interpreter} -E\nraise SystemExit\n",
+    )
+    environment = BoundPythonEnvironment(
+        EnvironmentKind.PIPX,
+        console,
+        interpreter,
+        console.resolve(),
+        interpreter.resolve(),
+        "0.0.1",
+    )
+    target = InstallationTarget(_payload(target_root, launcher), environment)
+
+    validate_environment_binding(environment)
+    launch = validate_bound_launch(target)
+
+    assert launch.arguments[1] == "--tongs-python-executable"
+    assert launch.arguments[2] == os.fspath(interpreter)
+    assert not any("-E" in argument for argument in launch.arguments)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        os,
+        "execv",
+        lambda executable, arguments: observed.extend([executable, arguments]),
+    )
+    launch_desktop(target)
+    assert observed[0] == launcher
 
 
 def test_launch_reprobes_bound_core_and_preserves_invocation_path(

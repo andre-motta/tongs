@@ -134,3 +134,54 @@ additional bindings reconcile it (each requires a second press to confirm):
 | ++f2++ | Open job log in external editor |
 | ++slash++ | Search job log text (live, with match count) |
 | ++n++ / ++n+shift++ | Jump to next / previous match (wraps around) |
+
+## Desktop review workflow
+
+These keys belong to the desktop application's review surfaces, not to the
+terminal interface. They act from anywhere on the review page, including with
+nothing focused, and they stand down while a text field, a `contenteditable`
+region, a select control, or a modal dialog holds the keyboard, and whenever a
+modifier the binding does not name is held.
+
+| Key | Desktop | Terminal interface |
+|-----|---------|--------------------|
+| `c` | Comment on the focused row or the current selection | `c` (diff viewer, MR detail) |
+| `Shift+C` | Open **Your review** | `Ctrl+G` (MR detail) |
+| `]` / `[` | Next / previous changed file, wrapping | `n` / `Shift+N` (diff viewer) |
+| `n` / `p` | Next / previous thread or pending comment, wrapping | `]` / `[` (diff viewer, next / previous comment) |
+| `r` | Reply to the focused thread | `r` (diff viewer, discussion tab) |
+| `Ctrl+Enter` / `Cmd+Enter` | Primary composer action | `Ctrl+S` (comment editor) |
+| `Esc` | Close the composer and keep the text | `Esc` (comment editor, cancel) |
+| `v` | Cycle the verdict in **Your review** | `v` (review draft) |
+
+Where the desktop and the terminal interface differ, the difference is
+deliberate:
+
+- The terminal interface uses `]` and `[` for the next and previous comment and
+  `n` and `Shift+N` for the next and previous file. The desktop map swaps the
+  two pairs: `]` and `[` move between files and `n` and `p` move between the
+  threads and pending comments of the file on screen. This is the only
+  reassignment in the table, and it is the one the design fixed, so the two
+  interfaces do not agree on these four keys.
+- `v` toggles unified and split layout in the terminal diff viewer. The desktop
+  has toolbar buttons for the layout, so `v` is free for the verdict, which is
+  the terminal interface's own meaning for it on the review draft screen.
+- `Shift+C` opens **Your review**; the terminal interface reaches the same
+  screen with `Ctrl+G`. It only opens: a drawer already on screen owns the
+  keyboard, and `Esc` is what closes it.
+- `Ctrl+Enter` (or `Cmd+Enter` on macOS) runs whatever the composer's primary
+  button would run, so it carries the same refusals: an empty comment or a
+  draft held by a save is refused exactly as pressing the button is.
+- `n`, `p`, `]` and `[` wrap at both ends. `]` and `[` stay unclaimed on a
+  review with one changed file. `n` and `p` walk the rows in the order the page
+  lays them out, which in the desktop's **Split** layout means the old pane's
+  threads and pending comments before the new pane's, not top-to-bottom screen
+  order.
+- While **Your review** is open it owns the keyboard wherever the focus is
+  sitting, including on the diff behind it, and the diff's own keys stand down.
+  `Esc` there cancels an armed confirmation first and otherwise closes the
+  drawer, returning the focus to the button that opened it.
+- `Esc` closes the in-diff composer and keeps the typed text, which returns to
+  the same review and the same anchor. Inside the composer it answers the
+  nearest question first: an armed **Discard review** confirmation, then the
+  **More review actions** overflow, and only then the composer itself.

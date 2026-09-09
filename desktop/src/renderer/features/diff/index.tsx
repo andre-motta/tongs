@@ -41,12 +41,24 @@ import {
 import {
   ReviewDrawerMount,
   peekPendingEdit,
+  requestDrawerOpen,
   requestPendingEdit,
   pendingEntryTarget,
   subscribePendingEdit,
   takePendingEdit,
   useReviewDrawer,
 } from "../review/drawer.js";
+import {
+  REVIEW_ROW_ATTRIBUTE,
+  focusedReviewRow,
+  pendingRowKey,
+  pressComposerPrimary,
+  reviewDrawerIsOpen,
+  stepReviewRow,
+  threadRowDiscussion,
+  threadRowKey,
+  useReviewKeyMap,
+} from "../review/keys.js";
 import {
   PendingCard,
   PendingCardMirror,
@@ -660,6 +672,102 @@ function DiffWorkspace({
       extend();
     },
   };
+  // The review keyboard map (design 2.8). The region is the routed content
+  // around the workspace, not the workspace itself, so a key typed with the
+  // focus on the layout toggle or the changed-file navigation is answered the
+  // same way as one typed with nothing focused at all. The rows container is
+  // held separately because it is what `n`, `p`, `r` and the composer's
+  // primary action reach into.
+  const [workspaceNode, setWorkspaceNode] = useState<HTMLElement | null>(null);
+  const [rowsNode, setRowsNode] = useState<HTMLElement | null>(null);
+  const rowCursor = useRef<string | null>(null);
+  const stepFile = (direction: 1 | -1): boolean => {
+    // A review with one file has no next file, so the key stays unclaimed
+    // rather than scrolling the one file back to its top.
+    if (files.length < 2) return false;
+    const at = files.findIndex((file) => file.file_index === selected);
+    const from = at < 0 ? 0 : at;
+    const next = files[(from + direction + files.length) % files.length];
+    if (!next) return false;
+    setSelected(next.file_index);
+    setTarget(0);
+    // The changed-file navigation drops the composer and the selection when it
+    // moves to another file, and never when it stays; the key does exactly the
+    // same, so a review with one file is not reset by a press that goes
+    // nowhere.
+    if (next.file_index !== selected) {
+      setComposerAnchor(null);
+      selectAnchor(null);
+    }
+    return true;
+  };
+  const stepRow = (direction: 1 | -1): boolean => {
+    const step = stepReviewRow(rowsNode, direction, rowCursor.current);
+    rowCursor.current = step.key;
+    return step.moved;
+  };
+  const composeOnSelection = (): boolean => {
+    // A row that holds the focus answers `c` itself, with the row's own
+    // handler. This is the same key from the body: the anchor is the selection
+    // the reader built, and a range composes on the whole range exactly as the
+    // gutter affordance does.
+    if (!selection || selection.review !== review) return false;
+    const file = files.find((row) => row.file_index === selection.fileIndex);
+    if (!file) return false;
+    const range =
+      (selection.selectedLines?.length ?? 0) > 1
+        ? rangeAnchorForSelection(selection, review, loaded, file)
+        : null;
+    inline.open(range ?? selection, true);
+    return true;
+  };
+  const replyToFocusedThread = (): boolean => {
+    const discussion = threadRowDiscussion(
+      focusedReviewRow(rowsNode) ?? rowCursor.current,
+    );
+    if (discussion === null) return false;
+    // The key carries the same refusals the Reply button carries, rather than
+    // opening a composer the thread would not take.
+    if (threads.replyReason(discussion) !== null) return false;
+    threads.openReply(discussion);
+    return true;
+  };
+  const closeComposer = (): boolean => {
+    // Escape used to be bound to the non-focusable `.diff-view` section, so it
+    // did nothing once the focus left the diff rows. The composer's own staged
+    // Escape still answers first whenever the focus is inside it (an armed
+    // discard, then the overflow, then the composer), because that handler
+    // calls `preventDefault` and this map never answers a key twice. The text
+    // stays either way: it lives in the per-anchor buffer, not in the composer.
+    if (composerAnchor === null) return false;
+    inline.close();
+    return true;
+  };
+  useReviewKeyMap(
+    workspaceNode?.parentElement ?? workspaceNode,
+    [
+      { key: "c", run: composeOnSelection },
+      {
+        key: "C",
+        shift: true,
+        run: () => requestDrawerOpen(review),
+      },
+      { key: "]", run: () => stepFile(1) },
+      { key: "[", run: () => stepFile(-1) },
+      { key: "n", run: () => stepRow(1) },
+      { key: "p", run: () => stepRow(-1) },
+      { key: "r", run: replyToFocusedThread },
+      { key: "Enter", primary: true, run: () => pressComposerPrimary(rowsNode) },
+      { key: "Escape", run: closeComposer },
+    ],
+    // The review drawer is a dialog over the diff. It is not `aria-modal`,
+    // because the diff behind it stays readable, but it does own the keyboard
+    // while it is open: `v` and `Esc` are its keys, and a `n` typed with the
+    // focus in the diff behind it must not move the diff underneath. The
+    // drawer's own map claims on this same predicate, so everything this one
+    // stands down for is offered there.
+    { standDown: reviewDrawerIsOpen },
+  );
   const moveFocus = (event: KeyboardEvent<HTMLElement>): void => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const buttons = [
@@ -681,7 +789,7 @@ function DiffWorkspace({
     }
   };
   return (
-    <div className="diff-workspace">
+    <div className="diff-workspace" ref={setWorkspaceNode}>
       <nav
         className="file-list"
         aria-label="Changed files"
@@ -710,11 +818,7 @@ function DiffWorkspace({
       <section
         className={`diff-view diff-${loaded.layout}`}
         data-layout={loaded.layout}
-        onKeyDown={(event) => {
-          if (event.key !== "Escape" || composerAnchor === null) return;
-          event.preventDefault();
-          inline.close();
-        }}
+        ref={setRowsNode}
       >
         {threads.loadError && (
           <Notice kind="warning">{threads.loadError}</Notice>
@@ -1106,13 +1210,19 @@ function DiffRowView({
           className={threadRowClassName(threads, thread)}
           role="listitem"
           key={thread.discussion.id}
+          {...{ [REVIEW_ROW_ATTRIBUTE]: threadRowKey(thread.discussion.id) }}
         >
           <DiffThread thread={thread} slot={threads} />
         </div>
       ))}
       {entries.map((entry) =>
         inline.editing?.id === entry.id ? null : (
-          <div className="pending-card-row" role="listitem" key={entry.id}>
+          <div
+            className="pending-card-row"
+            role="listitem"
+            key={entry.id}
+            {...{ [REVIEW_ROW_ATTRIBUTE]: pendingRowKey(entry.id) }}
+          >
             <PendingCard
               entry={entry}
               reason={inline.controller.entryReason}
@@ -1336,6 +1446,20 @@ function GutterComment({
         event.stopPropagation();
         compose();
       }}
+      onKeyDown={(event) => {
+        // The same containment for the keyboard path. Enter and Space on this
+        // button used to reach the split cell's own handler, which calls
+        // `preventDefault` and re-selects the one row: the range collapsed,
+        // and the suppressed default meant the activation click was never
+        // synthesised either, so the composer did not open at all. The press
+        // is carried out here instead of being left to that synthesis, which
+        // is how the row and the cell already answer their own keys.
+        if (event.key !== "Enter" && event.key !== " ") return;
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        compose();
+      }}
     >
       +
     </button>
@@ -1516,6 +1640,7 @@ function SplitPaneRow({
             className={threadRowClassName(threads, thread)}
             role="listitem"
             key={thread.discussion.id}
+            {...{ [REVIEW_ROW_ATTRIBUTE]: threadRowKey(thread.discussion.id) }}
           >
             <DiffThread thread={thread} slot={threads} />
           </div>
@@ -1528,7 +1653,12 @@ function SplitPaneRow({
       )}
       {entries.map((entry) =>
         inline.editing?.id === entry.id ? null : entry.anchor?.side === side ? (
-          <div className="pending-card-row" role="listitem" key={entry.id}>
+          <div
+            className="pending-card-row"
+            role="listitem"
+            key={entry.id}
+            {...{ [REVIEW_ROW_ATTRIBUTE]: pendingRowKey(entry.id) }}
+          >
             <PendingCard
               entry={entry}
               reason={inline.controller.entryReason}
@@ -1724,6 +1854,11 @@ function activateOnKeyboard(
   choose: () => void,
 ): void {
   if (event.key !== "Enter" && event.key !== " ") return;
+  // Shift extends the range, so it stays part of a plain activation. Ctrl or
+  // Cmd does not: that combination is the composer's primary action in the
+  // review keyboard map, and a row that answered it would select itself and
+  // swallow the write.
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
   event.preventDefault();
   choose();
 }

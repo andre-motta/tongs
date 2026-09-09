@@ -160,17 +160,17 @@ Python 3.12 and 3.13 core/MCP tests, desktop fixture and production shell tests,
 and the Fedora 44 Podman probe through `Desktop pre-merge aggregate`.
 
 `ci.yml` is not the only workflow that runs on a `feat/desktop-app` pull request.
-Three more also trigger on that base:
+One more also triggers on that base:
 
 | Workflow | Trigger |
 |---|---|
-| `desktop-archive.yml` (Reproducible desktop archive) | PRs into `feat/desktop-app` matching its path filter |
-| `desktop-python-rpms.yml` (Desktop Python companion RPMs) | PRs into `feat/desktop-app` matching its path filter |
 | `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter |
 
-`desktop-rpm.yml` (Desktop Fedora RPM) is manual only (`workflow_dispatch`); the
-production gate's `rpm-lifecycle` job runs the same source rebuild and lifecycle
-against the receipt-bound fresh archive on every pull request.
+`desktop-rpm.yml` (Desktop Fedora RPM), `desktop-python-rpms.yml` (Desktop Python
+companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are manual
+only (`workflow_dispatch`); the production gate's `rpm-lifecycle` and `archive` jobs
+prove the same source rebuild, companion closure, lifecycle and byte-identical
+rebuild against the receipt-bound fresh archive on every pull request.
 
 `docs.yml` deploys the site and runs `mkdocs build --strict`, but only on a push
 to `main`. No pull-request check builds the documentation, so run the strict

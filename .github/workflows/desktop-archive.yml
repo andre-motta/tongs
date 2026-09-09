@@ -1,18 +1,6 @@
 name: Reproducible desktop archive
 
 on:
-  pull_request:
-    branches: [feat/desktop-app]
-    paths:
-      - LICENSE
-      - desktop/**
-      - packaging/desktop/archive/**
-      - packaging/desktop/common/**
-      - scripts/build_desktop_archive.py
-      - src/tongs/__init__.py
-      - src/tongs/desktop/artifact_contract/**
-      - tests/packaging/desktop/archive/**
-      - .github/workflows/desktop-archive.yml
   workflow_dispatch:
 
 permissions:

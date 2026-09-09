@@ -320,6 +320,30 @@ def test_launch_exec_places_xwayland_before_extra_arguments(
     assert argv.index("--ozone-platform=x11") < argv.index("--tongs-smoke-report")
 
 
+def test_launch_tolerates_extra_arguments_repeating_the_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(launcher_module.sys, "platform", "linux")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    target = _launchable_target(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        os,
+        "execv",
+        lambda executable, arguments: observed.extend([executable, arguments]),
+    )
+
+    launch_desktop(target, extra_arguments=("--ozone-platform=x11",))
+
+    argv = observed[1]
+    assert isinstance(argv, list)
+    # A caller that already selects XWayland repeats a switch Chromium keys by
+    # name with the same value, so the launch stays valid instead of failing.
+    assert argv.count("--ozone-platform=x11") == 2
+    assert argv[1] == "--ozone-platform=x11"
+    assert argv[-1] == "--ozone-platform=x11"
+
+
 def test_launch_rejects_unrecorded_payload_content(tmp_path: Path) -> None:
     target_root = tmp_path / "payload"
     launcher = _executable(target_root / "runtime/tongs-desktop", "#!/bin/sh\n")

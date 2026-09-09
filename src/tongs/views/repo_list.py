@@ -62,8 +62,17 @@ class RepoListScreen(Screen):
         self._repo_data: dict[str, Repo] = {}
         self._sort_key: str = "name"
         self._apply_filters()
+        # Keep the table focused so the advertised "/" binding reaches the
+        # screen instead of being typed into the filter box.
+        table.focus()
 
     def action_go_back(self) -> None:
+        search = self.query_one("#repo-search", Input)
+        if self.focused is search:
+            # Escape closes the filter and restores the unfiltered list.
+            search.value = ""
+            self.query_one("#repo-table", DataTable).focus()
+            return
         self.app.pop_screen()
 
     def action_start_search(self) -> None:

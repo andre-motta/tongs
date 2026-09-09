@@ -168,7 +168,7 @@ activation.
 - **Three-level drill-down** -- browse pipelines, drill into jobs grouped by stage, drill into full job logs
 - **ANSI log rendering** -- CI color output rendered natively via `Text.from_ansi()` with line numbers
 - **Cancel / Retry** -- cancel running pipelines or individual jobs (`C`), retry failed pipelines or jobs (`R`), with double-press confirmation
-- **Log search** -- press `/` in the log view to search for text across the full job output
+- **Log search** -- press `/` in the log view to search the full job output, `n` / `N` to walk matches, `Escape` to close the search and return to where you were
 - **Open in editor** -- press `F2` to open the job log in your `$EDITOR` for deeper analysis
 - **Open in browser** -- press `o` to jump to the pipeline or job in the web UI
 - **MR-scoped** -- Pipeline tab shows only pipelines associated with the current MR/PR
@@ -351,7 +351,9 @@ See the [full keybinding reference](https://www.tongs.tools/reference/keybinding
 | `R` | Retry pipeline or job (press twice) |
 | `o` | Open pipeline / job in browser |
 | `F2` | Open job log in external editor |
-| `/` | Search job log text |
+| `/` | Search job log text (live, with match count) |
+| `n` / `N` | Jump to next / previous match (wraps) |
+| `Escape` | Close the log search, then drill out one level |
 
 ## Configuration
 

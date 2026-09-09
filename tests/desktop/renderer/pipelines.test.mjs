@@ -133,7 +133,15 @@ test("pipeline panel renders hierarchy, inert paged logs, search, and keyboard s
 
   const search = view.getByRole("searchbox", { name: "Search log" });
   fireEvent.change(search, { target: { value: "fail" } });
-  assert.equal(view.container.querySelector(".ci-match-count").textContent, "1 of 1 matches");
+  // The filter itself is a synchronous useMemo over React state, but a slow
+  // runner can still observe the pre-change render before the commit lands,
+  // so wait for the status text rather than reading it right after the event.
+  await waitFor(() => {
+    assert.equal(
+      view.container.querySelector(".ci-match-count").textContent,
+      "1 of 1 matches",
+    );
+  });
   search.blur();
   fireEvent.keyDown(document.body, { key: "/" });
   assert.equal(document.activeElement, search);

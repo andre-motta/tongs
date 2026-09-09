@@ -602,18 +602,28 @@ export function useReviewDrawer(
 
   // Discard is the composer controller's, taken verbatim, for the same reason
   // Edit and Delete are: the drawer button and the composer overflow entry must
-  // send the identical `review.discard_draft` call and leave the identical
-  // state behind, and one implementation is how that stays true. The only work
-  // left here is the drawer's own list: a draft that was just discarded is no
-  // longer a candidate to recover.
+  // send the identical `drafts.discard` call and leave the identical state
+  // behind, and one implementation is how that stays true. The drawer's own
+  // slot is cleared first because it wins over the composer's when both hold a
+  // sentence: a refused discard has to report its own reason rather than an
+  // older unrelated failure, and one that succeeds must not leave that failure
+  // standing beside an emptied review.
   const discard = useCallback(async (): Promise<void> => {
-    const discarded = held.current.draft.remote;
-    if (await composer.discardReview()) {
-      setDraftCandidates((items) =>
-        items.filter((item) => item.id !== discarded?.id),
-      );
-    }
-  }, [composer.discardReview, held]);
+    setMessage(null);
+    await composer.discardReview();
+  }, [composer.discardReview]);
+
+  // A draft this session discarded is no longer a candidate to recover. The
+  // composer publishes the id rather than the drawer deriving it, so a discard
+  // taken from the in-diff overflow prunes this list exactly as one taken from
+  // the button beside it does.
+  const discardedDraftId = composer.discardedDraftId;
+  useEffect(() => {
+    if (discardedDraftId === null) return;
+    setDraftCandidates((items) =>
+      items.filter((item) => item.id !== discardedDraftId),
+    );
+  }, [discardedDraftId]);
 
   const groups = useMemo(
     () => groupPendingEntries(composer.pending),

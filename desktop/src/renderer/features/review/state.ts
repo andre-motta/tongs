@@ -84,6 +84,14 @@ export interface ReviewWorkflowState {
   readonly quick: QuickIntent<unknown> | null;
   readonly draft: DraftEditorState;
   readonly submission: SubmissionState;
+  /**
+   * The id of the draft this session discarded, or null before any discard.
+   * It lives in the shared state rather than in one surface's own hook so that
+   * a discard taken from the in-diff overflow and one taken from the drawer
+   * leave every surface holding the same fact, including a surface that keeps
+   * its own list of recoverable drafts.
+   */
+  readonly lastDiscardedDraftId: string | null;
 }
 
 export interface DraftAnchorSelection {
@@ -143,6 +151,7 @@ export function createReviewWorkflowState(
       pendingSave: null,
     }),
     submission: Object.freeze({ progress: null, pending: null, message: null }),
+    lastDiscardedDraftId: null,
   });
 }
 
@@ -598,20 +607,30 @@ export function discardDraftRefusal(state: ReviewWorkflowState): string | null {
 }
 
 /**
- * What a discard would destroy, named for the reader. Both counts are read
- * from the content the surfaces actually hold rather than assumed: a review
- * with no summary must not be told it is losing one, and the comment count is
- * the same number the drawer badge and the drawer title show. Shared by the
- * drawer and the in-diff composer so one press and the other are answering
- * literally the same question.
+ * What a discard would destroy, named for the reader. Every part is read from
+ * the content the surfaces actually hold rather than assumed: a review with no
+ * summary must not be told it is losing one, a chosen verdict is content the
+ * reader entered and so is named rather than dropped silently, and the comment
+ * count is the same number the drawer badge and the drawer title show. Shared
+ * by the drawer and the in-diff composer so one press and the other are
+ * answering literally the same question.
  */
 export function discardSubject(state: ReviewWorkflowState): string {
-  const comments = state.draft.local.comments.length;
-  const summary = state.draft.local.body.trim().length > 0;
-  const counted =
-    comments === 1 ? "1 pending comment" : `${comments} pending comments`;
-  if (comments === 0) return summary ? "the summary" : "this pending review";
-  return summary ? `${counted} and the summary` : counted;
+  const content = state.draft.local;
+  const parts: string[] = [];
+  if (content.comments.length > 0) {
+    parts.push(
+      content.comments.length === 1
+        ? "1 pending comment"
+        : `${content.comments.length} pending comments`,
+    );
+  }
+  if (content.body.trim().length > 0) parts.push("the summary");
+  if (content.verdict !== null) parts.push("the verdict");
+  const last = parts.pop();
+  if (last === undefined) return "this pending review";
+  if (parts.length === 0) return last;
+  return `${parts.join(", ")} and ${last}`;
 }
 
 /**
@@ -634,6 +653,7 @@ export function discardDraft(state: ReviewWorkflowState): ReviewWorkflowState {
   const refusal = discardDraftRefusal(state);
   if (refusal !== null) throw new ReviewWorkflowRefusal(refusal);
   return replace(state, {
+    lastDiscardedDraftId: state.draft.remote?.id ?? state.lastDiscardedDraftId,
     draft: Object.freeze({
       remote: null,
       local: EMPTY_CONTENT,

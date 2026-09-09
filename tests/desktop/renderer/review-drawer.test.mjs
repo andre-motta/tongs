@@ -1132,6 +1132,246 @@ test("the composer overflow discards the pending review and returns to Start a r
 });
 
 /**
+ * Escape on the composer surface, in the three stages it has to answer. The
+ * diff view above the composer closes it on any Escape while an anchor is
+ * open, so an Escape the composer consumed has to stop there; otherwise
+ * backing out of a destructive confirmation takes the composer with it.
+ */
+test("Escape in the composer cancels the armed discard, then the overflow, then closes", async () => {
+  const review = "review-composer-discard-escape";
+  const discards = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(
+              review,
+              4,
+              content({
+                body: "Nearly there",
+                comments: [inlineEntry("a", "Guard this", 11, "src/calc.py")],
+              }),
+            ),
+          ],
+        }),
+      discardReviewDraft: async (params) => {
+        discards.push(params);
+        return { discarded: draft(review, 4, content()) };
+      },
+    }),
+    review,
+  );
+  const composers = () =>
+    view.container.querySelectorAll(
+      'textarea[aria-label="Inline review comment"]',
+    ).length;
+  const overflows = () =>
+    view.container.querySelectorAll('[role="group"][aria-label="Review actions"]')
+      .length;
+  const prompts = () =>
+    view.container.querySelectorAll('.inline-composer [role="status"]').length;
+  const escape = () =>
+    fireEvent.keyDown(view.container.querySelector(".inline-composer"), {
+      key: "Escape",
+    });
+
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  await view.findByLabelText("Inline review comment");
+  fireEvent.click(view.getByRole("button", { name: "More review actions" }));
+  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
+  await view.findByText(
+    "Discard 1 pending comment and the summary? This cannot be undone.",
+  );
+  assert.equal(composers(), 1);
+  assert.equal(overflows(), 1);
+  assert.equal(prompts(), 1);
+
+  // Stage one: the armed confirmation is cancelled and nothing else moves.
+  escape();
+  await waitFor(() => assert.equal(prompts(), 0));
+  assert.equal(composers(), 1);
+  assert.equal(overflows(), 1);
+  assert.equal(discards.length, 0);
+
+  // Stage two: the overflow closes, the composer stays.
+  escape();
+  await waitFor(() => assert.equal(overflows(), 0));
+  assert.equal(composers(), 1);
+
+  // Stage three: with nothing left to answer, the composer closes as always.
+  escape();
+  await waitFor(() => assert.equal(composers(), 0));
+  assert.equal(discards.length, 0);
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 1);
+});
+
+/**
+ * A destructive action that reports nothing when it is refused is the wrong
+ * failure mode. The drawer's own message slot wins over the composer's, so it
+ * has to be cleared as the discard starts: the refusal that renders must be
+ * the discard's own, and a discard that succeeds must not leave an older,
+ * unrelated failure standing beside an emptied review.
+ */
+test("a refused discard reports its own reason and a successful one clears the slot", async () => {
+  const review = "review-drawer-discard-message";
+  let refuseDiscard = true;
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(
+              review,
+              4,
+              content({
+                body: "Nearly there",
+                comments: [inlineEntry("a", "Guard this", 11, "src/calc.py")],
+              }),
+            ),
+          ],
+        }),
+      saveReviewDraft: async () => {
+        throw {
+          code: "network_unavailable",
+          message: "The forge was unreachable.",
+          retryable: true,
+        };
+      },
+      discardReviewDraft: async () => {
+        if (refuseDiscard) {
+          throw {
+            code: "conflict",
+            message: "The stored draft moved on.",
+            retryable: false,
+          };
+        }
+        return { discarded: draft(review, 4, content()) };
+      },
+    }),
+    review,
+  );
+  const notices = () =>
+    [
+      ...view.container.querySelectorAll(".review-drawer .notice-error"),
+    ].map((element) => element.textContent);
+
+  fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
+  fireEvent.change(await view.findByLabelText("Summary"), {
+    target: { value: "My text" },
+  });
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
+  await waitFor(() => assert.equal(notices().length, 1));
+  assert.deepEqual(notices(), [
+    "The forge could not be reached. Refresh remote state before deciding whether to retry.",
+  ]);
+
+  // The refused discard replaces that sentence with its own rather than
+  // leaving the reader with an unrelated one beside an untouched review.
+  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
+  fireEvent.click(
+    view.getByRole("button", {
+      name: "Confirm discard of 1 pending comment and the summary",
+    }),
+  );
+  await waitFor(() =>
+    assert.deepEqual(notices(), [
+      "The review changed remotely. Refresh it before choosing another action.",
+    ]),
+  );
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 1);
+
+  // The discard that lands leaves no error behind it.
+  refuseDiscard = false;
+  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
+  fireEvent.click(
+    view.getByRole("button", {
+      name: "Confirm discard of 1 pending comment and the summary",
+    }),
+  );
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".pending-card").length, 0),
+  );
+  assert.deepEqual(notices(), []);
+});
+
+/**
+ * Both surfaces have to leave identical state, and the drawer's list of
+ * recoverable drafts is part of that state. A draft discarded from the in-diff
+ * overflow, with the drawer never opened for the discard, must not still be
+ * offered for recovery afterwards.
+ */
+test("a discard taken from the composer prunes the drawer recovery list", async () => {
+  const review = "review-drawer-discard-candidates";
+  const first = "44444444-4444-4444-8444-444444444444";
+  const third = "55555555-5555-4555-8555-555555555555";
+  const candidates = [
+    { ...draft(review, 2, content({ body: "First" })), id: first },
+    draft(review, 3, content({ body: "Second" })),
+    { ...draft(review, 4, content({ body: "Third" })), id: third },
+  ];
+  const discards = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({ cursor: 0, next_cursor: null, drafts: candidates }),
+      discardReviewDraft: async (params) => {
+        discards.push(params);
+        return { discarded: draft(review, 3, content()) };
+      },
+    }),
+    review,
+  );
+  const recoveries = () =>
+    view.container.querySelectorAll(".review-workflow-recovery button").length;
+
+  const toggle = await view.findByRole("button", { name: /Your review/ });
+  fireEvent.click(toggle);
+  await waitFor(() => assert.equal(recoveries(), 3));
+
+  // Adopt the middle one, then leave the drawer entirely.
+  fireEvent.click(
+    view.getByRole("button", { name: new RegExp(`Draft ${DRAFT_ID}`) }),
+  );
+  await view.findByLabelText("Summary");
+  fireEvent.click(view.getByRole("button", { name: "Close your review" }));
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
+  );
+
+  // Discard it from the in-diff overflow, without the drawer being open.
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  await view.findByLabelText("Inline review comment");
+  fireEvent.click(view.getByRole("button", { name: "More review actions" }));
+  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
+  fireEvent.click(
+    view.getByRole("button", { name: "Confirm discard of the summary" }),
+  );
+  await waitFor(() => assert.equal(discards.length, 1));
+  assert.equal(discards[0].draft_id, DRAFT_ID);
+
+  // The drawer offers the two that are left, and not the one that is gone.
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
+  await waitFor(() => assert.equal(recoveries(), 2));
+  assert.equal(
+    [...view.container.querySelectorAll(".review-workflow-recovery button")]
+      .map((element) => element.textContent)
+      .filter((label) => label.includes(DRAFT_ID)).length,
+    0,
+  );
+});
+
+/**
  * The carry over from #190: mount adoption and the first bind used to ask the
  * sidecar the same question twice. One shared read now answers both, and the
  * drawer's own candidate list.

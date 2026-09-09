@@ -847,6 +847,13 @@ export interface InlineComposerController {
    * never sent is sent, and nothing already published is touched.
    */
   readonly discardReview: () => Promise<boolean>;
+  /**
+   * The id of the draft this session last discarded, or null before any
+   * discard. Read from the shared workflow state, so a surface holding its own
+   * list of recoverable drafts prunes it whichever surface the discard was
+   * taken from.
+   */
+  readonly discardedDraftId: string | null;
   readonly openExternal: (url: string) => Promise<boolean>;
   readonly clearMessage: () => void;
 }
@@ -1423,8 +1430,8 @@ export function useInlineReviewComposer(
     [bridge],
   );
 
-  // The one discard in the renderer. `review.discard_draft` is the same
-  // protocol method the TUI reaches from its Shift+D binding, and it is a
+  // The one discard in the renderer. `drafts.discard` is the same protocol
+  // operation the TUI reaches from its Shift+D binding, and it is a
   // local write: the draft was never on the forge, so discarding it publishes
   // nothing and retracts nothing. The refusal is asked for again here rather
   // than trusted from the press, because a save or a submission can take the
@@ -1481,6 +1488,7 @@ export function useInlineReviewComposer(
     discardSubject: discardSubject(workflow),
     discardPrompt: discardConfirmationPrompt(workflow),
     discardReview,
+    discardedDraftId: workflow.lastDiscardedDraftId,
     openExternal,
     clearMessage,
   };
@@ -1680,12 +1688,18 @@ export function InlineComposer({
           // Escape answers the nearest question first. An armed discard is
           // cancelled by it and the composer stays open with the text intact,
           // because a reader backing out of a destructive confirmation is not
-          // asking to lose the surface as well.
+          // asking to lose the surface as well. Propagation has to stop with
+          // it: the diff view above closes the composer on any Escape while an
+          // anchor is open, and `preventDefault` alone does not hold the key
+          // here, so without this the cancelled confirmation would take the
+          // composer down with it.
           if (confirmingDiscard) {
+            event.stopPropagation();
             setConfirmingDiscard(false);
             return;
           }
           if (overflow) {
+            event.stopPropagation();
             setOverflow(false);
             return;
           }

@@ -116,15 +116,16 @@ revision it was created from.
 A pending review can be discarded from either surface: **Discard review** in
 **Your review**, or the **More review actions** overflow in the in-diff
 composer, which appears only while a review is pending. Both ask first with the
-same sentence, which names how many pending comments would go and whether a
-summary would go with them, and both then make the same `review.discard_draft`
-call the terminal interface makes from ++shift+d++. Press ++escape++ to cancel
-the confirmation and leave the review alone. A discard removes only the local
-durable draft: nothing that was never sent to the forge is sent, and nothing
-already published is changed. Afterwards the diff drops its pending cards, the
-**Your review** count returns to zero, and the composer offers **Start a
-review** again. A discard is refused while a save or a submission attempt holds
-the draft, and the reason is shown on the button.
+same sentence, which names how many pending comments would go and whether the
+summary and the chosen verdict would go with them, and both then make the same
+`drafts.discard` call the terminal interface makes from ++shift+d++. Press
+++escape++ to cancel the confirmation; the drawer and the composer stay open on
+the review, and a further ++escape++ closes them as usual. A discard removes
+only the local durable draft: nothing that was never sent to the forge is sent,
+and nothing already published is changed. Afterwards the diff drops its pending
+cards, the **Your review** count returns to zero, and the composer offers
+**Start a review** again. A discard is refused while a save or a submission
+attempt holds the draft, and the reason is shown on the button.
 
 If another writer changes the stored draft before your save lands, the
 workspace reports a version conflict and shows both versions side by side: your

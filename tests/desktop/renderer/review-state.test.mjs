@@ -585,6 +585,48 @@ test("the discard confirmation names only what the draft actually holds", () => 
     comments: [{ id: "c1", kind: "general", body: "one" }],
   });
   assert.equal(discardSubject(oneComment), "1 pending comment");
+
+  // A chosen verdict is content the reader entered and the discard destroys
+  // it, so the sentence names it rather than letting it go unannounced.
+  const everything = adoptDraft(base, {
+    ...draft(4, "a summary"),
+    verdict: "request_changes",
+    comments: [
+      { id: "c1", kind: "general", body: "one" },
+      { id: "c2", kind: "general", body: "two" },
+    ],
+  });
+  assert.equal(
+    discardSubject(everything),
+    "2 pending comments, the summary and the verdict",
+  );
+  assert.equal(
+    discardConfirmationPrompt(everything),
+    "Discard 2 pending comments, the summary and the verdict? This cannot be undone.",
+  );
+
+  const verdictOnly = adoptDraft(base, { ...draft(5, ""), verdict: "approve" });
+  assert.equal(discardSubject(verdictOnly), "the verdict");
+  assert.equal(
+    discardConfirmationPrompt(verdictOnly),
+    "Discard the verdict? This cannot be undone.",
+  );
+
+  const commentAndVerdict = adoptDraft(base, {
+    ...draft(6, "   "),
+    verdict: "comment",
+    comments: [{ id: "c1", kind: "general", body: "one" }],
+  });
+  assert.equal(
+    discardSubject(commentAndVerdict),
+    "1 pending comment and the verdict",
+  );
+
+  const summaryAndVerdict = adoptDraft(base, {
+    ...draft(7, "a summary"),
+    verdict: "comment",
+  });
+  assert.equal(discardSubject(summaryAndVerdict), "the summary and the verdict");
 });
 
 function draft(version, body) {

@@ -745,17 +745,31 @@ function SplitPaneRow({
   );
 }
 
+// The sidecar derives every shape the forge payload determines, so each badge
+// states a fact about the file.  The last entry is the honest residue: GitHub's
+// files endpoint withholds the patch for binary content and for a mode-only
+// change without distinguishing them, so the badge names the forge as the limit
+// instead of implying the client failed to load the file.
+const FILE_BADGES: ReadonlyArray<
+  readonly [(file: DiffFileRow) => boolean, string, string?]
+> = [
+  [(file) => file.is_binary, "Binary"],
+  [(file) => file.is_truncated, "Truncated"],
+  [(file) => file.is_empty, "Empty"],
+  [(file) => file.is_mode_only, "Mode only"],
+  [(file) => file.is_rename_only, "Rename only"],
+  [
+    (file) => file.is_unavailable,
+    "Not exposed by forge",
+    "The forge sent no diff content for this file and did not report whether it is a binary or a mode-only change.",
+  ],
+];
+
 function FileBadges({ file }: { readonly file: DiffFileRow }): ReactNode {
-  return [
-    [file.is_binary, "Binary"],
-    [file.is_truncated, "Truncated"],
-    [file.is_empty, "Empty"],
-    [file.is_mode_only, "Mode only"],
-    [file.is_unavailable, "Unavailable"],
-  ].map(
-    ([condition, label]) =>
-      condition && (
-        <span key={String(label)} className="badge">
+  return FILE_BADGES.map(
+    ([matches, label, hint]) =>
+      matches(file) && (
+        <span key={label} className="badge" title={hint}>
           {label}
         </span>
       ),

@@ -7,6 +7,83 @@ from collections.abc import Mapping, Sequence
 from tongs.diff.models import DiffFile, DiffHunk, FileStatus, LineType
 from tongs.diff.parser import _detect_language, parse_diff
 
+# Suffixes whose content a unified diff cannot show as reviewable text.  The
+# probe that uses this set applies only where the forge withheld both the patch
+# and the reason, so a false positive replaces no information rather than real
+# diff content.
+_BINARY_SUFFIXES = frozenset(
+    {
+        "7z",
+        "a",
+        "avi",
+        "avif",
+        "bin",
+        "bmp",
+        "bz2",
+        "class",
+        "dat",
+        "db",
+        "deb",
+        "dll",
+        "dmg",
+        "doc",
+        "docx",
+        "dylib",
+        "eot",
+        "exe",
+        "flac",
+        "gif",
+        "gz",
+        "ico",
+        "img",
+        "iso",
+        "jar",
+        "jpeg",
+        "jpg",
+        "mkv",
+        "mov",
+        "mp3",
+        "mp4",
+        "npy",
+        "npz",
+        "o",
+        "odp",
+        "ods",
+        "odt",
+        "ogg",
+        "onnx",
+        "otf",
+        "pdf",
+        "pkl",
+        "png",
+        "ppt",
+        "pptx",
+        "pyc",
+        "pyd",
+        "rar",
+        "rpm",
+        "safetensors",
+        "so",
+        "sqlite",
+        "sqlite3",
+        "tar",
+        "tiff",
+        "ttf",
+        "wasm",
+        "wav",
+        "webm",
+        "webp",
+        "whl",
+        "woff",
+        "woff2",
+        "xls",
+        "xlsx",
+        "xz",
+        "zip",
+        "zst",
+    }
+)
+
 
 def convert_forge_changes(
     changes: Sequence[Mapping[str, object]],
@@ -17,8 +94,14 @@ def convert_forge_changes(
     uses ``old_path``/``new_path``/``diff``.  The API's file metadata remains
     authoritative for paths, status, and aggregate counts.  Patch text is
     parsed only in memory, and an absent patch is represented as an explicit
-    empty or truncated file according to the available metadata.  Missing
-    patch text is never treated as evidence that a file is binary.
+    empty, rename-only or truncated file according to the available metadata.
+
+    GitHub's files endpoint withholds binary, mode and emptiness metadata, so
+    the shapes it does determine are derived from the fields it does send and
+    the remainder stays explicitly unavailable.  Missing patch text alone is
+    never treated as evidence that a file is binary; only a cheap local suffix
+    probe on a file the forge says has no changed lines is, and no derivation
+    here issues a forge request.
     """
 
     return tuple(_convert_change(change) for change in changes)
@@ -61,6 +144,33 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
         reported_deletions if reported_deletions is not None else parsed_deletions
     )
     has_hunks = bool(hunks)
+
+    # GitHub omits ``patch`` and reports zero counts for a binary, empty,
+    # rename-only or mode-only file without saying which one it is.  Derive
+    # the shapes its remaining fields determine, and leave the rest explicitly
+    # unavailable instead of guessing between binary and a mode change.
+    withholds_patch = not _has_patch_key(change)
+    reports_no_lines = _reports_no_line_change(change)
+    # A rename the forge describes with no content change: GitLab returns an
+    # empty diff, GitHub omits the patch and reports zero changes.  Both are
+    # rename-only, which is a stronger statement than an empty file.
+    is_rename_only = (
+        not has_hunks
+        and not is_binary
+        and status is FileStatus.RENAMED
+        and old_path != new_path
+        and (reports_no_lines or _has_explicit_empty_patch(change))
+    )
+    if (
+        not is_binary
+        and not is_rename_only
+        and not has_hunks
+        and withholds_patch
+        and reports_no_lines
+        and _has_binary_suffix(new_path or old_path)
+    ):
+        is_binary = True
+
     is_mode_only = (
         mode_only_value is True
         or (
@@ -100,12 +210,21 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
 
     explicit_empty = _first_bool(change, "is_empty", "empty", "empty_diff")
     if explicit_empty is None:
+        # An added or deleted file the forge reports with zero changed lines
+        # and no patch is empty on one side, which is a fact about the file
+        # rather than a gap in the response.
+        reports_empty_content = _has_explicit_empty_patch(change) or (
+            withholds_patch
+            and reports_no_lines
+            and status in (FileStatus.ADDED, FileStatus.DELETED)
+        )
         is_empty = (
-            _has_explicit_empty_patch(change)
+            reports_empty_content
             and not has_hunks
             and not is_binary
             and not is_truncated
             and not is_mode_only
+            and not is_rename_only
         )
     else:
         is_empty = explicit_empty
@@ -115,6 +234,7 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
         and not is_truncated
         and not is_mode_only
         and not is_empty
+        and not is_rename_only
         and explicit_empty is None
     )
 
@@ -136,6 +256,7 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
         is_truncated=is_truncated,
         is_empty=is_empty,
         is_mode_only=is_mode_only,
+        is_rename_only=is_rename_only,
         is_unavailable=is_unavailable,
     )
 
@@ -217,6 +338,41 @@ def _modes_differ(change: Mapping[str, object]) -> bool:
     old_mode = _string(change.get("a_mode")) or _string(change.get("old_mode"))
     new_mode = _string(change.get("b_mode")) or _string(change.get("new_mode"))
     return old_mode is not None and new_mode is not None and old_mode != new_mode
+
+
+def _reports_no_line_change(change: Mapping[str, object]) -> bool:
+    """Whether the forge affirmatively reported zero changed lines.
+
+    GitHub's files endpoint always carries ``changes``, ``additions`` and
+    ``deletions``, so a reported zero is evidence about the file.  A forge that
+    reports no counts at all offers no such evidence and must not be read as
+    if it had reported zero.
+    """
+
+    changes = _json_count(change.get("changes"))
+    additions = _json_count(change.get("additions"))
+    deletions = _json_count(change.get("deletions"))
+    if changes is None and (additions is None or deletions is None):
+        return False
+    return not (changes or additions or deletions)
+
+
+def _has_patch_key(change: Mapping[str, object]) -> bool:
+    """Whether the forge sent patch text at all, empty text included."""
+
+    return any(isinstance(change.get(key), str) for key in ("diff", "patch"))
+
+
+def _has_binary_suffix(path: str) -> bool:
+    """Cheap local probe for a path whose content is not reviewable text.
+
+    This runs only for a file the forge says has no changed lines and no
+    patch, where the alternative is no information at all.  It reads the path
+    the forge already sent and never issues a request.
+    """
+
+    _, separator, suffix = path.rpartition(".")
+    return bool(separator) and suffix.lower() in _BINARY_SUFFIXES
 
 
 def _patch_mentions_binary(patch: str) -> bool:

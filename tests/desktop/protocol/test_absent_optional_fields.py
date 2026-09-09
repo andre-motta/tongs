@@ -5,6 +5,12 @@ breaks the contract makes it reject the whole response.  The core models spell
 an absent optional text as the empty string, so the sidecar has to translate
 that to null on the wire.  These tests pin both known instances: the language of
 a file with no detected lexer, and the inline position of a review-level note.
+
+The same shapes cover the metadata GitHub's files endpoint withholds.  The
+sidecar derives the shapes that endpoint's remaining fields determine and leaves
+only the genuinely undetermined one unavailable, so these tests also pin the
+derived per-file state and keep the captured renderer fixture equal to what the
+sidecar projects today.
 """
 
 from __future__ import annotations
@@ -40,6 +46,32 @@ _EXPECTED_SHAPES = (
     ("src/renamed_module.py", "renamed"),
     ("src/tool.sh", "modified"),
 )
+_METADATA_FLAGS = (
+    "is_binary",
+    "is_truncated",
+    "is_empty",
+    "is_mode_only",
+    "is_rename_only",
+    "is_unavailable",
+)
+# The state each forge's payload actually determines for the four files with no
+# patch.  GitHub reports the rename, the added empty file and, through its path,
+# the binary file; it exposes no way to tell a mode-only change from binary
+# content, so ``src/tool.sh`` stays unavailable there instead of guessing.
+_EXPECTED_METADATA_STATE = {
+    "github": {
+        "assets/icon.bin": ("is_binary",),
+        "src/empty_placeholder.py": ("is_empty",),
+        "src/renamed_module.py": ("is_rename_only",),
+        "src/tool.sh": ("is_unavailable",),
+    },
+    "gitlab": {
+        "assets/icon.bin": ("is_binary",),
+        "src/empty_placeholder.py": ("is_empty",),
+        "src/renamed_module.py": ("is_rename_only",),
+        "src/tool.sh": ("is_mode_only",),
+    },
+}
 
 
 def _fixture() -> JsonObject:
@@ -86,6 +118,21 @@ def _comment(identifier: str, file_path: str, line: int | None) -> InlineComment
     )
 
 
+async def _file_rows(forge: str) -> list[JsonObject]:
+    server, handle = _server_for_diff(_fixture()[f"{forge}_changes"])
+    page = cast(
+        JsonObject,
+        await server._diff_open(
+            {"review": handle}, RequestContext("diff", DesktopCancellation())
+        ),
+    )
+    return [
+        cast(JsonObject, entry)
+        for entry in cast(list[object], page["entries"])
+        if cast(JsonObject, entry)["kind"] == "file"
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forge", ["github", "gitlab"])
 async def test_every_diff_shape_projects_a_wire_conformant_file_row(
@@ -97,20 +144,8 @@ async def test_every_diff_shape_projects_a_wire_conformant_file_row(
     mode-only files, and GitLab omits ``diff`` for three of them, so this drives
     the shapes the acceptance fixture exists to exercise.
     """
-    server, handle = _server_for_diff(_fixture()[f"{forge}_changes"])
+    files = await _file_rows(forge)
 
-    page = cast(
-        JsonObject,
-        await server._diff_open(
-            {"review": handle}, RequestContext("diff", DesktopCancellation())
-        ),
-    )
-
-    files = [
-        cast(JsonObject, entry)
-        for entry in cast(list[object], page["entries"])
-        if cast(JsonObject, entry)["kind"] == "file"
-    ]
     assert [(file["new_path"], file["status"]) for file in files] == list(
         _EXPECTED_SHAPES
     )
@@ -119,6 +154,55 @@ async def test_every_diff_shape_projects_a_wire_conformant_file_row(
             assert file[key] != "", f"{key} must never be empty on the wire"
         language = file["language"]
         assert language is None or (isinstance(language, str) and language != "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forge", ["github", "gitlab"])
+async def test_withheld_patch_projects_the_state_the_forge_determines(
+    forge: str,
+) -> None:
+    """Each hard shape reaches the client as one honest, exclusive state.
+
+    A generic unavailable badge on GitHub told the reviewer nothing about the
+    file, so a shape the payload determines must arrive as that shape and the
+    one it does not must arrive as unavailable rather than as a guess.
+    """
+    rows = await _file_rows(forge)
+
+    expected = _EXPECTED_METADATA_STATE[forge]
+    observed = {
+        cast(str, row["new_path"]): tuple(
+            flag for flag in _METADATA_FLAGS if row[flag] is True
+        )
+        for row in rows
+        if cast(str, row["new_path"]) in expected
+    }
+    assert observed == expected
+    for row in rows:
+        for flag in _METADATA_FLAGS:
+            assert isinstance(row[flag], bool), f"{flag} must be a wire boolean"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forge", ["github", "gitlab"])
+async def test_captured_renderer_page_equals_what_the_sidecar_projects(
+    forge: str,
+) -> None:
+    """The fixture the renderer tests read must not drift from the sidecar.
+
+    Those tests assert badges against a captured wire page.  If the projection
+    changes and the capture does not, they would keep proving the old contract.
+    """
+    server, handle = _server_for_diff(_fixture()[f"{forge}_changes"])
+    page = cast(
+        JsonObject,
+        await server._diff_open(
+            {"review": handle}, RequestContext("diff", DesktopCancellation())
+        ),
+    )
+    captured = cast(JsonObject, _fixture()[f"{forge}_unified_page"])
+
+    assert page["entries"] == captured["entries"]
 
 
 @pytest.mark.asyncio

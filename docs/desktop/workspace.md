@@ -163,7 +163,11 @@ available hunk context. A file can carry these visible badges:
 - **Truncated** when the forge returned only a bounded portion.
 - **Empty** when the file has no changed rows.
 - **Mode only** when the change is a file-mode update.
-- **Unavailable** when the forge could not provide the file content.
+- **Rename only** when the file moved and its content did not change.
+- **Not exposed by forge** when the forge sent no content and no reason for it.
+  GitHub's pull-request files endpoint omits the patch for both binary content
+  and a mode-only change and exposes no field that separates them, so the badge
+  names that limit instead of implying the file failed to load.
 
 Select a file or hunk to move the content view. Large files are displayed in
 bounded row windows with **Previous rows** and **Next rows** controls. In

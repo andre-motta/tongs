@@ -153,16 +153,18 @@ test("every sandbox diff shape renders from the captured wire page", async () =>
     gitlab_unified_page: {
       "assets/icon.bin": "Binary",
       "src/empty_placeholder.py": "Empty",
-      "src/renamed_module.py": "Empty",
+      "src/renamed_module.py": "Rename only",
       "src/tool.sh": "Mode only",
     },
-    // The GitHub files endpoint withholds that metadata, so the four shapes
-    // arrive as content the forge did not supply.
+    // The GitHub files endpoint withholds that metadata.  The sidecar derives
+    // every shape its remaining fields determine, so only the file that could
+    // be either binary content or a mode change reads as unexposed, and it says
+    // the forge is the limit rather than showing a generic failure.
     github_unified_page: {
-      "assets/icon.bin": "Unavailable",
-      "src/empty_placeholder.py": "Unavailable",
-      "src/renamed_module.py": "Unavailable",
-      "src/tool.sh": "Unavailable",
+      "assets/icon.bin": "Binary",
+      "src/empty_placeholder.py": "Empty",
+      "src/renamed_module.py": "Rename only",
+      "src/tool.sh": "Not exposed by forge",
     },
   };
   for (const [key, badges] of Object.entries(expected)) {
@@ -572,6 +574,7 @@ function diffPage(layout) {
     is_truncated: false,
     is_empty: false,
     is_mode_only: false,
+    is_rename_only: false,
     is_unavailable: false,
   };
   const hunk = {

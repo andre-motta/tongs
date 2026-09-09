@@ -54,7 +54,7 @@ export interface ReviewSnapshotDto {
   readonly revision: ReviewRevisionDto | null; readonly revision_error: ServiceErrorDto | null;
 }
 
-export interface DiffFileRow { readonly kind: "file"; readonly file_index: number; readonly old_path: string; readonly new_path: string; readonly status: string; readonly additions: number; readonly deletions: number; readonly is_binary: boolean; readonly language: string | null; readonly is_truncated: boolean; readonly is_empty: boolean; readonly is_mode_only: boolean; readonly is_unavailable: boolean; }
+export interface DiffFileRow { readonly kind: "file"; readonly file_index: number; readonly old_path: string; readonly new_path: string; readonly status: string; readonly additions: number; readonly deletions: number; readonly is_binary: boolean; readonly language: string | null; readonly is_truncated: boolean; readonly is_empty: boolean; readonly is_mode_only: boolean; readonly is_rename_only: boolean; readonly is_unavailable: boolean; }
 export interface DiffHunkRow { readonly kind: "hunk"; readonly file_index: number; readonly hunk_index: number; readonly header: string; readonly old_start: number; readonly old_count: number; readonly new_start: number; readonly new_count: number; readonly context_text: string; }
 export interface DiffLineRow { readonly kind: "line"; readonly file_index: number; readonly hunk_index: number; readonly old_line: number | null; readonly new_line: number | null; readonly content: string; readonly line_type: string; }
 export type DiffLayout = "unified" | "split";

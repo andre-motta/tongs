@@ -134,6 +134,9 @@ Pure shared diff alignment produces rows with independent old/new cells and
 original `DiffLine`/file positions. Pair adjacent deletion/addition runs within a
 hunk, retain unmatched cells, and never align across hunk boundaries. Binary,
 renamed, deleted, empty, no-newline and truncated files retain explicit states.
+Derive those states in the sidecar from what the forge payload determines, and
+where a forge exposes no way to tell two of them apart, say the forge did not
+expose it rather than presenting a generic failure or a guess.
 Selecting an empty cell cannot manufacture a comment anchor. Desktop virtualizes
 rows; TUI uses its own renderer and falls back to unified at narrow widths.
 

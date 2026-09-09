@@ -681,7 +681,7 @@ class SplitDiffView(Widget):
         }
 
         if file.is_binary or not file.hunks:
-            message = _placeholder_message(file)
+            message = placeholder_message(file)
             placeholder = Option(_single_line(message, Style(dim=True)), disabled=True)
             old_options.append(placeholder)
             new_options.append(
@@ -952,7 +952,16 @@ def _fold_context_rows(
     return tuple(result)
 
 
-def _placeholder_message(file: DiffFile) -> str:
+def placeholder_message(file: DiffFile) -> str:
+    """One honest line for a file the forge described without content.
+
+    The leading branches state what the forge reported about the file.  The
+    unavailable branch is the residue GitHub's files endpoint leaves behind: it
+    withholds the patch for binary content and for a mode-only change alike, so
+    that line names the forge as the limit instead of blaming the read.  The
+    final line covers a file that carries no metadata reason at all.
+    """
+
     if file.is_binary:
         return "[Binary file]"
     if file.is_truncated:
@@ -961,8 +970,10 @@ def _placeholder_message(file: DiffFile) -> str:
         return "[Empty file]"
     if file.is_mode_only:
         return "[File mode changed]"
+    if file.is_rename_only:
+        return "[Renamed with no content change]"
     if file.is_unavailable:
-        return "Diff unavailable from the forge. Press o to view in browser."
+        return "Not exposed by the forge. Press o to view in browser."
     return "Diff not available. Press o to view in browser."
 
 
@@ -1033,4 +1044,5 @@ __all__ = [
     "SplitReplyRequested",
     "SplitResolveRequested",
     "is_actionable",
+    "placeholder_message",
 ]

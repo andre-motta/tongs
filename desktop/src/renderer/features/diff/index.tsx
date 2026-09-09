@@ -34,6 +34,7 @@ import {
 import { QueryCoordinator } from "../../core/query.js";
 import {
   InlineComposer,
+  anchorIdentity,
   useInlineReviewComposer,
   type InlineComposerController,
 } from "../review/composer.js";
@@ -831,6 +832,7 @@ function DiffRowView({
     inline.anchor !== null &&
     composerOnUnifiedRow(inline.anchor, loaded, file, row);
   const entries = pendingOnUnifiedRow(pending, file, row);
+  const explains = file === null ? null : (pendingOnFile(pending, file)[0]?.id ?? null);
   const editEntry = (entry: PendingDraftEntry): void => {
     if (!file || !entry.anchor) return;
     // The composer takes the row the card sits on, which is the line the
@@ -915,6 +917,7 @@ function DiffRowView({
       {composerOpen && inline.anchor && (
         <div className="inline-composer-row" role="listitem">
           <InlineComposer
+            key={composerKey(inline)}
             anchor={inline.anchor}
             controller={inline.controller}
             entry={inline.editing}
@@ -928,6 +931,7 @@ function DiffRowView({
             <PendingCard
               entry={entry}
               reason={inline.controller.entryReason}
+              explain={entry.id === explains}
               busy={inline.controller.busy}
               openExternal={inline.controller.openExternal}
               edit={() => editEntry(entry)}
@@ -938,6 +942,19 @@ function DiffRowView({
       )}
     </>
   );
+}
+
+/**
+ * The composer keeps the text it is collecting in its own state, so it has to
+ * be remounted whenever what it is composing changes. A new comment and one or
+ * more pending cards share a row, and Edit swaps the composer's shape without
+ * moving it, so without this key React reconciles the two and one comment's
+ * unsent text is saved into another.
+ */
+function composerKey(slot: InlineComposerSlot): string {
+  return slot.editing
+    ? `edit:${slot.editing.id}`
+    : `new:${anchorIdentity(slot.anchor)}`;
 }
 
 /**
@@ -1162,6 +1179,7 @@ function SplitPaneRow({
   // does not own the anchor side renders one spacer per card and the two
   // independent pane grids stay on the same rows.
   const entries = pendingOnSplitRow(pending, file, row);
+  const explains = file === null ? null : (pendingOnFile(pending, file)[0]?.id ?? null);
   const editEntry = (entry: PendingDraftEntry): void => {
     const cell = entry.anchor ? row[entry.anchor.side] : null;
     if (!file || !entry.anchor || !cell) return;
@@ -1190,6 +1208,7 @@ function SplitPaneRow({
         (inline.anchor.side === side ? (
           <div className="inline-composer-row" role="listitem">
             <InlineComposer
+              key={composerKey(inline)}
               anchor={inline.anchor}
               controller={inline.controller}
               entry={inline.editing}
@@ -1212,6 +1231,7 @@ function SplitPaneRow({
             <PendingCard
               entry={entry}
               reason={inline.controller.entryReason}
+              explain={entry.id === explains}
               busy={inline.controller.busy}
               openExternal={inline.controller.openExternal}
               edit={() => editEntry(entry)}

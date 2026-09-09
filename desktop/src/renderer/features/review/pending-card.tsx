@@ -58,6 +58,7 @@ export function staleRibbonText(anchor: DraftInlineAnchorDto): string {
 export function PendingCard({
   entry,
   reason,
+  explain,
   busy,
   openExternal,
   edit,
@@ -66,6 +67,12 @@ export function PendingCard({
   readonly entry: PendingDraftEntry;
   /** Why this entry cannot be changed right now, or null when it can. */
   readonly reason: string | null;
+  /**
+   * Whether this card is the one that spells the refusal out. Every card's
+   * controls carry it as a title, but one sentence repeated under every card
+   * of a file says nothing the first one did not.
+   */
+  readonly explain: boolean;
   readonly busy: boolean;
   readonly openExternal: (url: string) => Promise<boolean>;
   readonly edit: () => void;
@@ -113,7 +120,7 @@ export function PendingCard({
       <div className="pending-card-body">
         <SafeMarkdown source={entry.body} openExternal={openExternal} />
       </div>
-      {reason !== null && <small>{reason}</small>}
+      {reason !== null && explain && <small>{reason}</small>}
     </article>
   );
 }

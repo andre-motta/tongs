@@ -811,7 +811,8 @@ export function useInlineReviewComposer(
       return "No pending review holds this comment.";
     if (workflow.draft.conflict)
       return "This pending review was changed elsewhere. Resolve the conflict in the review workflow before changing pending comments.";
-    if (!canCaptureDraftInline(workflow)) return boundElsewhereRefusal(workflow);
+    if (!canCaptureDraftInline(workflow))
+      return boundElsewhereEntryRefusal(workflow);
     return null;
   }, [workflow]);
 
@@ -1097,9 +1098,26 @@ const ENTRY_GONE_REFUSAL =
 
 /** Names the actual reason a bound draft cannot take another inline entry. */
 function boundElsewhereRefusal(state: ReviewWorkflowState): string {
+  return boundElsewhereSentence(state, "adding inline feedback");
+}
+
+/**
+ * The same three states, worded for the controls a pending card carries. The
+ * state is identical and so is the remedy; only the action the reader was
+ * refused differs, and naming the wrong one is what sends them looking for a
+ * composer they never opened.
+ */
+function boundElsewhereEntryRefusal(state: ReviewWorkflowState): string {
+  return boundElsewhereSentence(state, "changing pending comments");
+}
+
+function boundElsewhereSentence(
+  state: ReviewWorkflowState,
+  action: string,
+): string {
   const remote = state.draft.remote;
   if (remote && remote.state !== "editable")
-    return "The pending review is locked by its submission attempt. Settle it in the review workflow before adding inline feedback.";
+    return `The pending review is locked by its submission attempt. Settle it in the review workflow before ${action}.`;
   if (
     remote &&
     !sameComposerRevision(
@@ -1107,8 +1125,8 @@ function boundElsewhereRefusal(state: ReviewWorkflowState): string {
       state.displayed.latestObservedRevision,
     )
   )
-    return "The pending review is bound to an earlier revision. Migrate it in the review workflow before adding inline feedback.";
-  return "The pending review is bound to a durable submission attempt. Settle it in the review workflow before adding inline feedback.";
+    return `The pending review is bound to an earlier revision. Migrate it in the review workflow before ${action}.`;
+  return `The pending review is bound to a durable submission attempt. Settle it in the review workflow before ${action}.`;
 }
 
 /**

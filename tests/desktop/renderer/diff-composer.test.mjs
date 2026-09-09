@@ -1351,6 +1351,209 @@ test("a failed entry delete restores the pending card and reports the failure", 
   );
 });
 
+test("switching a row's composer from a new comment to Edit keeps the two texts apart", async () => {
+  const review = "review-pending-new-then-edit";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 4, [inlineEntry("entry-a", "Guard the zero divisor", 11)])],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  // The card and the gutter share one row, so the composer changes shape in
+  // place. Its text must change with it.
+  await view.findByLabelText("Pending review comment on new line 11");
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "UNSENT NEW COMMENT" },
+  });
+  fireEvent.click(
+    view.getByRole("button", { name: "Edit pending comment on new line 11" }),
+  );
+  const editor = await view.findByLabelText("Pending review comment");
+  assert.equal(editor.value, "Guard the zero divisor");
+  assert.equal(view.container.querySelectorAll(".inline-composer-text").length, 1);
+
+  fireEvent.change(editor, { target: { value: "Raise ZeroDivisionError instead" } });
+  fireEvent.click(view.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  assert.deepEqual(
+    saves[0].content.comments.map((comment) => `${comment.id}:${comment.body}`),
+    ["entry-a:Raise ZeroDivisionError instead"],
+  );
+
+  // The new comment's text is still on its own anchor, unsent.
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
+  assert.equal(
+    (await view.findByLabelText("Inline review comment")).value,
+    "UNSENT NEW COMMENT",
+  );
+});
+
+test("switching a row's composer from Edit to a new comment keeps the two texts apart", async () => {
+  const review = "review-pending-edit-then-new";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 2, [inlineEntry("entry-a", "Guard the zero divisor", 11)])],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Edit pending comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Pending review comment"), {
+    target: { value: "UNSENT EDIT TEXT" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
+  const composer = await view.findByLabelText("Inline review comment");
+  assert.equal(composer.value, "");
+  assert.equal(view.container.querySelectorAll(".inline-composer-text").length, 1);
+
+  fireEvent.change(composer, { target: { value: "A second note on this line" } });
+  fireEvent.click(view.getByRole("button", { name: "Add to review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  // The abandoned edit is not appended, and the stored body is untouched.
+  assert.deepEqual(
+    saves[0].content.comments.map((comment) => comment.body),
+    ["Guard the zero divisor", "A second note on this line"],
+  );
+  assert.equal(saves[0].content.comments[0].id, "entry-a");
+  assert.notEqual(saves[0].content.comments[1].id, "entry-a");
+});
+
+test("saving a pending comment that was not changed writes no new version", async () => {
+  const review = "review-pending-noop-save";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 9, [inlineEntry("entry-a", "Guard the zero divisor", 11)])],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Edit pending comment on new line 11" }),
+  );
+  await view.findByLabelText("Edit pending comment composer");
+  fireEvent.click(view.getByRole("button", { name: "Save changes" }));
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".inline-composer").length, 0),
+  );
+  // No version was burned, and the entry is back as a card unchanged.
+  assert.equal(saves.length, 0);
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 1);
+  assert.equal(
+    view.container.querySelector(".pending-card-body p").textContent,
+    "Guard the zero divisor",
+  );
+});
+
+test("editing one entry then another on the same row never writes one body into the other", async () => {
+  const review = "review-pending-a-then-b";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(review, 3, [
+              inlineEntry("entry-a", "AAA body", 11),
+              inlineEntry("entry-b", "BBB body", 11),
+            ]),
+          ],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  await view.findAllByLabelText("Pending review comment on new line 11");
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 2);
+  assert.equal(view.getByText("2 pending").textContent, "2 pending");
+
+  fireEvent.click(
+    view.getAllByRole("button", { name: "Edit pending comment on new line 11" })[0],
+  );
+  assert.equal(
+    (await view.findByLabelText("Pending review comment")).value,
+    "AAA body",
+  );
+  // Only the other entry's card is left, so this Edit is unambiguous.
+  fireEvent.click(
+    view.getByRole("button", { name: "Edit pending comment on new line 11" }),
+  );
+  const editor = await view.findByLabelText("Pending review comment");
+  assert.equal(editor.value, "BBB body");
+
+  fireEvent.change(editor, { target: { value: "BBB edited" } });
+  fireEvent.click(view.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  assert.deepEqual(
+    saves[0].content.comments.map((comment) => `${comment.id}:${comment.body}`),
+    ["entry-a:AAA body", "entry-b:BBB edited"],
+  );
+});
+
+test("a read-only pending review explains itself once per file, in the words of the card", async () => {
+  const review = "review-pending-readonly";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            {
+              ...draft(review, 2, [
+                inlineEntry("entry-a", "First note", 11),
+                inlineEntry("entry-b", "Second note", 10),
+                inlineEntry("entry-c", "Third note", 12, { side: "old", old_line: 12, new_line: null }),
+              ]),
+              revision: { head_sha: "old-head", base_sha: "df2bd3f", start_sha: null },
+            },
+          ],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  await view.findByLabelText("Pending review comment on new line 11");
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 3);
+  // One sentence for the file, not one per card.
+  assert.equal(view.container.querySelectorAll(".pending-card small").length, 1);
+  const refusal =
+    "The pending review is bound to an earlier revision. Migrate it in the review workflow before changing pending comments.";
+  assert.equal(view.container.querySelector(".pending-card small").textContent, refusal);
+  const edit = view.getByRole("button", { name: "Edit pending comment on new line 11" });
+  assert.equal(edit.disabled, true);
+  assert.equal(edit.title, refusal);
+  const remove = view.getByRole("button", { name: "Delete pending comment on new line 11" });
+  assert.equal(remove.disabled, true);
+  assert.equal(remove.title, refusal);
+  fireEvent.click(remove);
+  assert.equal(saves.length, 0);
+});
+
 function splitCell(view, side, line) {
   const cell = view.container.querySelector(
     `.split-cell[data-anchor-side="${side}"][data-${side}-line="${line}"]`,

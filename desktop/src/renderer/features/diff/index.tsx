@@ -30,10 +30,27 @@ import {
   serviceErrorOf,
 } from "../../core/presentation.js";
 import { QueryCoordinator } from "../../core/query.js";
+import {
+  InlineComposer,
+  useInlineReviewComposer,
+  type InlineComposerController,
+} from "../review/composer.js";
 import { ReviewHeader } from "../review-detail/index.js";
 
 const MAX_DIFF_PAGES = 1000;
 const MAX_DIFF_ROWS = 100_000;
+
+/**
+ * One in-diff composer is open at a time. It is bound to the anchor it was
+ * opened with, so extending or moving the line selection never retargets the
+ * composer that is already collecting text.
+ */
+export interface InlineComposerSlot {
+  readonly controller: InlineComposerController;
+  readonly anchor: InlineAnchorSelection | null;
+  readonly open: (anchor: InlineAnchorSelection) => void;
+  readonly close: () => void;
+}
 
 export interface LoadedDiff {
   readonly layout: DiffLayout;
@@ -194,6 +211,7 @@ function DiffView({
       {jumpError && <Notice kind="warning">{jumpError}</Notice>}
       {loaded && (
         <DiffWorkspace
+          bridge={bridge}
           review={route.item.handle}
           loaded={loaded}
           selection={inlineAnchor}
@@ -313,11 +331,13 @@ type FeatureContributionParameters = Parameters<
 >[0];
 
 function DiffWorkspace({
+  bridge,
   review,
   loaded,
   selection,
   selectAnchor,
 }: {
+  readonly bridge: DesktopBridge;
   readonly review: string;
   readonly loaded: LoadedDiff;
   readonly selection: InlineAnchorSelection | null;
@@ -329,6 +349,23 @@ function DiffWorkspace({
   );
   const [selected, setSelected] = useState(files[0]?.file_index ?? 0);
   const [target, setTarget] = useState(0);
+  const [composerAnchor, setComposerAnchor] =
+    useState<InlineAnchorSelection | null>(null);
+  const composerController = useInlineReviewComposer(
+    bridge,
+    review,
+    loaded.revision,
+  );
+  // A reloaded diff can retire the row the composer is anchored to. Only an
+  // anchor that no longer belongs to the loaded diff is dropped, and its typed
+  // text stays in the per-anchor buffer either way.
+  useEffect(() => {
+    setComposerAnchor((anchor) =>
+      anchor === null || anchorBelongsToLoadedDiff(anchor, review, loaded)
+        ? anchor
+        : null,
+    );
+  }, [loaded, review]);
   useEffect(() => {
     setSelected(files[0]?.file_index ?? 0);
     setTarget(0);
@@ -362,6 +399,15 @@ function DiffWorkspace({
   const visible = loaded.rows.filter((row) => row.file_index === selected);
   const selectedFile =
     files.find((file) => file.file_index === selected) ?? null;
+  const inline: InlineComposerSlot = {
+    controller: composerController,
+    anchor: composerAnchor,
+    open: (anchor) => {
+      selectAnchor(anchor);
+      setComposerAnchor(anchor);
+    },
+    close: () => setComposerAnchor(null),
+  };
   const moveFocus = (event: KeyboardEvent<HTMLElement>): void => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const buttons = [
@@ -398,7 +444,10 @@ function DiffWorkspace({
             select={(fileIndex, rowIndex) => {
               setSelected(fileIndex);
               setTarget(rowIndex);
-              if (fileIndex !== selected) selectAnchor(null);
+              if (fileIndex !== selected) {
+                setComposerAnchor(null);
+                selectAnchor(null);
+              }
             }}
           />
         ))}
@@ -419,6 +468,7 @@ function DiffWorkspace({
           file={selectedFile}
           selection={selection}
           selectAnchor={selectAnchor}
+          inline={inline}
         />
       </section>
     </div>
@@ -434,6 +484,7 @@ function DiffRowsWindow({
   file,
   selection,
   selectAnchor,
+  inline,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -443,6 +494,7 @@ function DiffRowsWindow({
   readonly file: DiffFileRow | null;
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
+  readonly inline: InlineComposerSlot;
 }): ReactNode {
   const [start, setStart] = useState(
     Math.max(0, Math.floor(targetIndex / pageSize) * pageSize),
@@ -471,6 +523,7 @@ function DiffRowsWindow({
                     side={side}
                     selection={selection}
                     selectAnchor={selectAnchor}
+                    inline={inline}
                   />
                 ))}
               </div>
@@ -488,6 +541,7 @@ function DiffRowsWindow({
               file={file}
               selection={selection}
               selectAnchor={selectAnchor}
+              inline={inline}
             />
           ))}
         </div>
@@ -563,6 +617,7 @@ function DiffRowView({
   file,
   selection,
   selectAnchor,
+  inline,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -570,6 +625,7 @@ function DiffRowView({
   readonly file: DiffFileRow | null;
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
+  readonly inline: InlineComposerSlot;
 }): ReactNode {
   if (row.kind === "file") {
     const path =
@@ -612,58 +668,128 @@ function DiffRowView({
       ),
     );
   };
+  const compose = (side: "old" | "new"): void => {
+    if (!selectable || !file) return;
+    inline.open(selectionForUnifiedLine(review, loaded, file, row, side));
+  };
   const selected =
     selection !== null &&
     selectionMatchesLine(selection, loaded, file, row, defaultSide);
+  const composerOpen =
+    inline.anchor !== null &&
+    composerOnUnifiedRow(inline.anchor, loaded, file, row);
   return (
-    <div
-      className={`diff-line line-${row.line_type}${selected ? " line-selected" : ""}`}
-      role="listitem"
-      data-selected-side={selected ? selection.side : undefined}
-    >
-      <LineNumberAnchor
-        label="old"
-        value={row.old_line}
-        selected={
-          selection !== null &&
-          selectionMatchesLine(selection, loaded, file, row, "old")
-        }
-        selectable={selectable}
-        choose={(extend) => choose("old", extend)}
-      />
-      <LineNumberAnchor
-        label="new"
-        value={row.new_line}
-        selected={
-          selection !== null &&
-          selectionMatchesLine(selection, loaded, file, row, "new")
-        }
-        selectable={selectable}
-        choose={(extend) => choose("new", extend)}
-      />
-      <code
-        className={`line-content${selectable ? " selectable-line" : ""}`}
-        role={selectable ? "button" : undefined}
-        tabIndex={selectable ? 0 : undefined}
-        aria-label={
-          selectable
-            ? `Select ${defaultSide} line ${defaultSide === "old" ? row.old_line : row.new_line}`
-            : undefined
-        }
-        onClick={selectable ? (event) => choose(defaultSide, event.shiftKey) : undefined}
-        onKeyDown={
-          selectable
-            ? (event) =>
-                activateOnKeyboard(event, () =>
-                  choose(defaultSide, event.shiftKey),
-                )
-            : undefined
-        }
+    <>
+      <div
+        className={`diff-line line-${row.line_type}${selected ? " line-selected" : ""}`}
+        role="listitem"
+        data-selected-side={selected ? selection.side : undefined}
       >
-        {marker(row.line_type)}
-        {row.content}
-      </code>
-    </div>
+        <LineNumberAnchor
+          label="old"
+          value={row.old_line}
+          selected={
+            selection !== null &&
+            selectionMatchesLine(selection, loaded, file, row, "old")
+          }
+          selectable={selectable}
+          choose={(extend) => choose("old", extend)}
+        />
+        <LineNumberAnchor
+          label="new"
+          value={row.new_line}
+          selected={
+            selection !== null &&
+            selectionMatchesLine(selection, loaded, file, row, "new")
+          }
+          selectable={selectable}
+          choose={(extend) => choose("new", extend)}
+        />
+        <GutterComment
+          selectable={selectable}
+          side={defaultSide}
+          line={defaultSide === "old" ? row.old_line : row.new_line}
+          compose={() => compose(defaultSide)}
+        />
+        <code
+          className={`line-content${selectable ? " selectable-line" : ""}`}
+          role={selectable ? "button" : undefined}
+          tabIndex={selectable ? 0 : undefined}
+          aria-label={
+            selectable
+              ? `Select ${defaultSide} line ${defaultSide === "old" ? row.old_line : row.new_line}`
+              : undefined
+          }
+          onClick={selectable ? (event) => choose(defaultSide, event.shiftKey) : undefined}
+          onKeyDown={
+            selectable
+              ? (event) => {
+                  if (isCommentKey(event)) {
+                    event.preventDefault();
+                    compose(defaultSide);
+                    return;
+                  }
+                  activateOnKeyboard(event, () =>
+                    choose(defaultSide, event.shiftKey),
+                  );
+                }
+              : undefined
+          }
+        >
+          {marker(row.line_type)}
+          {row.content}
+        </code>
+      </div>
+      {composerOpen && inline.anchor && (
+        <div className="inline-composer-row" role="listitem">
+          <InlineComposer
+            anchor={inline.anchor}
+            controller={inline.controller}
+            close={inline.close}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * The gutter affordance the design puts on every source row. It stays in the
+ * grid when a row cannot be commented on, so the code column never shifts.
+ */
+function GutterComment({
+  selectable,
+  side,
+  line,
+  compose,
+}: {
+  readonly selectable: boolean;
+  readonly side: "old" | "new";
+  readonly line: number | null;
+  readonly compose: () => void;
+}): ReactNode {
+  if (!selectable || line === null)
+    return <span className="gutter-comment gutter-comment-empty" />;
+  return (
+    <button
+      className="gutter-comment"
+      aria-label={`Comment on ${side} line ${line}`}
+      title="Comment on this line"
+      onClick={compose}
+    >
+      +
+    </button>
+  );
+}
+
+/** The design's keyboard equivalent of the gutter affordance (section 2.8). */
+function isCommentKey(event: KeyboardEvent<HTMLElement>): boolean {
+  return (
+    event.key === "c" &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
   );
 }
 
@@ -705,6 +831,7 @@ function SplitPaneRow({
   side,
   selection,
   selectAnchor,
+  inline,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -713,6 +840,7 @@ function SplitPaneRow({
   readonly side: "old" | "new";
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
+  readonly inline: InlineComposerSlot;
 }): ReactNode {
   if (row.kind === "file")
     return (
@@ -731,17 +859,39 @@ function SplitPaneRow({
       </div>
     );
   if (row.kind !== "split") return null;
+  const composerOpen =
+    inline.anchor !== null &&
+    composerOnSplitRow(inline.anchor, loaded, file, row);
   return (
-    <SplitCell
-      review={review}
-      loaded={loaded}
-      row={row}
-      file={file}
-      cell={row[side]}
-      visualSide={side}
-      selection={selection}
-      selectAnchor={selectAnchor}
-    />
+    <>
+      <SplitCell
+        review={review}
+        loaded={loaded}
+        row={row}
+        file={file}
+        cell={row[side]}
+        visualSide={side}
+        selection={selection}
+        selectAnchor={selectAnchor}
+        inline={inline}
+      />
+      {composerOpen &&
+        inline.anchor &&
+        (inline.anchor.side === side ? (
+          <div className="inline-composer-row" role="listitem">
+            <InlineComposer
+              anchor={inline.anchor}
+              controller={inline.controller}
+              close={inline.close}
+            />
+          </div>
+        ) : (
+          // The panes are two independent columns, so the pane that does not
+          // hold the composer keeps its rows aligned with a spacer of the same
+          // fixed height.
+          <div className="inline-composer-mirror" aria-hidden="true" />
+        ))}
+    </>
   );
 }
 
@@ -771,6 +921,7 @@ function SplitCell({
   visualSide,
   selection,
   selectAnchor,
+  inline,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -780,6 +931,7 @@ function SplitCell({
   readonly visualSide: "old" | "new";
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
+  readonly inline: InlineComposerSlot;
 }): ReactNode {
   const selectable =
     cell?.anchor_side !== null && cell !== null && file !== null;
@@ -801,6 +953,10 @@ function SplitCell({
       ),
     );
   };
+  const compose = (): void => {
+    if (!selectable || !cell || !file || !cell.anchor_side) return;
+    inline.open(selectionForSplitCell(review, loaded, file, row, cell));
+  };
   return (
     <div
       className={`split-cell split-${visualSide}${cell ? ` line-${cell.line_type}` : " split-empty"}${selectable ? " selectable-line" : ""}${selected ? " line-selected" : ""}`}
@@ -818,7 +974,14 @@ function SplitCell({
       onClick={selectable ? (event) => choose(event.shiftKey) : undefined}
       onKeyDown={
         selectable
-          ? (event) => activateOnKeyboard(event, () => choose(event.shiftKey))
+          ? (event) => {
+              if (isCommentKey(event)) {
+                event.preventDefault();
+                compose();
+                return;
+              }
+              activateOnKeyboard(event, () => choose(event.shiftKey));
+            }
           : undefined
       }
     >
@@ -827,6 +990,12 @@ function SplitCell({
           <span className="line-number">
             {visualSide === "old" ? cell.old_line : cell.new_line}
           </span>
+          <GutterComment
+            selectable={selectable && cell.anchor_side === visualSide}
+            side={visualSide}
+            line={visualSide === "old" ? cell.old_line : cell.new_line}
+            compose={compose}
+          />
           <code className="line-content">
             {marker(cell.line_type)}
             {cell.content}
@@ -1297,6 +1466,50 @@ export function rebindInlineAnchor(
     Boolean(selection.selectedLines && selection.selectedLines.length > 1),
   );
   return sameSelectedSource(selection, rebound) ? rebound : null;
+}
+
+function anchorBelongsToLoadedDiff(
+  anchor: InlineAnchorSelection,
+  review: string,
+  loaded: LoadedDiff,
+): boolean {
+  return (
+    anchor.review === review &&
+    anchor.snapshotId === loaded.snapshotId &&
+    anchor.resource === loaded.resource &&
+    sameRevisionValue(anchor.revision, loaded.revision)
+  );
+}
+
+function composerOnUnifiedRow(
+  anchor: InlineAnchorSelection,
+  loaded: LoadedDiff,
+  file: DiffFileRow | null,
+  row: Extract<DiffRow, { readonly kind: "line" }>,
+): boolean {
+  return (
+    file !== null &&
+    anchor.rowIndex === null &&
+    selectionBelongsToLoadedFile(anchor, loaded, file) &&
+    anchor.hunkIndex === row.hunk_index &&
+    anchor.oldLine === row.old_line &&
+    anchor.newLine === row.new_line &&
+    anchor.lineType === row.line_type
+  );
+}
+
+function composerOnSplitRow(
+  anchor: InlineAnchorSelection,
+  loaded: LoadedDiff,
+  file: DiffFileRow | null,
+  row: SplitDiffRow,
+): boolean {
+  return (
+    file !== null &&
+    anchor.rowIndex === row.row_index &&
+    selectionBelongsToLoadedFile(anchor, loaded, file) &&
+    anchor.hunkIndex === row.hunk_index
+  );
 }
 
 function selectionMatchesLine(

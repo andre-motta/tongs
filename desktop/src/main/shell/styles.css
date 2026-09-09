@@ -977,7 +977,7 @@ button {
 }
 .diff-line {
   display: grid;
-  grid-template-columns: 55px 55px minmax(max-content, 1fr);
+  grid-template-columns: 55px 55px 22px minmax(max-content, 1fr);
   min-height: 22px;
 }
 .line-number {
@@ -1047,7 +1047,7 @@ button {
   min-width: 100%;
   min-height: 22px;
   display: grid;
-  grid-template-columns: 55px max-content;
+  grid-template-columns: 55px 22px max-content;
 }
 .split-cell .line-content {
   display: block;
@@ -1055,6 +1055,101 @@ button {
 .split-empty {
   background: #0a0e15;
 }
+.gutter-comment {
+  display: block;
+  box-sizing: border-box;
+  width: 22px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  /*
+   * Transparent rather than hidden, so that the affordance appears on hover
+   * without dropping out of the keyboard tab order.
+   */
+  opacity: 0;
+}
+.gutter-comment-empty {
+  cursor: default;
+}
+.diff-line:hover > .gutter-comment,
+.split-cell:hover > .gutter-comment,
+.diff-line:focus-within > .gutter-comment,
+.split-cell:focus-within > .gutter-comment,
+.gutter-comment:focus-visible {
+  opacity: 1;
+}
+.gutter-comment-empty,
+.gutter-comment-empty:hover {
+  opacity: 0;
+}
+.gutter-comment:hover,
+.gutter-comment:focus-visible {
+  color: var(--text);
+  background: var(--accent-2);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/*
+ * The composer is a row of the diff rather than an overlay, so the rows below
+ * it are pushed down. Its height is fixed so that the split panes, which are
+ * two independent columns, stay aligned through the spacer in the other pane.
+ */
+.inline-composer-row,
+.inline-composer-mirror {
+  box-sizing: border-box;
+  height: var(--inline-composer-height, 15rem);
+  padding: 0.5rem 0.75rem 0.75rem 55px;
+}
+.inline-composer {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.75rem;
+  background: var(--panel);
+  overflow: auto;
+}
+.inline-composer-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.inline-composer-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.inline-composer-text {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 5rem;
+  resize: vertical;
+  font: inherit;
+}
+.inline-composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 .window-controls {
   position: sticky;
   bottom: 0;

@@ -1051,6 +1051,46 @@ test("the Overview composer is the shared composer in its general mode", async (
   assert.equal(names.filter((name) => name === "Start a review").length, 1);
 });
 
+test("a verdict tile explains the capability read before it explains the body", async () => {
+  const review = "review-verdict-slow-capabilities";
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const bridge = reviewBridge(review, {
+    getReviewMutationCapabilities: () => ({
+      requestToken: crypto.randomUUID(),
+      result: gate.then(() => ({ review, capabilities: capabilities() })),
+    }),
+  });
+  const view = renderOverview(bridge, review);
+  await view.findByLabelText("General review comment");
+
+  // While the read is in flight every tile says so, and none of them claims
+  // the missing body is the reason. This is the state #215 read as if it were
+  // the settled one.
+  const tiles = () => [
+    ...view.container.querySelectorAll(".review-workflow-verdicts button"),
+  ];
+  assert.equal(tiles().length, 3);
+  assert.equal(
+    tiles().filter((tile) => tile.title === VERDICTS_LOADING).length,
+    3,
+  );
+  assert.equal(tiles().filter((tile) => tile.disabled).length, 3);
+
+  release();
+  await settledCapabilities(view);
+  assert.equal(
+    view.getByRole("button", { name: "Submit comment verdict" }).title,
+    "Enter a review body in the general composer first.",
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Approve review" }).disabled,
+    false,
+  );
+});
+
 test("the comment verdict reads the body the composer is holding", async () => {
   const review = "review-verdict-body";
   const verdicts = [];
@@ -1062,8 +1102,16 @@ test("the comment verdict reads the body the composer is holding", async () => {
   });
   const view = renderOverview(bridge, review);
   await view.findByLabelText("General review comment");
+  // The tile is disabled while the capability read is in flight and again once
+  // it answers with no body to submit, so the read has to have answered before
+  // its title says anything about the body.
+  await settledCapabilities(view);
+  assert.equal(
+    view.container.querySelectorAll(".review-workflow-verdicts button").length,
+    3,
+  );
   const comment = view.getByRole("button", { name: "Submit comment verdict" });
-  await waitFor(() => assert.equal(comment.disabled, true));
+  assert.equal(comment.disabled, true);
   assert.equal(comment.title, "Enter a review body in the general composer first.");
 
   fireEvent.change(view.getByLabelText("General review comment"), {
@@ -1136,6 +1184,7 @@ test("an unsupported verdict names its capability even while another verdict sta
   });
   fireEvent.click(await enabledButton(view, "Submit comment verdict"));
   await view.findByText("Comment verdict submitted.");
+  await settledCapabilities(view);
 
   // A missing capability is permanent; a standing lasts until the next
   // comment, so the tile names the one that will still be true tomorrow.
@@ -1292,8 +1341,12 @@ test("a general entry is refused while the review's submission is in flight", as
   const view = renderOverview(bridge, review);
   const composer = await view.findByLabelText("General review comment");
   fireEvent.change(composer, { target: { value: "note during submission" } });
+  // Same race as #215 on the composer's own primary: it is disabled while the
+  // capability read is in flight and again for the submission, and only the
+  // second is what this test is about.
+  await settledCapabilities(view);
   const primary = view.getByRole("button", { name: "Add to review" });
-  await waitFor(() => assert.equal(primary.disabled, true));
+  assert.equal(primary.disabled, true);
   assert.equal(
     primary.title,
     "The pending review is bound to a durable submission attempt. Settle it in Your review before adding a general comment.",
@@ -1436,6 +1489,33 @@ test("Add comment now posts a general comment immediately and writes no draft", 
  * capability-gated control renders disabled while the read is in flight, and a
  * press on it does nothing, so waiting for the element alone is a race.
  */
+/**
+ * The sentences a capability-gated control shows while the read behind it is
+ * still in flight. They are the reason the control is disabled at that moment,
+ * and they are not the reason it will be disabled for once the read answers.
+ */
+const VERDICTS_LOADING = "Verdict support for this review is still loading.";
+const COMPOSER_LOADING =
+  "General comment support for this review is still loading.";
+
+/**
+ * Waits until every capability-gated control on the surface has an answer
+ * behind it. A control is disabled both while its read is in flight and for
+ * its own standing reason, so waiting on `disabled` cannot tell the two apart
+ * and leaves a loading sentence readable as if it were the reason: that is the
+ * race #215 caught on a slow runner. Counted rather than matched against a
+ * node, so the wait can only end when no control is still loading.
+ */
+async function settledCapabilities(view) {
+  await waitFor(() => {
+    const loading = [...view.container.querySelectorAll("button")].filter(
+      (button) =>
+        button.title === VERDICTS_LOADING || button.title === COMPOSER_LOADING,
+    ).length;
+    assert.equal(loading, 0);
+  });
+}
+
 /** Lets every already-dispatched read and its follow-on effects settle. */
 async function settle(rounds = 20) {
   for (let round = 0; round < rounds; round += 1)

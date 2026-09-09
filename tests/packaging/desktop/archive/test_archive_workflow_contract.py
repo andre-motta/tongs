@@ -30,8 +30,8 @@ def test_workflow_checks_out_exact_candidate_and_retains_bounded_evidence() -> N
     assert "ref: ${{ env.TONGS_HEAD_SHA }}" in workflow
     assert "persist-credentials: false" in workflow
     assert "packaging/desktop/archive/run_hosted.sh" in workflow
-    assert "      - LICENSE\n" in workflow
-    assert "      - src/tongs/__init__.py\n" in workflow
+    assert "on:\n  workflow_dispatch:\n" in workflow
+    assert "\n  pull_request:\n" not in workflow
     assert "retention-days: 14" in workflow
     assert "release" not in workflow.lower()
 

@@ -1,12 +1,6 @@
 name: Desktop Python companion RPMs
 
 on:
-  pull_request:
-    branches: [feat/desktop-app]
-    paths:
-      - packaging/rpm/python-dependencies/**
-      - tests/packaging/rpm/python-dependencies/**
-      - .github/workflows/desktop-python-rpms.yml
   workflow_dispatch:
 
 permissions:

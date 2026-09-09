@@ -60,11 +60,25 @@ INSTALL_PROVIDES: dict[str, frozenset[str]] = {
     "python -m pip install -e .": CORE_MODULES,
     '"$TRANSFER_PYTHON" -I -m pip install --isolated '
     "--disable-pip-version-check -e .": CORE_MODULES,
+    '"$CANDIDATE_PYTHON" -I -m pip install --isolated '
+    "--disable-pip-version-check -e . "
+    '"jsonschema>=4.18,<5" "sigstore==${SIGSTORE_VERSION}"': CORE_MODULES
+    | frozenset({"jsonschema"}),
+    '"$CANDIDATE_PYTHON" -I -m pip install --isolated '
+    "--disable-pip-version-check -e . "
+    '"sigstore==${SIGSTORE_VERSION}"': CORE_MODULES,
+    '"$CANDIDATE_PYTHON" -I -m pip install --isolated '
+    '--disable-pip-version-check -e ".[dev]" '
+    '"sigstore==${SIGSTORE_VERSION}"': CORE_MODULES | DEV_MODULES,
     "python -m pip install build": frozenset(),
     "python -m pip install ./examples/desktop-plugin": frozenset(),
 }
 
-WORKFLOWS = ("ci.yml", "desktop-production.yml")
+#: Every workflow is parsed.  Scoping this to two files is what let the fifth
+#: instance of the missing-dependency class reach a trusted push run: the
+#: candidate attestation job invokes the SPDX generator, and nothing here looked
+#: at release-desktop.yml.
+WORKFLOW_DIRECTORY = ".github/workflows"
 
 
 @dataclass(frozen=True)
@@ -118,10 +132,25 @@ ENTRY_POINTS: tuple[EntryPoint, ...] = (
         note="loads package_contract.py, which imports packaging.version",
     ),
     EntryPoint(
+        program="tests/containers/verify_expected_failure.py",
+        jobs=("desktop-podman-probe.yml:fedora-44-x86-64",),
+        note="the probe job installs nothing, so this must stay stdlib only",
+    ),
+    EntryPoint(
         program="tests/integration/desktop/candidate_attestation.py",
-        jobs=("desktop-production.yml:archive",),
+        jobs=(
+            "desktop-production.yml:archive",
+            "release-desktop.yml:candidate-archive",
+            "release-desktop.yml:candidate-attestation",
+        ),
         permitted=CORE_MODULES,
         note="issue #120's transfer command, run from the job's isolated venv",
+    ),
+    EntryPoint(
+        program="scripts/build_desktop_sbom.py",
+        jobs=("release-desktop.yml:candidate-attestation",),
+        permitted=CORE_MODULES | frozenset({"jsonschema"}),
+        note="validates against the pinned SPDX schema, so it needs jsonschema",
     ),
     EntryPoint(
         program="tests/ci/desktop_production_expectations.py",
@@ -182,11 +211,11 @@ def _run_under_minimal_environment(
 @pytest.fixture(scope="module")
 def workflow_jobs() -> dict[str, dict]:
     jobs: dict[str, dict] = {}
-    for name in WORKFLOWS:
-        document = yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
+    for path in sorted((ROOT / WORKFLOW_DIRECTORY).glob("*.yml")):
+        document = yaml.safe_load(path.read_text())
         for job, body in document["jobs"].items():
             if isinstance(body, dict) and "steps" in body:
-                jobs[f"{name}:{job}"] = body
+                jobs[f"{path.name}:{job}"] = body
     return jobs
 
 
@@ -206,12 +235,32 @@ def _installed_modules(job: dict) -> frozenset[str]:
     return frozenset(provided)
 
 
+def _invoked_programs(step: dict) -> set[str]:
+    """Return the repository-relative programs a step runs directly.
+
+    Matching on the whole path token matters: ``test_candidate_attestation.py``
+    contains ``candidate_attestation.py`` as a substring but is a pytest target,
+    not a program with a dependency set of its own.
+    """
+
+    programs = set()
+    for token in (step.get("run") or "").split():
+        candidate = token.strip('"').strip("'")
+        if not candidate.endswith(".py"):
+            continue
+        if not candidate.startswith(("tests/", "scripts/", ".github/")):
+            continue
+        if Path(candidate).name.startswith("test_"):
+            continue
+        programs.add(candidate)
+    return programs
+
+
 def _jobs_invoking(program: str, jobs: dict[str, dict]) -> set[str]:
-    name = Path(program).name
     found = set()
     for label, job in jobs.items():
         for step in job["steps"]:
-            if name in (step.get("run") or ""):
+            if program in _invoked_programs(step):
                 found.add(label)
     return found
 
@@ -287,23 +336,11 @@ def test_the_table_covers_every_entry_point_the_workflows_invoke(
 ) -> None:
     """A new production program must be added here, not silently trusted."""
 
-    recorded = {Path(entry.program).name for entry in ENTRY_POINTS}
+    recorded = {entry.program for entry in ENTRY_POINTS}
     invoked: set[str] = set()
     for job in workflow_jobs.values():
         for step in job["steps"]:
-            for token in (step.get("run") or "").split():
-                candidate = token.strip('"')
-                name = Path(candidate).name
-                if not candidate.endswith(".py"):
-                    continue
-                if not candidate.startswith(("tests/", "scripts/", ".github/")):
-                    continue
-                # A test module is a pytest target, not a program invoked
-                # directly, so its dependencies come from the job's pytest
-                # install rather than from an entry point of its own.
-                if name.startswith("test_"):
-                    continue
-                invoked.add(name)
+            invoked |= _invoked_programs(step)
     assert invoked <= recorded, sorted(invoked - recorded)
     assert invoked, "the workflows should invoke at least one recorded program"
 

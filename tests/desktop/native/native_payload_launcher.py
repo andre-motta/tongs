@@ -45,6 +45,7 @@ from tests.integration.desktop.native_payload_acceptance import (
     capture_payload_snapshot,
     chromium_argv_title,
     parse_bound_manifests,
+    title_derived_role,
     validate_policy,
     verify_core_observation,
     verify_native_acceptance,
@@ -582,7 +583,12 @@ def _validate_process_refresh(
             # forward also keeps the browser's installed-launcher and full main
             # argv equality checks comparing canonical values. See
             # ``.worktrees/desktop-125-chromium-process-title-audit.md``.
-            return replace(current, role=previous.role, argv=previous.argv)
+            return replace(
+                current,
+                role=previous.role,
+                argv=previous.argv,
+                title_derived=False,
+            )
     parent = observations.get(previous.ppid)
     inherited_parent_image = (
         parent is not None
@@ -605,9 +611,12 @@ def _is_compaction_role_transition(previous_role: str, current_role: str) -> boo
         # The browser keeps its role across the rewrite because it is the root
         # PID of the owned tree, which is how the collector classifies it.
         return current_role == "browser"
-    # A compacted child title exposes no ``--type=`` token, so the collector
-    # necessarily reclassifies it as a generic helper.
-    return previous_role in COMPACTED_PROCESS_ROLE_TYPES and current_role == "helper"
+    if previous_role not in COMPACTED_PROCESS_ROLE_TYPES:
+        return False
+    # The collector either fails to classify the compacted title, leaving a
+    # generic helper, or derives the same audited role from it. Any other role
+    # is a genuine change and stays rejected.
+    return current_role in ("helper", previous_role)
 
 
 def _is_exact_argv_storage_compaction(
@@ -852,6 +861,15 @@ def _observe_process(pid: int, root_pid: int) -> ProcessObservation | None:
     except (FileNotFoundError, PermissionError):
         cwd = None
     role = _process_role(pid, root_pid, argv)
+    title_derived = False
+    if role == "helper":
+        # Canonical classification takes precedence. A zygote forked child never
+        # has a canonical argv of its own, so its role can only come from the
+        # compacted title. See ``.worktrees/desktop-125-attempt10-analysis.md``.
+        derived = title_derived_role(executable, argv)
+        if derived is not None:
+            role = derived
+            title_derived = True
     return ProcessObservation(
         pid=pid,
         ppid=_status_int(status, "PPid"),
@@ -867,6 +885,7 @@ def _observe_process(pid: int, root_pid: int) -> ProcessObservation | None:
             seccomp_filters=_status_int(status, "Seccomp_filters"),
         ),
         raw_argv=argv,
+        title_derived=title_derived,
     )
 
 

@@ -1196,7 +1196,7 @@ def test_final_verifier_rejects_first_observed_compacted_helper_with_hidden_swit
 
     with pytest.raises(
         NativeAcceptanceError,
-        match="Electron canonical argv does not name its executable",
+        match="owned process uses a forbidden security/GPU switch",
     ):
         _verify(fixture)
 
@@ -2672,6 +2672,320 @@ def test_process_refresh_rejects_arbitrary_prior_raw_state(tmp_path: Path) -> No
                 role="helper",
                 argv=compacted_raw,
                 raw_argv=compacted_raw,
+            ),
+            {},
+        )
+
+
+def _as_title_derived(
+    process: ProcessObservation, tail: str, *, role: str | None = None
+) -> ProcessObservation:
+    """Present one process the way a compacted Chromium child is observed."""
+
+    title = (f"{process.executable} {tail}",)
+    derived = acceptance_module.title_derived_role(process.executable, title)
+    return replace(
+        process,
+        role=process.role if role is None else role,
+        argv=title,
+        raw_argv=title,
+        title_derived=derived is not None if role is None else True,
+    )
+
+
+def _with_process(fixture: dict[str, Any], pid: int, replacement: Any) -> None:
+    observations = tuple(
+        replace(
+            observation,
+            processes=tuple(
+                replacement(process) if process.pid == pid else process
+                for process in observation.processes
+            ),
+        )
+        for observation in fixture["observations"]
+    )
+    fixture["observations"] = observations
+
+
+def test_final_verifier_accepts_a_title_derived_renderer_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """Attempt 10: the injected renderer exists only as a compacted title."""
+
+    fixture = _fixture(tmp_path)
+    _with_process(
+        fixture,
+        103,
+        lambda process: _as_title_derived(
+            process, "--type=renderer --enable-crash-reporter=id,no_channel"
+        ),
+    )
+
+    assert _verify(fixture).validation == "controlled-fixture-structural-only"
+
+
+def test_final_verifier_accepts_a_title_derived_gpu_process(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    _with_process(
+        fixture,
+        102,
+        lambda process: _as_title_derived(
+            process, "--type=gpu-process --gpu-preferences=value"
+        ),
+    )
+
+    assert _verify(fixture).validation == "controlled-fixture-structural-only"
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "--type=renderer",
+        "--type=gpu-process --gpu-preferences=value with space",
+        "--type=zygote",
+        "--type=utility --utility-sub-type=network.mojom.NetworkService",
+    ],
+)
+def test_title_derived_role_classifies_every_audited_type(
+    tmp_path: Path, tail: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    executable = fixture["observations"][0].processes[1].executable
+    expected = {
+        "renderer": "renderer",
+        "gpu-process": "gpu",
+        "zygote": "zygote",
+        "utility": "utility",
+    }[tail.split(" ", 1)[0].partition("=")[2]]
+
+    assert (
+        acceptance_module.title_derived_role(executable, (f"{executable} {tail}",))
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "/usr/bin/false --type=renderer",
+        "{exe}--type=renderer",
+        "{exe} ",
+        "{exe} --lang=en-US",
+        "{exe} --type=renderer --type=gpu-process",
+        "{exe} --type=broker",
+        "{exe} --type=",
+        "{exe} -- --type=renderer",
+        "{exe} --type=renderer --no-sandbox",
+        "{exe} --type=renderer --js-flags=--expose-gc",
+    ],
+)
+def test_title_derived_role_refuses_anything_but_one_audited_type(
+    tmp_path: Path, title: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    executable = fixture["observations"][0].processes[1].executable
+
+    assert (
+        acceptance_module.title_derived_role(
+            executable, (title.format(exe=executable),)
+        )
+        is None
+    )
+
+
+def test_title_derived_role_requires_exactly_one_field(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    executable = fixture["observations"][0].processes[1].executable
+
+    assert (
+        acceptance_module.title_derived_role(
+            executable, (executable, "--type=renderer")
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("tail", "role"),
+    [
+        ("--type=gpu-process", "renderer"),
+        ("--type=renderer --type=zygote", "renderer"),
+        ("--type=broker", "renderer"),
+        ("-- --type=renderer", "renderer"),
+        ("--lang=en-US", "renderer"),
+    ],
+)
+def test_final_verifier_rejects_an_unreproducible_title_derived_role(
+    tmp_path: Path, tail: str, role: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    _with_process(
+        fixture, 103, lambda process: _as_title_derived(process, tail, role=role)
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError, match="title-derived process role is not reproducible"
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_title_derived_claim_over_a_foreign_prefix(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    forged = ("/usr/bin/false --type=renderer",)
+    _with_process(
+        fixture,
+        103,
+        lambda process: replace(
+            process, argv=forged, raw_argv=forged, title_derived=True
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError, match="title-derived process role is not reproducible"
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_title_derived_process_outside_the_owned_tree(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    _with_process(
+        fixture,
+        103,
+        lambda process: replace(
+            _as_title_derived(process, "--type=renderer"), ppid=987_654
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError, match="owned process lacks ancestry to browser"
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_title_derived_process_with_a_foreign_executable(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    foreign = ("/usr/bin/false --type=renderer",)
+    _with_process(
+        fixture,
+        103,
+        lambda process: replace(
+            process,
+            executable="/usr/bin/false",
+            argv=foreign,
+            raw_argv=foreign,
+            title_derived=True,
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="title-derived process does not share the browser executable",
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_forbidden_switch_inside_a_compacted_title(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    # The collector cannot classify this title, so it records a plain helper.
+    # The forbidden switch must still be found by splitting the title.
+    _with_process(
+        fixture,
+        104,
+        lambda process: replace(
+            process,
+            role="helper",
+            argv=(f"{process.executable} --type=renderer --no-sandbox",),
+            raw_argv=(f"{process.executable} --type=renderer --no-sandbox",),
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="owned process uses a forbidden security/GPU switch",
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_title_derived_browser(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    _with_process(
+        fixture,
+        100,
+        lambda process: replace(
+            process,
+            argv=(" ".join(process.argv),),
+            raw_argv=(" ".join(process.argv),),
+            title_derived=True,
+        ),
+    )
+
+    browser = fixture["observations"][0].processes[0]
+    forged = (" ".join(browser.argv),)
+    with pytest.raises(
+        NativeAcceptanceError, match="title-derived process role is not reproducible"
+    ):
+        acceptance_module._verify_raw_process_argv(
+            replace(browser, argv=forged, raw_argv=forged, title_derived=True)
+        )
+
+    with pytest.raises(
+        NativeAcceptanceError, match="browser argv does not name the installed launcher"
+    ):
+        _verify(fixture)
+
+
+def test_process_refresh_carries_a_canonical_role_over_a_title_derived_observation(
+    tmp_path: Path,
+) -> None:
+    """A canonical observation keeps precedence and clears the marking."""
+
+    fixture = _fixture(tmp_path)
+    zygote = fixture["observations"][0].processes[1]
+    canonical = (acceptance_module.CHROMIUM_ZYGOTE_ARGV0, "--type=renderer")
+    previous = replace(zygote, role="renderer", argv=canonical, raw_argv=canonical)
+    compacted = (f"{previous.executable} --type=renderer",)
+    current = replace(
+        previous,
+        role="renderer",
+        argv=compacted,
+        raw_argv=compacted,
+        title_derived=True,
+    )
+
+    normalized = launcher_module._validate_process_refresh(previous, current, {})
+
+    assert normalized.role == "renderer"
+    assert normalized.argv == canonical
+    assert normalized.raw_argv == compacted
+    assert normalized.title_derived is False
+
+
+def test_process_refresh_still_rejects_a_changed_role_over_a_title(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    zygote = fixture["observations"][0].processes[1]
+    canonical = (zygote.executable, "--type=zygote")
+    previous = replace(zygote, argv=canonical, raw_argv=canonical)
+    compacted = (f"{zygote.executable} --type=renderer",)
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(
+            previous,
+            replace(
+                previous,
+                role="renderer",
+                argv=compacted,
+                raw_argv=compacted,
+                title_derived=True,
             ),
             {},
         )

@@ -278,6 +278,11 @@ class ProcessObservation:
     cwd: str | None
     sandbox: SandboxStatus
     raw_argv: tuple[str, ...] | None = None
+    # True when ``role`` was derived from a compacted Chromium process title
+    # rather than from a canonical NUL separated argv. Such an observation's
+    # ``argv`` is the single raw title field and must never be treated as a
+    # canonical argument vector.
+    title_derived: bool = False
 
     def __post_init__(self) -> None:
         if self.raw_argv is None:
@@ -1556,6 +1561,73 @@ def _verify_renderer_probe(probe: Mapping[str, Any], gpu: GpuPolicy) -> str:
     return renderer
 
 
+def compacted_title_tokens(
+    executable: str, argv: Sequence[str]
+) -> tuple[str, ...] | None:
+    """Split one compacted Chromium title into its space delimited tokens.
+
+    Returns ``None`` unless ``argv`` is exactly one field beginning with the
+    resolved executable followed by one ASCII space, which is the only shape
+    ``SetProcessTitleFromCommandLine`` writes for an owned process.
+
+    Splitting on single spaces cannot invent a token the title does not contain
+    and cannot hide one: a switch present as a space delimited token is always
+    produced. It is therefore conservative for the forbidden switch check, which
+    may over-detect but never under-detect.
+    """
+
+    if len(argv) != 1:
+        return None
+    prefix = f"{executable} "
+    field = argv[0]
+    if not field.startswith(prefix) or len(field) <= len(prefix):
+        return None
+    tokens = tuple(field[len(prefix) :].split(" "))
+    if len(tokens) > MAX_ARGUMENTS:
+        return None
+    return tokens
+
+
+def title_derived_role(executable: str, argv: Sequence[str]) -> str | None:
+    """Role of a process observed only as its compacted process title.
+
+    This deliberately supersedes the earlier rule that a compact field is never
+    parsed, for role derivation only. The measurement in
+    ``.worktrees/desktop-125-attempt10-analysis.md`` shows that all 65 live
+    Chromium children of four independent applications on the audited host
+    present exactly one compacted cmdline field, so a zygote forked renderer has
+    no canonical argv at any sampling instant and could never be classified.
+    Canonical classification still takes precedence, a canonical observation
+    followed by a compacted one still goes through the refresh rule, and a
+    title-derived observation is never treated as a canonical argument vector.
+
+    Returns ``None`` when the field is not a well formed owned title, when it
+    does not carry exactly one audited ``--type`` token, when a bare ``--``
+    terminator precedes that token, or when any token is a forbidden switch.
+    """
+
+    tokens = compacted_title_tokens(executable, argv)
+    if tokens is None:
+        return None
+    if any(token.split("=", 1)[0] in FORBIDDEN_SWITCHES for token in tokens):
+        return None
+    roles = {value: key for key, value in COMPACTED_PROCESS_ROLE_TYPES.items()}
+    found: list[str] = []
+    terminated = False
+    for token in tokens:
+        if token == CHROMIUM_SWITCH_TERMINATOR:
+            terminated = True
+            continue
+        if not token.startswith("--type="):
+            continue
+        if terminated:
+            return None
+        found.append(token.partition("=")[2])
+    if len(found) != 1:
+        return None
+    return roles.get(found[0])
+
+
 def chromium_argv_title(executable: str, argv: Sequence[str]) -> str:
     """The compact title when the parsed command line keeps the argv order."""
 
@@ -1662,6 +1734,19 @@ def _verify_raw_process_argv(process: ProcessObservation) -> None:
         len(item.encode("utf-8")) > MAX_ARGUMENT_BYTES for item in raw
     ):
         raise NativeAcceptanceError("raw process arguments exceed bounded limits")
+    if process.title_derived:
+        # A title-derived claim is re-derived here from the raw field itself, so
+        # the pure verifier never trusts the collector's classification. The
+        # browser can never reach this branch because ``title_derived_role``
+        # only returns the four audited child roles.
+        if (
+            raw != process.argv
+            or title_derived_role(process.executable, process.argv) != process.role
+        ):
+            raise NativeAcceptanceError(
+                "title-derived process role is not reproducible"
+            )
+        return
     process_type = COMPACTED_PROCESS_ROLE_TYPES.get(process.role)
     expected_type = None if process_type is None else f"--type={process_type}"
     is_browser = process.role == "browser"
@@ -1771,16 +1856,23 @@ def _verify_process_observations(
             len(item.encode("utf-8")) > MAX_ARGUMENT_BYTES for item in process.argv
         ):
             raise NativeAcceptanceError("owned process arguments exceed bounded limits")
-        if any("node_modules" in PurePosixPath(item).parts for item in process.argv):
+        # A compacted title is checked through its space delimited tokens, which
+        # can over-detect but never hide a switch, so these safety checks now
+        # reach a process that has no canonical argv at all.
+        title_tokens = compacted_title_tokens(process.executable, process.argv)
+        tokens = process.argv if title_tokens is None else title_tokens
+        if any("node_modules" in PurePosixPath(item).parts for item in tokens):
             raise NativeAcceptanceError(
                 "owned process arguments reference node_modules"
             )
-        switches = {
-            item.split("=", 1)[0] for item in process.argv if item.startswith("--")
-        }
+        switches = {item.split("=", 1)[0] for item in tokens if item.startswith("--")}
         if switches & FORBIDDEN_SWITCHES:
             raise NativeAcceptanceError(
                 "owned process uses a forbidden security/GPU switch"
+            )
+        if process.title_derived and process.executable != main[0].executable:
+            raise NativeAcceptanceError(
+                "title-derived process does not share the browser executable"
             )
         if process.role == "python-sidecar":
             expected_prefix = (
@@ -1819,7 +1911,9 @@ def _verify_process_observations(
                 if process.role in COMPACTED_PROCESS_ROLE_TYPES
                 else (process.executable,)
             )
-            if not process.argv or process.argv[0] not in allowed_argv0:
+            if not process.title_derived and (
+                not process.argv or process.argv[0] not in allowed_argv0
+            ):
                 raise NativeAcceptanceError(
                     "Electron canonical argv does not name its executable"
                 )

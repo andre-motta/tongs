@@ -322,23 +322,6 @@ def test_the_sbom_adapter_constants_anchor_the_gate_policy() -> None:
     assert check.receipt_name == "sbom-receipt.json"
 
 
-#: Workflows required to pin every ``actions/*`` step to a full commit SHA.
-#: These are the ones GitHub triggers automatically (push, tag push, or a
-#: ``workflow_call`` from one of the others); a compromised or rewritten tag
-#: on one of them runs without a human deciding to run it first.
-#: ``desktop-rpm.yml``, ``desktop-python-rpms.yml`` and ``desktop-archive.yml``
-#: are ``workflow_dispatch``-only utility workflows and are not yet in this
-#: set; see issue #149.
-_SHA_PINNED_WORKFLOWS = (
-    "ci.yml",
-    "desktop-production.yml",
-    "desktop-podman-probe.yml",
-    "release-desktop.yml",
-    "docs.yml",
-    "publish.yml",
-)
-
-
 def _actions_uses(workflow: dict[str, Any]) -> list[str]:
     """Every ``actions/*`` ``uses:`` reference in a parsed workflow, structurally.
 
@@ -357,14 +340,19 @@ def _actions_uses(workflow: dict[str, Any]) -> list[str]:
     return references
 
 
-def test_every_action_in_the_required_call_chain_is_sha_pinned() -> None:
+def test_every_action_in_every_workflow_is_sha_pinned() -> None:
+    """Every ``actions/*`` step in every workflow must pin a full commit SHA,
+    no exceptions; see issue #149.  This globs every ``*.yml`` file under
+    ``.github/workflows`` instead of an enumerated subset, so a new workflow
+    is covered automatically rather than by remembering to add it here."""
+
     unpinned: list[str] = []
-    for name in _SHA_PINNED_WORKFLOWS:
-        workflow = _load(ROOT / ".github/workflows" / name)
+    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        workflow = _load(path)
         for uses in _actions_uses(workflow):
             reference = uses.split("@", 1)[1] if "@" in uses else ""
             if re.fullmatch(r"[0-9a-f]{40}", reference) is None:
-                unpinned.append(f"{name}: {uses}")
+                unpinned.append(f"{path.name}: {uses}")
     assert unpinned == []
 
 

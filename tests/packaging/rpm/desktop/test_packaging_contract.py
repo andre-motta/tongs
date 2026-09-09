@@ -451,7 +451,10 @@ def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:
     assert "persist-credentials: false" in workflow
     assert "fetch-depth: 0" in workflow
     assert "TONGS_HEAD_SHA" in workflow
-    assert "actions/upload-artifact@v7" in workflow
+    assert (
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1"
+        in workflow
+    )
     assert "secrets" not in workflow
     assert "    paths:" not in workflow
 

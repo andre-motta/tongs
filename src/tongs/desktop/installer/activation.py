@@ -31,6 +31,7 @@ from tongs.desktop.installer.menu import (
     render_desktop_entry,
 )
 from tongs.desktop.installer.models import (
+    PERSISTENT_INSTALL_GUIDANCE,
     AcceptedReleaseState,
     InstallerError,
     InstallerErrorCode,
@@ -846,8 +847,7 @@ def _persistent_environment_error() -> InstallerError:
     return InstallerError(
         InstallerErrorCode.INCOMPATIBLE,
         "Desktop menu registration requires a persistent Python installation. "
-        "Install Tongs with 'pipx install tongs' or "
-        "'python -m pip install --user tongs', then retry.",
+        + PERSISTENT_INSTALL_GUIDANCE,
     )
 
 

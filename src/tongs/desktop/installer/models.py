@@ -48,6 +48,13 @@ class InstallerError(RuntimeError):
         self.retryable = retryable
 
 
+PERSISTENT_INSTALL_GUIDANCE = (
+    "Install Tongs with 'pipx install tongs' or "
+    "'python -m pip install --user tongs', then retry."
+)
+"""Single wording for the persistent installations the desktop commands accept."""
+
+
 @dataclass(frozen=True, slots=True)
 class InstallerLimits:
     """Implementation-owned bounds independent of untrusted manifests."""
@@ -195,6 +202,7 @@ class VerifiedStagedArtifact:
 
 
 __all__ = [
+    "PERSISTENT_INSTALL_GUIDANCE",
     "AcceptedReleaseState",
     "BuildIdentity",
     "Clock",

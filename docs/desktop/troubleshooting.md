@@ -85,13 +85,28 @@ naming the bound environment means that exact recorded path no longer validates:
 | `The bound Tongs Python environment changed or disappeared.` | The recorded console script or interpreter is gone or was replaced. |
 | `The bound Tongs Python environment could not be validated.` | The environment could be found but did not answer the identity probe. |
 | `The bound Tongs console script has an invalid interpreter.` | The console script's shebang does not name a usable interpreter. |
-| `The bound Tongs console script must name one exact interpreter.` | The shebang or trampoline does not resolve to a single interpreter. |
 | `The bound Tongs core is incompatible with this desktop payload.` | The bound core version is outside the payload's declared compatibility interval. |
 | `The installed desktop launcher is unsafe.` | The launcher inside the payload failed its validation. |
 
 All of these are repair conditions. Run `tongs desktop repair` from the intended
 persistent environment first; use `tongs desktop repair --redownload` only when
 local recovery cannot succeed.
+
+One shebang failure is not a repair condition, because repair cannot rewrite a
+console script the packaging tool wrote:
+
+**The bound Tongs console script must name one absolute Python interpreter path,
+followed only by the '-E' flag pipx adds. Install Tongs with 'pipx install tongs'
+or 'python -m pip install --user tongs', then retry.**
+
+The shebang has to identify the interpreter without a `PATH` lookup. Three shapes
+are accepted: the plain absolute shim pip and venv write (`#!/usr/bin/python3`),
+the fixed shell trampoline used when the environment path contains spaces, and
+the pipx shape, which appends `-E` to that absolute path when it exposes an app.
+A `#!/usr/bin/env python3` shebang, a relative interpreter path, and any other
+interpreter flag stay rejected, because each of them can resolve to a different
+Python than the one the menu entry was bound to. Reinstall into a supported
+layout instead of editing the shebang by hand.
 
 ## Graphics and session
 

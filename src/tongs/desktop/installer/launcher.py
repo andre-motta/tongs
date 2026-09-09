@@ -25,11 +25,16 @@ from tongs.desktop.installer.activation import (
     InstallationTarget,
     validate_installed_payload,
 )
-from tongs.desktop.installer.models import InstallerError, InstallerErrorCode
+from tongs.desktop.installer.models import (
+    PERSISTENT_INSTALL_GUIDANCE,
+    InstallerError,
+    InstallerErrorCode,
+)
 from tongs.desktop.protocol import PROTOCOL_MAJOR
 from tongs.plugins.desktop import DESKTOP_PLUGIN_API_MAJOR
 
 _PROBE_TIMEOUT_SECONDS = 5.0
+_CONSOLE_SHEBANG_FLAGS = frozenset({"-E"})
 _MAX_PROBE_BYTES = 4096
 _VERSION_PROBE = (
     "import importlib.metadata,sys;"
@@ -332,15 +337,25 @@ def _console_interpreter(console_real: Path) -> Path:
         ) from error
     if declaration == "/bin/sh":
         return _shell_shebang_interpreter(second)
-    if not declaration or any(char.isspace() for char in declaration):
-        raise _repair_error(
-            "The bound Tongs console script must name one exact interpreter."
-        )
-    result = Path(declaration)
+    return _direct_shebang_interpreter(declaration)
+
+
+def _direct_shebang_interpreter(declaration: str) -> Path:
+    """Split one absolute interpreter path from the isolation flag pipx appends.
+
+    pipx rewrites the shebang of every app it exposes to end in ``-E`` (see
+    ``_add_ignore_environment_to_python_shebang`` in pipx ``commands/common.py``),
+    so that flag belongs to a supported install and is not a second interpreter.
+    """
+    values = declaration.split()
+    if not values:
+        raise _console_shebang_error()
+    interpreter, *flags = values
+    if len(set(flags)) != len(flags) or not _CONSOLE_SHEBANG_FLAGS.issuperset(flags):
+        raise _console_shebang_error()
+    result = Path(interpreter)
     if not result.is_absolute():
-        raise _repair_error(
-            "The bound Tongs console script must name one exact interpreter."
-        )
+        raise _console_shebang_error()
     return Path(os.path.abspath(result))
 
 
@@ -365,14 +380,10 @@ def _shell_shebang_interpreter(line: bytes) -> Path:
             "The bound Tongs console script has an invalid interpreter."
         ) from error
     if len(values) != 1:
-        raise _repair_error(
-            "The bound Tongs console script must name one exact interpreter."
-        )
+        raise _console_shebang_error()
     result = Path(values[0])
     if not result.is_absolute():
-        raise _repair_error(
-            "The bound Tongs console script must name one exact interpreter."
-        )
+        raise _console_shebang_error()
     return Path(os.path.abspath(result))
 
 
@@ -427,6 +438,14 @@ def _probe_environment() -> dict[str, str]:
     environment.pop("PYTHONPATH", None)
     environment.pop("PYTHONHOME", None)
     return environment
+
+
+def _console_shebang_error() -> InstallerError:
+    return InstallerError(
+        InstallerErrorCode.INCOMPATIBLE,
+        "The bound Tongs console script must name one absolute Python interpreter "
+        f"path, followed only by the '-E' flag pipx adds. {PERSISTENT_INSTALL_GUIDANCE}",
+    )
 
 
 def _repair_error(message: str) -> InstallerError:

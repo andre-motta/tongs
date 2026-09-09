@@ -44,7 +44,8 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "jsonschema>=4.18,<5",
-    "mkdocs-material>=9.0",
+    "mkdocs-material==9.7.7",
+    "mkdocs==1.6.1",
     # Required by tests/ci/test_production_workflow_contract.py, which parses
     # the workflows to catch drift between them and the gate's constants.  It
     # must be a declared dependency rather than a transitive one, because a

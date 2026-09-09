@@ -9,12 +9,14 @@ remains separate.
 
 **Correction, 2026-09-08:** the blocked, unassigned status described in the next
 paragraph was accurate when these drafts were written. It is now historical: the
-production design was approved and integrated, and S1, S2, S4, S6, S10, S15a, S16,
-and S17 are implemented in the current tree (`src/tongs/services/`,
-`src/tongs/diff/`, `src/tongs/plugins/desktop*.py`, `src/tongs/desktop/protocol/`,
-`desktop/`, `src/tongs/desktop/installer/`, and the release-archive and RPM
-packaging under `packaging/rpm/`). None of the items below remains unassigned or
-blocked. For current status and issue identifiers, use
+production design was approved and integrated, and S0, S1, S2, S4, S6, S10, S15a,
+S16, and S17 are implemented in the current tree
+(`src/tongs/desktop/artifact_contract/`, `src/tongs/services/`, `src/tongs/diff/`,
+`src/tongs/plugins/desktop*.py`, `src/tongs/desktop/protocol/`, `desktop/`,
+`src/tongs/desktop/installer/`, the release archive under
+`packaging/desktop/archive/`, and the Fedora RPM packaging under
+`packaging/rpm/`). None of the items below remains unassigned or blocked. For
+current status and issue identifiers, use
 [issue #17](https://github.com/andre-motta/tongs/issues/17) and its children rather
 than the drafting-time snapshot preserved below.
 
@@ -37,7 +39,8 @@ and S15a remains blocked until S0 is verified and integrated.
 
 Parent: production desktop initiative. State: planned.
 Issue: pending creation after design review. Owner/model: Sol high.
-Independent reviewer: a separate senior reviewer. Integration gate: the orchestrator.
+Independent reviewer: a separate senior reviewer at high effort. Integration gate:
+the orchestrator.
 
 ### Outcome and ownership
 
@@ -90,8 +93,8 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 `Co-Authored-By: Codex <actual model> <noreply@openai.com>`. The contributor does
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
-artifacts, or expand the approved contract. The orchestrator alone integrates and maintains
-shared issue and dependency tracking.
+artifacts, or expand the approved contract. The orchestrator alone integrates and
+maintains shared issue and dependency tracking.
 
 ### Acceptance and checks
 
@@ -132,7 +135,8 @@ use `Refs` language in the intermediate PR.
 
 Parent: production desktop initiative. State: planned.
 Issue: pending creation after design review. Owner/model: Luna xhigh.
-Independent reviewer: a senior reviewer. Integration gate: the orchestrator.
+Independent reviewer: a senior reviewer at high effort. Integration gate: the
+orchestrator.
 
 ### Outcome and ownership
 
@@ -187,8 +191,8 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 `Co-Authored-By: Codex <actual model> <noreply@openai.com>`. The contributor does
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
-artifacts, or expand the approved contract. The orchestrator alone integrates and maintains
-shared issue and dependency tracking.
+artifacts, or expand the approved contract. The orchestrator alone integrates and
+maintains shared issue and dependency tracking.
 
 ### Acceptance and checks
 
@@ -219,7 +223,8 @@ use `Refs` language in the intermediate PR.
 
 Parent: production desktop initiative. State: planned.
 Issue: pending creation after design review. Owner/model: Sol high.
-Independent reviewer: a separate senior reviewer. Integration gate: the orchestrator.
+Independent reviewer: a separate senior reviewer at high effort. Integration gate:
+the orchestrator.
 
 ### Outcome and ownership
 
@@ -231,9 +236,10 @@ constructed by desktop discovery, and no terminal lifecycle hook runs in desktop
 
 Owned files are new `src/tongs/plugins/desktop*.py`, focused
 `tests/plugins/test_desktop*.py`, and separately packaged plugin fixture projects
-under a new test-only fixture directory agreed with the orchestrator. Any entry-point metadata
-fixture change is confined to test packages. Production packaging or shared
-`pyproject.toml` edits require an exclusive orchestrator-coordinated window.
+under a new test-only fixture directory agreed with the orchestrator. Any
+entry-point metadata fixture change is confined to test packages. Production
+packaging or shared `pyproject.toml` edits require an exclusive
+orchestrator-coordinated window.
 
 Stable SDK types are frozen manifest, module, asset bundle, navigation, command,
 method, focus-target, error, and compatibility declarations. A provider implements:
@@ -283,8 +289,8 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 `Co-Authored-By: Codex <actual model> <noreply@openai.com>`. The contributor does
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
-artifacts, or expand the approved contract. The orchestrator alone integrates and maintains
-shared issue and dependency tracking.
+artifacts, or expand the approved contract. The orchestrator alone integrates and
+maintains shared issue and dependency tracking.
 
 ### Acceptance and checks
 
@@ -321,7 +327,8 @@ use `Refs` language in the intermediate PR.
 
 Parent: production desktop initiative. State: planned and queued.
 Issue: pending creation after design review. Owner/model: Sol high.
-Independent reviewer: a separate senior reviewer. Integration gate: the orchestrator.
+Independent reviewer: a separate senior reviewer at high effort. Integration gate:
+the orchestrator.
 
 ### Outcome and ownership
 
@@ -334,8 +341,8 @@ layout.
 Owned files are a new `src/tongs/desktop/artifact_contract/**` package, its packaged
 JSON schemas, `tests/desktop/artifact_contract/**`, and clearly synthetic reference
 fixtures under that test tree. Any package-data or shared `pyproject.toml` change
-requires an exclusive orchestrator-coordinated window. S0 does not edit S15a's installer
-modules or S16's future producer modules.
+requires an exclusive orchestrator-coordinated window. S0 does not edit S15a's
+installer modules or S16's future producer modules.
 
 The external `desktop-manifest-v1.json` schema carries schema version,
 desktop/core/protocol compatibility, release version, source commit, target
@@ -393,8 +400,8 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 `Co-Authored-By: Codex <actual model> <noreply@openai.com>`. The contributor does
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
-artifacts or metadata, or expand the approved contract. The orchestrator alone integrates and
-maintains shared issue and dependency tracking.
+artifacts or metadata, or expand the approved contract. The orchestrator alone
+integrates and maintains shared issue and dependency tracking.
 
 ### Acceptance and checks
 
@@ -435,7 +442,8 @@ feature reaches main and use `Refs` language in the intermediate PR.
 
 Parent: production desktop initiative. State: planned and queued.
 Issue: pending creation after design review. Owner/model: Sol high.
-Independent reviewer: a separate senior reviewer. Integration gate: the orchestrator.
+Independent reviewer: a separate senior reviewer at high effort. Integration gate:
+the orchestrator.
 
 ### Outcome and ownership
 

@@ -4,7 +4,19 @@ This document preserves the original assignment drafts. For current work status,
 use [issue #17](https://github.com/andre-motta/tongs/issues/17) and its children.
 The [project SDLC profile](../SDLC.md) supersedes the historical instructions below
 to keep every completed issue open until main delivery. Verified scoped work items
-may now close under Astra's tracker gate; final product acceptance remains separate.
+may now close under the orchestrator's tracker gate; final product acceptance
+remains separate.
+
+**Correction, 2026-09-08:** the blocked, unassigned status described in the next
+paragraph was accurate when these drafts were written. It is now historical: the
+production design was approved and integrated, and S1, S2, S4, S6, S10, S15a, S16,
+and S17 are implemented in the current tree (`src/tongs/services/`,
+`src/tongs/diff/`, `src/tongs/plugins/desktop*.py`, `src/tongs/desktop/protocol/`,
+`desktop/`, `src/tongs/desktop/installer/`, and the release-archive and RPM
+packaging under `packaging/rpm/`). None of the items below remains unassigned or
+blocked. For current status and issue identifiers, use
+[issue #17](https://github.com/andre-motta/tongs/issues/17) and its children rather
+than the drafting-time snapshot preserved below.
 
 These issue-ready drafts remain planned. None is ready or assigned. Every item is
 blocked until the production desktop design passes independent review and Astra
@@ -25,7 +37,7 @@ and S15a remains blocked until S0 is verified and integrated.
 
 Parent: production desktop initiative. State: planned.
 Issue: pending creation after design review. Owner/model: Sol high.
-Independent reviewer: a separate Sol high agent. Integration gate: Astra.
+Independent reviewer: a separate senior reviewer. Integration gate: the orchestrator.
 
 ### Outcome and ownership
 
@@ -39,8 +51,8 @@ Owned files are `src/tongs/services/**`, `tests/services/**`, and only the minim
 read-side additions agreed in the approved design under `src/tongs/forges/` and
 their focused tests. Coordinate any shared `src/tongs/forges/models.py`,
 `src/tongs/forges/base.py`, `src/tongs/forges/github.py`,
-`src/tongs/forges/gitlab.py`, or `src/tongs/forges/registry.py` edit with Astra;
-no other first-wave item edits those files concurrently.
+`src/tongs/forges/gitlab.py`, or `src/tongs/forges/registry.py` edit with the
+orchestrator; no other first-wave item edits those files concurrently.
 
 Once the gate records their final shapes, implement and preserve the contracts for
 `RepositoryRef`, `ReviewRef`, `ReviewRevision`, `ReviewSnapshot`, `ServiceError`,
@@ -59,12 +71,12 @@ UI or draft state. Do not add a second forge client or move TUI plugin hooks.
 ### Dependencies and readiness
 
 - Prerequisite: independent approval of the complete production design, followed by
-  Astra's verified integration of its design PR into `feat/desktop-app`.
+  the orchestrator's verified integration of its design PR into `feat/desktop-app`.
 - Stable interface approval: pending. The names and invariants in the design
   proposal remain candidate interfaces until independent review is recorded.
 - Verified prerequisite merge SHA: pending.
 - Blocker: independent design approval and verified design integration are absent.
-  Astra records both before assignment.
+  The orchestrator records both before assignment.
 - Readiness evidence: pending exact integration head and required checks.
 
 ### Assignment and Git authority
@@ -78,7 +90,7 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 `Co-Authored-By: Codex <actual model> <noreply@openai.com>`. The contributor does
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
-artifacts, or expand the approved contract. Astra alone integrates and maintains
+artifacts, or expand the approved contract. The orchestrator alone integrates and maintains
 shared issue and dependency tracking.
 
 ### Acceptance and checks
@@ -120,7 +132,7 @@ use `Refs` language in the intermediate PR.
 
 Parent: production desktop initiative. State: planned.
 Issue: pending creation after design review. Owner/model: Luna xhigh.
-Independent reviewer: Sol high. Integration gate: Astra.
+Independent reviewer: a senior reviewer. Integration gate: the orchestrator.
 
 ### Outcome and ownership
 
@@ -157,7 +169,7 @@ after both dependencies integrate.
 ### Dependencies and readiness
 
 - Prerequisite: independent approval of the complete production design, followed by
-  Astra's verified integration of its design PR into `feat/desktop-app`.
+  the orchestrator's verified integration of its design PR into `feat/desktop-app`.
 - Stable interface approval: pending. The proposed alignment pairs only inside a
   hunk and never treats an empty cell as a comment target.
 - Verified prerequisite merge SHA: pending.
@@ -175,7 +187,7 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 `Co-Authored-By: Codex <actual model> <noreply@openai.com>`. The contributor does
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
-artifacts, or expand the approved contract. Astra alone integrates and maintains
+artifacts, or expand the approved contract. The orchestrator alone integrates and maintains
 shared issue and dependency tracking.
 
 ### Acceptance and checks
@@ -207,7 +219,7 @@ use `Refs` language in the intermediate PR.
 
 Parent: production desktop initiative. State: planned.
 Issue: pending creation after design review. Owner/model: Sol high.
-Independent reviewer: a separate Sol high agent. Integration gate: Astra.
+Independent reviewer: a separate senior reviewer. Integration gate: the orchestrator.
 
 ### Outcome and ownership
 
@@ -219,9 +231,9 @@ constructed by desktop discovery, and no terminal lifecycle hook runs in desktop
 
 Owned files are new `src/tongs/plugins/desktop*.py`, focused
 `tests/plugins/test_desktop*.py`, and separately packaged plugin fixture projects
-under a new test-only fixture directory agreed with Astra. Any entry-point metadata
+under a new test-only fixture directory agreed with the orchestrator. Any entry-point metadata
 fixture change is confined to test packages. Production packaging or shared
-`pyproject.toml` edits require an exclusive Astra-coordinated window.
+`pyproject.toml` edits require an exclusive orchestrator-coordinated window.
 
 Stable SDK types are frozen manifest, module, asset bundle, navigation, command,
 method, focus-target, error, and compatibility declarations. A provider implements:
@@ -253,7 +265,7 @@ package-resource resolution in this item, not a frontend build system.
 ### Dependencies and readiness
 
 - Prerequisite: independent approval of the complete production design, followed by
-  Astra's verified integration of its design PR into `feat/desktop-app`.
+  the orchestrator's verified integration of its design PR into `feat/desktop-app`.
 - Stable interface approval: pending. The companion entry-point group and SDK major
   remain candidate interfaces until independent review is recorded.
 - Verified prerequisite merge SHA: pending.
@@ -271,7 +283,7 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 `Co-Authored-By: Codex <actual model> <noreply@openai.com>`. The contributor does
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
-artifacts, or expand the approved contract. Astra alone integrates and maintains
+artifacts, or expand the approved contract. The orchestrator alone integrates and maintains
 shared issue and dependency tracking.
 
 ### Acceptance and checks
@@ -309,7 +321,7 @@ use `Refs` language in the intermediate PR.
 
 Parent: production desktop initiative. State: planned and queued.
 Issue: pending creation after design review. Owner/model: Sol high.
-Independent reviewer: a separate Sol high agent. Integration gate: Astra.
+Independent reviewer: a separate senior reviewer. Integration gate: the orchestrator.
 
 ### Outcome and ownership
 
@@ -322,7 +334,7 @@ layout.
 Owned files are a new `src/tongs/desktop/artifact_contract/**` package, its packaged
 JSON schemas, `tests/desktop/artifact_contract/**`, and clearly synthetic reference
 fixtures under that test tree. Any package-data or shared `pyproject.toml` change
-requires an exclusive Astra-coordinated window. S0 does not edit S15a's installer
+requires an exclusive orchestrator-coordinated window. S0 does not edit S15a's installer
 modules or S16's future producer modules.
 
 The external `desktop-manifest-v1.json` schema carries schema version,
@@ -359,7 +371,7 @@ and production artifacts. No personal keys or TUF roots are created or maintaine
 ### Dependencies and readiness
 
 - Prerequisite: independent approval of the complete production design, followed by
-  Astra's verified integration of its design PR into `feat/desktop-app`.
+  the orchestrator's verified integration of its design PR into `feat/desktop-app`.
 - Recorded CTO decisions: the CLI default is the per-user archive; RPM installation
   is a separate optional README process; GitHub-managed signing with an exact
   official build identity replaces personal TUF keys.
@@ -381,7 +393,7 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 `Co-Authored-By: Codex <actual model> <noreply@openai.com>`. The contributor does
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
-artifacts or metadata, or expand the approved contract. Astra alone integrates and
+artifacts or metadata, or expand the approved contract. The orchestrator alone integrates and
 maintains shared issue and dependency tracking.
 
 ### Acceptance and checks
@@ -423,7 +435,7 @@ feature reaches main and use `Refs` language in the intermediate PR.
 
 Parent: production desktop initiative. State: planned and queued.
 Issue: pending creation after design review. Owner/model: Sol high.
-Independent reviewer: a separate Sol high agent. Integration gate: Astra.
+Independent reviewer: a separate senior reviewer. Integration gate: the orchestrator.
 
 ### Outcome and ownership
 
@@ -445,8 +457,8 @@ retained authentic GitHub/Sigstore-shaped verification fixtures plus explicit
 negative variants. Consume S0's schemas, typed models, shared validator, and
 deterministic archive fixture without copying them. The approved Sigstore dependency
 uses the maintained `sigstore>=4.5,<5` API series with one exact release locked in
-CI. `pyproject.toml` and lock/config edits require an exclusive Astra-coordinated
-window because those files are shared.
+CI. `pyproject.toml` and lock/config edits require an exclusive
+orchestrator-coordinated window because those files are shared.
 
 Stable outputs are a validated exact target selection and a `VerifiedStagedArtifact`
 containing schema/version compatibility, normalized supported platform identity,
@@ -465,16 +477,16 @@ fixtures and clearly distinguish them from a published production release.
 
 ### Dependencies and readiness
 
-- Prerequisites: independent approval of the complete production design, Astra's
-  verified integration of that design into `feat/desktop-app`, and S0's reviewed,
-  verified integration on that branch.
+- Prerequisites: independent approval of the complete production design, the
+  orchestrator's verified integration of that design into `feat/desktop-app`, and
+  S0's reviewed, verified integration on that branch.
 - Recorded CTO decisions: `--install-desktop` selects only the per-user archive;
   RPM is a separate optional README process; verification uses GitHub-managed
   signing and the exact official build identity, with no personal TUF keys.
 - Verified prerequisite merge SHAs: design and S0 pending.
 - Blocker: independent design review, design integration, and S0 integration are
-  absent. S15a remains queued until Astra verifies all three and allocates author
-  and independent-review capacity.
+  absent. S15a remains queued until the orchestrator verifies all three and
+  allocates author and independent-review capacity.
 - Readiness evidence: pending exact integration heads, S0 schema/fixture hashes,
   Sigstore dependency lock, authentic fixture provenance, and required checks.
 
@@ -490,7 +502,7 @@ base `feat/desktop-app`. Each commit has a title, a blank line, a one-line body,
 not edit shared tracker state, integrate the PR, push directly to
 `feat/desktop-app` or `main`, merge any PR, create tags or releases, publish
 artifacts or metadata, handle production keys, or expand the approved contract.
-Astra alone integrates and maintains shared issue and dependency tracking.
+The orchestrator alone integrates and maintains shared issue and dependency tracking.
 
 ### Acceptance and checks
 

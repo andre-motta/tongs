@@ -2,10 +2,17 @@
 
 Issue: #22, under #17. Status: production baseline authorized; independent
 engineering review and verified feature integration required before dispatch.
-Author/architecture owner: Astra. Verified foundation: feature commit
+Author/architecture owner: the orchestrator. Verified foundation: feature commit
 `42c8bfce1db1a38eb872872d1b324e02aadc3ea6` and CI run 34147002731.
 This document replaces the disposable `prototype-1` contract for production work;
 it does not turn the spike into a supported SDK by declaration.
+
+**Correction, 2026-09-08:** the verified-foundation commit above is the historical
+starting point recorded when this baseline was authorized, not the current state.
+`feat/desktop-app` has advanced hundreds of commits past it, and S1, S2, S4, S6,
+S10, S15a, S16, and S17 from the dependency table below are implemented in the
+current tree. Read the tree and Git log directly for the current integration state
+rather than relying on this foundation commit.
 
 CTO decisions, 2026-09-07: the default installer is per-user with the invoking
 Tongs environment; RPM installation is a separate optional process documented in
@@ -17,10 +24,10 @@ The [issue decision record](https://github.com/andre-motta/tongs/issues/22#issue
 retains the public-safe summary.
 Together with the CTO's instruction to continue implementation until the feature
 is ready for its main PR, these decisions authorize this production baseline.
-Astra owns its technical contracts and decomposition. New material product or
-architecture changes return to the CTO; routine implementation details and review
-corrections proceed under the existing feature-branch authority. Final main merge
-and publication retain their separate gate.
+The orchestrator owns its technical contracts and decomposition. New material
+product or architecture changes return to the CTO; routine implementation details
+and review corrections proceed under the existing feature-branch authority. Final
+main merge and publication retain their separate gate.
 
 ## Delivery outcome
 
@@ -402,8 +409,9 @@ UI controls must represent implemented behavior; no fixture branding or generate
 review data appears in production mode. Keyboard/focus/resize/light-dark and
 terminal regression checks are required, alongside explicit accessibility limits.
 
-After all acceptance criteria pass, Astra opens `feat/desktop-app` against `main`
-with the complete evidence package. Main merge and release remain CTO decisions.
+After all acceptance criteria pass, the orchestrator opens `feat/desktop-app`
+against `main` with the complete evidence package. Main merge and release remain
+CTO decisions.
 
 ## Dependency-driven implementation slices
 

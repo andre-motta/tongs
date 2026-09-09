@@ -1,5 +1,5 @@
 {
-  "source": "Captured read-only from andre-motta/tongs-test-sandbox pull request 9 and gitlab.com/alustosa/tongs-test-sandbox merge request 8. Eight files, one of every diff shape: binary, modified text, added empty, no trailing newline, deleted, renamed and mode only. GitHub omits patch for four of them.",
+  "source": "Captured read-only from andre-motta/tongs-test-sandbox pull request 9 and gitlab.com/alustosa/tongs-test-sandbox merge request 8. Eight files, one of every diff shape: binary, modified text, added empty, no trailing newline, deleted, renamed and mode only. GitHub omits patch for four of them, so the binary, empty and rename-only shapes are derived from the fields it does send and the mode-only file stays unexposed. The unified pages are the sidecar's own projection of these changes, held equal to it by tests/desktop/protocol/test_absent_optional_fields.py.",
   "github_changes": [
     {
       "filename": "assets/icon.bin",
@@ -188,12 +188,13 @@
         "status": "modified",
         "additions": 0,
         "deletions": 0,
-        "is_binary": false,
+        "is_binary": true,
         "language": null,
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
-        "is_unavailable": true
+        "is_rename_only": false,
+        "is_unavailable": false
       },
       {
         "kind": "file",
@@ -208,6 +209,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -306,6 +308,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -447,9 +450,10 @@
         "is_binary": false,
         "language": "python",
         "is_truncated": false,
-        "is_empty": false,
+        "is_empty": true,
         "is_mode_only": false,
-        "is_unavailable": true
+        "is_rename_only": false,
+        "is_unavailable": false
       },
       {
         "kind": "file",
@@ -464,6 +468,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -526,6 +531,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -579,7 +585,8 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
-        "is_unavailable": true
+        "is_rename_only": true,
+        "is_unavailable": false
       },
       {
         "kind": "file",
@@ -594,6 +601,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": true
       }
     ]
@@ -622,6 +630,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -637,6 +646,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -735,6 +745,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -878,6 +889,7 @@
         "is_truncated": false,
         "is_empty": true,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -893,6 +905,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -955,6 +968,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": false,
         "is_unavailable": false
       },
       {
@@ -1006,8 +1020,9 @@
         "is_binary": false,
         "language": "python",
         "is_truncated": false,
-        "is_empty": true,
+        "is_empty": false,
         "is_mode_only": false,
+        "is_rename_only": true,
         "is_unavailable": false
       },
       {
@@ -1023,6 +1038,7 @@
         "is_truncated": false,
         "is_empty": false,
         "is_mode_only": true,
+        "is_rename_only": false,
         "is_unavailable": false
       }
     ]

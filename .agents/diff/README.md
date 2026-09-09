@@ -100,7 +100,11 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 - `language: str` -- detected from file extension
 - `is_truncated`, `is_empty`, `is_mode_only`, `is_rename_only`,
   `is_unavailable` -- explicit reasons a forge-described file has incomplete or
-  absent content hunks; at most one of them is set per file
+  absent content hunks. The states derived from a payload are mutually
+  exclusive; a state the forge reports explicitly is passed through as reported,
+  so an explicit `is_empty`, `too_large` or mode signal can still set two of
+  these at once. No real GitHub or GitLab payload does, and the desktop badge
+  map would render both rather than fail.
 - `is_metadata_only` -- derived property for binary, empty, mode-only,
   rename-only, or unavailable files
 
@@ -243,7 +247,8 @@ settled first, a path that resolves to a text lexer licenses the rename-only and
 empty readings, and a path that says neither leaves the file unavailable. Never
 let a withheld patch produce a state that asserts there is no content change
 unless the path carries that text signal, and never derive a state that
-contradicts a flag the forge reported explicitly. Mode-only is not derivable on
+contradicts a flag the forge reported explicitly: derivations yield to reported
+flags rather than replacing them. Mode-only is not derivable on
 GitHub at all: no cheap endpoint carries file modes, so those files stay
 unavailable.
 

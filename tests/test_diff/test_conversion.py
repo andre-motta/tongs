@@ -457,7 +457,13 @@ def test_empty_is_inferred_only_where_the_path_carries_a_text_signal() -> None:
 
 
 def test_a_derived_state_never_contradicts_an_explicit_forge_flag() -> None:
-    """Each file reaches the renderer with at most one metadata state."""
+    """A derivation yields to a state the forge reported explicitly.
+
+    The derived states are mutually exclusive.  Reported flags are passed
+    through as the forge sent them, so two of them can still coexist on a
+    payload no real forge produces; what must never happen is a derivation
+    overriding or contradicting one of them.
+    """
 
     flags = ("is_binary", "is_truncated", "is_empty", "is_mode_only", "is_rename_only")
     mode_changed, too_large, explicitly_empty = convert_forge_changes(

@@ -106,12 +106,20 @@ again.
 
 ## Comment, suggest, and submit
 
-The **Discussions** panel has two paths. **Quick comment** and **Quick inline
-comment** act immediately against the selected review. Choose **Start review**
-to create a durable draft, or **Resume review** to reopen one saved draft.
-While a durable draft is active, the controls add general comments, selected
-lines, and suggestions to that draft. The draft remains bound to the review
-revision it was created from.
+The **Discussions** panel is a write-free jump list: every published thread
+that resolves to a diff position, unresolved ones first, each with **Show in
+diff** to open it where it was written. Writing happens in the composers
+instead: the in-diff composer, opened from the gutter's `+` button or the
+`c` key, and the general composer on **Overview** for a review-level comment.
+Both offer the same two writes, **Add comment now** to act immediately
+against the selected review, and **Start a review** (or **Add to review**
+once one is pending) to add the entry to a durable draft. A single saved
+draft is adopted automatically when the review opens; when more than one is
+found, the **Your review** drawer offers **Choose a preserved draft** to pick
+among them. While a durable draft is active, the composers add general
+comments, selected lines, and suggestions to it, and the drawer tracks,
+submits, or discards it. The draft remains bound to the review revision it
+was created from.
 
 A pending review can be discarded from either surface: **Discard review** in
 **Your review**, or the **More review actions** overflow in the in-diff
@@ -164,10 +172,13 @@ source: GitHub gets a `suggestion` fence over the whole range, GitLab gets a
 `suggestion:-0+N` fence anchored on the first line, where N is one less than
 the number of selected source lines. Old-side selections, non-contiguous
 lines, deletion rows, and a partial diff all refuse **Insert suggestion** in
-their own words; refresh the diff to complete a partial selection. Edit the
-block or add an explanation above it, use **Preview** to check the rendered
-Markdown, then choose **Add comment now** for an immediate comment or
-**Start a review** / **Add to review** to add it to a durable draft.
+their own words; refresh the diff to complete a partial selection. A
+selection that changed underneath the press, for example because the diff
+moved to a later revision, is refused too: the composer reports it and asks
+you to reselect the lines. Edit the block or add an explanation above it, use
+**Preview** to check the rendered Markdown, then choose **Add comment now**
+for an immediate comment or **Start a review** / **Add to review** to add it
+to a durable draft.
 
 ## Work with a diff
 

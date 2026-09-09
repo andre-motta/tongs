@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+import re
 import selectors
 import shlex
 import shutil
@@ -35,6 +36,8 @@ from tongs.plugins.desktop import DESKTOP_PLUGIN_API_MAJOR
 
 _PROBE_TIMEOUT_SECONDS = 5.0
 _CONSOLE_SHEBANG_FLAGS = frozenset({"-E"})
+_SHEBANG_SEPARATORS = " \t"
+_SHEBANG_SEPARATOR = re.compile(f"[{_SHEBANG_SEPARATORS}]+")
 _MAX_PROBE_BYTES = 4096
 _VERSION_PROBE = (
     "import importlib.metadata,sys;"
@@ -330,7 +333,7 @@ def _console_interpreter(console_real: Path) -> Path:
             "The bound Tongs console script has an invalid interpreter."
         )
     try:
-        declaration = first[2:].strip().decode("utf-8", errors="strict")
+        declaration = first[2:].strip(b" \t\r\n").decode("utf-8", errors="strict")
     except UnicodeDecodeError as error:
         raise _repair_error(
             "The bound Tongs console script has an invalid interpreter."
@@ -346,11 +349,15 @@ def _direct_shebang_interpreter(declaration: str) -> Path:
     pipx rewrites the shebang of every app it exposes to end in ``-E`` (see
     ``_add_ignore_environment_to_python_shebang`` in pipx ``commands/common.py``),
     so that flag belongs to a supported install and is not a second interpreter.
+
+    Only a space or a tab separates the tokens, because that is all the kernel
+    treats as a separator. Any other whitespace belongs to the literal path the
+    kernel would execute, so a declaration carrying it is rejected instead of
+    being reported as a binding to the shorter path in front of it.
     """
-    values = declaration.split()
-    if not values:
+    if any(char.isspace() and char not in _SHEBANG_SEPARATORS for char in declaration):
         raise _console_shebang_error()
-    interpreter, *flags = values
+    interpreter, *flags = _SHEBANG_SEPARATOR.split(declaration)
     if len(set(flags)) != len(flags) or not _CONSOLE_SHEBANG_FLAGS.issuperset(flags):
         raise _console_shebang_error()
     result = Path(interpreter)
@@ -370,9 +377,7 @@ def _shell_shebang_interpreter(line: bytes) -> Path:
     prefix = "'''exec' "
     suffix = ' "$0" "$@"'
     if not declaration.startswith(prefix) or not declaration.endswith(suffix):
-        raise _repair_error(
-            "The bound Tongs console script must name one exact interpreter."
-        )
+        raise _console_trampoline_error()
     try:
         values = shlex.split(declaration[len(prefix) : -len(suffix)], posix=True)
     except ValueError as error:
@@ -380,10 +385,10 @@ def _shell_shebang_interpreter(line: bytes) -> Path:
             "The bound Tongs console script has an invalid interpreter."
         ) from error
     if len(values) != 1:
-        raise _console_shebang_error()
+        raise _console_trampoline_error()
     result = Path(values[0])
     if not result.is_absolute():
-        raise _console_shebang_error()
+        raise _console_trampoline_error()
     return Path(os.path.abspath(result))
 
 
@@ -445,6 +450,14 @@ def _console_shebang_error() -> InstallerError:
         InstallerErrorCode.INCOMPATIBLE,
         "The bound Tongs console script must name one absolute Python interpreter "
         f"path, followed only by the '-E' flag pipx adds. {PERSISTENT_INSTALL_GUIDANCE}",
+    )
+
+
+def _console_trampoline_error() -> InstallerError:
+    return InstallerError(
+        InstallerErrorCode.INCOMPATIBLE,
+        "The bound Tongs console script's shell trampoline must exec one absolute "
+        f"Python interpreter path and no arguments. {PERSISTENT_INSTALL_GUIDANCE}",
     )
 
 

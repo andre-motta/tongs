@@ -9,7 +9,10 @@ import {
   discussionDiffTarget,
 } from "../../../desktop/dist/src/renderer/features/review/index.js";
 import { createReviewOverviewFeature } from "../../../desktop/dist/src/renderer/features/review-detail/index.js";
-import { cacheWorkflow } from "../../../desktop/dist/src/renderer/features/review/composer.js";
+import {
+  cacheWorkflow,
+  readInlineBuffer,
+} from "../../../desktop/dist/src/renderer/features/review/composer.js";
 import {
   adoptDraft,
   beginSubmission,
@@ -455,10 +458,7 @@ test("the Discussions panel offers no composer, suggestion, reply or resolve con
   );
 
   assert.equal(view.container.querySelectorAll("textarea").length, 0);
-  assert.equal(
-    view.container.querySelectorAll(".review-workflow-composer").length,
-    0,
-  );
+  assert.equal(view.container.querySelectorAll(".inline-composer").length, 0);
   assert.equal(
     view.container.querySelectorAll(".suggestion-composer").length,
     0,
@@ -1073,6 +1073,54 @@ test("the comment verdict reads the body the composer is holding", async () => {
   await waitFor(() => assert.equal(verdicts.length, 1));
   assert.equal(verdicts[0].body, "the verdict body");
   assert.equal(verdicts[0].verdict, "comment");
+
+  // A submitted verdict says so, empties the box it was written in, and does
+  // not offer the same press again until the next comment is written.
+  await view.findByText("Comment verdict submitted.");
+  await waitFor(() =>
+    assert.equal(view.getByLabelText("General review comment").value, ""),
+  );
+  assert.equal(readInlineBuffer(review, null), "");
+  assert.equal(
+    view.getByRole("button", { name: "Submit comment verdict" }).disabled,
+    true,
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Approve review" }).disabled,
+    true,
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Approve review" }).title,
+    "Comment verdict submitted.",
+  );
+
+  // Writing the next comment arms the tiles again and drops the standing.
+  fireEvent.change(view.getByLabelText("General review comment"), {
+    target: { value: "a second body" },
+  });
+  await waitFor(() =>
+    assert.equal(
+      view.getByRole("button", { name: "Approve review" }).disabled,
+      false,
+    ),
+  );
+  assert.equal(
+    view.container.querySelectorAll(".notice-verdict").length,
+    0,
+  );
+  assert.equal(readInlineBuffer(review, null), "a second body");
+  assert.equal(
+    view.getByLabelText("General review comment").value,
+    "a second body",
+  );
+
+  // The visible text and the retained text agree across a remount.
+  view.unmount();
+  const again = renderOverview(bridge, review);
+  assert.equal(
+    (await again.findByLabelText("General review comment")).value,
+    "a second body",
+  );
 });
 
 test("a failed review-level discussions read is stated, not reported as an absence", async () => {

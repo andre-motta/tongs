@@ -398,7 +398,19 @@ function GeneralComposer({
   const { workflow, apply } = controller.shared;
   const [body, setBody] = useState("");
   const [confirmation, setConfirmation] = useState<ReviewVerdict | null>(null);
+  const [submitted, setSubmitted] = useState<ReviewVerdict | null>(null);
+  // Bumped when this surface clears the retained text behind the composer. The
+  // composer reads its buffer once, when it mounts, so remounting it is how one
+  // owner clears both the stored text and the text on screen; clearing only the
+  // buffer would leave the box showing a body the store no longer holds and let
+  // a later remount empty it without the reader asking.
+  const [composerEpoch, setComposerEpoch] = useState(0);
   const quick = workflow.quick;
+  const publishBody = useCallback((next: string): void => {
+    setBody(next);
+    // A verdict's standing lasts until the reader writes the next one.
+    if (next.length > 0) setSubmitted(null);
+  }, []);
 
   const runQuickVerdict = async (verdict: ReviewVerdict): Promise<void> => {
     if (workflow.draft.remote) return;
@@ -419,8 +431,15 @@ function GeneralComposer({
     try {
       const outcome = await bridge.submitReviewVerdict(command);
       apply((current) => settleQuickIntent(current, operationId, outcome));
-      if (verdict !== "approve" && outcome.outcome === "known")
+      // A known outcome clears the quick intent's message, so without a
+      // standing of its own a submitted verdict would look like a press that
+      // did nothing, and the obvious answer would be to press again.
+      if (outcome.outcome !== "known") return;
+      setSubmitted(verdict);
+      if (verdict !== "approve") {
         clearInlineBuffer(review, null);
+        setComposerEpoch((epoch) => epoch + 1);
+      }
     } catch (failure) {
       apply((current) =>
         isUncertainError(failure)
@@ -436,7 +455,17 @@ function GeneralComposer({
 
   return (
     <section className="panel general-composer-panel">
-      <InlineComposer anchor={null} controller={controller} onBody={setBody} />
+      <InlineComposer
+        key={composerEpoch}
+        anchor={null}
+        controller={controller}
+        onBody={publishBody}
+      />
+      {submitted !== null && (
+        <div className="notice notice-verdict" role="status">
+          {VERDICT_SUBMITTED[submitted]}
+        </div>
+      )}
       {quick?.message && (
         <div
           className={`notice notice-${quick.status === "rejected" ? "error" : "warning"}`}
@@ -466,8 +495,10 @@ function GeneralComposer({
           blocked={
             quick?.status === "sending" ||
             quick?.status === "unknown" ||
-            controller.busy
+            controller.busy ||
+            submitted !== null
           }
+          standing={submitted === null ? null : VERDICT_SUBMITTED[submitted]}
           bodyAvailable={body.length > 0}
           confirmation={confirmation}
           run={runQuickVerdict}
@@ -489,15 +520,30 @@ function GeneralComposer({
  */
 const VERDICTS_LOADING = "Verdict support for this review is still loading.";
 
+/**
+ * What a submitted verdict says for itself. The tiles stay disabled while one
+ * of these stands, so the sentence and the disabled tile are the same fact:
+ * this review already carries that verdict, and writing the next comment is
+ * what asks for another.
+ */
+const VERDICT_SUBMITTED: Record<ReviewVerdict, string> = Object.freeze({
+  comment: "Comment verdict submitted.",
+  approve: "Approval submitted.",
+  request_changes: "Requested changes submitted.",
+});
+
 function QuickVerdicts({
   capabilities,
   blocked,
+  standing,
   bodyAvailable,
   confirmation,
   run,
 }: {
   readonly capabilities: ReviewMutationCapabilitiesDto | null;
   readonly blocked: boolean;
+  /** What a verdict already submitted from here says, or null when none has. */
+  readonly standing: string | null;
   readonly bodyAvailable: boolean;
   readonly confirmation: ReviewVerdict | null;
   readonly run: (verdict: ReviewVerdict) => Promise<void>;
@@ -523,7 +569,9 @@ function QuickVerdicts({
             title={
               capabilities === null
                 ? VERDICTS_LOADING
-                : supported !== true
+                : standing !== null
+                  ? standing
+                  : supported !== true
                   ? `${text} is unsupported for this review.`
                   : verdict !== "approve" && !bodyAvailable
                     ? "Enter a review body in the general composer first."

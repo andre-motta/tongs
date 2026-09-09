@@ -63,7 +63,6 @@
 
 .review-workflow-discussions,
 .review-workflow-compose,
-.review-workflow-composer,
 .review-workflow-draft,
 .review-workflow-progress,
 .review-workflow-recovery,
@@ -101,7 +100,6 @@
 }
 
 .review-workflow-thread,
-.review-workflow-composer,
 .review-workflow-draft,
 .review-workflow-progress,
 .review-workflow-recovery,
@@ -135,14 +133,12 @@
 }
 
 .review-workflow-reply,
-.review-workflow-composer label,
 .review-workflow-draft label {
   display: grid;
   gap: 0.4rem;
 }
 
 .review-workflow-reply textarea,
-.review-workflow-composer textarea,
 .review-workflow-draft textarea {
   box-sizing: border-box;
   width: 100%;
@@ -454,6 +450,9 @@ button {
 }
 .notice-empty {
   border-style: dashed;
+}
+.notice-verdict {
+  border-color: var(--accent);
 }
 .notice-action {
   margin-left: 12px;

@@ -88,10 +88,6 @@ export interface ComposerBuffers {
    * one must never reach the other.
    */
   readonly edits: Map<string, string>;
-  readonly suggestions: Map<
-    string,
-    { readonly comment: string; readonly replacement: string }
-  >;
 }
 
 const composerCache = new Map<string, ComposerBuffers>();
@@ -105,7 +101,6 @@ export function buffersFor(review: string): ComposerBuffers {
       inline: new Map(),
       replies: new Map(),
       edits: new Map(),
-      suggestions: new Map(),
     };
     composerCache.set(review, buffers);
   }

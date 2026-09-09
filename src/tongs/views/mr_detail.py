@@ -311,7 +311,21 @@ class MRDetailScreen(Screen):
         except Exception as exc:  # noqa: BLE001 - Keep MR reads usable if draft recovery fails.
             self.notify(f"Could not recover review drafts. ({exc})", severity="warning")
 
+    def _detached_from_app(self) -> bool:
+        """Has this screen left the app, taking its draft widgets with it?
+
+        Textual cancels a screen's workers from ``Widget._on_unmount``, so a
+        draft worker resumes after ``pop_screen`` has already removed the
+        widgets its recovery and ``finally`` paths touch. ``is_mounted`` stays
+        true for a removed screen, so check DOM attachment, which also goes
+        false while the app is exiting, and the screen stack, which
+        ``pop_screen`` updates synchronously before it awaits the removal.
+        """
+        return not self.is_attached or self not in self.app.screen_stack
+
     def _refresh_draft_ui(self) -> None:
+        if self._detached_from_app():
+            return
         self.query_one("#review-draft-bar", ReviewDraftBar).show_draft(
             self._review_draft,
             self._current_review_revision,
@@ -370,7 +384,7 @@ class MRDetailScreen(Screen):
 
     def _show_review_draft(self) -> None:
         draft = self._review_draft
-        if draft is None:
+        if draft is None or self._detached_from_app():
             return
         github = self.mr_summary.forge_host.forge_type.value == "github"
         supports_submission = self._supports_batched_review is not None and (
@@ -526,7 +540,7 @@ class MRDetailScreen(Screen):
 
     def _open_draft_comment(self, comment_id: UUID) -> None:
         draft = self._review_draft
-        if draft is None:
+        if draft is None or self._detached_from_app():
             return
         comment = next((item for item in draft.comments if item.id == comment_id), None)
         if comment is None:

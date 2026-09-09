@@ -27,6 +27,7 @@ from tongs.views.review_submit import ReviewSubmitScreen
 from tongs.widgets.comment_editor import CommentEditor
 from tongs.widgets.diff_panel import CommentRequested, DiffOptionList, DiffPanel
 from tongs.widgets.discussion_list import DiscussionReplyRequested
+from tongs.widgets.review_draft import ReviewDraftBar
 from tongs.widgets.split_diff import (
     DiffSelection,
     DiffViewMode,
@@ -1069,3 +1070,82 @@ async def test_paused_attempt_recovers_unknown_after_restart_and_can_be_asserted
         )
         stored = await restarted.session.drafts.get_draft(draft_id)
         assert stored.state is DraftState.SUBMITTED
+
+
+@pytest.mark.asyncio
+async def test_leaving_detail_mid_submission_records_outcome_without_exiting(
+    tmp_path: Path,
+) -> None:
+    """Leaving the MR detail screen mid-submission must not take the app down.
+
+    Textual cancels the submission worker from ``Widget._on_unmount``, so the
+    worker's ``except asyncio.CancelledError`` recovery and its ``finally``
+    block both run after ``pop_screen`` has already removed the widgets they
+    repaint. Before the guard in ``MRDetailScreen._detached_from_app`` the
+    ``#review-draft-bar`` query raised ``NoMatches`` out of a worker that
+    defaults to ``exit_on_error=True``, which exited the whole TUI.
+    """
+    app, forge = _app(tmp_path)
+    forge.blocked_mutation = "verdict"
+
+    async with app.run_test(size=(160, 40), notifications=True) as pilot:
+        screen = await _open_detail(app, pilot)
+        screen.action_review_draft()
+        await _wait_until(app, lambda: screen._review_draft is not None)
+        screen.action_add_comment()
+        editor = screen.query_one("#comment-editor", CommentEditor)
+        editor.query_one("#comment-input", TextArea).text = "note before leaving"
+        editor.action_submit()
+        await _wait_until(
+            app,
+            lambda: (
+                screen._review_draft is not None
+                and len(screen._review_draft.comments) == 1
+            ),
+        )
+        draft_id = screen._review_draft.id
+
+        screen.action_review_draft()
+        await _wait_until(app, lambda: isinstance(app.screen, ReviewSubmitScreen))
+        await pilot.press("v")
+        await pilot.press("ctrl+s")
+        # The worker suspends inside the blocked verdict call, so the worker
+        # barrier in ``_wait_until`` cannot be used until it is cancelled.
+        await asyncio.wait_for(forge.mutation_started.wait(), timeout=2)
+        await pilot.pause()
+        assert app.screen is screen
+
+        screen.action_go_back()
+        await _wait_until(
+            app,
+            lambda: (
+                app._exception is not None
+                or (screen not in app.screen_stack and not screen._draft_busy)
+            ),
+        )
+
+        assert app._exception is None
+        assert app.is_running
+        assert not isinstance(app.screen, MRDetailScreen)
+
+        stored = await app.session.drafts.get_draft(draft_id)
+        assert stored.state is DraftState.UNKNOWN
+
+        # The interrupted attempt is still recorded, so returning to the MR
+        # shows the recovered draft instead of a lost submission.
+        table = app.screen.query_one("#reviews-table")
+        table.focus()
+        await pilot.press("enter")
+        await _wait_until(app, lambda: isinstance(app.screen, MRDetailScreen))
+        reopened = cast(MRDetailScreen, app.screen)
+        await _wait_until(
+            app,
+            lambda: (
+                reopened._review_progress is not None
+                and reopened._review_progress.outcome.value == "unknown"
+            ),
+        )
+        assert reopened._review_progress.draft_id == draft_id
+        assert not reopened._draft_busy
+        bar = reopened.query_one("#review-draft-bar", ReviewDraftBar)
+        assert "unknown" in str(bar.render())

@@ -12,10 +12,14 @@ import {
   canCaptureDraftInline,
   canSaveDraft,
   captureDraftAnchor,
+  chooseRemoteDraft,
   conflictDraftSave,
   contextFingerprint,
   createReviewWorkflowState,
+  dismissSupersededDraft,
+  draftNeedsRevisionRecovery,
   editDraft,
+  keepLocalDraftRefusal,
   finishDraftSave,
   failDraftSave,
   finishSubmission,
@@ -184,6 +188,154 @@ test("draft conflict and edit-during-save preserve unsaved local text", () => {
   assert.equal(state.draft.remote.version, 3);
   assert.equal(state.draft.local.body, "newer local");
   assert.equal(state.draft.dirty, true);
+});
+
+test("either conflict choice clears the gate and keeps the losing text reachable", () => {
+  const remoteComment = {
+    id: "33333333-3333-4333-8333-333333333333",
+    kind: "general",
+    body: "remote comment",
+  };
+  const stored = { ...draft(4, "stored body"), comments: [remoteComment] };
+  let base = adoptDraft(createReviewWorkflowState(review, revision), draft(3, "server"));
+  base = beginDraftSave(
+    editDraft(base, { body: "my text", verdict: "approve", comments: [] }),
+  );
+  const conflicted = conflictDraftSave(base, stored);
+  assert.equal(canSaveDraft(conflicted), false);
+  assert.equal(conflicted.draft.local.body, "my text");
+  assert.equal(conflicted.draft.conflict.body, "stored body");
+  assert.equal(conflicted.draft.conflict.comments[0].body, "remote comment");
+  assert.deepEqual(conflicted.draft.supersededLocalDrafts, []);
+  assert.equal(conflicted.draft.conflictHeldVersion, 3);
+  assert.equal(keepLocalDraftRefusal(conflicted), null);
+
+  const mine = keepLocalDraft(conflicted);
+  assert.equal(mine.draft.conflict, null);
+  assert.equal(mine.draft.conflictHeldVersion, null);
+  assert.equal(mine.draft.remote.version, 4);
+  assert.equal(mine.draft.local.body, "my text");
+  assert.equal(canSaveDraft(mine), true);
+  const resaved = finishDraftSave(beginDraftSave(mine), {
+    ...draft(5, "my text"),
+    verdict: "approve",
+  });
+  assert.equal(resaved.draft.remote.version, 5);
+  assert.equal(resaved.draft.local.body, "my text");
+  assert.equal(resaved.draft.dirty, false);
+
+  const theirs = chooseRemoteDraft(conflicted);
+  assert.equal(theirs.draft.conflict, null);
+  assert.equal(theirs.draft.remote.version, 4);
+  assert.equal(theirs.draft.local.body, "stored body");
+  assert.equal(theirs.draft.local.comments[0].body, "remote comment");
+  assert.equal(theirs.draft.dirty, false);
+  assert.deepEqual(
+    theirs.draft.supersededLocalDrafts.map((item) => [
+      item.displacedByVersion,
+      item.content.body,
+      item.content.verdict,
+    ]),
+    [[4, "my text", "approve"]],
+  );
+  assert.equal(canSaveDraft(theirs), false);
+  assert.equal(theirs.draft.pendingSave, null);
+  assert.equal(theirs.draft.conflictHeldVersion, null);
+  assert.equal(draftNeedsRevisionRecovery(theirs), false);
+  const kept = editDraft(theirs, { body: "next", verdict: null, comments: [] });
+  assert.equal(kept.draft.supersededLocalDrafts[0].content.body, "my text");
+  const dismissed = dismissSupersededDraft(theirs, 4);
+  assert.deepEqual(dismissed.draft.supersededLocalDrafts, []);
+  assert.throws(() => dismissSupersededDraft(dismissed, 4), /retained for that version/);
+  assert.throws(() => chooseRemoteDraft(dismissed), /No conflicting draft/);
+  assert.throws(() => keepLocalDraft(dismissed), /No conflicting draft/);
+});
+
+test("a second take-theirs adds a retained copy instead of discarding the first", () => {
+  let state = adoptDraft(createReviewWorkflowState(review, revision), draft(3, "server"));
+  state = beginDraftSave(
+    editDraft(state, { body: "first local", verdict: null, comments: [] }),
+  );
+  state = chooseRemoteDraft(conflictDraftSave(state, draft(4, "stored four")));
+  assert.equal(state.draft.local.body, "stored four");
+  state = beginDraftSave(
+    editDraft(state, { body: "second local", verdict: null, comments: [] }),
+  );
+  state = chooseRemoteDraft(conflictDraftSave(state, draft(6, "stored six")));
+  assert.deepEqual(
+    state.draft.supersededLocalDrafts.map((item) => [
+      item.displacedByVersion,
+      item.content.body,
+    ]),
+    [
+      [4, "first local"],
+      [6, "second local"],
+    ],
+  );
+  assert.equal(state.draft.local.body, "stored six");
+  const partial = dismissSupersededDraft(state, 4);
+  assert.deepEqual(
+    partial.draft.supersededLocalDrafts.map((item) => item.content.body),
+    ["second local"],
+  );
+  assert.deepEqual(
+    dismissSupersededDraft(partial, 6).draft.supersededLocalDrafts,
+    [],
+  );
+});
+
+test("keeping local text is refused, not applied, when the stored draft cannot be saved over", () => {
+  let editable = adoptDraft(createReviewWorkflowState(review, revision), draft(3, "server"));
+  editable = beginDraftSave(
+    editDraft(editable, { body: "my precious text", verdict: null, comments: [] }),
+  );
+  for (const [draftState, pattern] of [
+    ["submitted", /already submitted/],
+    ["submitting", /submission attempt elsewhere/],
+    ["partial", /submission attempt elsewhere/],
+    ["unknown", /submission attempt elsewhere/],
+  ]) {
+    const conflicted = conflictDraftSave(editable, {
+      ...draft(4, "stored elsewhere"),
+      state: draftState,
+    });
+    assert.match(keepLocalDraftRefusal(conflicted), pattern);
+    assert.throws(() => keepLocalDraft(conflicted), /no longer editable/);
+    const theirs = chooseRemoteDraft(conflicted);
+    assert.equal(theirs.draft.conflict, null);
+    assert.equal(theirs.draft.supersededLocalDrafts[0].content.body, "my precious text");
+  }
+
+  const commentId = "33333333-3333-4333-8333-333333333333";
+  const comment = { id: commentId, kind: "general", body: "keep" };
+  let withComment = adoptDraft(createReviewWorkflowState(review, revision), {
+    ...draft(3, "server"),
+    comments: [comment],
+  });
+  withComment = beginDraftSave(
+    editDraft(withComment, { body: "my text", verdict: null, comments: [comment] }),
+  );
+  withComment = conflictDraftSave(withComment, draft(4, "stored elsewhere"));
+  assert.equal(keepLocalDraftRefusal(withComment), null);
+  const blanked = editDraft(withComment, {
+    body: "my text",
+    verdict: null,
+    comments: [{ ...comment, body: "" }],
+  });
+  assert.match(keepLocalDraftRefusal(blanked), /empty draft comments/);
+  assert.equal(
+    keepLocalDraftRefusal(chooseRemoteDraft(withComment)),
+    "No draft conflict is waiting to be resolved.",
+  );
+});
+
+test("taking an identical stored version retains no superseded copy", () => {
+  let state = adoptDraft(createReviewWorkflowState(review, revision), draft(3, "server"));
+  state = beginDraftSave(editDraft(state, { body: "same", verdict: null, comments: [] }));
+  state = conflictDraftSave(state, draft(4, "same"));
+  const theirs = chooseRemoteDraft(state);
+  assert.deepEqual(theirs.draft.supersededLocalDrafts, []);
+  assert.equal(theirs.draft.local.body, "same");
 });
 
 test("draft save results bind the same draft, revision, and version", () => {

@@ -103,9 +103,19 @@ comment** act immediately against the selected review. Choose **Start review**
 to create a durable draft, or **Resume review** to reopen one saved draft.
 While a durable draft is active, the controls add general comments, selected
 lines, and suggestions to that draft. The draft remains bound to the review
-revision it was created from. If another writer changes the draft, the
-workspace reports a version conflict and preserves your unsaved text so you
-can resolve it deliberately.
+revision it was created from.
+
+If another writer changes the stored draft before your save lands, the
+workspace reports a version conflict and shows both versions side by side: your
+unsaved text, and the stored draft with its version number and the time it was
+last updated. Nothing is chosen for you. **Keep my text and save over version
+N** re-saves your text on top of the stored version. **Take the stored version
+and keep mine to copy** loads the stored draft for editing and keeps your
+displaced text on screen, in a read-only box, until you dismiss it; a further
+conflict adds another copy instead of replacing the first. If the stored draft
+was submitted or is held by a submission attempt elsewhere, keeping your text
+is refused with that reason and both versions stay on screen so you can copy
+your text out.
 
 If the review revision changes, old inline anchors stay on the old draft and
 cannot be submitted against the new revision. The workspace can create a

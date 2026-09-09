@@ -36,7 +36,7 @@ import type {
   FeatureContext,
   InlineAnchorSelection,
 } from "../../core/navigation.js";
-import { safeError } from "../../core/presentation.js";
+import { formatDate, safeError } from "../../core/presentation.js";
 import {
   SafeMarkdown,
   safeMarkdownPresentationBytes,
@@ -52,8 +52,10 @@ import {
   canSaveDraft,
   canStartSubmission,
   captureDraftAnchor,
+  chooseRemoteDraft,
   conflictDraftSave,
   createReviewWorkflowState,
+  dismissSupersededDraft,
   draftNeedsRevisionRecovery,
   editDraft,
   failSubmission,
@@ -62,6 +64,7 @@ import {
   finishSubmission,
   forkDraftToCurrentRevision,
   keepLocalDraft,
+  keepLocalDraftRefusal,
   markQuickIntentUncertain,
   observeReviewRevision,
   portableDraftContent,
@@ -357,6 +360,28 @@ function ReviewWorkflow({
       }
       setError(reviewMutationError(reason));
     }
+  };
+
+  const keepLocalDraftText = async (): Promise<void> => {
+    const current = workflowRef.current;
+    if (!current?.draft.conflict) return;
+    const refusal = keepLocalDraftRefusal(current);
+    if (refusal !== null) {
+      setError(refusal);
+      return;
+    }
+    setError(null);
+    apply(keepLocalDraft);
+    await saveDraft();
+  };
+
+  const takeRemoteDraftText = (): void => {
+    const current = workflowRef.current;
+    const remote = current?.draft.conflict;
+    if (!remote) return;
+    setError(null);
+    apply(chooseRemoteDraft);
+    setDraftCandidates([remote]);
   };
 
   const migrateDraft = async (): Promise<void> => {
@@ -821,7 +846,12 @@ function ReviewWorkflow({
               {draftCandidates.length === 1 ? "Resume review" : "Start review"}
             </button>
           ) : (
-            <strong>Draft review active</strong>
+            <>
+              <strong>Draft review active</strong>
+              <span className="review-workflow-thread-meta">
+                Stored version {workflow.draft.remote.version}
+              </span>
+            </>
           )}
           <ActionButtons
             capabilities={actionCapabilities}
@@ -979,7 +1009,11 @@ function ReviewWorkflow({
                 workflow={workflow}
                 edit={(content) => apply((state) => editDraft(state, content))}
                 save={() => void saveDraft()}
-                keepLocal={() => apply(keepLocalDraft)}
+                keepLocal={() => void keepLocalDraftText()}
+                takeRemote={takeRemoteDraftText}
+                dismissSuperseded={(version) =>
+                  apply((state) => dismissSupersededDraft(state, version))
+                }
                 migrate={() => void migrateDraft()}
                 submit={submitDraft}
                 confirmation={confirmation}
@@ -1347,6 +1381,8 @@ function DraftEditor({
   edit,
   save,
   keepLocal,
+  takeRemote,
+  dismissSuperseded,
   migrate,
   submit,
   confirmation,
@@ -1357,6 +1393,8 @@ function DraftEditor({
   readonly edit: (content: DraftContentInputDto) => void;
   readonly save: () => void;
   readonly keepLocal: () => void;
+  readonly takeRemote: () => void;
+  readonly dismissSuperseded: (displacedByVersion: number) => void;
   readonly migrate: () => void;
   readonly submit: () => Promise<void>;
   readonly confirmation: Confirmation | null;
@@ -1400,10 +1438,67 @@ function DraftEditor({
       )}
       {workflow.draft.conflict && (
         <Notice kind="warning">
-          The durable draft changed elsewhere. Your unsaved text is preserved.
-          <button className="button button-secondary" onClick={keepLocal}>Keep my text</button>
+          <p>
+            The stored draft is now version {workflow.draft.conflict.version}
+            {workflow.draft.conflictHeldVersion === null
+              ? ""
+              : `, and you were editing version ${workflow.draft.conflictHeldVersion}`}
+            . Neither side was discarded. Both are shown below; choose one deliberately.
+          </p>
+          <div className="review-workflow-conflict">
+            <article>
+              <strong>Your text, not stored</strong>
+              <p className="review-workflow-thread-meta">Typed in this window.</p>
+              <textarea
+                readOnly
+                aria-label="My unsaved draft text"
+                value={draftContentTranscript(workflow.draft.local)}
+              />
+            </article>
+            <article>
+              <strong>Stored draft, version {workflow.draft.conflict.version}</strong>
+              <p className="review-workflow-thread-meta">
+                Saved outside this window, last updated{" "}
+                {formatDate(workflow.draft.conflict.updated_at)}. This draft store
+                records no author, so the writer is not identified.
+              </p>
+              <textarea
+                readOnly
+                aria-label="Stored draft text"
+                value={draftContentTranscript(workflow.draft.conflict)}
+              />
+            </article>
+          </div>
+          <div className="review-workflow-row">
+            <button className="button" onClick={keepLocal}>
+              Keep my text and save over version {workflow.draft.conflict.version}
+            </button>
+            <button className="button button-secondary" onClick={takeRemote}>
+              Take the stored version and keep mine to copy
+            </button>
+          </div>
         </Notice>
       )}
+      {workflow.draft.supersededLocalDrafts.map((superseded) => (
+        <Notice kind="warning" key={superseded.displacedByVersion}>
+          <p>
+            Your text was replaced by stored version {superseded.displacedByVersion} and
+            was never saved. Copy anything you still need, then dismiss it. A later
+            conflict adds another copy rather than replacing this one.
+          </p>
+          <textarea
+            readOnly
+            aria-label={`My superseded draft text replaced by version ${superseded.displacedByVersion}`}
+            value={draftContentTranscript(superseded.content)}
+          />
+          <button
+            className="button button-secondary"
+            onClick={() => dismissSuperseded(superseded.displacedByVersion)}
+          >
+            Dismiss my text replaced by version {superseded.displacedByVersion}
+          </button>
+        </Notice>
+      ))}
       <label>
         Review body
         <textarea
@@ -1825,6 +1920,13 @@ function inlineDisabledReason(
   if (durable && workflow && !canCaptureDraftInline(workflow))
     return "The draft is bound to an earlier revision or a durable submission attempt.";
   return null;
+}
+
+function draftContentTranscript(content: DraftContentInputDto): string {
+  const sections = [content.body, `Verdict: ${content.verdict ?? "none"}`];
+  for (const comment of content.comments)
+    sections.push(`${draftCommentLabel(comment)}\n${comment.body}`);
+  return sections.join("\n\n");
 }
 
 function draftCommentLabel(comment: DraftCommentInputDto): string {

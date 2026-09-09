@@ -172,10 +172,11 @@ test("GitLab suggestion enters the durable draft and saves without a direct forg
   const draftComment = await view.findByLabelText(/Edit draft comment/);
   assert.equal(draftComment.value, "```suggestion:-0+1\nreplacement\n```");
   fireEvent.click(view.getByRole("button", { name: "Save draft" }));
-  await view.findByText(/Your unsaved text is preserved/);
+  await view.findByText(/now version 2, and you were editing version 1/);
   assert.equal(draftComment.value, "```suggestion:-0+1\nreplacement\n```");
-  fireEvent.click(view.getByRole("button", { name: "Keep my text" }));
-  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  fireEvent.click(
+    view.getByRole("button", { name: "Keep my text and save over version 2" }),
+  );
   await waitFor(() => assert.equal(saves.length, 2));
   assert.equal(saves[1].expected_version, 2);
   assert.equal(saves[1].content.comments.length, 1);
@@ -193,37 +194,216 @@ test("GitLab suggestion enters the durable draft and saves without a direct forg
   assert.deepEqual(saves[1].content.comments[0], saves[0].content.comments[0]);
 });
 
-test("explicit review recovery avoids duplicate drafts and preserves text on version conflict", async () => {
-  const review = "review-draft";
-  let creates = 0;
-  let saves = 0;
-  const bridge = reviewBridge(review, {
+function conflictingDraftBridge(review, counters) {
+  return reviewBridge(review, {
     listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [draft(review, 1, "server")] }),
     createReviewDraft: async () => {
-      creates += 1;
+      counters.creates += 1;
       return draft(review, 1, "created");
     },
     saveReviewDraft: async (params) => {
-      saves += 1;
-      if (saves === 1)
+      counters.saves += 1;
+      counters.savedParams.push(params);
+      if (counters.saves === 1)
         throw { code: "conflict", message: "The draft changed.", retryable: true };
-      return draft(review, 3, params.content.body);
+      return draft(review, params.expected_version + 1, params.content.body);
     },
-    getReviewDraft: () => read(draft(review, 2, "TUI edit")),
+    getReviewDraft: () => read({
+      ...draft(review, 2, "TUI edit"),
+      comments: [{ id: "33333333-3333-4333-8333-333333333333", kind: "general", body: "TUI comment" }],
+    }),
+  });
+}
+
+async function conflictedDraftView(review, counters) {
+  const view = renderFeature(conflictingDraftBridge(review, counters), review);
+  fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
+  await view.findByText("Stored version 1");
+  assert.equal(counters.creates, 0);
+  fireEvent.change(view.getByLabelText("Review body"), {
+    target: { value: "local unsaved text" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  await view.findByText(/now version 2, and you were editing version 1/);
+  return view;
+}
+
+function counters() {
+  return { creates: 0, saves: 0, savedParams: [] };
+}
+
+test("a stale save shows both draft versions and neither is silently discarded", async () => {
+  const state = counters();
+  const view = await conflictedDraftView("review-draft-both", state);
+  assert.equal(view.getByLabelText("Review body").value, "local unsaved text");
+  assert.match(view.getByLabelText("My unsaved draft text").value, /local unsaved text/);
+  const stored = view.getByLabelText("Stored draft text").value;
+  assert.match(stored, /TUI edit/);
+  assert.match(stored, /TUI comment/);
+  assert.equal(view.getByRole("button", { name: "Save draft" }).disabled, true);
+  assert.equal(view.getByRole("button", { name: "Submit review" }).disabled, true);
+  assert.equal(state.saves, 1);
+  assert.equal(state.creates, 0);
+});
+
+test("keeping my text re-saves it on top of the stored version", async () => {
+  const state = counters();
+  const view = await conflictedDraftView("review-draft-keep-mine", state);
+  fireEvent.click(
+    view.getByRole("button", { name: "Keep my text and save over version 2" }),
+  );
+  await waitFor(() => assert.equal(state.saves, 2));
+  assert.deepEqual(
+    {
+      expected: state.savedParams[1].expected_version,
+      body: state.savedParams[1].content.body,
+    },
+    { expected: 2, body: "local unsaved text" },
+  );
+  await view.findByText("Stored version 3");
+  assert.equal(view.queryByLabelText("Stored draft text"), null);
+  assert.equal(view.getByLabelText("Review body").value, "local unsaved text");
+  assert.equal(view.queryByLabelText("My superseded draft text"), null);
+  assert.equal(state.creates, 0);
+});
+
+test("taking the stored version keeps my text reachable until I dismiss it", async () => {
+  const state = counters();
+  const view = await conflictedDraftView("review-draft-take-theirs", state);
+  fireEvent.click(
+    view.getByRole("button", { name: "Take the stored version and keep mine to copy" }),
+  );
+  await view.findByText("Stored version 2");
+  assert.equal(view.queryByLabelText("Stored draft text"), null);
+  assert.equal(view.getByLabelText("Review body").value, "TUI edit");
+  assert.match(
+    view.getByLabelText("My superseded draft text replaced by version 2").value,
+    /local unsaved text/,
+  );
+  assert.equal(state.saves, 1);
+  assert.equal(state.creates, 0);
+  fireEvent.click(
+    view.getByRole("button", { name: "Dismiss my text replaced by version 2" }),
+  );
+  await waitFor(() =>
+    assert.equal(
+      view.queryByLabelText("My superseded draft text replaced by version 2"),
+      null,
+    ));
+  assert.equal(view.getByLabelText("Review body").value, "TUI edit");
+});
+
+test("a second take-theirs keeps both retained texts, each dismissed on its own", async () => {
+  const review = "review-draft-two-conflicts";
+  let saves = 0;
+  const remote = [
+    { ...draft(review, 2, "stored two"), updated_at: "2026-09-08T01:00:00+00:00" },
+    { ...draft(review, 4, "stored four"), updated_at: "2026-09-08T02:00:00+00:00" },
+  ];
+  const bridge = reviewBridge(review, {
+    listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [draft(review, 1, "server")] }),
+    saveReviewDraft: async () => {
+      saves += 1;
+      throw { code: "conflict", message: "The draft changed.", retryable: true };
+    },
+    getReviewDraft: () => read(remote[Math.min(saves, remote.length) - 1]),
   });
   const view = renderFeature(bridge, review);
   fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
-  await view.findByText("Draft review active");
-  assert.equal(creates, 0);
-  const body = view.getByLabelText("Review body");
-  fireEvent.change(body, { target: { value: "local unsaved text" } });
+  await view.findByText("Stored version 1");
+
+  fireEvent.change(view.getByLabelText("Review body"), {
+    target: { value: "first local" },
+  });
   fireEvent.click(view.getByRole("button", { name: "Save draft" }));
-  await view.findByText(/changed elsewhere/);
-  assert.equal(view.getByLabelText("Review body").value, "local unsaved text");
-  fireEvent.click(view.getByRole("button", { name: "Keep my text" }));
+  await view.findByText(/now version 2, and you were editing version 1/);
+  fireEvent.click(
+    view.getByRole("button", { name: "Take the stored version and keep mine to copy" }),
+  );
+  await view.findByLabelText("My superseded draft text replaced by version 2");
+
+  fireEvent.change(view.getByLabelText("Review body"), {
+    target: { value: "second local" },
+  });
   fireEvent.click(view.getByRole("button", { name: "Save draft" }));
-  await waitFor(() => assert.equal(saves, 2));
-  assert.equal(view.getByLabelText("Review body").value, "local unsaved text");
+  await view.findByText(/now version 4, and you were editing version 2/);
+  fireEvent.click(
+    view.getByRole("button", { name: "Take the stored version and keep mine to copy" }),
+  );
+  await view.findByLabelText("My superseded draft text replaced by version 4");
+
+  assert.equal(saves, 2);
+  assert.match(
+    view.getByLabelText("My superseded draft text replaced by version 2").value,
+    /first local/,
+  );
+  assert.match(
+    view.getByLabelText("My superseded draft text replaced by version 4").value,
+    /second local/,
+  );
+  assert.equal(view.getByLabelText("Review body").value, "stored four");
+
+  fireEvent.click(
+    view.getByRole("button", { name: "Dismiss my text replaced by version 2" }),
+  );
+  await waitFor(() =>
+    assert.equal(
+      view.queryByLabelText("My superseded draft text replaced by version 2"),
+      null,
+    ));
+  assert.match(
+    view.getByLabelText("My superseded draft text replaced by version 4").value,
+    /second local/,
+  );
+});
+
+test("keeping my text is refused with its reason when the stored draft was submitted", async () => {
+  const review = "review-draft-submitted-conflict";
+  let saves = 0;
+  const bridge = reviewBridge(review, {
+    listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [draft(review, 1, "server")] }),
+    saveReviewDraft: async () => {
+      saves += 1;
+      throw { code: "conflict", message: "The draft changed.", retryable: true };
+    },
+    getReviewDraft: () =>
+      read({ ...draft(review, 2, "submitted elsewhere"), state: "submitted" }),
+  });
+  const view = renderFeature(bridge, review);
+  fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
+  await view.findByText("Stored version 1");
+  fireEvent.change(view.getByLabelText("Review body"), {
+    target: { value: "my precious text" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  await view.findByText(/now version 2, and you were editing version 1/);
+
+  fireEvent.click(
+    view.getByRole("button", { name: "Keep my text and save over version 2" }),
+  );
+  await view.findByText(/already submitted/);
+  assert.equal(saves, 1);
+  assert.match(view.getByLabelText("Stored draft text").value, /submitted elsewhere/);
+  assert.match(view.getByLabelText("My unsaved draft text").value, /my precious text/);
+  assert.equal(view.getByLabelText("Review body").value, "my precious text");
+  assert.equal(
+    Boolean(
+      view.getByRole("button", {
+        name: "Take the stored version and keep mine to copy",
+      }),
+    ),
+    true,
+  );
+
+  fireEvent.click(
+    view.getByRole("button", { name: "Take the stored version and keep mine to copy" }),
+  );
+  await view.findByLabelText("My superseded draft text replaced by version 2");
+  assert.match(
+    view.getByLabelText("My superseded draft text replaced by version 2").value,
+    /my precious text/,
+  );
+  assert.equal(saves, 1);
 });
 
 test("submission needs confirmation and unknown progress exposes reconciliation without restart", async () => {

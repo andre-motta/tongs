@@ -594,3 +594,23 @@ test("result binding rejects valid shapes from another operation, resource, or p
     submission,
   ));
 });
+
+test("a saved draft only has to advance past the version the caller held", () => {
+  const params = { review, draft_id: draftId, expected_version: 1, content };
+  assert.doesNotThrow(() =>
+    assertReviewBoundResult("drafts.save", params, { ...draft, version: 2 }));
+  assert.doesNotThrow(() =>
+    assertReviewBoundResult("drafts.save", params, { ...draft, version: 5 }));
+  assert.throws(
+    () => assertReviewBoundResult("drafts.save", params, { ...draft, version: 1 }),
+    /does not match its request/,
+  );
+  assert.throws(
+    () => assertReviewBoundResult(
+      "drafts.save",
+      { ...params, expected_version: 4 },
+      { ...draft, version: 2 },
+    ),
+    /does not match its request/,
+  );
+});

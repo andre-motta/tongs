@@ -302,14 +302,18 @@ test("a draft conflict refuses the primary action instead of appending again", a
   );
 });
 
-test("one recovered pending review is adopted rather than duplicated", async () => {
+test("a durable pending review is visible before the first press and is adopted, not duplicated", async () => {
   const review = "review-composer-adopt";
   const creates = [];
   const saves = [];
   const view = renderDiff(
     diffBridge(review, {
       listReviewDrafts: () =>
-        read({ cursor: 0, next_cursor: null, drafts: [draft(review, 3, [])] }),
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 3, [inlineEntry("entry-a", "Written in the TUI", 11)])],
+        }),
       createReviewDraft: async (params) => {
         creates.push(params);
         return draft(review, 1, []);
@@ -321,17 +325,35 @@ test("one recovered pending review is adopted rather than duplicated", async () 
     }),
     review,
   );
+  // The draft was written elsewhere, so the state has to be visible before the
+  // reader types anything: the card, the header count, the chip and the label.
+  await view.findByLabelText("Pending review comment on new line 11");
+  assert.equal(view.getByText("Written in the TUI").tagName.toLowerCase(), "p");
+  assert.equal(view.getByText("1 pending").textContent, "1 pending");
   fireEvent.click(
-    await view.findByRole("button", { name: "Comment on new line 11" }),
+    await view.findByRole("button", { name: "Comment on new line 10" }),
   );
+  await view.findByLabelText("Inline comment composer");
+  assert.equal(
+    view.getByText("Review in progress, 1 pending").textContent,
+    "Review in progress, 1 pending",
+  );
+  assert.equal(view.queryByRole("button", { name: "Start a review" }), null);
   fireEvent.change(await view.findByLabelText("Inline review comment"), {
     target: { value: "Guard the zero divisor" },
   });
-  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  fireEvent.click(view.getByRole("button", { name: "Add to review" }));
   await waitFor(() => assert.equal(saves.length, 1));
   assert.equal(creates.length, 0);
   assert.equal(saves[0].expected_version, 3);
-  assert.equal(saves[0].content.comments.length, 1);
+  assert.equal(saves[0].content.comments.length, 2);
+  assert.equal(saves[0].content.comments[0].body, "Written in the TUI");
+  assert.equal(saves[0].content.comments[1].body, "Guard the zero divisor");
+  // Add to review leaves its own pending card behind, next to the one that
+  // came from the store.
+  await view.findByLabelText("Pending review comment on new line 10");
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 2);
+  assert.equal(view.getByText("2 pending").textContent, "2 pending");
 });
 
 test("several recovered pending reviews refuse in their own words", async () => {
@@ -398,15 +420,17 @@ test("a pending review bound to an earlier revision refuses in its own words", a
   fireEvent.change(await view.findByLabelText("Inline review comment"), {
     target: { value: "Guard the zero divisor" },
   });
-  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  // The mount read adopts the durable draft, so the refusal stands before the
+  // press rather than after it, and the primary write is already disabled.
   await view.findByText(
     "The pending review is bound to an earlier revision. Migrate it in the review workflow before adding inline feedback.",
   );
-  assert.equal(saves.length, 0);
+  assert.equal(view.queryByRole("button", { name: "Start a review" }), null);
   assert.equal(
     view.getByRole("button", { name: "Add to review" }).disabled,
     true,
   );
+  assert.equal(saves.length, 0);
 });
 
 test("a partial diff context refuses the draft path in its own words", async () => {
@@ -1031,6 +1055,302 @@ test("a drag that overshoots into the next hunk stops at the boundary", async ()
   );
 });
 
+test("a saved entry becomes a pending card under its own row", async () => {
+  const review = "review-pending-card";
+  const saves = [];
+  const view = renderDiff(diffBridge(review, { saveReviewDraft: recorder(review, saves) }), review);
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "Guard the `zero` divisor" },
+  });
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 0);
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+
+  const card = await view.findByLabelText("Pending review comment on new line 11");
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 1);
+  assert.equal(card.querySelector(".pending-badge").textContent, "Pending");
+  assert.equal(card.querySelector(".pending-card-author").textContent, "You");
+  assert.equal(card.querySelector(".pending-card-anchor").textContent, "new line 11");
+  // The body is safe Markdown, so the backticks became a code span.
+  assert.equal(card.querySelector(".pending-card-body code").textContent, "zero");
+  assert.equal(card.querySelectorAll(".pending-card-ribbon").length, 0);
+  assert.ok(view.getByRole("button", { name: "Edit pending comment on new line 11" }));
+  assert.ok(view.getByRole("button", { name: "Delete pending comment on new line 11" }));
+
+  // The card is a row of the diff under the line its anchor names, and the
+  // composer closed on the successful write.
+  assert.deepEqual(
+    [...view.container.querySelectorAll(".windowed-items > *")].map((element) =>
+      element.className.split(" ")[0],
+    ),
+    ["diff-file", "diff-hunk", "diff-line", "diff-line", "pending-card-row", "diff-line"],
+  );
+  assert.equal(view.getByText("1 pending").textContent, "1 pending");
+});
+
+test("Edit round-trips the body and replaces the entry instead of appending", async () => {
+  const review = "review-pending-edit";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 4, [inlineEntry("entry-a", "Guard the zero divisor", 11)])],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Edit pending comment on new line 11" }),
+  );
+  const editor = await view.findByLabelText("Pending review comment");
+  assert.equal(editor.value, "Guard the zero divisor");
+  assert.ok(view.getByLabelText("Edit pending comment composer"));
+  assert.equal(
+    view.getByText("src/calc.py, new line 11").textContent,
+    "src/calc.py, new line 11",
+  );
+  // The edit replaces a body; it never recaptures an anchor, so the suggestion
+  // rules and the quick path are not offered here.
+  assert.equal(view.queryByRole("button", { name: "Insert suggestion" }), null);
+  assert.equal(view.queryByRole("button", { name: "Add comment now" }), null);
+  // The card gives way to the composer rather than being shown twice.
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 0);
+
+  fireEvent.change(editor, { target: { value: "Raise ZeroDivisionError instead" } });
+  fireEvent.click(view.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  assert.equal(saves[0].expected_version, 4);
+  assert.deepEqual(
+    saves[0].content.comments.map((comment) => `${comment.id}:${comment.body}`),
+    ["entry-a:Raise ZeroDivisionError instead"],
+  );
+  assert.equal(saves[0].content.comments[0].anchor.new_line, 11);
+
+  const card = await view.findByLabelText("Pending review comment on new line 11");
+  assert.equal(card.querySelector(".pending-card-body p").textContent, "Raise ZeroDivisionError instead");
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 1);
+  assert.equal(view.getByText("1 pending").textContent, "1 pending");
+});
+
+test("Delete saves the draft without the entry", async () => {
+  const review = "review-pending-delete";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(review, 6, [
+              inlineEntry("entry-a", "First note", 11),
+              inlineEntry("entry-b", "Second note", 10),
+            ]),
+          ],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  await view.findByLabelText("Pending review comment on new line 11");
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 2);
+  assert.equal(view.getByText("2 pending").textContent, "2 pending");
+
+  fireEvent.click(
+    view.getByRole("button", { name: "Delete pending comment on new line 11" }),
+  );
+  await waitFor(() => assert.equal(saves.length, 1));
+  assert.equal(saves[0].expected_version, 6);
+  assert.deepEqual(
+    saves[0].content.comments.map((comment) => `${comment.id}:${comment.body}`),
+    ["entry-b:Second note"],
+  );
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".pending-card").length, 1),
+  );
+  assert.equal(view.queryByLabelText("Pending review comment on new line 11"), null);
+  assert.equal(view.getByText("1 pending").textContent, "1 pending");
+});
+
+test("a stale entry keeps its ribbon and offers no Edit", async () => {
+  const review = "review-pending-stale";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(review, 2, [
+              inlineEntry("entry-a", "Written against an older head", 11, {
+                stale: true,
+                revision: { ...REVISION, head_sha: "abc1234deadbeef" },
+              }),
+            ]),
+          ],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  const card = await view.findByLabelText("Pending review comment on new line 11");
+  assert.equal(
+    card.querySelector(".pending-card-ribbon").textContent,
+    "Stale, was line 11 at revision abc1234",
+  );
+  assert.equal(card.className.includes("pending-card-stale"), true);
+  assert.equal(
+    view.queryByRole("button", { name: "Edit pending comment on new line 11" }),
+    null,
+  );
+  assert.ok(view.getByRole("button", { name: "Delete pending comment on new line 11" }));
+  // Nothing is written just by rendering a stale entry.
+  assert.equal(saves.length, 0);
+});
+
+test("a range entry renders one card under the row that closes the range", async () => {
+  const review = "review-pending-range";
+  const view = renderDiff(
+    wideBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(review, 3, [
+              inlineEntry("entry-a", "Guard the whole block", 13, {
+                start_line: 11,
+                start_side: "new",
+              }),
+            ]),
+          ],
+        }),
+    }),
+    review,
+  );
+  const card = await view.findByLabelText(
+    "Pending review comment on Lines 11 to 13 (new)",
+  );
+  assert.equal(
+    card.querySelector(".pending-card-anchor").textContent,
+    "Lines 11 to 13 (new)",
+  );
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 1);
+  // One card, under line 13, which is where the composer that wrote it stood.
+  assert.deepEqual(
+    [...view.container.querySelectorAll(".windowed-items > *")].map((element) =>
+      element.className.split(" ")[0],
+    ),
+    [
+      "diff-file",
+      "diff-hunk",
+      "diff-line",
+      "diff-line",
+      "diff-line",
+      "diff-line",
+      "pending-card-row",
+      "diff-line",
+    ],
+  );
+});
+
+test("the split layout renders the card in its own pane and mirrors the other", async () => {
+  const review = "review-pending-split";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      openDiff: (params) => read(diffPage(review, params.layout ?? "unified")),
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 2, [inlineEntry("entry-a", "New side note", 11)])],
+        }),
+      saveReviewDraft: recorder(review, saves),
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: "Split" }));
+  await view.findByLabelText("Pending review comment on new line 11");
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-new .pending-card-row").length,
+    1,
+  );
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-old .pending-card-row").length,
+    0,
+  );
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-old .pending-card-mirror").length,
+    1,
+  );
+  assert.equal(view.getByText("1 pending").textContent, "1 pending");
+
+  // Edit opens the composer in the pane that owns the anchor side, and the
+  // other pane keeps its spacer.
+  fireEvent.click(
+    view.getByRole("button", { name: "Edit pending comment on new line 11" }),
+  );
+  await view.findByLabelText("Edit pending comment composer");
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-new .inline-composer-row").length,
+    1,
+  );
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-old .inline-composer-mirror").length,
+    1,
+  );
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 0);
+});
+
+test("a failed entry delete restores the pending card and reports the failure", async () => {
+  const review = "review-pending-delete-failure";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 5, [inlineEntry("entry-a", "First note", 11)])],
+        }),
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        throw { code: "write_failed", message: "the sidecar refused" };
+      },
+    }),
+    review,
+  );
+  await view.findByLabelText("Pending review comment on new line 11");
+  fireEvent.click(
+    view.getByRole("button", { name: "Delete pending comment on new line 11" }),
+  );
+  await waitFor(() => assert.equal(saves.length, 1));
+  // The entry is put back exactly as it was, so the obvious retry sends the
+  // same removal once rather than saving a review the store never lost.
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".pending-card").length, 1),
+  );
+  assert.equal(view.getByText("1 pending").textContent, "1 pending");
+  fireEvent.click(
+    view.getByRole("button", { name: "Delete pending comment on new line 11" }),
+  );
+  await waitFor(() => assert.equal(saves.length, 2));
+  assert.equal(saves[1].expected_version, 5);
+  assert.deepEqual(
+    saves[1].content.comments.map((comment) => comment.id),
+    [],
+  );
+});
+
 function splitCell(view, side, line) {
   const cell = view.container.querySelector(
     `.split-cell[data-anchor-side="${side}"][data-${side}-line="${line}"]`,
@@ -1133,6 +1453,28 @@ function capabilities(changes = {}) {
     comment_verdict: true,
     atomic_review_batch: false,
     ...changes,
+  };
+}
+
+/** One stored inline entry on the fixture file, anchored on the new side. */
+function inlineEntry(id, body, newLine, anchorChanges = {}) {
+  return {
+    id,
+    kind: "inline",
+    body,
+    anchor: {
+      revision: REVISION,
+      old_path: "src/calc.py",
+      new_path: "src/calc.py",
+      old_line: null,
+      new_line: newLine,
+      side: "new",
+      context_fingerprint: "f".repeat(64),
+      start_line: null,
+      start_side: null,
+      stale: false,
+      ...anchorChanges,
+    },
   };
 }
 

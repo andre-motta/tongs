@@ -169,11 +169,17 @@ test("GitLab suggestion enters the durable draft and saves without a direct forg
   });
   fireEvent.click(view.getByRole("button", { name: "Add suggestion to draft" }));
   assert.equal(quickWrites, 0);
-  const draftComment = await view.findByLabelText(/Edit draft comment/);
-  assert.equal(draftComment.value, "```suggestion:-0+1\nreplacement\n```");
-  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
+  await view.findByText("src/example.py, new line 7");
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
   await view.findByText(/now version 2, and you were editing version 1/);
-  assert.equal(draftComment.value, "```suggestion:-0+1\nreplacement\n```");
+  assert.equal(saves[0].content.comments.length, 1);
+  assert.equal(
+    saves[0].content.comments[0].body,
+    "```suggestion:-0+1\nreplacement\n```",
+  );
   fireEvent.click(
     view.getByRole("button", { name: "Keep my text and save over version 2" }),
   );
@@ -220,10 +226,13 @@ async function conflictedDraftView(review, counters) {
   fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
   await view.findByText("Stored version 1");
   assert.equal(counters.creates, 0);
-  fireEvent.change(view.getByLabelText("Review body"), {
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
+  fireEvent.change(view.getByLabelText("Summary"), {
     target: { value: "local unsaved text" },
   });
-  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
   await view.findByText(/now version 2, and you were editing version 1/);
   return view;
 }
@@ -235,13 +244,19 @@ function counters() {
 test("a stale save shows both draft versions and neither is silently discarded", async () => {
   const state = counters();
   const view = await conflictedDraftView("review-draft-both", state);
-  assert.equal(view.getByLabelText("Review body").value, "local unsaved text");
+  assert.equal(view.getByLabelText("Summary").value, "local unsaved text");
   assert.match(view.getByLabelText("My unsaved draft text").value, /local unsaved text/);
   const stored = view.getByLabelText("Stored draft text").value;
   assert.match(stored, /TUI edit/);
   assert.match(stored, /TUI comment/);
-  assert.equal(view.getByRole("button", { name: "Save draft" }).disabled, true);
-  assert.equal(view.getByRole("button", { name: "Submit review" }).disabled, true);
+  assert.equal(
+    view.getByRole("button", { name: "Save summary and verdict" }).disabled,
+    true,
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Submit review" }).disabled,
+    true,
+  );
   assert.equal(state.saves, 1);
   assert.equal(state.creates, 0);
 });
@@ -262,7 +277,7 @@ test("keeping my text re-saves it on top of the stored version", async () => {
   );
   await view.findByText("Stored version 3");
   assert.equal(view.queryByLabelText("Stored draft text"), null);
-  assert.equal(view.getByLabelText("Review body").value, "local unsaved text");
+  assert.equal(view.getByLabelText("Summary").value, "local unsaved text");
   assert.equal(view.queryByLabelText("My superseded draft text"), null);
   assert.equal(state.creates, 0);
 });
@@ -275,7 +290,7 @@ test("taking the stored version keeps my text reachable until I dismiss it", asy
   );
   await view.findByText("Stored version 2");
   assert.equal(view.queryByLabelText("Stored draft text"), null);
-  assert.equal(view.getByLabelText("Review body").value, "TUI edit");
+  assert.equal(view.getByLabelText("Summary").value, "TUI edit");
   assert.match(
     view.getByLabelText("My superseded draft text replaced by version 2").value,
     /local unsaved text/,
@@ -287,10 +302,12 @@ test("taking the stored version keeps my text reachable until I dismiss it", asy
   );
   await waitFor(() =>
     assert.equal(
-      view.queryByLabelText("My superseded draft text replaced by version 2"),
-      null,
+      view.container.querySelectorAll(
+        '[aria-label="My superseded draft text replaced by version 2"]',
+      ).length,
+      0,
     ));
-  assert.equal(view.getByLabelText("Review body").value, "TUI edit");
+  assert.equal(view.getByLabelText("Summary").value, "TUI edit");
 });
 
 test("a second take-theirs keeps both retained texts, each dismissed on its own", async () => {
@@ -311,21 +328,26 @@ test("a second take-theirs keeps both retained texts, each dismissed on its own"
   const view = renderFeature(bridge, review);
   fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
   await view.findByText("Stored version 1");
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
 
-  fireEvent.change(view.getByLabelText("Review body"), {
+  fireEvent.change(view.getByLabelText("Summary"), {
     target: { value: "first local" },
   });
-  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
   await view.findByText(/now version 2, and you were editing version 1/);
   fireEvent.click(
     view.getByRole("button", { name: "Take the stored version and keep mine to copy" }),
   );
   await view.findByLabelText("My superseded draft text replaced by version 2");
 
-  fireEvent.change(view.getByLabelText("Review body"), {
+  fireEvent.change(view.getByLabelText("Summary"), {
     target: { value: "second local" },
   });
-  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
   await view.findByText(/now version 4, and you were editing version 2/);
   fireEvent.click(
     view.getByRole("button", { name: "Take the stored version and keep mine to copy" }),
@@ -341,15 +363,17 @@ test("a second take-theirs keeps both retained texts, each dismissed on its own"
     view.getByLabelText("My superseded draft text replaced by version 4").value,
     /second local/,
   );
-  assert.equal(view.getByLabelText("Review body").value, "stored four");
+  assert.equal(view.getByLabelText("Summary").value, "stored four");
 
   fireEvent.click(
     view.getByRole("button", { name: "Dismiss my text replaced by version 2" }),
   );
   await waitFor(() =>
     assert.equal(
-      view.queryByLabelText("My superseded draft text replaced by version 2"),
-      null,
+      view.container.querySelectorAll(
+        '[aria-label="My superseded draft text replaced by version 2"]',
+      ).length,
+      0,
     ));
   assert.match(
     view.getByLabelText("My superseded draft text replaced by version 4").value,
@@ -372,10 +396,13 @@ test("keeping my text is refused with its reason when the stored draft was submi
   const view = renderFeature(bridge, review);
   fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
   await view.findByText("Stored version 1");
-  fireEvent.change(view.getByLabelText("Review body"), {
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
+  fireEvent.change(view.getByLabelText("Summary"), {
     target: { value: "my precious text" },
   });
-  fireEvent.click(view.getByRole("button", { name: "Save draft" }));
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
   await view.findByText(/now version 2, and you were editing version 1/);
 
   fireEvent.click(
@@ -385,7 +412,7 @@ test("keeping my text is refused with its reason when the stored draft was submi
   assert.equal(saves, 1);
   assert.match(view.getByLabelText("Stored draft text").value, /submitted elsewhere/);
   assert.match(view.getByLabelText("My unsaved draft text").value, /my precious text/);
-  assert.equal(view.getByLabelText("Review body").value, "my precious text");
+  assert.equal(view.getByLabelText("Summary").value, "my precious text");
   assert.equal(
     Boolean(
       view.getByRole("button", {
@@ -423,12 +450,16 @@ test("submission needs confirmation and unknown progress exposes reconciliation 
   });
   const view = renderFeature(bridge, review);
   fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
+  await view.findByText("Stored version 1");
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
   const submit = await view.findByRole("button", { name: "Submit review" });
   fireEvent.click(submit);
   assert.equal(starts, 0);
   fireEvent.click(view.getByRole("button", { name: "Confirm submit review" }));
   await view.findByText(/Remote status is unknown/);
   assert.equal(starts, 1);
+  const steps = view.getByRole("list", { name: "Submission steps" });
+  assert.match(steps.textContent, /Verdict: unknown/);
   fireEvent.click(view.getByRole("button", { name: "Retry only remaining steps" }));
   assert.match(view.getByText(/can repeat an unconfirmed remote write/).textContent, /Confirmed receipt steps stay excluded/);
   assert.equal(reconciles, 0);
@@ -464,6 +495,8 @@ test("submission timeout recovers durable status without replaying start", async
   });
   const view = renderFeature(bridge, review);
   fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
+  await view.findByText("Stored version 1");
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
   fireEvent.click(await view.findByRole("button", { name: "Submit review" }));
   fireEvent.click(view.getByRole("button", { name: "Confirm submit review" }));
   await view.findByText(/Remote status is unknown/);
@@ -748,25 +781,102 @@ test("draft comments are reviewable, editable, and deliberately removable", asyn
     },
     { id: "55555555-5555-4555-8555-555555555555", kind: "reply", body: "Reply text", thread_id: "thread-1" },
   ];
+  const saves = [];
   const bridge = reviewBridge(review, {
     listReviewDrafts: () => read({
       cursor: 0,
       next_cursor: null,
       drafts: [{ ...draft(review, 1, "body"), comments }],
     }),
+    saveReviewDraft: async (params) => {
+      saves.push(params);
+      return {
+        ...draft(review, params.expected_version + 1, params.content.body),
+        comments: params.content.comments,
+      };
+    },
   });
   const view = renderFeature(bridge, review);
   fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
-  await view.findByText(/src\/example.py · new line 4/);
-  await view.findByText(/Reply .* to discussion thread-1/);
-  const inlineEditor = view.getByLabelText(`Edit draft comment ${comments[1].id}`);
-  fireEvent.change(inlineEditor, { target: { value: "" } });
-  await view.findByText("Edit or remove empty draft comments before saving.");
-  assert.equal(view.getByRole("button", { name: "Save draft" }).disabled, true);
-  const removes = view.getAllByRole("button", { name: "Remove draft comment" });
-  fireEvent.click(removes[1]);
-  assert.equal(view.queryByLabelText(`Edit draft comment ${comments[1].id}`), null);
-  assert.equal(view.getByRole("button", { name: "Save draft" }).disabled, false);
+  await view.findByText("Stored version 1");
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
+
+  await view.findByText("General text");
+  await view.findByText("Inline text");
+  await view.findByText("Reply text");
+  assert.ok(
+    view.getByLabelText("Pending review comment on src/example.py, new line 4"),
+  );
+  // A pending reply names the discussion it answers, which is the only thing
+  // in the drawer that says which thread the reply belongs to.
+  assert.ok(view.getByLabelText("Pending review comment on reply to thread-1"));
+  const fileHeadings = [
+    ...view.container.querySelectorAll(".review-drawer-file-name"),
+  ].map((node) => node.textContent);
+  assert.equal(fileHeadings.some((text) => text.startsWith("Review-level")), true);
+  assert.equal(
+    fileHeadings.some((text) => text.startsWith("src/example.py")),
+    true,
+  );
+
+  // Editable: the general comment (an unanchored entry) edits in place in the
+  // drawer. An anchored (inline) entry's Edit instead sends the reader to the
+  // diff to edit it there, so it has no in-drawer editor for this test to
+  // drive; deleting it below exercises its own control instead.
+  fireEvent.click(
+    view.getByRole("button", { name: "Edit pending comment on general comment" }),
+  );
+  const editor = view.getByLabelText("Edit pending general comment");
+  assert.equal(editor.value, "General text");
+  fireEvent.change(editor, { target: { value: "" } });
+  assert.equal(
+    view.getByRole("button", { name: "Save pending comment on general comment" })
+      .disabled,
+    true,
+  );
+  fireEvent.change(editor, { target: { value: "Updated general text" } });
+  fireEvent.click(
+    view.getByRole("button", { name: "Save pending comment on general comment" }),
+  );
+  await waitFor(() => assert.equal(saves.length, 1));
+  assert.equal(saves[0].content.comments.length, 3);
+  assert.equal(
+    saves[0].content.comments.find((item) => item.id === comments[0].id).body,
+    "Updated general text",
+  );
+  await view.findByText("Updated general text");
+  assert.equal(
+    view.getByRole("button", { name: "Save summary and verdict" }).disabled,
+    true,
+  );
+
+  // Deliberately removable: unlike the old local-only "Remove draft comment",
+  // Delete in the drawer goes through removeEntry, which saves immediately.
+  fireEvent.click(
+    view.getByRole("button", {
+      name: "Delete pending comment on src/example.py, new line 4",
+    }),
+  );
+  await waitFor(() => assert.equal(saves.length, 2));
+  assert.equal(saves[1].content.comments.length, 2);
+  assert.equal(
+    saves[1].content.comments.some((item) => item.id === comments[1].id),
+    false,
+  );
+  // Counted rather than queried for a null node: a failed absence check must
+  // report a number, not serialise the mounted tree into the failure.
+  assert.equal(
+    [...view.container.querySelectorAll(".review-drawer-entry-body")].filter(
+      (element) => element.textContent.includes("Inline text"),
+    ).length,
+    0,
+  );
+  assert.equal(
+    view.container.querySelectorAll(
+      '[aria-label="Pending review comment on src/example.py, new line 4"]',
+    ).length,
+    0,
+  );
 });
 
 test("stale draft migration creates a separate draft and keeps inline and reply text recoverable", async () => {
@@ -806,6 +916,7 @@ test("stale draft migration creates a separate draft and keeps inline and reply 
   });
   const view = renderFeature(bridge, review);
   fireEvent.click(await view.findByRole("button", { name: "Resume review" }));
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
   await view.findByText(/remains preserved at revision old-head/);
   assert.equal(view.getByRole("button", { name: "Submit review" }).disabled, true);
   assert.equal(view.getByLabelText("Add selected line to draft").disabled, true);
@@ -815,9 +926,28 @@ test("stale draft migration creates a separate draft and keeps inline and reply 
   await waitFor(() => assert.equal(creates.length, 1));
   assert.equal(creates[0].revision.head_sha, "new-head");
   assert.deepEqual(creates[0].content.comments.map((item) => item.kind), ["general"]);
-  await view.findByText("Keep this inline text");
-  await view.findByText("Keep this reply");
+  assert.equal(creates[0].content.body, "Portable body");
+  assert.equal(creates[0].content.verdict, "approve");
+  // The S46 bound the title names: the old draft is preserved, and the inline
+  // and reply text it holds stays readable in the drawer so it can be
+  // recreated deliberately after its current targets are checked. Nothing was
+  // retargeted, so the preserved section names the revision it belongs to.
   await view.findByText(/Preserved old draft 11111111/);
+  await view.findByText(/Revision old-head/);
+  assert.ok(view.getByText("Keep this inline text"));
+  assert.ok(view.getByText("Keep this reply"));
+  assert.ok(view.getByText("reply to thread-old"));
+
+  // The portable general comment travelled to the new draft, so it is not
+  // repeated as preserved text that still needs recreating.
+  assert.equal(
+    [
+      ...view.container.querySelectorAll(
+        ".review-workflow-preserved-draft article",
+      ),
+    ].length,
+    2,
+  );
 });
 
 test("durable recovery loads and binds the attempt draft instead of another candidate", async () => {
@@ -852,12 +982,13 @@ test("durable recovery loads and binds the attempt draft instead of another cand
     },
   });
   const view = renderFeature(bridge, review);
+  fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
   fireEvent.click(await view.findByRole("button", {
     name: "Recover unknown attempt with 0 confirmed step(s)",
   }));
   await waitFor(() => assert.equal(loads.length, 1));
   assert.equal(loads[0].draft_id, otherId);
-  assert.equal(view.getByLabelText("Review body").value, "matching recovered draft");
+  assert.equal(view.getByLabelText("Summary").value, "matching recovered draft");
   await view.findByText(/Remote status is unknown/);
   assert.equal(view.queryByDisplayValue("first draft"), null);
 });

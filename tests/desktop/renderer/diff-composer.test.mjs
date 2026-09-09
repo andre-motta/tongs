@@ -288,7 +288,7 @@ test("a draft conflict refuses the primary action instead of appending again", a
   fireEvent.click(view.getByRole("button", { name: "Start a review" }));
   await waitFor(() => assert.equal(saves.length, 1));
   await view.findByText(
-    "This pending review was changed elsewhere. Resolve the conflict in the review workflow before adding inline feedback.",
+    "This pending review was changed elsewhere. Resolve the conflict in Your review before adding inline feedback.",
   );
   assert.equal(
     view.getByRole("button", { name: "Add to review" }).disabled,
@@ -390,7 +390,7 @@ test("several recovered pending reviews refuse in their own words", async () => 
   });
   fireEvent.click(view.getByRole("button", { name: "Start a review" }));
   await view.findByText(
-    "Several pending reviews were recovered. Resume one in the review workflow before commenting.",
+    "Several pending reviews were recovered. Resume one in Your review before commenting.",
   );
   assert.equal(creates.length, 0);
   assert.equal(saves.length, 0);
@@ -423,7 +423,7 @@ test("a pending review bound to an earlier revision refuses in its own words", a
   // The mount read adopts the durable draft, so the refusal stands before the
   // press rather than after it, and the primary write is already disabled.
   await view.findByText(
-    "The pending review is bound to an earlier revision. Migrate it in the review workflow before adding inline feedback.",
+    "The pending review is bound to an earlier revision. Migrate it in Your review before adding inline feedback.",
   );
   assert.equal(view.queryByRole("button", { name: "Start a review" }), null);
   assert.equal(
@@ -1542,7 +1542,7 @@ test("a read-only pending review explains itself once per file, in the words of 
   // One sentence for the file, not one per card.
   assert.equal(view.container.querySelectorAll(".pending-card small").length, 1);
   const refusal =
-    "The pending review is bound to an earlier revision. Migrate it in the review workflow before changing pending comments.";
+    "The pending review is bound to an earlier revision. Migrate it in Your review before changing pending comments.";
   assert.equal(view.container.querySelector(".pending-card small").textContent, refusal);
   const edit = view.getByRole("button", { name: "Edit pending comment on new line 11" });
   assert.equal(edit.disabled, true);

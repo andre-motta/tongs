@@ -562,6 +562,52 @@ export function keepLocalDraftRefusal(state: ReviewWorkflowState): string | null
   return null;
 }
 
+/**
+ * Why the pending review cannot be discarded now, or null when it can. A
+ * discard destroys stored content, so it is refused while anything else holds
+ * the draft rather than racing it: an in-flight save would resurrect what was
+ * discarded under its own expected version, and a submission attempt owns the
+ * draft until it is reconciled.
+ */
+export function discardDraftRefusal(state: ReviewWorkflowState): string | null {
+  const remote = state.draft.remote;
+  if (!remote) return "No pending review is open to discard.";
+  if (state.draft.pendingSave)
+    return "A draft save is in flight. Let it settle before discarding the review.";
+  if (state.submission.pending)
+    return "A submission step is in flight. Let it settle before discarding the review.";
+  if (state.submission.progress && state.submission.progress.outcome !== "editable")
+    return "This review is held by its submission attempt. Reconcile the attempt before discarding it.";
+  if (remote.state !== "editable")
+    return "This draft is held by a submission attempt, so it cannot be discarded yet.";
+  return null;
+}
+
+/**
+ * Drops the discarded draft and returns the review to its no-draft state. The
+ * retained texts are kept deliberately: `supersededLocalDrafts` is text the
+ * reader was promised would stay until dismissed on its own, and
+ * `preservedStaleDrafts` records old drafts this session did not delete, so
+ * neither is this action's to throw away.
+ */
+export function discardDraft(state: ReviewWorkflowState): ReviewWorkflowState {
+  const refusal = discardDraftRefusal(state);
+  if (refusal !== null) throw new Error(refusal);
+  return replace(state, {
+    draft: Object.freeze({
+      remote: null,
+      local: EMPTY_CONTENT,
+      dirty: false,
+      conflict: null,
+      conflictHeldVersion: null,
+      supersededLocalDrafts: state.draft.supersededLocalDrafts,
+      preservedStaleDrafts: state.draft.preservedStaleDrafts,
+      pendingSave: null,
+    }),
+    submission: Object.freeze({ progress: null, pending: null, message: null }),
+  });
+}
+
 export function beginSubmission(
   state: ReviewWorkflowState,
   kind: PendingSubmission["kind"],

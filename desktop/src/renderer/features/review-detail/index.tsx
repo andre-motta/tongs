@@ -18,10 +18,19 @@ export function ReviewHeader({
   route,
   navigate,
   panels,
+  drawer = null,
 }: {
   readonly route: Extract<AppRoute, { kind: "review" }>;
   readonly navigate: (route: AppRoute) => void;
   readonly panels: readonly ReviewPanelContribution[];
+  /**
+   * The "Your review" button and its drawer, from whichever review surface
+   * holds the workflow controller. The header carries it because GitLab puts
+   * the review's own state in the top right of the review page, not inside one
+   * tab, but the header itself owns no review state and mounts no reads: a
+   * panel with no controller passes nothing and shows no button.
+   */
+  readonly drawer?: ReactNode;
 }): ReactNode {
   return (
     <>
@@ -36,6 +45,7 @@ export function ReviewHeader({
           <p className="eyebrow">Review #{route.item.summary.number}</p>
           <h1 className="view-title">{route.item.summary.title}</h1>
         </div>
+        {drawer}
         <button
           className="button button-secondary"
           onClick={() =>

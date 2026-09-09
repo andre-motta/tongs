@@ -39,6 +39,15 @@ import {
   type InlineComposerController,
 } from "../review/composer.js";
 import {
+  ReviewDrawerMount,
+  peekPendingEdit,
+  requestPendingEdit,
+  pendingEntryTarget,
+  subscribePendingEdit,
+  takePendingEdit,
+  useReviewDrawer,
+} from "../review/drawer.js";
+import {
   PendingCard,
   PendingCardMirror,
   type PendingDraftEntry,
@@ -214,7 +223,22 @@ function DiffView({
   }, [loaded, route.diffTarget, route.item.handle, selectInlineAnchor]);
   return (
     <>
-      <ReviewHeader route={route} navigate={navigate} panels={panels} />
+      <ReviewHeader
+        route={route}
+        navigate={navigate}
+        panels={panels}
+        drawer={
+          loaded ? (
+            <DiffReviewDrawer
+              bridge={bridge}
+              review={route.item.handle}
+              forge={forge}
+              revision={loaded.revision}
+              jumpTo={(target) => navigate({ ...route, diffTarget: target })}
+            />
+          ) : null
+        }
+      />
       <div className="diff-toolbar">
         <strong className="toolbar-title">Layout</strong>
         <button
@@ -286,6 +310,51 @@ function DiffView({
         />
       )}
     </>
+  );
+}
+
+/**
+ * The review drawer as the Changes tab mounts it. It is a component of its own
+ * because the controller needs a revision, and the revision is only known once
+ * the diff has loaded. Jump reuses the discussion jump path exactly: the
+ * drawer hands over the stored anchor's own path, side and line, and
+ * `resolveDiscussionTarget` turns them into a selection the same way it does
+ * for a discussion, so no new coordinate rule is introduced here.
+ */
+function DiffReviewDrawer({
+  bridge,
+  review,
+  forge,
+  revision,
+  jumpTo,
+}: {
+  readonly bridge: DesktopBridge;
+  readonly review: string;
+  readonly forge: RepositoryDto["forge_type"] | null;
+  readonly revision: DiffPage["revision"];
+  readonly jumpTo: (target: DiscussionDiffTarget) => void;
+}): ReactNode {
+  const controller = useReviewDrawer(bridge, review, revision, forge);
+  const target = (entry: PendingDraftEntry): DiscussionDiffTarget | null => {
+    const anchored = pendingEntryTarget(entry);
+    return anchored
+      ? { discussionId: `pending:${entry.id}`, ...anchored }
+      : null;
+  };
+  return (
+    <ReviewDrawerMount
+      controller={controller}
+      openExternal={(url) => bridge.openExternal(url)}
+      jump={(entry) => {
+        const to = target(entry);
+        if (to) jumpTo(to);
+      }}
+      edit={(entry) => {
+        requestPendingEdit(review, entry.id);
+        const to = target(entry);
+        if (to) jumpTo(to);
+      }}
+    />
   );
 }
 
@@ -517,6 +586,46 @@ function DiffWorkspace({
     setComposerAnchor(null);
     setEditingEntry(null);
   }, [composerController.pending, editingEntry]);
+  // An Edit pressed in the drawer names an entry, not a row: the drawer can be
+  // open over any panel, and the row the entry sits on may not be loaded yet.
+  // The request is claimed only once the entry is in the adopted draft and its
+  // line resolves in the loaded diff, so an Edit pressed before the diff is
+  // ready opens the editor when it becomes ready rather than doing nothing. A
+  // request that names an entry this review no longer holds is dropped, so it
+  // cannot reopen on some later diff.
+  useEffect(() => {
+    const claim = (): void => {
+      const entryId = peekPendingEdit(review);
+      if (entryId === null) return;
+      const entry = composerController.pending.find(
+        (item) => item.id === entryId,
+      );
+      if (!entry) {
+        if (composerController.pending.length > 0) takePendingEdit(review);
+        return;
+      }
+      const anchored = pendingEntryTarget(entry);
+      const resolved = anchored
+        ? resolveDiscussionTarget(review, loaded, {
+            discussionId: `pending:${entry.id}`,
+            ...anchored,
+          })
+        : null;
+      if (!resolved) {
+        takePendingEdit(review);
+        return;
+      }
+      takePendingEdit(review);
+      composerController.clearMessage();
+      // The selection the reader built is left alone, exactly as the in-diff
+      // card's own Edit leaves it, and the entry keeps the anchor it was
+      // saved with.
+      setComposerAnchor(resolved);
+      setEditingEntry(entry);
+    };
+    claim();
+    return subscribePendingEdit(claim);
+  }, [composerController, loaded, review]);
   const inline: InlineComposerSlot = {
     controller: composerController,
     anchor: composerAnchor,

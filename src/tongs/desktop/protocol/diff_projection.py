@@ -55,6 +55,7 @@ def _file_wire(file_index: int, file: DiffFile) -> JsonObject:
         "is_truncated": file.is_truncated,
         "is_empty": file.is_empty,
         "is_mode_only": file.is_mode_only,
+        "is_rename_only": file.is_rename_only,
         "is_unavailable": file.is_unavailable,
     }
 

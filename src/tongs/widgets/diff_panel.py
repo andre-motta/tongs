@@ -38,6 +38,7 @@ from tongs.widgets.split_diff import (
     SplitReplyRequested,
     SplitResolveRequested,
     is_actionable,
+    placeholder_message,
 )
 
 
@@ -701,22 +702,16 @@ class DiffContent(Widget):
         option_list._selection_anchor = None
         option_list._explicit_selection_side = None
 
-        if file.is_binary:
+        if file.is_binary or not file.hunks:
+            # One shared line with the split view, so a binary, empty, mode
+            # only, rename only or forge-withheld file reads the same in both
+            # layouts instead of claiming the diff was too large for the API.
             option_list.add_option(
-                Option(Text("[Binary file]", style=Style(dim=True)), disabled=True)
+                Option(
+                    Text(placeholder_message(file), style=Style(dim=True)),
+                    disabled=True,
+                )
             )
-            return
-
-        if not file.hunks:
-            msg = Text()
-            msg.append(
-                "Diff not available. May be too large for the API. ",
-                Style(dim=True),
-            )
-            msg.append("Press ", Style(dim=True))
-            msg.append("o", Style(bold=True))
-            msg.append(" to view in browser.", Style(dim=True))
-            option_list.add_option(Option(msg, disabled=True))
             return
 
         disc_index = _build_discussion_index(self._file_discussions)

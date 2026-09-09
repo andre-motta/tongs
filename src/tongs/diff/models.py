@@ -63,13 +63,24 @@ class DiffFile:
     is_truncated: bool = False
     is_empty: bool = False
     is_mode_only: bool = False
+    # A rename or copy the forge describes with no content change.  It is a
+    # stronger statement than an empty file, and it is the one shape GitHub's
+    # files endpoint always determines on its own.
+    is_rename_only: bool = False
+    # The forge returned neither content nor a reason.  On GitHub this is the
+    # residue of a withheld patch that could be either binary content or a
+    # mode-only change, which its files endpoint does not distinguish.
     is_unavailable: bool = False
 
     @property
     def is_metadata_only(self) -> bool:
         """Whether this file has no content hunks for a metadata reason."""
         return (
-            self.is_mode_only or self.is_empty or self.is_binary or self.is_unavailable
+            self.is_mode_only
+            or self.is_empty
+            or self.is_binary
+            or self.is_rename_only
+            or self.is_unavailable
         )
 
 

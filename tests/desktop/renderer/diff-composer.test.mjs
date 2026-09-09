@@ -1109,6 +1109,7 @@ function diffPage(review, layout) {
     is_truncated: false,
     is_empty: false,
     is_mode_only: false,
+    is_rename_only: false,
     is_unavailable: false,
   };
   const hunk = {

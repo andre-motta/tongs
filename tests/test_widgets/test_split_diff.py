@@ -29,6 +29,7 @@ from tongs.widgets.split_diff import (
     SplitDiffColumn,
     SplitDiffView,
     is_actionable,
+    placeholder_message,
 )
 
 
@@ -637,3 +638,77 @@ async def test_h_and_l_survive_a_unified_split_round_trip() -> None:
         assert app.query_one("#split-new", SplitDiffColumn).has_focus
         assert panel.selection is not None
         assert panel.selection.side is DiffSide.NEW
+
+
+def _metadata_file(**flags: object) -> DiffFile:
+    """A file the forge described without any patch content."""
+
+    return DiffFile(
+        old_path="src/tool.sh",
+        new_path="src/tool.sh",
+        status=FileStatus.MODIFIED,
+        hunks=(),
+        language="bash",
+        **flags,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    (
+        ({"is_binary": True}, "[Binary file]"),
+        ({"is_empty": True}, "[Empty file]"),
+        ({"is_mode_only": True}, "[File mode changed]"),
+        ({"is_rename_only": True}, "[Renamed with no content change]"),
+        (
+            {"is_truncated": True},
+            "Diff truncated by the forge. Press o to view in browser.",
+        ),
+        (
+            {"is_unavailable": True},
+            "Not exposed by the forge. Press o to view in browser.",
+        ),
+        ({}, "Diff not available. Press o to view in browser."),
+    ),
+)
+def test_placeholder_message_states_what_the_forge_reported(
+    flags: dict[str, object], expected: str
+) -> None:
+    """Each metadata-only shape gets its own line, never a generic failure.
+
+    The unavailable line is the only one that describes the forge rather than
+    the file, because GitHub's files endpoint withholds the patch for binary
+    content and for a mode-only change without distinguishing them.
+    """
+
+    assert placeholder_message(_metadata_file(**flags)) == expected
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    (
+        ({"is_binary": True}, "[Binary file]"),
+        ({"is_empty": True}, "[Empty file]"),
+        ({"is_mode_only": True}, "[File mode changed]"),
+        ({"is_rename_only": True}, "[Renamed with no content change]"),
+        (
+            {"is_unavailable": True},
+            "Not exposed by the forge. Press o to view in browser.",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_unified_placeholder_never_blames_a_too_large_api_response(
+    flags: dict[str, object], expected: str
+) -> None:
+    """The terminal unified view must not invent a size limit it cannot know."""
+
+    app = _DiffApp()
+    async with app.run_test(size=(160, 30)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.set_files([_metadata_file(**flags)])
+        await pilot.pause()
+
+        unified = app.query_one(DiffOptionList)
+        assert unified.option_count == 1
+        assert str(unified.get_option_at_index(0).prompt) == expected

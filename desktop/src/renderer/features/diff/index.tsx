@@ -719,6 +719,25 @@ function DiffWorkspace({
         {threads.loadError && (
           <Notice kind="warning">{threads.loadError}</Notice>
         )}
+        {/*
+          A refusal raised by an Edit or a Delete pressed on a pending card is
+          the controller's, and the composer used to be the only thing that
+          rendered it, so a press made with no composer open was refused in
+          silence. The drawer made that ordinary: it writes the same draft, so
+          a save in flight there refuses a press here. The composer still shows
+          its own copy while it is open, so this stands in only when it is not.
+        */}
+        {composerAnchor === null && composerController.message !== null && (
+          <Notice kind="error">
+            <span>{composerController.message}</span>
+            <button
+              className="button button-secondary notice-action"
+              onClick={composerController.clearMessage}
+            >
+              Dismiss
+            </button>
+          </Notice>
+        )}
         <DiffRowsWindow
           review={review}
           loaded={loaded}

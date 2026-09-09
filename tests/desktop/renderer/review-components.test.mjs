@@ -936,7 +936,19 @@ test("stale draft migration creates a separate draft and keeps inline and reply 
   await view.findByText(/Revision old-head/);
   assert.ok(view.getByText("Keep this inline text"));
   assert.ok(view.getByText("Keep this reply"));
-  assert.ok(view.getByText("reply to thread-old"));
+  // The preserved list names each entry the way the base draft editor did:
+  // the entry's own id, and for an inline entry its path, side, line and the
+  // stale marker, so two entries on one anchor stay distinguishable.
+  assert.ok(
+    view.getByText(
+      "Reply 55555555-5555-4555-8555-555555555555 to discussion thread-old",
+    ),
+  );
+  assert.ok(
+    view.getByText(
+      "Inline 44444444-4444-4444-8444-444444444444 \u00b7 src/example.py \u00b7 new line 4 \u00b7 stale anchor",
+    ),
+  );
 
   // The portable general comment travelled to the new draft, so it is not
   // repeated as preserved text that still needs recreating.

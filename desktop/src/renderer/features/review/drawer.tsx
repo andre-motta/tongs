@@ -18,9 +18,10 @@ import type {
   SubmissionProgressDto,
   SubmissionStepDto,
 } from "../../../shared/review.js";
-import { formatDate, safeError } from "../../core/presentation.js";
+import { formatDate } from "../../core/presentation.js";
 import { SafeMarkdown } from "../../core/safe-markdown.js";
 import {
+  ComposerRefusal,
   isConflictError,
   readActiveDrafts,
   recoverDraft,
@@ -37,6 +38,7 @@ import {
 } from "./pending-card.js";
 import type { SuggestionForge } from "./suggestion.js";
 import {
+  ReviewWorkflowRefusal,
   adoptDraft,
   beginDraftSave,
   beginSubmission,
@@ -326,7 +328,7 @@ export function useReviewDrawer(
         apply((state) => editDraft(state, change(state.draft.local)));
         setMessage(null);
       } catch (reason) {
-        setMessage(reviewMutationError(reason));
+        setMessage(drawerFailureMessage(reason));
       }
     },
     [apply],
@@ -348,7 +350,7 @@ export function useReviewDrawer(
     try {
       current = apply(beginDraftSave);
     } catch (reason) {
-      setMessage(reviewMutationError(reason));
+      setMessage(drawerFailureMessage(reason));
       return false;
     }
     const remote = current.draft.remote;
@@ -378,7 +380,7 @@ export function useReviewDrawer(
         : null;
       if (conflicting) apply((latest) => conflictDraftSave(latest, conflicting));
       else apply(failDraftSave);
-      setMessage(reviewMutationError(reason));
+      setMessage(drawerFailureMessage(reason));
       return false;
     } finally {
       setBusy(false);
@@ -400,7 +402,7 @@ export function useReviewDrawer(
     try {
       current = apply((state) => beginSubmission(state, "start"));
     } catch (reason) {
-      setMessage(reviewMutationError(reason));
+      setMessage(drawerFailureMessage(reason));
       return;
     }
     const draft = current.draft.remote;
@@ -432,9 +434,9 @@ export function useReviewDrawer(
           ...items.filter((item) => item.attempt_id !== recovered.attempt_id),
         ]);
       } else {
-        apply((state) => failSubmission(state, reviewMutationError(reason)));
+        apply((state) => failSubmission(state, drawerFailureMessage(reason)));
       }
-      setMessage(reviewMutationError(reason));
+      setMessage(drawerFailureMessage(reason));
     } finally {
       setBusy(false);
     }
@@ -450,7 +452,7 @@ export function useReviewDrawer(
       try {
         apply((state) => beginSubmission(state, mode));
       } catch (reason) {
-        setMessage(reviewMutationError(reason));
+        setMessage(drawerFailureMessage(reason));
         return;
       }
       setBusy(true);
@@ -485,8 +487,8 @@ export function useReviewDrawer(
           attempt.attempt_id,
         );
         if (recovered) apply((state) => recoverSubmission(state, recovered));
-        else apply((state) => failSubmission(state, reviewMutationError(reason)));
-        setMessage(reviewMutationError(reason));
+        else apply((state) => failSubmission(state, drawerFailureMessage(reason)));
+        setMessage(drawerFailureMessage(reason));
       } finally {
         setBusy(false);
       }
@@ -519,7 +521,7 @@ export function useReviewDrawer(
           ...items.filter((item) => item.id !== matching.id),
         ]);
       } catch (reason) {
-        setMessage(safeError(reason));
+        setMessage(drawerFailureMessage(reason));
       }
     },
     [apply, bridge, held, review],
@@ -531,7 +533,7 @@ export function useReviewDrawer(
         apply((state) => adoptDraft(state, draft));
         setMessage(null);
       } catch (reason) {
-        setMessage(reviewMutationError(reason));
+        setMessage(drawerFailureMessage(reason));
       }
     },
     [apply],
@@ -566,7 +568,7 @@ export function useReviewDrawer(
       try {
         apply((state) => dismissSupersededDraft(state, displacedByVersion));
       } catch (reason) {
-        setMessage(reviewMutationError(reason));
+        setMessage(drawerFailureMessage(reason));
       }
     },
     [apply],
@@ -590,7 +592,7 @@ export function useReviewDrawer(
         ...items.filter((item) => item.id !== fresh.id),
       ]);
     } catch (reason) {
-      setMessage(reviewMutationError(reason));
+      setMessage(drawerFailureMessage(reason));
     } finally {
       setBusy(false);
     }
@@ -615,7 +617,7 @@ export function useReviewDrawer(
       apply(discardDraft);
       setDraftCandidates((items) => items.filter((item) => item.id !== remote.id));
     } catch (reason) {
-      setMessage(reviewMutationError(reason));
+      setMessage(drawerFailureMessage(reason));
     } finally {
       setBusy(false);
     }
@@ -661,6 +663,21 @@ export function useReviewDrawer(
 }
 
 /**
+ * The sentence for a failed drawer action. The workflow state refuses a change
+ * with a sentence already written for the reader, so that sentence is what is
+ * shown; without this every refusal here reported as "the local service could
+ * not complete this read", which names the wrong thing and drops the cause.
+ * Anything that is not a deliberate refusal keeps the generic reporting
+ * boundary, so an untyped internal failure never reaches the reader as advice.
+ */
+export function drawerFailureMessage(reason: unknown): string {
+  return reason instanceof ReviewWorkflowRefusal ||
+    reason instanceof ComposerRefusal
+    ? reason.message
+    : reviewMutationError(reason);
+}
+
+/**
  * Why Submit cannot run on this state, worded for the state that actually
  * blocks it rather than reusing one sentence for every cause.
  */
@@ -687,6 +704,25 @@ export function submitRefusal(state: ReviewWorkflowState): string {
   if (state.draft.dirty)
     return "Save the summary and verdict before submitting the review.";
   return "This review cannot be submitted yet.";
+}
+
+/**
+ * Why an unsaved draft cannot be saved right now. The base draft editor said
+ * this for the empty-comment case, which only a draft written elsewhere can
+ * reach, and losing it left Save disabled with no reason at all.
+ */
+export function saveRefusal(state: ReviewWorkflowState): string {
+  const draft = state.draft.remote;
+  if (!draft) return "No pending review is open to save.";
+  if (state.draft.conflict)
+    return "This pending review was changed elsewhere. Resolve the conflict before saving it.";
+  if (state.draft.pendingSave)
+    return "A draft save is already in flight.";
+  if (draft.state !== "editable")
+    return "This draft is held by a submission attempt, so it cannot be saved.";
+  if (state.draft.local.comments.some((comment) => comment.body.length === 0))
+    return "Edit or remove empty pending comments before saving.";
+  return "This review cannot be saved yet.";
 }
 
 /**
@@ -794,6 +830,13 @@ function ReviewDrawer({
     canStartSubmission(workflow) || canSaveDraft(workflow)
       ? null
       : submitRefusal(workflow);
+  // Save is disabled both when there is nothing to save and when something
+  // holds the draft. Only the second is worth a sentence: a draft that matches
+  // the store needs no explanation for not being saved again.
+  const saveReason =
+    canSaveDraft(workflow) || !workflow.draft.dirty
+      ? null
+      : saveRefusal(workflow);
   return (
     <div
       ref={panelRef}
@@ -909,10 +952,16 @@ function ReviewDrawer({
             <button
               className="button button-secondary"
               disabled={!canSaveDraft(workflow) || controller.busy}
+              title={saveReason ?? undefined}
               onClick={() => void controller.save()}
             >
               {workflow.draft.pendingSave ? "Saving…" : "Save summary and verdict"}
             </button>
+            {saveReason !== null && (
+              <p role="status" className="review-drawer-confirm">
+                {saveReason}
+              </p>
+            )}
             <button
               className="button button-danger"
               disabled={controller.discardReason !== null || controller.busy}
@@ -1100,11 +1149,15 @@ function DrawerEntryRow({
   const label = drawerEntryLabel(file, entry);
   const stale = entry.anchor?.stale === true;
   const target = pendingEntryTarget(entry);
-  // A general comment and a reply have no diff line, so there is no in-diff
-  // composer for Edit to open. They are edited here instead, over the same
-  // entry mutation the in-diff card's Edit uses, so no pending entry of any
-  // kind is left readable but unchangeable.
-  const inPlace = entry.anchor === null;
+  // Edited here rather than in the diff when there is no in-diff composer to
+  // open on: a general comment and a reply have no diff line at all, and a
+  // stale entry must never be opened on a current row, because the composer
+  // there would sit on a line that is not the one the entry was stored
+  // against. A body edit changes only the body: the stored anchor travels back
+  // out exactly as it came in, which is what keeps S46's "nothing is silently
+  // retargeted" true while still leaving no pending entry of any kind readable
+  // but unchangeable.
+  const inPlace = entry.anchor === null || stale;
   const [draftBody, setDraftBody] = useState<string | null>(null);
   return (
     <article
@@ -1124,17 +1177,15 @@ function DrawerEntryRow({
               Jump
             </button>
           )}
-          {!stale && (
-            <button
-              className="button button-secondary"
-              aria-label={`Edit pending comment on ${label}`}
-              disabled={busy || reason !== null}
-              title={reason ?? undefined}
-              onClick={() => (inPlace ? setDraftBody(entry.body) : edit())}
-            >
-              Edit
-            </button>
-          )}
+          <button
+            className="button button-secondary"
+            aria-label={`Edit pending comment on ${label}`}
+            disabled={busy || reason !== null}
+            title={reason ?? undefined}
+            onClick={() => (inPlace ? setDraftBody(entry.body) : edit())}
+          >
+            Edit
+          </button>
           <button
             className="button button-secondary"
             aria-label={`Delete pending comment on ${label}`}
@@ -1150,7 +1201,8 @@ function DrawerEntryRow({
         <p className="review-drawer-entry-ribbon" role="status">
           {staleRibbonText(entry.anchor)}. It is listed here by the line it was
           stored against, and offers no jump, because no row of the current
-          diff is known to be that line.
+          diff is known to be that line. Its text can still be edited here, and
+          its anchor is never retargeted.
         </p>
       )}
       {draftBody === null ? (
@@ -1160,7 +1212,7 @@ function DrawerEntryRow({
       ) : (
         <div className="review-drawer-entry-editor">
           <label>
-            {`Edit pending ${entry.kind === "reply" ? "reply" : "general comment"}`}
+            {inPlaceEditorLabel(entry, label)}
             <textarea
               value={draftBody}
               disabled={busy}
@@ -1191,6 +1243,18 @@ function DrawerEntryRow({
       )}
     </article>
   );
+}
+
+/**
+ * What the in-drawer editor is called. A stale entry names its own anchor,
+ * because the reader needs to know which stored line the text they are editing
+ * belongs to when no current row can be pointed at.
+ */
+function inPlaceEditorLabel(entry: PendingDraftEntry, label: string): string {
+  if (entry.anchor) return `Edit pending stale comment on ${label}`;
+  return entry.kind === "reply"
+    ? "Edit pending reply"
+    : "Edit pending general comment";
 }
 
 /**
@@ -1556,21 +1620,36 @@ function RecoveryList({
   );
 }
 
+/**
+ * The whole of one draft's content as text the reader can compare and copy.
+ * Both sides of the S46 conflict are read from this, and a retained text that
+ * was displaced is kept in it, so it carries the body itself rather than a
+ * label for it, and separates entries by a blank line.
+ */
 export function draftContentTranscript(content: DraftContentInputDto): string {
-  const header = `Body: ${content.body}\nVerdict: ${content.verdict ?? "none"}`;
-  const comments = content.comments.map(
-    (comment) => `${draftCommentLabel(comment)}: ${comment.body}`,
-  );
-  return [header, ...comments].join("\n");
+  const sections = [content.body, `Verdict: ${content.verdict ?? "none"}`];
+  for (const comment of content.comments)
+    sections.push(`${draftCommentLabel(comment)}\n${comment.body}`);
+  return sections.join("\n\n");
 }
 
+/**
+ * How one draft entry is named in a transcript and in the preserved old draft
+ * list. It carries the entry's own id, because two entries can share one
+ * anchor and a reader comparing two versions has to tell them apart, and it
+ * carries the side and the stale marker, because a stale old-side anchor is
+ * exactly what S46 asks to stay legible after a revision moves.
+ */
 export function draftCommentLabel(comment: DraftCommentInputDto): string {
-  if (comment.kind === "inline")
-    return `inline ${comment.anchor.new_path}:${
-      comment.anchor.new_line ?? comment.anchor.old_line
-    }`;
-  if (comment.kind === "reply") return `reply to ${comment.thread_id}`;
-  return "general";
+  if (comment.kind === "general") return `General comment ${comment.id}`;
+  if (comment.kind === "reply")
+    return `Reply ${comment.id} to discussion ${comment.thread_id}`;
+  const line =
+    comment.anchor.side === "old"
+      ? comment.anchor.old_line
+      : comment.anchor.new_line;
+  const stale = comment.anchor.stale === true ? " \u00b7 stale anchor" : "";
+  return `Inline ${comment.id} \u00b7 ${comment.anchor.new_path} \u00b7 ${comment.anchor.side} line ${line}${stale}`;
 }
 
 function Notice({

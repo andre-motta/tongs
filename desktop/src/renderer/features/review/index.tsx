@@ -36,7 +36,6 @@ import { formatDate, safeError } from "../../core/presentation.js";
 import { SafeMarkdown } from "../../core/safe-markdown.js";
 import { ReviewHeader } from "../review-detail/index.js";
 import {
-  ACTIVE_DRAFT_STATES,
   BufferedInlineNotes,
   Composer,
   MULTILINE_REFUSAL,
@@ -50,6 +49,10 @@ import {
   isUncertainError,
   mutationAnchor,
   newOperationId,
+  readActiveDrafts,
+  readMutationCapabilities,
+  releaseActiveDrafts,
+  releaseMutationCapabilities,
   reviewMutationError,
   subscribeWorkflow,
   type ComposerBuffers,
@@ -285,21 +288,25 @@ function ReviewWorkflow({
   );
   useEffect(() => {
     let current = true;
+    // The active drafts and the mutation capabilities go through the shared
+    // readers, because the drawer this panel now mounts asks for both as well.
+    // Reading them directly here would put the same two questions to the
+    // sidecar twice on every visit to this tab.
+    const drafts = readActiveDrafts(bridge, review);
+    const capabilities = readMutationCapabilities(bridge, review);
     const reads = [
       bridge.getReview(review),
       bridge.listDiscussions(review),
-      bridge.getReviewMutationCapabilities(review),
       bridge.getReviewActionCapabilities(review),
-      bridge.listReviewDrafts({ review, states: ACTIVE_DRAFT_STATES, max_items: 100 }),
     ] as const;
     void Promise.all([
       reads[0].result,
       reads[1].result,
       reads[2].result,
-      reads[3].result,
-      reads[4].result,
+      capabilities.result,
+      drafts.result,
     ] as const)
-      .then(([detail, discussionResult, mutationResult, actionResult, draftResult]) => {
+      .then(([detail, discussionResult, actionResult, mutationResult, draftResult]) => {
         if (!current) return;
         if (!detail.revision)
           throw new Error("The current review revision is unavailable.");
@@ -320,6 +327,8 @@ function ReviewWorkflow({
     return () => {
       current = false;
       for (const item of reads) void bridge.cancelRead(item.requestToken);
+      releaseActiveDrafts(bridge, review, drafts);
+      releaseMutationCapabilities(bridge, review, capabilities);
     };
   }, [bridge, review]);
 

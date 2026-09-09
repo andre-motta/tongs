@@ -42,6 +42,7 @@ import {
   type SuggestionForge,
 } from "./suggestion.js";
 import {
+  ReviewWorkflowRefusal,
   adoptDraft,
   beginDraftSave,
   beginQuickIntent,
@@ -617,8 +618,15 @@ export class ComposerRefusal extends Error {
 }
 
 /** The sentence to show for a failed composer action. */
+/**
+ * The sentence for a failed composer action. A deliberate refusal, raised here
+ * or by the workflow state, keeps its own words; anything else keeps the
+ * generic reporting boundary, so an untyped internal failure never reaches the
+ * reader as advice.
+ */
 export function composerFailureMessage(value: unknown): string {
-  return value instanceof ComposerRefusal
+  return value instanceof ComposerRefusal ||
+    value instanceof ReviewWorkflowRefusal
     ? value.message
     : reviewMutationError(value);
 }
@@ -1104,6 +1112,12 @@ export function useInlineReviewComposer(
       const bound = held.current;
       const restored = bound.draft.local;
       const wasDirty = bound.draft.dirty;
+      // A save running on another surface can confirm between the local edit
+      // below and the rollback that undoes it. `finishDraftSave` then sees
+      // content that differs from what it sent and keeps this change as
+      // unsaved dirty content rather than dropping it, which is the safe half
+      // of the race: nothing is written twice and nothing is lost, and the
+      // next save carries it deliberately.
       try {
         apply((current) =>
           editDraft(current, {

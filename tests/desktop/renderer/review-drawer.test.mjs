@@ -4,7 +4,10 @@ import test, { afterEach } from "node:test";
 
 import { QueryCoordinator } from "../../../desktop/dist/src/renderer/core/query.js";
 import { createDiffFeature } from "../../../desktop/dist/src/renderer/features/diff/index.js";
-import { clearPendingEdit } from "../../../desktop/dist/src/renderer/features/review/drawer.js";
+import {
+  clearPendingEdit,
+  draftContentTranscript,
+} from "../../../desktop/dist/src/renderer/features/review/drawer.js";
 
 const desktopRequire = createRequire(
   new URL("../../../desktop/package.json", import.meta.url),
@@ -536,10 +539,16 @@ test("Delete in the drawer removes the entry from the store and from the diff", 
  * card at all for an entry whose row is not loaded. The drawer is the listing
  * that neither implies a row nor omits an entry, so it lists the stale one by
  * its stored line and offers no jump to a row it cannot vouch for.
+ *
+ * S46 also asks that the old draft stay usable, so the body is editable here.
+ * Editing it must not move the anchor: the whole point of a stale entry is
+ * that nothing is silently retargeted.
  */
-test("a stale entry is listed by its stored line and offers no jump or edit", async () => {
+test("a stale entry is listed by its stored line, editable, with no jump", async () => {
   const review = "review-drawer-stale";
   const stale = inlineEntry("a", "Was on the old line", 11, "src/calc.py");
+  const staleAnchor = { ...stale.anchor, stale: true };
+  const saves = [];
   const view = renderDiff(
     diffBridge(review, {
       listReviewDrafts: () =>
@@ -552,28 +561,26 @@ test("a stale entry is listed by its stored line and offers no jump or edit", as
               3,
               content({
                 comments: [
-                  {
-                    ...stale,
-                    anchor: { ...stale.anchor, stale: true },
-                  },
+                  { ...stale, anchor: staleAnchor },
                   inlineEntry("b", "Still current", 12, "src/calc.py"),
                 ],
               }),
             ),
           ],
         }),
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        return draft(review, params.expected_version + 1, params.content);
+      },
     }),
     review,
   );
   fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
   await view.findByLabelText("Pending comments");
   await view.findByText(
-    "Stale, was line 11 at revision f8bbf48. It is listed here by the line it was stored against, and offers no jump, because no row of the current diff is known to be that line.",
+    "Stale, was line 11 at revision f8bbf48. It is listed here by the line it was stored against, and offers no jump, because no row of the current diff is known to be that line. Its text can still be edited here, and its anchor is never retargeted.",
   );
 
-  // Nothing is retargeted and nothing is hidden: the entry is listed, its
-  // text is readable, and only the two actions that would need a current row
-  // are withheld.
   // The diff still shows its own stale card, so the text is on screen twice:
   // once where the diff guesses a row, once where the drawer states the line.
   assert.equal(view.getAllByText("Was on the old line").length, 2);
@@ -581,29 +588,287 @@ test("a stale entry is listed by its stored line and offers no jump or edit", as
     view.container.querySelectorAll(".review-drawer-entry-stale").length,
     1,
   );
+  // No jump, because no current row is known to be that line.
   assert.equal(
     view.container.querySelectorAll(
       '.review-drawer-entry-stale button[aria-label^="Jump"]',
     ).length,
     0,
   );
-  assert.equal(
-    view.container.querySelectorAll(
-      '.review-drawer-entry-stale button[aria-label^="Edit"]',
-    ).length,
-    0,
-  );
-  assert.ok(
+
+  // Edit is offered, and it edits in place rather than opening a composer on
+  // a current row that is not the line the entry was stored against.
+  fireEvent.click(
     view.getByRole("button", {
-      name: "Delete pending comment on src/calc.py, new line 11",
+      name: "Edit pending comment on src/calc.py, new line 11",
     }),
   );
+  const editor = await view.findByLabelText(
+    "Edit pending stale comment on src/calc.py, new line 11",
+  );
+  assert.equal(editor.value, "Was on the old line");
+  assert.equal(view.container.querySelectorAll(".inline-composer").length, 0);
+  fireEvent.change(editor, { target: { value: "Reworded, same target" } });
+  fireEvent.click(
+    view.getByRole("button", {
+      name: "Save pending comment on src/calc.py, new line 11",
+    }),
+  );
+  await waitFor(() => assert.equal(saves.length, 1));
 
-  // A stale entry blocks submission, and the refusal names that cause rather
-  // than a reused sentence.
+  // The body changed and nothing else did. The anchor is compared field by
+  // field against the one the store held, so a retarget cannot hide in it.
+  const written = saves[0].content.comments[0];
+  assert.equal(written.id, "a");
+  assert.equal(written.body, "Reworded, same target");
   assert.equal(
-    view.getByRole("button", { name: "Submit review" }).getAttribute("title"),
-    "This review is bound to an earlier revision. Create a current-revision draft before submitting it.",
+    JSON.stringify(written.anchor),
+    JSON.stringify({
+      revision: staleAnchor.revision,
+      old_path: staleAnchor.old_path,
+      new_path: staleAnchor.new_path,
+      old_line: staleAnchor.old_line,
+      new_line: staleAnchor.new_line,
+      side: staleAnchor.side,
+      context_fingerprint: staleAnchor.context_fingerprint,
+      start_line: staleAnchor.start_line,
+      start_side: staleAnchor.start_side,
+    }),
+  );
+  assert.equal(saves[0].content.comments[1].body, "Still current");
+});
+
+/**
+ * F1 from the #205 review: the workflow state refuses a change with a sentence
+ * written for the reader, and every one of them used to be reported as a
+ * failed read. The refusal the two surfaces make ordinary is a write held in
+ * flight on one of them, so the save is started from the diff and the refused
+ * press is made in the drawer, which keeps its own controls enabled because
+ * its own instance is not the busy one.
+ */
+test("a drawer write refused by the workflow state shows the refusal, not a read failure", async () => {
+  const review = "review-drawer-refusal";
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(
+              review,
+              2,
+              content({
+                comments: [
+                  inlineEntry("a", "First", 11, "src/calc.py"),
+                  inlineEntry("b", "Second", 12, "src/calc.py"),
+                ],
+              }),
+            ),
+          ],
+        }),
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        await gate;
+        return draft(review, params.expected_version + 1, params.content);
+      },
+    }),
+    review,
+  );
+
+  // A diff-side write is put in flight and held there.
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "Another note" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Add to review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+
+  // The drawer's own instance is not busy, so its Delete is pressable and the
+  // state is what refuses it.
+  fireEvent.click(view.getByRole("button", { name: /Your review/ }));
+  fireEvent.click(
+    await view.findByRole("button", {
+      name: "Delete pending comment on src/calc.py, new line 12",
+    }),
+  );
+  await view.findByText("A draft save is already pending");
+  assert.equal(saves.length, 1);
+  assert.equal(
+    view.container.querySelectorAll(".review-drawer .notice-error").length,
+    1,
+  );
+  release();
+});
+
+/**
+ * The other half of F1: Discard is refused by the same state, and because a
+ * disabled control cannot carry a notice its sentence is on the control.
+ */
+test("a discard refused while a save is in flight names the save on the button", async () => {
+  const review = "review-drawer-discard-refusal";
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const discards = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({ cursor: 0, next_cursor: null, drafts: [draft(review, 2, content())] }),
+      saveReviewDraft: async (params) => {
+        await gate;
+        return draft(review, params.expected_version + 1, params.content);
+      },
+      discardReviewDraft: async (params) => {
+        discards.push(params);
+        return { discarded: draft(review, 2, content()) };
+      },
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
+  fireEvent.change(await view.findByLabelText("Summary"), {
+    target: { value: "Held" },
+  });
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
+  const discard = await view.findByRole("button", { name: "Discard review" });
+  await waitFor(() => assert.equal(discard.disabled, true));
+  assert.equal(
+    discard.getAttribute("title"),
+    "A draft save is in flight. Let it settle before discarding the review.",
+  );
+  assert.equal(discards.length, 0);
+  release();
+  await waitFor(() => assert.equal(view.getAllByText("Version 3").length, 1));
+  await waitFor(() =>
+    assert.equal(
+      view.getByRole("button", { name: "Discard review" }).disabled,
+      false,
+    ),
+  );
+});
+
+/**
+ * F2 from the #205 review: a press on an in-diff pending card is refused by
+ * the same shared state, and the composer that used to be the only thing
+ * rendering that refusal is not open.
+ */
+test("an in-diff write refused while the drawer saves is explained on the diff", async () => {
+  const review = "review-diff-refusal";
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(
+              review,
+              2,
+              content({ comments: [inlineEntry("a", "First", 11, "src/calc.py")] }),
+            ),
+          ],
+        }),
+      saveReviewDraft: async (params) => {
+        await gate;
+        return draft(review, params.expected_version + 1, params.content);
+      },
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
+  fireEvent.change(await view.findByLabelText("Summary"), {
+    target: { value: "Held" },
+  });
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
+  fireEvent.click(view.getByRole("button", { name: "Close your review" }));
+
+  // No composer is open, so before this fix the press did nothing visible.
+  assert.equal(view.container.querySelectorAll(".inline-composer").length, 0);
+  fireEvent.click(
+    await view.findByRole("button", {
+      name: "Delete pending comment on new line 11",
+    }),
+  );
+  await view.findByText("A draft save is already pending");
+  assert.equal(
+    view.container.querySelectorAll(".diff-view .notice-error").length,
+    1,
+  );
+  fireEvent.click(view.getByRole("button", { name: "Dismiss" }));
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll(".diff-view .notice-error").length,
+      0,
+    ),
+  );
+  release();
+});
+
+/**
+ * The half of the "opening the drawer clears nothing" fix that nothing
+ * covered: a write refused while the drawer is shut is exactly what the reader
+ * opens it to find, so it has to survive the reopen.
+ */
+test("a failure raised while the drawer is shut is still there on reopen", async () => {
+  const review = "review-drawer-closed-failure";
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({ cursor: 0, next_cursor: null, drafts: [draft(review, 2, content())] }),
+      saveReviewDraft: async () => {
+        throw {
+          code: "mutation_failed",
+          message: "The mutation failed.",
+          retryable: false,
+        };
+      },
+    }),
+    review,
+  );
+  const toggle = await view.findByRole("button", { name: /Your review/ });
+  fireEvent.click(toggle);
+  fireEvent.change(await view.findByLabelText("Summary"), {
+    target: { value: "Doomed" },
+  });
+  fireEvent.click(
+    view.getByRole("button", { name: "Save summary and verdict" }),
+  );
+  // Shut before the write settles, so the failure lands on a closed drawer.
+  fireEvent.click(view.getByRole("button", { name: "Close your review" }));
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
+  );
+  fireEvent.click(toggle);
+  assert.equal(
+    view.container.querySelectorAll(".review-drawer .notice-error").length,
+    1,
+  );
+
+  // Closing deliberately drops it, so the next open is not greeted by an
+  // answer to a question nobody asked.
+  fireEvent.click(view.getByRole("button", { name: "Close your review" }));
+  fireEvent.click(toggle);
+  await view.findByLabelText("Summary");
+  assert.equal(
+    view.container.querySelectorAll(".review-drawer .notice-error").length,
+    0,
   );
 });
 
@@ -690,6 +955,66 @@ test("one active-draft read answers mount adoption, the drawer and the first bin
   await view.findByRole("button", { name: /Your review/ });
   await waitFor(() => assert.equal(reads >= 1, true));
   assert.equal(reads, 1);
+});
+
+/**
+ * F4 from the #205 review: the transcript is both sides of the S46 conflict
+ * and the preserved old draft list, so it has to stay legible when two entries
+ * share one anchor and when a stale anchor is on the old side. A label built
+ * from the path and one line number cannot tell those apart.
+ */
+test("the draft transcript distinguishes two entries on one anchor and marks a stale old-side one", () => {
+  const shared = {
+    revision: REVISION,
+    old_path: "/dev/null",
+    new_path: "/dev/null",
+    old_line: 42,
+    new_line: null,
+    side: "old",
+    context_fingerprint: "f".repeat(64),
+    start_line: null,
+    start_side: null,
+  };
+  const text = draftContentTranscript({
+    body: "b",
+    verdict: null,
+    comments: [
+      {
+        id: "c1",
+        kind: "inline",
+        body: "removed line note",
+        anchor: { ...shared, stale: true },
+      },
+      {
+        id: "c2",
+        kind: "inline",
+        body: "second note on same line",
+        anchor: { ...shared },
+      },
+      { id: "c3", kind: "reply", body: "a reply", thread_id: "thread-9" },
+      { id: "c4", kind: "general", body: "a general note" },
+    ],
+  });
+  assert.equal(
+    text,
+    [
+      "b",
+      "",
+      "Verdict: none",
+      "",
+      "Inline c1 \u00b7 /dev/null \u00b7 old line 42 \u00b7 stale anchor",
+      "removed line note",
+      "",
+      "Inline c2 \u00b7 /dev/null \u00b7 old line 42",
+      "second note on same line",
+      "",
+      "Reply c3 to discussion thread-9",
+      "a reply",
+      "",
+      "General comment c4",
+      "a general note",
+    ].join("\n"),
+  );
 });
 
 function transcript(content) {

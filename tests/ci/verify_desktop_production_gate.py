@@ -200,7 +200,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
             ExpectedReport(
                 "reports/draft-process.junit.xml",
                 PYTEST_JUNIT,
-                "tests.integration.desktop.test_draft_process_acceptance.",
+                "tests.integration.desktop.test_draft_process_acceptance",
             ),
         ),
     ),
@@ -284,7 +284,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
             ExpectedReport(
                 "reports/native-payload.junit.xml",
                 PYTEST_JUNIT,
-                "tests.integration.desktop.test_native_payload_acceptance.",
+                "tests.integration.desktop.test_native_payload_acceptance",
             ),
         ),
     ),

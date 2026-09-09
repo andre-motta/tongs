@@ -885,3 +885,31 @@ def test_both_core_reports_are_bound_to_their_suites() -> None:
             "reports/core.junit.xml": "tests.",
             "reports/mcp.junit.xml": "tests.test_mcp.",
         }
+
+
+def test_every_classname_prefix_matches_what_pytest_actually_emits() -> None:
+    """A trailing dot means a package; without one it must name a module.
+
+    pytest sets ``classname`` to the module's dotted path for a module-level
+    test, and appends ``.<Class>`` only for a test inside a class.  A prefix
+    written with a trailing dot therefore matches nothing in a suite of plain
+    functions, which silently rejects the real report.
+    """
+
+    root = Path(__file__).resolve().parents[2]
+    for check in REQUIRED_CHECKS:
+        for report in check.reports:
+            prefix = report.classname_prefix
+            if prefix is None:
+                continue
+            relative = prefix.rstrip(".").replace(".", "/")
+            if prefix.endswith("."):
+                assert (root / relative).is_dir(), (
+                    f"{check.check_id} prefix {prefix!r} ends with a separator, "
+                    f"so {relative} must be a package directory"
+                )
+            else:
+                assert (root / f"{relative}.py").is_file(), (
+                    f"{check.check_id} prefix {prefix!r} has no trailing "
+                    f"separator, so {relative}.py must be the emitting module"
+                )

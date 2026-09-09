@@ -133,9 +133,10 @@ test("pipeline panel renders hierarchy, inert paged logs, search, and keyboard s
 
   const search = view.getByRole("searchbox", { name: "Search log" });
   fireEvent.change(search, { target: { value: "fail" } });
-  // The filter itself is a synchronous useMemo over React state, but a slow
-  // runner can still observe the pre-change render before the commit lands,
-  // so wait for the status text rather than reading it right after the event.
+  // The status text depends on the synchronous `matches` memo and on
+  // `selectedMatch`, which a query change resets through a separate effect,
+  // so more than one commit can land after this event. Wait for the text
+  // rather than reading it right after the change.
   await waitFor(() => {
     assert.equal(
       view.container.querySelector(".ci-match-count").textContent,

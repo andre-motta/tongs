@@ -32,7 +32,7 @@ Object.assign(globalThis, {
   HTMLInputElement: dom.window.HTMLInputElement,
   Node: dom.window.Node,
 });
-const { act, cleanup, fireEvent, render } = desktopRequire(
+const { act, cleanup, fireEvent, render, waitFor } = desktopRequire(
   "@testing-library/react",
 );
 afterEach(cleanup);
@@ -90,37 +90,37 @@ test("typing filters live and n and N step matches with a wrapping counter", asy
 
   fireEvent.keyDown(document.body, { key: "/" });
   fireEvent.change(search, { target: { value: "error" } });
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
   assert.equal(selectedLine(view), MATCH_LINES[0] + 1);
 
   // n and N belong to the log, so Enter hands the keyboard back first.
   assert.equal(fireEvent.keyDown(search, { key: "n" }), true);
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
 
   fireEvent.keyDown(search, { key: "Enter" });
   assert.equal(focused(), BODY);
 
   assert.equal(fireEvent.keyDown(document.body, { key: "n" }), false);
-  assert.equal(matchCount(view), `2 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `2 of ${MATCH_LINES.length} matches`);
   assert.equal(selectedLine(view), MATCH_LINES[1] + 1);
 
   fireEvent.keyDown(document.body, { key: "n" });
-  assert.equal(matchCount(view), `3 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `3 of ${MATCH_LINES.length} matches`);
   assert.equal(rowWindow(view), "301-600 of 700");
 
   fireEvent.keyDown(document.body, { key: "N" });
-  assert.equal(matchCount(view), `2 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `2 of ${MATCH_LINES.length} matches`);
 
   fireEvent.keyDown(document.body, { key: "N" });
   fireEvent.keyDown(document.body, { key: "N" });
-  assert.equal(
-    matchCount(view),
+  await matchCount(
+    view,
     `${MATCH_LINES.length} of ${MATCH_LINES.length} matches`,
   );
   assert.equal(rowWindow(view), "601-700 of 700");
 
   fireEvent.keyDown(document.body, { key: "n" });
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
 });
 
 test("n does nothing without matches", async () => {
@@ -130,10 +130,10 @@ test("n does nothing without matches", async () => {
   fireEvent.keyDown(document.body, { key: "/" });
   fireEvent.change(search, { target: { value: "no such text" } });
   fireEvent.keyDown(search, { key: "Enter" });
-  assert.equal(matchCount(view), "No matches");
+  await matchCount(view, "No matches");
 
   assert.equal(fireEvent.keyDown(document.body, { key: "n" }), true);
-  assert.equal(matchCount(view), "No matches");
+  await matchCount(view, "No matches");
 });
 
 test("escape closes the search and restores the row window and focus", async () => {
@@ -147,11 +147,11 @@ test("escape closes the search and restores the row window and focus", async () 
   fireEvent.keyDown(nextRows, { key: "/" });
   fireEvent.change(search, { target: { value: "error" } });
   assert.equal(rowWindow(view), "1-300 of 700");
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
 
   assert.equal(fireEvent.keyDown(search, { key: "Escape" }), false);
   assert.equal(search.value, "");
-  assert.equal(matchCount(view), "700 lines");
+  await matchCount(view, "700 lines");
   assert.equal(rowWindow(view), "301-600 of 700");
   assert.equal(focused(), "BUTTON[Next rows]");
   assert.equal(view.container.querySelectorAll(".ci-log-match").length, 0);
@@ -170,7 +170,7 @@ test("escape from the log reopens a clean search on the next slash", async () =>
   fireEvent.keyDown(document.body, { key: "/" });
   assert.equal(focused(), SEARCH);
   assert.equal(search.value, "");
-  assert.equal(matchCount(view), "700 lines");
+  await matchCount(view, "700 lines");
 });
 
 test("escape closes a search that was typed into the field with the mouse", async () => {
@@ -178,11 +178,11 @@ test("escape closes a search that was typed into the field with the mouse", asyn
   const search = searchBox(view);
   fireEvent.change(search, { target: { value: "error" } });
   view.getByRole("button", { name: "Refresh log" }).focus();
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
 
   assert.equal(fireEvent.keyDown(document.activeElement, { key: "Escape" }), false);
   assert.equal(search.value, "");
-  assert.equal(matchCount(view), "700 lines");
+  await matchCount(view, "700 lines");
 });
 
 test("escape is left to other consumers when no search is running", async () => {
@@ -212,7 +212,7 @@ test("the search keys are ignored while a modal dialog owns the keyboard", async
   fireEvent.keyDown(document.body, { key: "/" });
   fireEvent.change(search, { target: { value: "error" } });
   fireEvent.keyDown(search, { key: "Enter" });
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
 
   await act(async () => controller.beginClear());
   assert.ok(view.getByText("Clear shared API cache?"));
@@ -224,13 +224,13 @@ test("the search keys are ignored while a modal dialog owns the keyboard", async
 
   // n must not walk the log behind the dialog.
   assert.equal(fireEvent.keyDown(document.activeElement, { key: "n" }), true);
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
 
   // Escape belongs to the dialog alone, so the log search survives it.
   fireEvent.keyDown(document.activeElement, { key: "Escape" });
   assert.equal(view.queryByText("Clear shared API cache?"), null);
   assert.equal(search.value, "error");
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
 });
 
 test("a log refresh ends an open search and restores the row window", async () => {
@@ -243,14 +243,14 @@ test("a log refresh ends an open search and restores the row window", async () =
   fireEvent.keyDown(document.body, { key: "/" });
   fireEvent.change(search, { target: { value: "error" } });
   fireEvent.keyDown(search, { key: "Enter" });
-  assert.equal(matchCount(view), `1 of ${MATCH_LINES.length} matches`);
+  await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
   assert.equal(rowWindow(view), "1-300 of 700");
 
   await act(async () => {
     fireEvent.click(view.getByRole("button", { name: "Refresh log" }));
   });
   assert.equal(search.value, "");
-  assert.equal(matchCount(view), "700 lines");
+  await matchCount(view, "700 lines");
   assert.equal(rowWindow(view), "301-600 of 700");
   assert.equal(view.container.querySelectorAll(".ci-log-match").length, 0);
 
@@ -304,8 +304,18 @@ function searchBox(view) {
   return view.getByRole("searchbox", { name: "Search log" });
 }
 
-function matchCount(view) {
-  return view.container.querySelector(".ci-match-count").textContent;
+// The status text depends on the synchronous `matches` memo and on
+// `selectedMatch`, which a query change resets through a separate effect, so
+// a query or step event can need more than one commit before the text
+// settles. Wait for the expected string rather than reading it right away.
+async function matchCount(view, expected) {
+  await waitFor(() => {
+    assert.equal(
+      view.container.querySelector(".ci-match-count").textContent,
+      expected,
+    );
+  });
+  return expected;
 }
 
 function rowWindow(view) {

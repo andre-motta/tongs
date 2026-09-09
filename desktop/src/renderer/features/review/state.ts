@@ -598,6 +598,32 @@ export function discardDraftRefusal(state: ReviewWorkflowState): string | null {
 }
 
 /**
+ * What a discard would destroy, named for the reader. Both counts are read
+ * from the content the surfaces actually hold rather than assumed: a review
+ * with no summary must not be told it is losing one, and the comment count is
+ * the same number the drawer badge and the drawer title show. Shared by the
+ * drawer and the in-diff composer so one press and the other are answering
+ * literally the same question.
+ */
+export function discardSubject(state: ReviewWorkflowState): string {
+  const comments = state.draft.local.comments.length;
+  const summary = state.draft.local.body.trim().length > 0;
+  const counted =
+    comments === 1 ? "1 pending comment" : `${comments} pending comments`;
+  if (comments === 0) return summary ? "the summary" : "this pending review";
+  return summary ? `${counted} and the summary` : counted;
+}
+
+/**
+ * The sentence shown before a discard is carried out. The wording is fixed and
+ * the two facts inside it are real, so a reader who confirms has been told
+ * exactly what leaves.
+ */
+export function discardConfirmationPrompt(state: ReviewWorkflowState): string {
+  return `Discard ${discardSubject(state)}? This cannot be undone.`;
+}
+
+/**
  * Drops the discarded draft and returns the review to its no-draft state. The
  * retained texts are kept deliberately: `supersededLocalDrafts` is text the
  * reader was promised would stay until dismissed on its own, and

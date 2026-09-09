@@ -50,6 +50,10 @@ import {
   captureDraftAnchor,
   conflictDraftSave,
   createReviewWorkflowState,
+  discardConfirmationPrompt,
+  discardDraft,
+  discardDraftRefusal,
+  discardSubject,
   editDraft,
   failDraftSave,
   finishDraftSave,
@@ -827,6 +831,22 @@ export interface InlineComposerController {
   readonly updateEntry: (entryId: string, body: string) => Promise<boolean>;
   /** Removes one pending entry from the draft and saves what is left. */
   readonly removeEntry: (entryId: string) => Promise<boolean>;
+  /**
+   * Why the pending review cannot be discarded now, or null when it can. The
+   * drawer and the composer overflow read this one sentence, so a discard the
+   * state refuses is refused identically wherever it is pressed.
+   */
+  readonly discardReason: string | null;
+  /** What a discard would destroy, for the confirmation and its button. */
+  readonly discardSubject: string;
+  /** The full sentence a reader confirms before the discard is carried out. */
+  readonly discardPrompt: string;
+  /**
+   * Discards the pending review in the durable store and returns this session
+   * to its no-draft state. Local only in effect on the forge: nothing that was
+   * never sent is sent, and nothing already published is touched.
+   */
+  readonly discardReview: () => Promise<boolean>;
   readonly openExternal: (url: string) => Promise<boolean>;
   readonly clearMessage: () => void;
 }
@@ -1403,6 +1423,38 @@ export function useInlineReviewComposer(
     [bridge],
   );
 
+  // The one discard in the renderer. `review.discard_draft` is the same
+  // protocol method the TUI reaches from its Shift+D binding, and it is a
+  // local write: the draft was never on the forge, so discarding it publishes
+  // nothing and retracts nothing. The refusal is asked for again here rather
+  // than trusted from the press, because a save or a submission can take the
+  // draft between the confirmation being shown and being answered.
+  const discardReview = useCallback(async (): Promise<boolean> => {
+    const current = held.current;
+    const remote = current.draft.remote;
+    const refusal = discardDraftRefusal(current);
+    if (refusal !== null || !remote) {
+      setMessage(refusal ?? "No pending review is open to discard.");
+      return false;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await bridge.discardReviewDraft({
+        review,
+        draft_id: remote.id,
+        expected_version: remote.version,
+      });
+      apply(discardDraft);
+      return true;
+    } catch (reason) {
+      setMessage(composerFailureMessage(reason));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [apply, bridge, held, review]);
+
   return {
     review,
     forge,
@@ -1425,6 +1477,10 @@ export function useInlineReviewComposer(
     setThreadResolved,
     updateEntry,
     removeEntry,
+    discardReason: discardDraftRefusal(workflow),
+    discardSubject: discardSubject(workflow),
+    discardPrompt: discardConfirmationPrompt(workflow),
+    discardReview,
     openExternal,
     clearMessage,
   };
@@ -1558,6 +1614,11 @@ export function InlineComposer({
       : readInlineBuffer(controller.review, anchor),
   );
   const [preview, setPreview] = useState(false);
+  // The overflow holds the review level action the composer can reach without
+  // opening the drawer. It is a disclosure rather than a relabelling button,
+  // so Discard never occupies the place a reader is aiming at for Cancel.
+  const [overflow, setOverflow] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const editor = useRef<HTMLTextAreaElement | null>(null);
   // The composer is opened from the gutter affordance or from the keyboard, and
   // both leave focus on the row. Taking focus here is what makes Esc and
@@ -1616,6 +1677,18 @@ export function InlineComposer({
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
+          // Escape answers the nearest question first. An armed discard is
+          // cancelled by it and the composer stays open with the text intact,
+          // because a reader backing out of a destructive confirmation is not
+          // asking to lose the surface as well.
+          if (confirmingDiscard) {
+            setConfirmingDiscard(false);
+            return;
+          }
+          if (overflow) {
+            setOverflow(false);
+            return;
+          }
           close();
           return;
         }
@@ -1689,6 +1762,19 @@ export function InlineComposer({
           >
             Preview
           </button>
+          {controller.pendingReview && (
+            <button
+              className="button button-secondary"
+              aria-expanded={overflow}
+              aria-label="More review actions"
+              onClick={() => {
+                setConfirmingDiscard(false);
+                setOverflow(!overflow);
+              }}
+            >
+              More
+            </button>
+          )}
         </div>
         <div className="inline-composer-writes">
           <button className="button button-secondary" onClick={close}>
@@ -1722,6 +1808,38 @@ export function InlineComposer({
           </button>
         </div>
       </div>
+      {controller.pendingReview && overflow && (
+        <div
+          className="inline-composer-writes"
+          role="group"
+          aria-label="Review actions"
+        >
+          <button
+            className="button button-danger"
+            disabled={controller.discardReason !== null || controller.busy}
+            title={controller.discardReason ?? undefined}
+            onClick={() => {
+              // One press asks, the next acts. The subject is re-read at both
+              // presses, so a comment added between them is counted.
+              if (!confirmingDiscard) {
+                setConfirmingDiscard(true);
+                return;
+              }
+              setConfirmingDiscard(false);
+              void controller.discardReview().then((discarded) => {
+                if (discarded) setOverflow(false);
+              });
+            }}
+          >
+            {confirmingDiscard
+              ? `Confirm discard of ${controller.discardSubject}`
+              : "Discard review"}
+          </button>
+        </div>
+      )}
+      {controller.pendingReview && overflow && confirmingDiscard && (
+        <small role="status">{controller.discardPrompt}</small>
+      )}
     </section>
   );
 }

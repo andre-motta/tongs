@@ -113,6 +113,19 @@ While a durable draft is active, the controls add general comments, selected
 lines, and suggestions to that draft. The draft remains bound to the review
 revision it was created from.
 
+A pending review can be discarded from either surface: **Discard review** in
+**Your review**, or the **More review actions** overflow in the in-diff
+composer, which appears only while a review is pending. Both ask first with the
+same sentence, which names how many pending comments would go and whether a
+summary would go with them, and both then make the same `review.discard_draft`
+call the terminal interface makes from ++shift+d++. Press ++escape++ to cancel
+the confirmation and leave the review alone. A discard removes only the local
+durable draft: nothing that was never sent to the forge is sent, and nothing
+already published is changed. Afterwards the diff drops its pending cards, the
+**Your review** count returns to zero, and the composer offers **Start a
+review** again. A discard is refused while a save or a submission attempt holds
+the draft, and the reason is shown on the button.
+
 If another writer changes the stored draft before your save lands, the
 workspace reports a version conflict and shows both versions side by side: your
 unsaved text, and the stored draft with its version number and the time it was

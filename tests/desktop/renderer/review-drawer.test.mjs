@@ -911,12 +911,12 @@ test("Discard review is confirmed inline and then drops the pending review", asy
   // One press asks, it does not act.
   fireEvent.click(view.getByRole("button", { name: "Discard review" }));
   await view.findByText(
-    "Discard 1 pending comment(s) and the summary? This cannot be undone.",
+    "Discard 1 pending comment and the summary? This cannot be undone.",
   );
   assert.equal(discards.length, 0);
   fireEvent.click(
     view.getByRole("button", {
-      name: "Confirm discard of 1 pending comment(s) and the summary",
+      name: "Confirm discard of 1 pending comment and the summary",
     }),
   );
   await waitFor(() => assert.equal(discards.length, 1));
@@ -932,6 +932,203 @@ test("Discard review is confirmed inline and then drops the pending review", asy
     "Your review, 0 pending",
   );
   assert.equal(view.container.querySelectorAll(".pending-card").length, 0);
+});
+
+/**
+ * The two facts inside the confirmation are read from the draft, not assumed.
+ * A review with no summary must not be told it is about to lose one, and the
+ * count is the same number the badge shows, singular or plural.
+ */
+test("the discard confirmation counts what is pending and names a summary only when there is one", async () => {
+  const review = "review-drawer-discard-count";
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(
+              review,
+              7,
+              content({
+                body: "",
+                comments: [
+                  inlineEntry("a", "Guard this", 11, "src/calc.py"),
+                  inlineEntry("b", "And this", 12, "src/calc.py"),
+                ],
+              }),
+            ),
+          ],
+        }),
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
+  await view.findByLabelText("Summary");
+  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
+  await view.findByText("Discard 2 pending comments? This cannot be undone.");
+  assert.equal(
+    view.container.querySelectorAll(".review-drawer-confirm").length,
+    1,
+  );
+  await view.findByRole("button", {
+    name: "Confirm discard of 2 pending comments",
+  });
+});
+
+/**
+ * Escape answers the armed question, not the drawer. Backing out of a
+ * destructive confirmation must leave the pending review, the drawer and the
+ * in-diff cards exactly as they were, and must send nothing.
+ */
+test("Escape cancels an armed discard and leaves the pending review untouched", async () => {
+  const review = "review-drawer-discard-escape";
+  const discards = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(
+              review,
+              4,
+              content({
+                body: "Nearly there",
+                comments: [inlineEntry("a", "Guard this", 11, "src/calc.py")],
+              }),
+            ),
+          ],
+        }),
+      discardReviewDraft: async (params) => {
+        discards.push(params);
+        return { discarded: draft(review, 4, content()) };
+      },
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
+  await view.findByLabelText("Summary");
+  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
+  await view.findByText(
+    "Discard 1 pending comment and the summary? This cannot be undone.",
+  );
+
+  fireEvent.keyDown(view.getByRole("dialog", { name: "Your review" }), {
+    key: "Escape",
+  });
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll(".review-drawer-confirm").length,
+      0,
+    ),
+  );
+  assert.equal(discards.length, 0);
+
+  // The drawer is still open on the same pending review, and the button has
+  // gone back to asking rather than acting.
+  await view.findByLabelText("Summary");
+  assert.equal(
+    view.getByRole("button", { name: /Your review/ }).getAttribute("aria-label"),
+    "Your review, 1 pending",
+  );
+  assert.equal(view.container.querySelectorAll(".pending-card").length, 1);
+  await view.findByRole("button", { name: "Discard review" });
+
+  // A second Escape, with nothing armed, closes the drawer as it always did.
+  fireEvent.keyDown(view.getByRole("dialog", { name: "Your review" }), {
+    key: "Escape",
+  });
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
+  );
+  assert.equal(discards.length, 0);
+});
+
+/**
+ * RFE 3, the other surface. The composer overflow carries the same Discard,
+ * offered only while there is a review to discard, and a discard taken there
+ * returns the composer to Start a review and empties the diff and the badge
+ * without the drawer being opened at all.
+ */
+test("the composer overflow discards the pending review and returns to Start a review", async () => {
+  const review = "review-composer-discard";
+  const discards = [];
+  let stored = null;
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({ cursor: 0, next_cursor: null, drafts: stored ? [stored] : [] }),
+      createReviewDraft: () => {
+        stored = draft(review, 1, content());
+        return Promise.resolve(stored);
+      },
+      saveReviewDraft: async (params) => {
+        stored = draft(review, params.expected_version + 1, params.content);
+        return stored;
+      },
+      discardReviewDraft: async (params) => {
+        discards.push(params);
+        const discarded = stored;
+        stored = null;
+        return { discarded };
+      },
+    }),
+    review,
+  );
+
+  // With no pending review there is nothing to overflow into.
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  await view.findByLabelText("Inline review comment");
+  assert.equal(
+    view.container.querySelectorAll('[aria-label="More review actions"]').length,
+    0,
+  );
+
+  fireEvent.change(view.getByLabelText("Inline review comment"), {
+    target: { value: "Guard the zero divisor" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".pending-card").length, 1),
+  );
+
+  // Reopened on the same line, the overflow is now offered.
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  await view.findByLabelText("Inline review comment");
+  fireEvent.click(view.getByRole("button", { name: "More review actions" }));
+
+  // One press asks, it does not act.
+  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
+  await view.findByText("Discard 1 pending comment? This cannot be undone.");
+  assert.equal(discards.length, 0);
+  fireEvent.click(
+    view.getByRole("button", { name: "Confirm discard of 1 pending comment" }),
+  );
+  await waitFor(() => assert.equal(discards.length, 1));
+  assert.equal(discards[0].draft_id, DRAFT_ID);
+  assert.equal(discards[0].expected_version, 2);
+
+  // The diff drops its pending cards, the badge returns to zero, and the
+  // composer that is still open offers to start a review again.
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".pending-card").length, 0),
+  );
+  assert.equal(
+    view.getByRole("button", { name: /Your review/ }).getAttribute("aria-label"),
+    "Your review, 0 pending",
+  );
+  await view.findByRole("button", { name: "Start a review" });
+  assert.equal(
+    view.container.querySelectorAll('[aria-label="More review actions"]').length,
+    0,
+  );
 });
 
 /**

@@ -732,6 +732,23 @@ function baseBridge(overrides) {
   return {
     cancelRead: async () => true,
     openExternal: async () => true,
+    // The diff surface reads inline comment support to decide what its gutter
+    // composer may offer, so every diff bridge answers that read.
+    getReviewMutationCapabilities: (review) =>
+      read({
+        review,
+        capabilities: {
+          general_comment: true,
+          inline_comment: true,
+          multiline_comment: true,
+          reply: true,
+          resolve: true,
+          approve: true,
+          request_changes: true,
+          comment_verdict: true,
+          atomic_review_batch: false,
+        },
+      }),
     ...overrides,
   };
 }

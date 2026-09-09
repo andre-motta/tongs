@@ -28,7 +28,6 @@ import type {
   ReviewVerdict,
   SubmissionProgressDto,
 } from "../../../shared/review.js";
-import { reviewMutationMessage } from "../../../shared/review.js";
 import type {
   AppRoute,
   DiscussionDiffTarget,
@@ -42,6 +41,23 @@ import {
   safeMarkdownPresentationBytes,
 } from "../../core/safe-markdown.js";
 import { ReviewHeader } from "../review-detail/index.js";
+import {
+  ACTIVE_DRAFT_STATES,
+  BufferedInlineNotes,
+  Composer,
+  anchorIdentity,
+  buffersFor,
+  cacheWorkflow,
+  cachedWorkflow,
+  draftSelection,
+  inlineBufferLabel,
+  isConflictError,
+  isUncertainError,
+  mutationAnchor,
+  newOperationId,
+  reviewMutationError,
+  type ComposerBuffers,
+} from "./composer.js";
 import {
   acknowledgeQuickUncertainty,
   adoptDraft,
@@ -72,7 +88,6 @@ import {
   recoverQuickIntent,
   rejectQuickIntent,
   settleQuickIntent,
-  type DraftAnchorSelection,
   type ReviewWorkflowState,
 } from "./state.js";
 import {
@@ -82,27 +97,13 @@ import {
   type SuggestionForge,
 } from "./suggestion.js";
 
-const ACTIVE_DRAFT_STATES = ["editable", "submitting", "partial", "unknown"] as const;
 const DISCUSSION_MARKDOWN_BUDGET_BYTES = 256 * 1024;
-const workflowCache = new Map<string, ReviewWorkflowState>();
 type Confirmation =
   | ReviewAction
   | "submit"
   | "migrate-draft"
   | `verdict:${ReviewVerdict}`
   | `reconcile:${ReconciliationResolution}`;
-
-interface ComposerBuffers {
-  general: string;
-  readonly inline: Map<string, string>;
-  readonly replies: Map<string, string>;
-  readonly suggestions: Map<
-    string,
-    { readonly comment: string; readonly replacement: string }
-  >;
-}
-
-const composerCache = new Map<string, ComposerBuffers>();
 
 interface ReviewFeatureBridge extends DesktopBridge, ReviewDesktopBridge {}
 
@@ -163,7 +164,7 @@ function ReviewWorkflow({
   const [recoveries, setRecoveries] =
     useState<readonly SubmissionProgressDto[]>([]);
   const [workflow, setWorkflow] = useState<ReviewWorkflowState | null>(
-    workflowCache.get(review) ?? null,
+    cachedWorkflow(review),
   );
   const workflowRef = useRef(workflow);
   const anchorRef = useRef(context.inlineAnchor);
@@ -263,7 +264,7 @@ function ReviewWorkflow({
       if (!current) throw new Error("Review workflow is not ready");
       const next = change(current);
       workflowRef.current = next;
-      workflowCache.set(review, next);
+      cacheWorkflow(review, next);
       setWorkflow(next);
       return next;
     },
@@ -298,12 +299,12 @@ function ReviewWorkflow({
         setActionCapabilities(actionResult.capabilities);
         setDraftCandidates(draftResult.drafts);
         setRecoveries(submissionResult.attempts);
-        const cached = workflowCache.get(review);
+        const cached = cachedWorkflow(review);
         const next = cached
           ? observeReviewRevision(cached, detail.revision)
           : createReviewWorkflowState(review, detail.revision);
         workflowRef.current = next;
-        workflowCache.set(review, next);
+        cacheWorkflow(review, next);
         setWorkflow(next);
       })
       .catch((reason: unknown) => current && setError(safeError(reason)));
@@ -1213,43 +1214,6 @@ export function discussionDiffTarget(
   return null;
 }
 
-function Composer({
-  label,
-  body,
-  setBody,
-  disabled,
-  disabledReason,
-  submit,
-}: {
-  readonly label: string;
-  readonly body: string;
-  readonly setBody: (value: string) => void;
-  readonly disabled: boolean;
-  readonly disabledReason: string | null;
-  readonly submit: () => void;
-}): ReactNode {
-  return (
-    <section className="review-workflow-composer">
-      <label>
-        <strong>{label}</strong>
-        <textarea
-          value={body}
-          disabled={disabled}
-          title={disabledReason ?? undefined}
-          onChange={(event) => setBody(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submit();
-          }}
-        />
-      </label>
-      {disabledReason && <small>{disabledReason}</small>}
-      <button className="button" disabled={disabled || !body} onClick={submit}>
-        {label}
-      </button>
-    </section>
-  );
-}
-
 function SuggestionComposer({
   selection,
   forge,
@@ -1348,30 +1312,6 @@ function SuggestionComposer({
           </div>
         </>
       )}
-    </section>
-  );
-}
-
-function BufferedInlineNotes({
-  entries,
-  currentKey,
-}: {
-  readonly entries: ReadonlyMap<string, string>;
-  readonly currentKey: string | null;
-}): ReactNode {
-  const retained = [...entries.entries()].filter(
-    ([key, body]) => key !== currentKey && body.length > 0,
-  );
-  if (retained.length === 0) return null;
-  return (
-    <section className="review-workflow-buffered-inline">
-      <strong>Unsent inline text kept on earlier selections</strong>
-      {retained.map(([key, body]) => (
-        <article key={key}>
-          <small>{inlineBufferLabel(key)}</small>
-          <p>{body}</p>
-        </article>
-      ))}
     </section>
   );
 }
@@ -1829,38 +1769,6 @@ function Notice({ kind, children }: { readonly kind: string; readonly children: 
   return <div className={`notice notice-${kind}`} role={kind === "error" ? "alert" : "status"}>{children}</div>;
 }
 
-function mutationAnchor(selection: InlineAnchorSelection): {
-  readonly old_path: string;
-  readonly new_path: string;
-  readonly line: number;
-  readonly side: "LEFT" | "RIGHT";
-} {
-  const line = selection.side === "old" ? selection.oldLine : selection.newLine;
-  if (line === null) throw new Error("The selected diff side has no source line");
-  return Object.freeze({
-    old_path: selection.oldPath,
-    new_path: selection.newPath,
-    line,
-    side: selection.side === "old" ? "LEFT" : "RIGHT",
-  });
-}
-
-function draftSelection(selection: InlineAnchorSelection): DraftAnchorSelection {
-  return Object.freeze({
-    review: selection.review,
-    revision: selection.revision,
-    oldPath: selection.oldPath,
-    newPath: selection.newPath,
-    side: selection.side,
-    oldLine: selection.oldLine,
-    newLine: selection.newLine,
-    startLine: null,
-    startSide: null,
-    contextLines: selection.contextLines,
-    contextComplete: selection.contextComplete,
-  });
-}
-
 async function recoverDraft(
   bridge: ReviewDesktopBridge,
   review: string,
@@ -1941,20 +1849,6 @@ function draftCommentLabel(comment: DraftCommentInputDto): string {
   return `Inline ${comment.id} · ${comment.anchor.new_path} · ${comment.anchor.side} line ${line}${stale}`;
 }
 
-function buffersFor(review: string): ComposerBuffers {
-  let buffers = composerCache.get(review);
-  if (!buffers) {
-    buffers = {
-      general: "",
-      inline: new Map(),
-      replies: new Map(),
-      suggestions: new Map(),
-    };
-    composerCache.set(review, buffers);
-  }
-  return buffers;
-}
-
 function suggestionBuffer(
   buffers: ComposerBuffers,
   key: string | null,
@@ -1976,24 +1870,6 @@ function clearSuggestionBuffer(
 ): void {
   const key = anchorIdentity(selection);
   if (key) buffersFor(review).suggestions.delete(key);
-}
-
-function anchorIdentity(anchor: InlineAnchorSelection | null): string | null {
-  if (!anchor) return null;
-  return JSON.stringify({
-    review: anchor.review,
-    revision: anchor.revision,
-    oldPath: anchor.oldPath,
-    newPath: anchor.newPath,
-    side: anchor.side,
-    oldLine: anchor.oldLine,
-    newLine: anchor.newLine,
-    contextLines: anchor.contextLines,
-    contextComplete: anchor.contextComplete,
-    rangeOriginOldLine: anchor.rangeOriginOldLine,
-    rangeOriginNewLine: anchor.rangeOriginNewLine,
-    selectedLines: anchor.selectedLines,
-  });
 }
 
 function suggestionActionDisabledReason(
@@ -2036,55 +1912,8 @@ function sameRevision(
   );
 }
 
-function inlineBufferLabel(key: string): string {
-  try {
-    const value = JSON.parse(key) as {
-      readonly newPath?: unknown;
-      readonly side?: unknown;
-      readonly oldLine?: unknown;
-      readonly newLine?: unknown;
-      readonly revision?: { readonly head_sha?: unknown };
-    };
-    const line = value.side === "old" ? value.oldLine : value.newLine;
-    return `${String(value.newPath)} · ${String(value.side)} line ${String(line)} · revision ${String(value.revision?.head_sha)}`;
-  } catch {
-    return "Earlier inline selection";
-  }
-}
-
 function capabilityReason(supported: boolean | undefined): string | null {
   return supported === true ? null : "General comments are unsupported for this review.";
-}
-
-function reviewMutationError(value: unknown): string {
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    "code" in value &&
-    typeof value.code === "string"
-  ) {
-    return reviewMutationMessage(value.code);
-  }
-  return safeError(value);
-}
-
-function isUncertainError(value: unknown): boolean {
-  if (value === null || typeof value !== "object") return false;
-  const code = "code" in value && typeof value.code === "string" ? value.code : "";
-  return (
-    code === "invalid_response" ||
-    code === "mutation_timeout" ||
-    code === "request_cancelled" ||
-    code === "unexpected_eof" ||
-    code === "write_failed"
-  );
-}
-
-function isConflictError(value: unknown): boolean {
-  if (value === null || typeof value !== "object") return false;
-  return (
-    "code" in value && value.code === "conflict"
-  );
 }
 
 function isActionCommand(value: unknown): value is {
@@ -2103,10 +1932,6 @@ function isActionCommand(value: unknown): value is {
     value.revision !== null &&
     typeof value.revision === "object"
   );
-}
-
-function newOperationId(kind: string): string {
-  return `desktop:${kind}:${crypto.randomUUID()}`;
 }
 
 function label(action: ReviewAction): string {

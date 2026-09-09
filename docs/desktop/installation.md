@@ -177,7 +177,22 @@ user-facing actions are:
 | `activation-pending` | A verified activation was interrupted. Run `tongs desktop repair`. |
 | `menu-repair-required` | The owned menu entry is missing or changed. Run `tongs desktop repair`. |
 | `payload-repair-required` | The bound environment or payload no longer validates. Run repair from the intended persistent environment, or use explicit `--redownload` if local recovery fails. |
-| `cleanup-required` | The active payload can still launch, but an old owned payload remains to be removed. Run repair before another install or update. |
+| `cleanup-required` | An old owned payload remains to be removed. The next action depends on whether an active payload is still present; see below. |
+
+`cleanup-required` reports two different situations, and `status` distinguishes
+them in its `detail` field. When an active payload is still present, the detail
+reads:
+
+```text
+The per-user desktop installation can launch, but old payload cleanup is incomplete; run 'tongs desktop repair'.
+```
+
+When no active target remains, an interrupted uninstall left work behind and the
+detail reads:
+
+```text
+Per-user desktop cleanup is incomplete; run 'tongs desktop uninstall' again.
+```
 
 Recovery is bounded to identities recorded in the private journal and state.
 Repair does not search arbitrary directories for payloads, and it does not
@@ -200,8 +215,10 @@ No per-user desktop installation is active.
 
 The JSON form exposes `installed`, `version`, `active_target`,
 `previous_target`, `ownership`, `environment`, `recovery`, `menu_registered`,
-`launch_ready`, `rpm_detected`, and `coexistence`. Paths are absolute when a
-target exists. Status acquires the per-user command lock and ensures its private
+`launch_ready`, `rpm_detected`, `coexistence`, and `detail`. `detail` carries
+the same human-readable sentence the plain command prints, which is what
+distinguishes the two `cleanup-required` situations above. Paths are absolute
+when a target exists. Status acquires the per-user command lock and ensures its private
 roots exist, but it does not change activation, menu, or payload content. It
 does not download, repair, register a menu entry, or remove a payload.
 
@@ -246,10 +263,28 @@ commands do not install RPM packages, elevate privileges, overwrite `/usr`, or
 remove RPM-owned files. An RPM can remain installed while the per-user
 activation is selected for `tongs desktop` and reported by `status`.
 
-This page intentionally does not define an RPM package name or installation
-procedure. The final desktop documentation will add the release and RPM path
-after packaging acceptance, native installed-artifact proof, and the remaining
-production gates are complete.
+The RPM path builds three packages:
+
+| Package | Owns |
+| --- | --- |
+| `python3-tongs` | `/usr/bin/tongs`, the Python modules, and their metadata. |
+| `python3-tongs+mcp` | `/usr/bin/tongs-mcp` only, which keeps the MCP dependency out of the base closure. |
+| `tongs-desktop` | The complete Electron runtime under `/usr/libexec/tongs-desktop`, its system launcher, desktop entry, icon, AppStream metadata, man page, and license and inventory copies. |
+
+`tongs-desktop` requires the exact `python3-tongs` build it was made against,
+plus `xorg-x11-server-Xwayland`. The packages contain no scriptlets and do not
+inspect or modify home directories.
+
+!!! warning "Unreleased feature"
+
+    No RPM is published. There is no package repository, no COPR repository, no
+    signed package, and no Fedora review submission, so there is nothing to
+    `dnf install` today. The package names above are the names the first
+    published build would use. The packaging sources and the local rebuild
+    harness are in `packaging/rpm/` in the repository. The desktop license field
+    is an honest aggregate expression for an artifact containing the upstream
+    Electron distribution; it is not a claim of Fedora or COPR publication
+    eligibility.
 
 ## Current boundary
 
@@ -258,5 +293,7 @@ and the main-branch release decision are separate gates. Do not treat the
 examples on this page as evidence that a public archive, production tag, or RPM
 is already available.
 
-See the [desktop production design](../work/desktop-production.md) for the
-shared architecture and acceptance boundary.
+The shared desktop architecture and acceptance boundary are tracked in the
+project's internal planning records rather than on this site. See
+[Contributing](../contributing.md) for how desktop changes are proposed,
+validated, and reviewed.

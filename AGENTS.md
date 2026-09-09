@@ -6,20 +6,25 @@ services, forge clients, repository discovery, cache, and durable review drafts.
 Python 3.12+ is required for the core; building the desktop shell requires
 Node.js 22.12+.
 
-## Agent Workflow (including Codex)
+## Agent Workflow
 
 For substantial initiatives, use the installed `agent-sdlc` skill and read the
-[project SDLC profile](docs/SDLC.md). Astra orchestrates; Sol at `high` handles
-senior implementation and independent review; Luna at `xhigh` handles bounded
-work. Use actual runtime model selection. Keep small fixes proportional.
+[project SDLC profile](docs/SDLC.md), a repository-only document that is excluded
+from the published site. Roles are named by function, not by any vendor's
+model codename: an **orchestrator** owns architecture, scheduling, and
+integration; a **senior contributor** and a separate **senior reviewer** handle
+senior implementation and independent review; a **bounded contributor** handles
+well-specified assignments under senior review. Select actual runtime models and
+record the model and effort setting actually used. Keep small fixes proportional.
 
-For the desktop initiative, Astra owns `feat/desktop-app`. Agents use isolated
-`feat/<work-item>` branches and PRs into that branch, with independent Sol review
-and Astra integration. Every change is issue-tracked with explicit dependencies.
-Only the final feature PR goes to `main` for CTO review. Hardware GPU acceleration
-is a mandatory production/release gate; see the profile for evidence requirements.
+For the desktop initiative, the orchestrator owns `feat/desktop-app`. Agents use
+isolated `feat/desktop-<issue>-<slug>` branches and PRs into that branch, with
+independent senior review and orchestrator integration. Every change is
+issue-tracked with explicit dependencies. Only the final feature PR goes to `main`
+for CTO review. Hardware GPU acceleration is a mandatory production and release
+gate; see the profile for evidence requirements.
 
-This file is the shared repository guide for coding agents. Codex reads `AGENTS.md` when working in this repository. Read `README.md` for product context and the relevant subsystem guides below before changing code. The `.agents/*/README.md` files are reference documentation to read explicitly.
+This file is the shared repository guide for coding agents. Codex and Claude Code both read `AGENTS.md` when working in this repository. Read `README.md` for product context and the relevant subsystem guides below before changing code. The `.agents/*/README.md` files are reference documentation to read explicitly.
 
 - Run commands from the current checkout or worktree root. Use its local `.venv`, including when a subsystem guide shows a machine-specific path.
 - Inspect `git status` before editing and preserve unrelated user changes.
@@ -34,10 +39,10 @@ This file is the shared repository guide for coding agents. Codex reads `AGENTS.
 - **HTTP:** httpx (async), no CLI subprocess per operation
 - **Config:** TOML via tomllib, platformdirs for cross-platform paths
 - **Build:** hatchling + hatch-vcs, `pip install -e ".[dev]"` for development
-- **Distribution:** `pipx install tongs` or `uvx tongs`
-- **Entry points:** `tongs` (TUI), `tongs-mcp` (MCP server)
+- **Distribution:** `pipx install tongs`, `uvx tongs`, `uv tool install tongs`, or the unreleased Fedora RPMs `python3-tongs`, `python3-tongs+mcp` and `tongs-desktop`
+- **Entry points:** `tongs` (TUI), `tongs-mcp` (MCP server), `tongs desktop` and the `tongs --install-desktop` alias (per-user desktop lifecycle), and the RPM-owned `/usr/libexec/tongs-desktop` launcher
 - **Plugins:** independent `tongs.plugins` and `tongs.desktop_plugins` entry-point groups
-- **Docs:** MkDocs Material site at [tongs.tools](https://tongs.tools)
+- **Docs:** MkDocs Material site at [www.tongs.tools](https://www.tongs.tools). `docs/SDLC.md`, `docs/site-plan.md` and `docs/work/` are excluded from the build and stay repository-only; everything else under `docs/` is published.
 
 ## Critical Rules
 
@@ -88,16 +93,19 @@ separate from native Fedora, GPU, installer, and release evidence.
 
 ## Git Commits
 
-- For approved SDLC initiatives, contributors may create coherent signed-off local commits in their assigned worktrees without per-commit approval. For desktop work, assigned contributor branch pushes and PRs into `feat/desktop-app` are authorized; Astra alone integrates. The final PR into `main` requires CTO acceptance before merge. Other initiatives retain their existing upstream gates. For other work, preserve the existing requirement to approve the full commit message before committing.
+- For approved SDLC initiatives, contributors may create coherent signed-off local commits in their assigned worktrees without per-commit approval. For desktop work, assigned contributor branch pushes and PRs into `feat/desktop-app` are authorized; the orchestrator alone integrates. The final PR into `main` requires CTO acceptance before merge. Other initiatives retain their existing upstream gates. For other work, preserve the existing requirement to approve the full commit message before committing.
 - Include a one-line description body after the title, separated by a blank line, before any trailers.
 - Use `git commit -s` to add the sign-off automatically; do not write `Signed-off-by` manually.
-- When adding a Codex co-author trailer, use `Co-Authored-By: Codex <model> <noreply@openai.com>` with the actual model name and no context-window annotation.
+- When adding a co-author trailer, use the address of the vendor that produced the commit: `Co-Authored-By: Codex <model> <noreply@openai.com>` or `Co-Authored-By: Claude <model> <noreply@anthropic.com>`. Use the actual model name and no context-window annotation. Do not claim co-authorship by a vendor that did not produce the commit.
 
 ## Module Map
 
 ```
 src/tongs/
+  __main__.py              # CLI entry, argument routing, and desktop subcommand dispatch
   app.py, tui_services.py  # Textual app and adapter over shared services
+  commands.py              # Textual command palette provider
+  config.py, errors.py, helpers.py  # TOML config, error/redaction types, shared helpers
   services/                # Session-owned reads, mutations, drafts, CI, and utilities
   scanner/                 # Local repository discovery and remote parsing
   forges/                  # ForgeClient ABC, GitHub/GitLab clients, auth, and HTTP
@@ -118,6 +126,15 @@ tests/
   desktop/                 # Python protocol/installer plus Electron, renderer, and native fixtures
   integration/desktop/     # Packaging, CI, artifact, and evidence integration checks
   plugins/                 # Desktop provider contract, lifecycle, discovery, and resources
+  packaging/desktop/, packaging/rpm/  # Archive producer and Fedora RPM source checks
+  containers/, ci/         # Fedora 44 harness interface and CI evidence verifiers
+  fixtures/                # Shared recorded payloads used across suites
+
+packaging/
+  desktop/archive/         # Reproducible per-user archive producer and contract
+  rpm/desktop/             # python-tongs and tongs-desktop SRPM sources and harness
+  rpm/python-dependencies/ # Companion Python RPM specs and manifest
+scripts/                   # Repository maintenance and evidence helpers
 ```
 
 ## Subsystem Guides
@@ -141,6 +158,20 @@ protocol, desktop provider host, installer, and artifact contracts are
 implemented in this tree. `.github/workflows/ci.yml` currently requires Ruff,
 Python 3.12 and 3.13 core/MCP tests, desktop fixture and production shell tests,
 and the Fedora 44 Podman probe through `Desktop pre-merge aggregate`.
+
+`ci.yml` is not the only workflow that runs on a `feat/desktop-app` pull request.
+Four more also trigger on that base:
+
+| Workflow | Trigger |
+|---|---|
+| `desktop-rpm.yml` (Desktop Fedora RPM) | every PR into `feat/desktop-app`, with no path filter |
+| `desktop-archive.yml` (Reproducible desktop archive) | PRs into `feat/desktop-app` matching its path filter |
+| `desktop-python-rpms.yml` (Desktop Python companion RPMs) | PRs into `feat/desktop-app` matching its path filter |
+| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter |
+
+`docs.yml` deploys the site and runs `mkdocs build --strict`, but only on a push
+to `main`. No pull-request check builds the documentation, so run the strict
+build locally before submitting a `docs/` or `mkdocs.yml` change.
 
 That pre-merge aggregate is not the final production desktop release gate.
 Native Fedora/GPU proof, packaging and installer proof, candidate attestation,

@@ -38,24 +38,32 @@ npm ci --prefix desktop
 - **Data models:** Use frozen dataclasses for immutable data and regular
   dataclasses for mutable state.
 - **Commits:** Use a title, a blank line, a one-line description body, and
-  `git commit -s`. When adding a Codex co-author, use
-  `Co-Authored-By: Codex <model> <noreply@openai.com>` with the actual model
-  name and no context-window annotation. Do not use em dashes in prose or
+  `git commit -s`. When adding a co-author trailer, use the address of the
+  vendor that produced the commit:
+  `Co-Authored-By: Codex <model> <noreply@openai.com>` or
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>`, with the actual
+  model name and no context-window annotation. Do not claim co-authorship by a
+  vendor that did not produce the commit. Do not use em dashes in prose or
   commit messages.
 
 ## How the review process works
 
-Substantial initiatives follow the [project SDLC profile](docs/SDLC.md). It
-defines model roles, dependent work items, isolated worktrees, independent
-review, local integration, and CTO design and upstream gates. Small fixes use
-the relevant checks without requiring an initiative or agent team.
+Substantial initiatives follow the [project SDLC profile](docs/SDLC.md), a
+repository-only document that is excluded from the published documentation site.
+It defines the roles, dependent work items, isolated worktrees, independent
+review, local integration, and CTO design and upstream gates. Roles are named by
+function: an orchestrator owns architecture, scheduling, and integration; a
+senior contributor and a separate senior reviewer handle senior implementation
+and independent review; a bounded contributor handles well-specified assignments
+under senior review. Small fixes use the relevant checks without requiring an
+initiative or agent team.
 
-Desktop work uses issue-linked `feat/<work-item>` branches in isolated
+Desktop work uses issue-linked `feat/desktop-<issue>-<slug>` branches in isolated
 worktrees. Open PRs against `feat/desktop-app` with dependencies, exact tested
-commits, checks, and functional evidence. Independent Sol review precedes Astra
-integration. Astra owns the feature branch and resolves integration conflicts.
-The complete feature is presented as one evidence-backed PR into `main` for CTO
-review.
+commits, checks, and functional evidence. Independent senior review precedes
+integration. The orchestrator owns the feature branch and resolves integration
+conflicts. The complete feature is presented as one evidence-backed PR into
+`main` for CTO review.
 
 Every change is reviewed for architecture, security, UX, and QE. Native
 hardware-accelerated Electron on the supported Fedora host is a separate
@@ -69,16 +77,18 @@ Run Python tools through the checkout-local environment:
 ```bash
 source .venv/bin/activate
 pytest tests/ --ignore=tests/test_mcp -v
-pytest tests/test_mcp -v --junitxml=/tmp/tongs-mcp.junit.xml
+pytest tests/test_mcp -v --junitxml="/tmp/tongs-mcp-$$.junit.xml"
 python tests/ci/verify_desktop_ci.py mcp-report \
-  --path /tmp/tongs-mcp.junit.xml
+  --path "/tmp/tongs-mcp-$$.junit.xml"
 ruff check src/ tests/
 ruff format --check src/ tests/
 ```
 
-The MCP extra is required so MCP tests execute rather than skip on import. Use a
-focused path during development, then run the checks appropriate to the changed
-source.
+The MCP extra is required so MCP tests execute rather than skip on import. The
+`$$` in the report path keeps concurrent worktrees from overwriting each other's
+report; CI uses `"$RUNNER_TEMP/mcp-<python-version>.junit.xml"` for the same
+reason. Use a focused path during development, then run the checks appropriate to
+the changed source.
 
 Install, build, type-check, and test the production Electron/React shell with:
 
@@ -116,12 +126,41 @@ node --test examples/desktop-plugin/tests/test_dashboard_module.mjs
 See the example [README](examples/desktop-plugin/README.md) for its declared
 modules, resources, and same-environment installation contract.
 
+The Fedora RPM sources have source-level checks that invoke no DNF, Podman, RPM,
+Cargo, or network operation:
+
+```bash
+.venv/bin/pytest tests/packaging/rpm/desktop tests/test_plugins/test_plugin_system.py -q
+.venv/bin/ruff check packaging/rpm/desktop tests/packaging/rpm/desktop src/tongs/mcp/plugin.py
+.venv/bin/pytest tests/packaging/rpm/python-dependencies -v
+```
+
+Documentation changes build the site strictly:
+
+```bash
+mkdocs build --strict
+```
+
 Pull requests to `main` and `feat/desktop-app` run `.github/workflows/ci.yml`.
 Its required `Desktop pre-merge aggregate` accepts an exact revision only when
 Ruff, Python 3.12 and 3.13 core/MCP tests, desktop fixture and production shell
 tests, and the Fedora 44 Podman probe succeed. A skipped, cancelled, missing, or
 failed required job fails the aggregate. A new commit supersedes earlier
 results.
+
+`ci.yml` is not the only workflow a `feat/desktop-app` pull request triggers.
+Four more run on that base:
+
+| Workflow | Trigger |
+|---|---|
+| `desktop-rpm.yml` (Desktop Fedora RPM) | every PR into `feat/desktop-app`, with no path filter |
+| `desktop-archive.yml` (Reproducible desktop archive) | PRs into `feat/desktop-app` matching its path filter |
+| `desktop-python-rpms.yml` (Desktop Python companion RPMs) | PRs into `feat/desktop-app` matching its path filter |
+| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter |
+
+`docs.yml` runs `mkdocs build --strict` and deploys the site, but only on a push
+to `main`. No pull-request check builds the documentation, which is why the
+strict build belongs in your local run.
 
 The Fedora harness interface is:
 
@@ -193,6 +232,14 @@ tests/
   desktop/          # Protocol, installer, Electron, renderer, and native fixtures
   integration/desktop/ # Packaging, CI, artifact, and evidence integration
   plugins/          # Desktop provider contract and lifecycle
+  packaging/desktop/, packaging/rpm/ # Archive producer and Fedora RPM source checks
+  containers/, ci/  # Fedora 44 harness interface and CI evidence verifiers
+  fixtures/         # Shared recorded payloads used across suites
+packaging/
+  desktop/archive/  # Reproducible per-user archive producer and contract
+  rpm/desktop/      # python-tongs and tongs-desktop SRPM sources and harness
+  rpm/python-dependencies/ # Companion Python RPM specs and manifest
+scripts/            # Repository maintenance and evidence helpers
 ```
 
 Read [AGENTS.md](AGENTS.md) and the relevant `.agents/*/README.md` subsystem

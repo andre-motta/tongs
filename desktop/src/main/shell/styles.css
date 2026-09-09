@@ -908,6 +908,12 @@ button {
   color: var(--muted);
 }
 .diff-workspace {
+  /*
+   * The composer row and the spacer that keeps the split panes aligned share
+   * this height. #190 can set it from a measured composer when pending cards
+   * render under the same anchor.
+   */
+  --inline-composer-height: 15rem;
   min-height: 480px;
   display: grid;
   grid-template-columns: minmax(180px, 25%) minmax(0, 1fr);

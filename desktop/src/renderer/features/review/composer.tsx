@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { ReviewRevisionDto } from "../../../shared/bridge.js";
 import type {
   DraftCommentInputDto,
+  DraftContentInputDto,
+  DraftInlineAnchorInputDto,
   DraftSnapshotDto,
   InlineCommentParams,
   ReviewDesktopBridge,
@@ -198,6 +200,25 @@ export function anchorLabel(selection: InlineAnchorSelection): string {
   return `${selection.newPath}, ${span}`;
 }
 
+/**
+ * A refusal the composer itself authored. Its text is written for the person
+ * using the app, so it is shown verbatim instead of being folded into the
+ * generic read-failure sentence that `safeError` reports for an untyped error.
+ */
+export class ComposerRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ComposerRefusal";
+  }
+}
+
+/** The sentence to show for a failed composer action. */
+export function composerFailureMessage(value: unknown): string {
+  return value instanceof ComposerRefusal
+    ? value.message
+    : reviewMutationError(value);
+}
+
 export function reviewMutationError(value: unknown): string {
   if (
     value !== null &&
@@ -331,6 +352,7 @@ export interface InlineComposerController {
     anchor: InlineAnchorSelection,
     body: string,
   ) => Promise<boolean>;
+  readonly clearMessage: () => void;
 }
 
 export function useInlineReviewComposer(
@@ -402,6 +424,7 @@ export function useInlineReviewComposer(
     };
   }, [bridge, review]);
 
+  const clearMessage = useCallback(() => setMessage(null), []);
   const quickBlocked =
     workflow.quick?.status === "sending" || workflow.quick?.status === "unknown";
   const quickReason = useCallback(
@@ -434,8 +457,10 @@ export function useInlineReviewComposer(
         )
       )
         return "The selected code belongs to an earlier revision. Refresh the diff.";
+      if (workflow.draft.conflict)
+        return "This pending review was changed elsewhere. Resolve the conflict in the review workflow before adding inline feedback.";
       if (workflow.draft.remote && !canCaptureDraftInline(workflow))
-        return "The pending review is bound to an earlier revision or to a durable submission attempt. Settle it in the review workflow first.";
+        return boundElsewhereRefusal(workflow);
       return null;
     },
     [quickReason, workflow],
@@ -451,7 +476,7 @@ export function useInlineReviewComposer(
         max_items: 100,
       }).result;
       if (result.drafts.length > 1)
-        throw new Error(
+        throw new ComposerRefusal(
           "Several pending reviews were recovered. Resume one in the review workflow before commenting.",
         );
       const recovered = result.drafts[0];
@@ -463,9 +488,7 @@ export function useInlineReviewComposer(
         }));
       const bound = apply((state) => adoptDraft(state, draft));
       if (!canCaptureDraftInline(bound))
-        throw new Error(
-          "The recovered pending review is bound to an earlier revision. Migrate it in the review workflow before adding inline feedback.",
-        );
+        throw new ComposerRefusal(boundElsewhereRefusal(bound));
       return bound;
     },
     [apply, bridge, review],
@@ -476,7 +499,9 @@ export function useInlineReviewComposer(
     const remote = current.draft.remote;
     const pending = current.draft.pendingSave;
     if (!remote || !pending)
-      throw new Error("The pending review is not ready to save");
+      throw new ComposerRefusal(
+        "The pending review is not ready to save. Settle it in the review workflow before adding inline feedback.",
+      );
     try {
       const saved = await bridge.saveReviewDraft({
         review,
@@ -496,6 +521,18 @@ export function useInlineReviewComposer(
     }
   }, [apply, bridge, review]);
 
+  const rollBack = useCallback(
+    (content: DraftContentInputDto): void => {
+      try {
+        apply((current) => editDraft(current, content));
+      } catch {
+        // A draft that no longer accepts edits keeps whatever the failed save
+        // left; the typed text is still in the per-anchor buffer either way.
+      }
+    },
+    [apply],
+  );
+
   const addToReview = useCallback(
     async (anchor: InlineAnchorSelection, body: string): Promise<boolean> => {
       if (body.length === 0) return false;
@@ -507,33 +544,41 @@ export function useInlineReviewComposer(
       setBusy(true);
       setMessage(null);
       try {
-        const captured = await captureDraftAnchor(draftSelection(anchor), () =>
-          draftSelection(anchor),
-        );
-        await bindDraft(anchor);
+        const captured = await captureAnchor(anchor);
+        const bound = await bindDraft(anchor);
         const comment: DraftCommentInputDto = Object.freeze({
           id: crypto.randomUUID(),
           kind: "inline",
           body,
           anchor: captured,
         });
+        // The entry is added to the shared draft only for the duration of the
+        // save. A failed save keeps the local content dirty, so leaving the
+        // entry behind would let the obvious retry write the same comment
+        // twice at the same anchor.
+        const restored = bound.draft.local;
         apply((current) =>
           editDraft(current, {
             ...current.draft.local,
             comments: [...current.draft.local.comments, comment],
           }),
         );
-        await saveDraft();
+        try {
+          await saveDraft();
+        } catch (failure) {
+          rollBack(restored);
+          throw failure;
+        }
         clearInlineBuffer(review, anchor);
         return true;
       } catch (failure) {
-        setMessage(reviewMutationError(failure));
+        setMessage(composerFailureMessage(failure));
         return false;
       } finally {
         setBusy(false);
       }
     },
-    [apply, bindDraft, draftReason, review, saveDraft],
+    [apply, bindDraft, draftReason, review, rollBack, saveDraft],
   );
 
   const commentNow = useCallback(
@@ -583,7 +628,7 @@ export function useInlineReviewComposer(
           return false;
         }
       } catch (failure) {
-        setMessage(reviewMutationError(failure));
+        setMessage(composerFailureMessage(failure));
         return false;
       } finally {
         setBusy(false);
@@ -604,7 +649,39 @@ export function useInlineReviewComposer(
     draftReason,
     addToReview,
     commentNow,
+    clearMessage,
   };
+}
+
+/** Names the actual reason a bound draft cannot take another inline entry. */
+function boundElsewhereRefusal(state: ReviewWorkflowState): string {
+  const remote = state.draft.remote;
+  if (remote && remote.state !== "editable")
+    return "The pending review is locked by its submission attempt. Settle it in the review workflow before adding inline feedback.";
+  if (
+    remote &&
+    !sameComposerRevision(
+      remote.revision,
+      state.displayed.latestObservedRevision,
+    )
+  )
+    return "The pending review is bound to an earlier revision. Migrate it in the review workflow before adding inline feedback.";
+  return "The pending review is bound to a durable submission attempt. Settle it in the review workflow before adding inline feedback.";
+}
+
+/** `captureDraftAnchor` refuses with sentences written for the reader. */
+async function captureAnchor(
+  anchor: InlineAnchorSelection,
+): Promise<DraftInlineAnchorInputDto> {
+  try {
+    return await captureDraftAnchor(draftSelection(anchor), () =>
+      draftSelection(anchor),
+    );
+  } catch (failure) {
+    throw failure instanceof Error
+      ? new ComposerRefusal(failure.message)
+      : failure;
+  }
 }
 
 /**
@@ -624,16 +701,26 @@ export function InlineComposer({
   const [body, setBodyState] = useState(() =>
     readInlineBuffer(controller.review, anchor),
   );
+  const editor = useRef<HTMLTextAreaElement | null>(null);
+  // The composer is opened from the gutter affordance or from the keyboard, and
+  // both leave focus on the row. Taking focus here is what makes Esc and
+  // Ctrl/Cmd+Enter reach the composer that just opened.
+  useEffect(() => {
+    editor.current?.focus();
+  }, []);
   const setBody = (value: string): void => {
     writeInlineBuffer(controller.review, anchor, value);
     setBodyState(value);
   };
   const quickReason = controller.quickReason(anchor);
   const draftReason = controller.draftReason(anchor);
+  // A refusal that is already reported as the notice is not repeated as a
+  // standing reason underneath it.
   const reasons = [
     ...new Set(
       [draftReason, quickReason].filter(
-        (reason): reason is string => reason !== null,
+        (reason): reason is string =>
+          reason !== null && reason !== controller.message,
       ),
     ),
   ];
@@ -667,6 +754,7 @@ export function InlineComposer({
         )}
       </div>
       <textarea
+        ref={editor}
         className="inline-composer-text"
         aria-label="Inline review comment"
         value={body}

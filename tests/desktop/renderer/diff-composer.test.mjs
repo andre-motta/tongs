@@ -81,7 +81,7 @@ test("the gutter affordance opens one in-diff composer under its own row", async
   assert.equal(view.getByRole("button", { name: "Cancel" }).disabled, false);
 });
 
-test("the keyboard opens the composer on the focused line and fires its primary action", async () => {
+test("the keyboard opens the composer, takes focus, closes on Escape, and fires the primary action", async () => {
   const review = "review-composer-keyboard";
   const saves = [];
   const view = renderDiff(
@@ -106,7 +106,32 @@ test("the keyboard opens the composer on the focused line and fires its primary 
     view.getByText("src/calc.py, new line 11").textContent,
     "src/calc.py, new line 11",
   );
-  const editor = view.getByLabelText("Inline review comment");
+
+  // The composer takes focus, so Escape and Ctrl+Enter reach it without a Tab.
+  assert.equal(
+    document.activeElement.getAttribute("aria-label"),
+    "Inline review comment",
+  );
+  fireEvent.keyDown(document.activeElement, { key: "Escape" });
+  assert.equal(view.queryByLabelText("Inline comment composer"), null);
+
+  // Escape also closes it from the row that owns it.
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
+  await view.findByLabelText("Inline comment composer");
+  assert.equal(
+    document.activeElement.getAttribute("aria-label"),
+    "Inline review comment",
+  );
+  lines[1].focus();
+  assert.equal(
+    document.activeElement.getAttribute("aria-label"),
+    "Select new line 11",
+  );
+  fireEvent.keyDown(document.activeElement, { key: "Escape" });
+  assert.equal(view.queryByLabelText("Inline comment composer"), null);
+
+  fireEvent.keyDown(lines[1], { key: "c" });
+  const editor = await view.findByLabelText("Inline review comment");
   fireEvent.change(editor, { target: { value: "Opened from the keyboard" } });
   fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
   await waitFor(() => assert.equal(saves.length, 1));
@@ -181,6 +206,262 @@ test("Start a review saves an inline entry for the row and then offers Add to re
   assert.equal(second.anchor.old_line, 12);
   assert.equal(second.anchor.new_line, null);
   assert.equal(second.anchor.side, "old");
+});
+
+test("a retry after a failed save writes the entry once", async () => {
+  const review = "review-composer-retry";
+  const creates = [];
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      createReviewDraft: async (params) => {
+        creates.push(params);
+        return draft(review, 1, []);
+      },
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        if (saves.length === 1)
+          throw {
+            code: "network",
+            message: "the save did not reach the service",
+            retryable: true,
+          };
+        return draft(review, params.expected_version + 1, params.content.comments);
+      },
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "Guard the zero divisor" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+
+  // The composer stays open with the text, so pressing the primary again is
+  // the obvious next move.
+  assert.equal(
+    view.getByLabelText("Inline review comment").value,
+    "Guard the zero divisor",
+  );
+  await waitFor(() =>
+    assert.equal(
+      view.getByRole("button", { name: "Add to review" }).disabled,
+      false,
+    ),
+  );
+  fireEvent.click(view.getByRole("button", { name: "Add to review" }));
+  await waitFor(() => assert.equal(saves.length, 2));
+  assert.equal(creates.length, 1);
+  assert.equal(saves[1].expected_version, 1);
+  assert.equal(
+    saves[1].content.comments.map((comment) => comment.body).join(" | "),
+    "Guard the zero divisor",
+  );
+});
+
+test("a draft conflict refuses the primary action instead of appending again", async () => {
+  const review = "review-composer-conflict";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        throw {
+          code: "conflict",
+          message: "the stored draft advanced",
+          retryable: false,
+        };
+      },
+      getReviewDraft: () => read(draft(review, 5, [])),
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "Guard the zero divisor" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  await view.findByText(
+    "This pending review was changed elsewhere. Resolve the conflict in the review workflow before adding inline feedback.",
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Add to review" }).disabled,
+    true,
+  );
+  fireEvent.click(view.getByRole("button", { name: "Add to review" }));
+  assert.equal(saves.length, 1);
+  assert.equal(
+    view.getByLabelText("Inline review comment").value,
+    "Guard the zero divisor",
+  );
+});
+
+test("one recovered pending review is adopted rather than duplicated", async () => {
+  const review = "review-composer-adopt";
+  const creates = [];
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({ cursor: 0, next_cursor: null, drafts: [draft(review, 3, [])] }),
+      createReviewDraft: async (params) => {
+        creates.push(params);
+        return draft(review, 1, []);
+      },
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        return draft(review, params.expected_version + 1, params.content.comments);
+      },
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "Guard the zero divisor" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  assert.equal(creates.length, 0);
+  assert.equal(saves[0].expected_version, 3);
+  assert.equal(saves[0].content.comments.length, 1);
+});
+
+test("several recovered pending reviews refuse in their own words", async () => {
+  const review = "review-composer-several";
+  const creates = [];
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [
+            draft(review, 1, []),
+            { ...draft(review, 2, []), id: "22222222-2222-4222-8222-222222222222" },
+          ],
+        }),
+      createReviewDraft: async (params) => {
+        creates.push(params);
+        return draft(review, 1, []);
+      },
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        return draft(review, params.expected_version + 1, params.content.comments);
+      },
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "Guard the zero divisor" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await view.findByText(
+    "Several pending reviews were recovered. Resume one in the review workflow before commenting.",
+  );
+  assert.equal(creates.length, 0);
+  assert.equal(saves.length, 0);
+});
+
+test("a pending review bound to an earlier revision refuses in its own words", async () => {
+  const review = "review-composer-stale";
+  const saves = [];
+  const stale = {
+    ...draft(review, 2, []),
+    revision: { head_sha: "old-head", base_sha: "df2bd3f", start_sha: null },
+  };
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({ cursor: 0, next_cursor: null, drafts: [stale] }),
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        return draft(review, params.expected_version + 1, params.content.comments);
+      },
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "Guard the zero divisor" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await view.findByText(
+    "The pending review is bound to an earlier revision. Migrate it in the review workflow before adding inline feedback.",
+  );
+  assert.equal(saves.length, 0);
+  assert.equal(
+    view.getByRole("button", { name: "Add to review" }).disabled,
+    true,
+  );
+});
+
+test("a partial diff context refuses the draft path in its own words", async () => {
+  const review = "review-composer-partial";
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      openDiff: (params) => read(truncatedDiffPage(review, params.layout ?? "unified")),
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        return draft(review, params.expected_version + 1, params.content.comments);
+      },
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  await view.findByText(
+    "The selected context is partial. Refresh the complete diff before drafting.",
+  );
+  fireEvent.change(view.getByLabelText("Inline review comment"), {
+    target: { value: "Guard the zero divisor" },
+  });
+  assert.equal(
+    view.getByRole("button", { name: "Start a review" }).disabled,
+    true,
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Add comment now" }).disabled,
+    false,
+  );
+  assert.equal(saves.length, 0);
+});
+
+test("the gutter keeps an existing multi-line selection and composes on its own line", async () => {
+  const review = "review-composer-range";
+  const view = renderDiff(diffBridge(review), review);
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll('.line-content[role="button"]').length,
+      3,
+    ),
+  );
+  const lines = view.container.querySelectorAll('.line-content[role="button"]');
+  fireEvent.click(lines[0]);
+  fireEvent.click(lines[1], { shiftKey: true });
+  assert.equal(view.container.querySelectorAll(".line-selected").length, 2);
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
+  await view.findByLabelText("Inline comment composer");
+  assert.equal(
+    view.getByText("src/calc.py, new line 11").textContent,
+    "src/calc.py, new line 11",
+  );
+  assert.equal(view.container.querySelectorAll(".line-selected").length, 2);
 });
 
 test("Add comment now posts the immediate inline mutation and writes no draft", async () => {
@@ -396,6 +677,16 @@ function reviewItem(handle) {
       additions: 1,
       deletions: 1,
     },
+  };
+}
+
+function truncatedDiffPage(review, layout) {
+  const page = diffPage(review, layout);
+  const [file, ...rest] = page.entries;
+  return {
+    ...page,
+    snapshot_id: `snapshot-truncated-${layout}`,
+    entries: [{ ...file, is_truncated: true }, ...rest],
   };
 }
 

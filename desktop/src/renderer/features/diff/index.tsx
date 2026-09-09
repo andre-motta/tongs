@@ -48,7 +48,16 @@ const MAX_DIFF_ROWS = 100_000;
 export interface InlineComposerSlot {
   readonly controller: InlineComposerController;
   readonly anchor: InlineAnchorSelection | null;
-  readonly open: (anchor: InlineAnchorSelection) => void;
+  /**
+   * `keepSelection` leaves the app-owned line selection alone, which is what a
+   * row inside an existing multi-line selection needs: card #188 composes on a
+   * single line, and discarding the range the reader built with the shipped
+   * shift-click affordance would be a regression while #189 is pending.
+   */
+  readonly open: (
+    anchor: InlineAnchorSelection,
+    keepSelection?: boolean,
+  ) => void;
   readonly close: () => void;
 }
 
@@ -402,11 +411,15 @@ function DiffWorkspace({
   const inline: InlineComposerSlot = {
     controller: composerController,
     anchor: composerAnchor,
-    open: (anchor) => {
-      selectAnchor(anchor);
+    open: (anchor, keepSelection = false) => {
+      composerController.clearMessage();
+      if (!keepSelection) selectAnchor(anchor);
       setComposerAnchor(anchor);
     },
-    close: () => setComposerAnchor(null),
+    close: () => {
+      composerController.clearMessage();
+      setComposerAnchor(null);
+    },
   };
   const moveFocus = (event: KeyboardEvent<HTMLElement>): void => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -458,6 +471,11 @@ function DiffWorkspace({
       <section
         className={`diff-view diff-${loaded.layout}`}
         data-layout={loaded.layout}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || composerAnchor === null) return;
+          event.preventDefault();
+          inline.close();
+        }}
       >
         <DiffRowsWindow
           review={review}
@@ -670,7 +688,14 @@ function DiffRowView({
   };
   const compose = (side: "old" | "new"): void => {
     if (!selectable || !file) return;
-    inline.open(selectionForUnifiedLine(review, loaded, file, row, side));
+    const inRange =
+      selection !== null &&
+      (selection.selectedLines?.length ?? 0) > 1 &&
+      selectionMatchesLine(selection, loaded, file, row, side);
+    inline.open(
+      selectionForUnifiedLine(review, loaded, file, row, side),
+      inRange,
+    );
   };
   const selected =
     selection !== null &&
@@ -889,7 +914,11 @@ function SplitPaneRow({
           // The panes are two independent columns, so the pane that does not
           // hold the composer keeps its rows aligned with a spacer of the same
           // fixed height.
-          <div className="inline-composer-mirror" aria-hidden="true" />
+          <div
+            className="inline-composer-mirror"
+            role="presentation"
+            aria-hidden="true"
+          />
         ))}
     </>
   );
@@ -955,7 +984,14 @@ function SplitCell({
   };
   const compose = (): void => {
     if (!selectable || !cell || !file || !cell.anchor_side) return;
-    inline.open(selectionForSplitCell(review, loaded, file, row, cell));
+    const inRange =
+      selection !== null &&
+      (selection.selectedLines?.length ?? 0) > 1 &&
+      selectionMatchesSplitCell(selection, loaded, file, row, cell);
+    inline.open(
+      selectionForSplitCell(review, loaded, file, row, cell),
+      inRange,
+    );
   };
   return (
     <div

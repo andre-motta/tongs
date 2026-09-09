@@ -29,6 +29,7 @@ from tongs.desktop.installer.launcher import (
     launch_desktop,
     validate_bound_launch,
     validate_environment_binding,
+    xwayland_launch_arguments,
 )
 from tongs.desktop.installer.models import (
     PERSISTENT_INSTALL_GUIDANCE,
@@ -68,6 +69,24 @@ def _payload(target_root: Path, launcher: Path) -> InstalledPayload:
             for parent in reversed(launcher.relative_to(target_root).parents[:-1])
         ),
     )
+
+
+def _launchable_target(tmp_path: Path) -> InstallationTarget:
+    target_root = tmp_path / "payload"
+    launcher = _executable(target_root / "runtime/tongs-desktop", "#!/bin/sh\n")
+    interpreter = Path(sys.executable)
+    console = _executable(
+        tmp_path / "bin/tongs", f"#!{interpreter}\nraise SystemExit\n"
+    )
+    environment = BoundPythonEnvironment(
+        EnvironmentKind.SYSTEM,
+        console,
+        interpreter,
+        console.resolve(),
+        interpreter.resolve(),
+        "0.0.1",
+    )
+    return InstallationTarget(_payload(target_root, launcher), environment)
 
 
 def _patch_script_roots(
@@ -348,6 +367,7 @@ def test_malformed_shell_trampolines_are_rejected(
 def test_pipx_isolation_shebang_survives_binding_and_launch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     target_root = tmp_path / "payload"
     launcher = _executable(target_root / "runtime/tongs-desktop", "#!/bin/sh\n")
     interpreter = Path(sys.executable)
@@ -384,6 +404,7 @@ def test_pipx_isolation_shebang_survives_binding_and_launch(
 def test_launch_reprobes_bound_core_and_preserves_invocation_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     target_root = tmp_path / "payload"
     launcher = _executable(target_root / "runtime/tongs-desktop", "#!/bin/sh\n")
     interpreter = Path(sys.executable)
@@ -415,6 +436,116 @@ def test_launch_reprobes_bound_core_and_preserves_invocation_path(
     launch_desktop(target, extra_arguments=("--ozone-platform=x11",))
     assert observed[0] == launcher
     assert observed[1][-1] == "--ozone-platform=x11"  # type: ignore[index]
+
+
+def test_xwayland_switch_is_selected_only_on_a_linux_wayland_session() -> None:
+    assert xwayland_launch_arguments(
+        platform="linux", environ={"WAYLAND_DISPLAY": "wayland-0"}
+    ) == ("--ozone-platform=x11",)
+    assert xwayland_launch_arguments(platform="linux", environ={"DISPLAY": ":0"}) == ()
+    assert (
+        xwayland_launch_arguments(platform="linux", environ={"WAYLAND_DISPLAY": ""})
+        == ()
+    )
+    assert (
+        xwayland_launch_arguments(
+            platform="darwin", environ={"WAYLAND_DISPLAY": "wayland-0"}
+        )
+        == ()
+    )
+    assert (
+        xwayland_launch_arguments(
+            platform="win32", environ={"WAYLAND_DISPLAY": "wayland-0"}
+        )
+        == ()
+    )
+
+
+def test_launch_arguments_select_xwayland_on_a_wayland_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(launcher_module.sys, "platform", "linux")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    target = _launchable_target(tmp_path)
+
+    launch = validate_bound_launch(target)
+
+    assert launch.arguments[0] == os.fspath(launch.executable)
+    assert launch.arguments[1] == "--ozone-platform=x11"
+    assert launch.arguments.count("--ozone-platform=x11") == 1
+    assert launch.arguments.index("--ozone-platform=x11") < launch.arguments.index(
+        "--tongs-python-executable"
+    )
+
+
+def test_launch_arguments_omit_xwayland_without_a_wayland_display(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(launcher_module.sys, "platform", "linux")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setenv("DISPLAY", ":0")
+    target = _launchable_target(tmp_path)
+
+    launch = validate_bound_launch(target)
+
+    assert "--ozone-platform=x11" not in launch.arguments
+    assert launch.arguments[1] == "--tongs-python-executable"
+
+
+def test_launch_arguments_omit_xwayland_off_linux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(launcher_module.sys, "platform", "darwin")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    target = _launchable_target(tmp_path)
+
+    assert "--ozone-platform=x11" not in validate_bound_launch(target).arguments
+
+
+def test_launch_exec_places_xwayland_before_extra_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(launcher_module.sys, "platform", "linux")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    target = _launchable_target(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        os,
+        "execv",
+        lambda executable, arguments: observed.extend([executable, arguments]),
+    )
+
+    launch_desktop(target, extra_arguments=("--tongs-smoke-report", "/tmp/report.json"))
+
+    argv = observed[1]
+    assert isinstance(argv, list)
+    assert argv[1] == "--ozone-platform=x11"
+    assert argv[-2:] == ["--tongs-smoke-report", "/tmp/report.json"]
+    assert argv.index("--ozone-platform=x11") < argv.index("--tongs-smoke-report")
+
+
+def test_launch_tolerates_extra_arguments_repeating_the_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(launcher_module.sys, "platform", "linux")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    target = _launchable_target(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        os,
+        "execv",
+        lambda executable, arguments: observed.extend([executable, arguments]),
+    )
+
+    launch_desktop(target, extra_arguments=("--ozone-platform=x11",))
+
+    argv = observed[1]
+    assert isinstance(argv, list)
+    # A caller that already selects XWayland repeats a switch Chromium keys by
+    # name with the same value, so the launch stays valid instead of failing.
+    assert argv.count("--ozone-platform=x11") == 2
+    assert argv[1] == "--ozone-platform=x11"
+    assert argv[-1] == "--ozone-platform=x11"
 
 
 def test_launch_rejects_unrecorded_payload_content(tmp_path: Path) -> None:

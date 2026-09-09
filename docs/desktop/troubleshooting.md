@@ -129,6 +129,19 @@ architectures are outside that policy. The release metadata check rejects an
 unsupported artifact target before download, so an unsupported platform fails at
 install rather than at launch.
 
+On a Wayland session the desktop shell runs through XWayland. `tongs desktop`
+adds `--ozone-platform=x11` to the launch itself when it runs on Linux with
+`WAYLAND_DISPLAY` set, which is the same condition the shell checks, so the menu
+entry and the command need no switch typed by hand. The shell still refuses to
+start when that switch is missing:
+
+```text
+Fedora KDE Wayland sessions must launch the desktop through XWayland
+```
+
+Seeing that message means something other than `tongs desktop` started the
+shell.
+
 Hardware GPU acceleration is a required and currently unmet production gate. A
 headless, container, or software-rendered run is not evidence that the
 accelerated path works, and this documentation makes no hardware acceleration

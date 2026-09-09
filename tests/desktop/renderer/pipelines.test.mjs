@@ -130,7 +130,7 @@ test("pipeline panel renders hierarchy, inert paged logs, search, and keyboard s
   fireEvent.change(search, { target: { value: "fail" } });
   assert.equal(view.container.querySelector(".ci-match-count").textContent, "1 of 1 matches");
   search.blur();
-  fireEvent.keyDown(view.container.querySelector(".ci-page"), { key: "/" });
+  fireEvent.keyDown(document.body, { key: "/" });
   assert.equal(document.activeElement, search);
 
   const pipelines = view.getByRole("navigation", { name: "Review pipelines" });

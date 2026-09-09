@@ -165,6 +165,15 @@ rebuild against the receipt-bound fresh archive on every pull request.
 to `main`. No pull-request check builds the documentation, which is why the
 strict build belongs in your local run.
 
+Every GitHub Action referenced from a workflow under `.github/workflows` is
+pinned to a full commit SHA with a trailing `# vX.Y.Z` comment, never a mutable
+tag; `tests/ci/test_production_workflow_contract.py` enforces this for the
+workflows GitHub triggers automatically. Python tooling a workflow installs,
+such as `mkdocs` and `mkdocs-material`, is pinned to an exact version declared
+in `pyproject.toml` rather than in the workflow alone. Updates to these pins
+will arrive as Dependabot pull requests once #162 (v1.1.0) lands; until then,
+bump them by hand.
+
 The Fedora harness interface is:
 
 ```bash

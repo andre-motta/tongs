@@ -322,23 +322,69 @@ def test_the_sbom_adapter_constants_anchor_the_gate_policy() -> None:
     assert check.receipt_name == "sbom-receipt.json"
 
 
+#: Workflows required to pin every ``actions/*`` step to a full commit SHA.
+#: These are the ones GitHub triggers automatically (push, tag push, or a
+#: ``workflow_call`` from one of the others); a compromised or rewritten tag
+#: on one of them runs without a human deciding to run it first.
+#: ``desktop-rpm.yml``, ``desktop-python-rpms.yml`` and ``desktop-archive.yml``
+#: are ``workflow_dispatch``-only utility workflows and are not yet in this
+#: set; see issue #149.
+_SHA_PINNED_WORKFLOWS = (
+    "ci.yml",
+    "desktop-production.yml",
+    "desktop-podman-probe.yml",
+    "release-desktop.yml",
+    "docs.yml",
+    "publish.yml",
+)
+
+
+def _actions_uses(workflow: dict[str, Any]) -> list[str]:
+    """Every ``actions/*`` ``uses:`` reference in a parsed workflow, structurally.
+
+    Walks ``jobs[*].steps[*].uses`` rather than matching line prefixes, so it
+    sees list-form steps (``- uses: ...``) the same as any other form.
+    """
+
+    references: list[str] = []
+    for job in (workflow.get("jobs") or {}).values():
+        if not isinstance(job, dict):
+            continue
+        for step in job.get("steps") or []:
+            uses = step.get("uses") if isinstance(step, dict) else None
+            if isinstance(uses, str) and uses.startswith("actions/"):
+                references.append(uses)
+    return references
+
+
 def test_every_action_in_the_required_call_chain_is_sha_pinned() -> None:
-    chain = (
-        "ci.yml",
-        "desktop-production.yml",
-        "desktop-podman-probe.yml",
-        "release-desktop.yml",
-    )
     unpinned: list[str] = []
-    for name in chain:
-        for line in (ROOT / ".github/workflows" / name).read_text().splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("uses: actions/"):
-                continue
-            reference = stripped.split("@", 1)[1].split()[0]
+    for name in _SHA_PINNED_WORKFLOWS:
+        workflow = _load(ROOT / ".github/workflows" / name)
+        for uses in _actions_uses(workflow):
+            reference = uses.split("@", 1)[1] if "@" in uses else ""
             if re.fullmatch(r"[0-9a-f]{40}", reference) is None:
-                unpinned.append(f"{name}: {stripped}")
+                unpinned.append(f"{name}: {uses}")
     assert unpinned == []
+
+
+def test_docs_workflow_mkdocs_pin_matches_the_dev_extra() -> None:
+    """``docs.yml`` installs mkdocs directly instead of the ``dev`` extra, so
+    nothing else keeps the two version pins from drifting apart; see issue
+    #149."""
+
+    pyproject_text = (ROOT / "pyproject.toml").read_text()
+    docs_workflow = _load(ROOT / ".github/workflows/docs.yml")
+    install_step = next(
+        step
+        for step in docs_workflow["jobs"]["build"]["steps"]
+        if "mkdocs-material" in str(step.get("run", ""))
+    )
+    pin_pattern = re.compile(r"(mkdocs(?:-material)?)==([0-9][\w.]*)")
+    workflow_pins = dict(pin_pattern.findall(install_step["run"]))
+    pyproject_pins = dict(pin_pattern.findall(pyproject_text))
+    assert workflow_pins == {"mkdocs": "1.6.1", "mkdocs-material": "9.7.7"}
+    assert workflow_pins == pyproject_pins, (workflow_pins, pyproject_pins)
 
 
 def test_every_new_upload_is_retry_safe_and_retained_for_fourteen_days(

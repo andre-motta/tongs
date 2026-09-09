@@ -567,3 +567,73 @@ async def test_placeholder_cannot_restore_prior_source_on_layout_or_navigation(
         await pilot.pause()
         assert panel.mode_state == DiffModeState(DiffViewMode.SPLIT, DiffViewMode.SPLIT)
         assert_authoritative_placeholder()
+
+
+@pytest.mark.asyncio
+async def test_h_and_l_move_focus_between_split_columns() -> None:
+    app = _DiffApp()
+    file = _file()
+    deleted = file.hunks[0].lines[1]
+    added = file.hunks[0].lines[4]
+
+    async with app.run_test(size=(160, 30)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.set_files([file])
+        panel.request_mode(DiffViewMode.SPLIT)
+        await pilot.pause()
+
+        split = app.query_one(SplitDiffView)
+        old = app.query_one("#split-old", SplitDiffColumn)
+        new = app.query_one("#split-new", SplitDiffColumn)
+        assert split.jump_to(21, DiffSide.NEW)
+        await pilot.pause()
+        assert new.has_focus
+
+        await pilot.press("h")
+        await pilot.pause()
+        assert old.has_focus
+        assert panel.selection is not None
+        assert panel.selection.side is DiffSide.OLD
+        assert panel.selection.line is deleted
+
+        await pilot.press("l")
+        await pilot.pause()
+        assert new.has_focus
+        assert panel.selection is not None
+        assert panel.selection.side is DiffSide.NEW
+        assert panel.selection.line is added
+
+
+@pytest.mark.asyncio
+async def test_h_and_l_survive_a_unified_split_round_trip() -> None:
+    app = _DiffApp()
+    file = _file()
+
+    async with app.run_test(size=(160, 30)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.set_files([file])
+        panel.request_mode(DiffViewMode.SPLIT)
+        await pilot.pause()
+        assert app.query_one(SplitDiffView).jump_to(21, DiffSide.NEW)
+        await pilot.pause()
+
+        panel.request_mode(DiffViewMode.UNIFIED)
+        await pilot.pause()
+        panel.request_mode(DiffViewMode.SPLIT)
+        await pilot.pause()
+
+        split = app.query_one(SplitDiffView)
+        assert split.jump_to(21, DiffSide.NEW)
+        await pilot.pause()
+
+        await pilot.press("h")
+        await pilot.pause()
+        assert app.query_one("#split-old", SplitDiffColumn).has_focus
+        assert panel.selection is not None
+        assert panel.selection.side is DiffSide.OLD
+
+        await pilot.press("l")
+        await pilot.pause()
+        assert app.query_one("#split-new", SplitDiffColumn).has_focus
+        assert panel.selection is not None
+        assert panel.selection.side is DiffSide.NEW

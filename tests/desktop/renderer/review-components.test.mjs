@@ -477,7 +477,6 @@ test("the Discussions panel offers no composer, suggestion, reply or resolve con
   assert.equal(names.filter((name) => name === "Reply").length, 0);
   assert.equal(names.filter((name) => name === "Resolve").length, 0);
   assert.equal(names.filter((name) => name === "Reopen thread").length, 0);
-  assert.equal(names.filter((name) => name === "Suggest replacement").length, 0);
   assert.equal(names.filter((name) => name === "Show in diff").length, 1);
 });
 

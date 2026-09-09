@@ -81,6 +81,17 @@ test("the gutter affordance opens one in-diff composer under its own row", async
   assert.equal(view.getByRole("button", { name: "Cancel" }).disabled, false);
 });
 
+test("the diff toolbar offers layout and refresh controls only", async () => {
+  const review = "review-toolbar-controls";
+  const view = renderDiff(diffBridge(review), review);
+  await view.findByRole("button", { name: "Comment on new line 11" });
+  const toolbar = view.container.querySelector(".diff-toolbar");
+  const names = [...toolbar.querySelectorAll("button")].map(
+    (button) => button.textContent,
+  );
+  assert.deepEqual(names, ["Unified", "Split", "Refresh"]);
+});
+
 test("the keyboard opens the composer, takes focus, closes on Escape, and fires the primary action", async () => {
   const review = "review-composer-keyboard";
   const saves = [];

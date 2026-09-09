@@ -272,19 +272,6 @@ function DiffView({
         >
           Refresh
         </button>
-        <button
-          className="button button-secondary"
-          disabled={
-            inlineAnchor?.review !== route.item.handle ||
-            inlineAnchor.side !== "new" ||
-            inlineAnchor.contextComplete !== true ||
-            !inlineAnchor.selectedLines?.length
-          }
-          title="Select one or more contiguous new-side lines. Use Shift+click or Shift+Enter to extend the range."
-          onClick={() => navigate({ ...route, panel: "discussions" })}
-        >
-          Suggest replacement
-        </button>
         {loaded && (
           <code
             className="revision"

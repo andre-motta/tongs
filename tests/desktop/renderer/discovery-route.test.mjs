@@ -55,18 +55,30 @@ test("mounted app reconciles successful discovery without losing review work", a
   assert.ok(routeNotice() === null);
 
   fireEvent.click(await awaitReview("Persistent review"));
-  // Overview holds the general composer now; the review's Summary is the
-  // drawer's, reached from the Discussions tab.
+  // Overview holds the general composer, and its primary is what starts a
+  // review now: the Discussions panel writes nothing at all.
   await waitFor(() => assert.ok(labelled("General review comment")));
+  setValue(labelled("General review comment"), "started from Overview");
+  await waitFor(() => assert.equal(button("Start a review").disabled, false));
+  fireEvent.click(button("Start a review"));
+  await waitFor(() => assert.ok(button("Add to review")));
   setValue(labelled("General review comment"), "unsent general composer");
+
+  // The review's Summary is the drawer's, reached from the Discussions tab.
   fireEvent.click(button("Discussions"));
-  await waitFor(() => assert.ok(button("Start review")));
-  fireEvent.click(button("Start review"));
   await waitFor(() => assert.equal(hasDrawerToggle(), true));
   fireEvent.click(drawerToggle());
   await waitFor(() => assert.equal(labelledValue("Summary"), ""));
   setValue(labelled("Summary"), "unsaved local draft body");
   fireEvent.click(drawerToggle());
+
+  // The anchored buffer is the in-diff composer's now. It holds whatever was
+  // typed on one line, a suggestion block included, because Insert suggestion
+  // pre-fills this same per-anchor body rather than a buffer of its own.
+  fireEvent.click(button("Files changed"));
+  fireEvent.click(await awaitGutter("Comment on new line 1"));
+  await waitFor(() => assert.ok(labelled("Inline review comment")));
+  setValue(labelled("Inline review comment"), "unsent anchored composer");
 
   const writesBeforeRemoval = fixture.writes.length;
   const readsBeforeRemoval = fixture.reviewReads.length;
@@ -87,8 +99,13 @@ test("mounted app reconciles successful discovery without losing review work", a
   );
   assert.equal(fixture.writes.length, writesBeforeRemoval);
   assert.equal(Boolean(labelled("General review comment")), false);
+  assert.equal(Boolean(labelled("Inline review comment")), false);
   assert.equal(
     document.body.textContent.includes("unsent general composer"),
+    false,
+  );
+  assert.equal(
+    document.body.textContent.includes("unsent anchored composer"),
     false,
   );
   assert.equal(
@@ -115,6 +132,19 @@ test("mounted app reconciles successful discovery without losing review work", a
   );
   fireEvent.click(drawerToggle());
   assert.ok(document.body.textContent.includes("Draft review active"));
+
+  // The anchored text returns to its own line and to no other.
+  fireEvent.click(button("Files changed"));
+  fireEvent.click(await awaitGutter("Comment on new line 2"));
+  await waitFor(() => assert.equal(labelledValue("Inline review comment"), ""));
+  fireEvent.click(button("Cancel"));
+  fireEvent.click(await awaitGutter("Comment on new line 1"));
+  await waitFor(() =>
+    assert.equal(
+      labelledValue("Inline review comment"),
+      "unsent anchored composer",
+    ),
+  );
   assert.equal(fixture.writes.length, writesBeforeRemoval);
 
   fireEvent.click(button("← Reviews"));
@@ -180,6 +210,17 @@ function bridgeFixture() {
     createReviewDraft: async () => {
       writes.push("create-draft");
       activeDraft = draft();
+      return activeDraft;
+    },
+    saveReviewDraft: async (params) => {
+      writes.push("save-draft");
+      activeDraft = {
+        ...draft(),
+        version: params.expected_version + 1,
+        body: params.content.body,
+        verdict: params.content.verdict,
+        comments: params.content.comments,
+      };
       return activeDraft;
     },
     openDiff: ({ layout }) => read(diffPage(layout)),
@@ -374,6 +415,15 @@ function button(name) {
   return [...document.querySelectorAll("button")].find(
     (item) => item.textContent.trim() === name,
   );
+}
+
+/** The in-diff gutter affordance, which names itself with an aria-label. */
+async function awaitGutter(name) {
+  return waitFor(() => {
+    const found = document.querySelector(`button[aria-label="${name}"]`);
+    assert.equal(Boolean(found), true);
+    return found;
+  });
 }
 
 async function awaitButton(name) {

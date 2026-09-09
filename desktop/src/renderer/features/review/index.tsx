@@ -15,7 +15,6 @@ import type {
   ReviewSnapshotDto,
 } from "../../../shared/bridge.js";
 import type {
-  DraftSnapshotDto,
   ReviewAction,
   ReviewActionCapabilitiesDto,
   ReviewDesktopBridge,
@@ -33,8 +32,6 @@ import {
   cachedWorkflow,
   isUncertainError,
   newOperationId,
-  readActiveDrafts,
-  releaseActiveDrafts,
   reviewMutationError,
   subscribeWorkflow,
 } from "./composer.js";
@@ -47,7 +44,6 @@ import {
 } from "./drawer.js";
 import {
   acknowledgeQuickUncertainty,
-  adoptDraft,
   beginQuickIntent,
   createReviewWorkflowState,
   markQuickIntentUncertain,
@@ -124,8 +120,6 @@ function ReviewWorkflow({
   const [discussions, setDiscussions] = useState<readonly DiscussionDto[]>([]);
   const [actionCapabilities, setActionCapabilities] =
     useState<ReviewActionCapabilitiesDto | null>(null);
-  const [draftCandidates, setDraftCandidates] =
-    useState<readonly DraftSnapshotDto[]>([]);
   const [workflow, setWorkflow] = useState<ReviewWorkflowState | null>(
     cachedWorkflow(review),
   );
@@ -196,54 +190,6 @@ function ReviewWorkflow({
       for (const item of reads) void bridge.cancelRead(item.requestToken);
     };
   }, [bridge, review]);
-
-  // The active-draft read waits for the revision deliberately. The drawer
-  // mounts on the same condition, so both surfaces ask in one commit and the
-  // shared reader answers them from one question; asking during the batch
-  // above settled the read before the drawer existed and put the same
-  // question to the sidecar twice on every visit to this tab.
-  const revisionReady = Boolean(snapshot?.revision);
-  useEffect(() => {
-    if (!revisionReady) return;
-    let live = true;
-    let shared: ReturnType<typeof readActiveDrafts> | null = null;
-    try {
-      shared = readActiveDrafts(bridge, review);
-      void shared.result.then(
-        (result) => {
-          if (live) setDraftCandidates(result.drafts);
-        },
-        () => undefined,
-      );
-    } catch {
-      // The toolbar still offers Start review, which reads again on the press.
-    }
-    return () => {
-      live = false;
-      if (shared) releaseActiveDrafts(bridge, review, shared);
-    };
-  }, [bridge, review, revisionReady]);
-
-  const startReview = async (): Promise<void> => {
-    if (!workflow || !snapshot?.revision) return;
-    setError(null);
-    if (draftCandidates.length > 1) {
-      setError("Multiple active drafts were recovered. Choose one before editing.");
-      return;
-    }
-    try {
-      const draft =
-        draftCandidates[0] ??
-        (await bridge.createReviewDraft({
-          review,
-          revision: workflow.displayed.revision,
-        }));
-      apply((current) => adoptDraft(current, draft));
-      setDraftCandidates([draft]);
-    } catch (reason) {
-      setError(reviewMutationError(reason));
-    }
-  };
 
   const runAction = async (action: ReviewAction): Promise<void> => {
     if (!workflow) return;
@@ -328,11 +274,7 @@ function ReviewWorkflow({
       />
       <section className="review-workflow-shell" aria-label="Review workflow">
         <div className="review-workflow-toolbar">
-          {!workflow?.draft.remote ? (
-            <button className="button" disabled={!snapshot?.revision} onClick={() => void startReview()}>
-              {draftCandidates.length === 1 ? "Resume review" : "Start review"}
-            </button>
-          ) : (
+          {workflow?.draft.remote && (
             <>
               <strong>Draft review active</strong>
               <span className="review-workflow-thread-meta">
@@ -393,8 +335,11 @@ function ReviewWorkflow({
  * The Discussions panel: every published thread that resolves to a diff
  * position, unresolved ones first, each with the jump that opens it where it
  * was written. Writing happens where the thread is, in the diff, or on
- * Overview for a review-level comment, so this panel offers no composer and no
- * reply or resolve control of its own.
+ * Overview for a review-level comment, so this panel offers no composer, no
+ * reply or resolve control, and no way to start a review: design 2.1 makes it
+ * "no longer the place to write", and a review is started from the composer
+ * that carries the first comment. The forge actions in the toolbar above act
+ * on the review itself rather than on its contents, and stay here.
  *
  * The jump goes through `discussionDiffTarget` untouched, so the coordinates a
  * row resolves to are exactly the ones the diff route already resolves and

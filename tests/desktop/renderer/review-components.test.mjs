@@ -9,6 +9,12 @@ import {
   discussionDiffTarget,
 } from "../../../desktop/dist/src/renderer/features/review/index.js";
 import { createReviewOverviewFeature } from "../../../desktop/dist/src/renderer/features/review-detail/index.js";
+import { cacheWorkflow } from "../../../desktop/dist/src/renderer/features/review/composer.js";
+import {
+  adoptDraft,
+  beginSubmission,
+  createReviewWorkflowState,
+} from "../../../desktop/dist/src/renderer/features/review/state.js";
 
 const desktopRequire = createRequire(
   new URL("../../../desktop/package.json", import.meta.url),
@@ -492,8 +498,19 @@ test("the Discussions route puts one active-draft read and one capabilities read
   const view = renderFeature(bridge, review);
   await view.findByRole("button", { name: /Your review/ });
   await waitFor(() => assert.equal(drafts, 1));
+  // A second read issued after the first settles would be invisible to an
+  // assertion in the same tick, so the route is left to settle first.
+  await settle();
   assert.equal(drafts, 1);
   assert.equal(capabilityReads, 1);
+  // Nothing on this panel starts a review any more; the drawer is the only
+  // surface here that asks either question.
+  assert.equal(
+    [...view.container.querySelectorAll("button")].filter((button) =>
+      ["Start review", "Resume review"].includes(button.textContent),
+    ).length,
+    0,
+  );
 });
 
 test("discussion diff targets use only actual path and side line data", () => {
@@ -978,6 +995,105 @@ test("durable recovery loads and binds the attempt draft instead of another cand
   assert.equal(view.queryByDisplayValue("first draft"), null);
 });
 
+test("a failed review-level discussions read is stated, not reported as an absence", async () => {
+  const review = "review-notes-failure";
+  let attempts = 0;
+  const bridge = reviewBridge(review, {
+    listDiscussions: () => {
+      attempts += 1;
+      return read(Promise.reject(new Error("controlled discussions failure")));
+    },
+  });
+  const view = renderOverview(bridge, review);
+
+  const refusal =
+    "The published discussions could not be read, so this review shows no review-level notes. Retry, or open the review on the forge.";
+  await view.findByText(refusal);
+  const section = view.container.querySelector(".review-level-discussions");
+  assert.equal(section.querySelectorAll(".notice-error").length, 1);
+  assert.equal(section.querySelectorAll(".notice-empty").length, 0);
+  assert.equal(section.textContent.includes("No review-level discussions yet."), false);
+
+  const retry = view.getByRole("button", { name: "Retry" });
+  fireEvent.click(retry);
+  await waitFor(() => assert.equal(attempts, 2));
+});
+
+test("review-level discussions still being read say so instead of saying there are none", async () => {
+  const review = "review-notes-loading";
+  const bridge = reviewBridge(review, {
+    listDiscussions: () => ({
+      requestToken: crypto.randomUUID(),
+      result: new Promise(() => {}),
+    }),
+  });
+  const view = renderOverview(bridge, review);
+
+  await waitFor(() => {
+    const section = view.container.querySelector(".review-level-discussions");
+    assert.equal(section.querySelectorAll(".notice-loading").length, 1);
+  });
+  await settle();
+  const section = view.container.querySelector(".review-level-discussions");
+  assert.equal(section.querySelectorAll(".notice-loading").length, 1);
+  assert.equal(section.querySelectorAll(".notice-empty").length, 0);
+  assert.equal(section.querySelectorAll(".notice-error").length, 0);
+  assert.equal(
+    section.textContent.includes("No review-level discussions yet."),
+    false,
+  );
+});
+
+test("an established absence of review-level notes is still said plainly", async () => {
+  const review = "review-notes-empty";
+  const view = renderOverview(reviewBridge(review), review);
+  await view.findByText("No review-level discussions yet.");
+  const section = view.container.querySelector(".review-level-discussions");
+  assert.equal(section.querySelectorAll(".notice-empty").length, 1);
+  assert.equal(section.querySelectorAll(".notice-error").length, 0);
+});
+
+test("a general entry is refused while the review's submission is in flight", async () => {
+  const review = "review-general-during-submission";
+  const saves = [];
+  const stored = draft(review, 3, "");
+  const bridge = reviewBridge(review, {
+    listReviewDrafts: () =>
+      read({ cursor: 0, next_cursor: null, drafts: [stored] }),
+    saveReviewDraft: async (params) => {
+      saves.push(params);
+      return draft(review, params.expected_version + 1, params.content.body);
+    },
+  });
+
+  // The state a Submit review press leaves behind: the draft is bound, the
+  // attempt has frozen its version, and no progress has come back yet. This is
+  // the state `canCaptureDraftInline` refuses for the in-diff composer.
+  cacheWorkflow(
+    review,
+    beginSubmission(
+      adoptDraft(
+        createReviewWorkflowState(review, stored.revision),
+        stored,
+      ),
+      "start",
+    ),
+  );
+
+  const view = renderOverview(bridge, review);
+  const composer = await view.findByLabelText("General review comment");
+  fireEvent.change(composer, { target: { value: "note during submission" } });
+  const primary = view.getByRole("button", { name: "Add to review" });
+  await waitFor(() => assert.equal(primary.disabled, true));
+  assert.equal(
+    primary.title,
+    "The pending review is bound to a durable submission attempt. Settle it in Your review before adding a general comment.",
+  );
+  fireEvent.click(primary);
+  await settle(4);
+  assert.equal(saves.length, 0);
+});
+
 test("the general composer buffer survives navigation and stays bound to its review", async () => {
   const review = "review-navigation-buffer";
   const bridge = reviewBridge(review);
@@ -1111,6 +1227,12 @@ test("Add comment now posts a general comment immediately and writes no draft", 
  * capability-gated control renders disabled while the read is in flight, and a
  * press on it does nothing, so waiting for the element alone is a race.
  */
+/** Lets every already-dispatched read and its follow-on effects settle. */
+async function settle(rounds = 20) {
+  for (let round = 0; round < rounds; round += 1)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
 async function enabledButton(view, name) {
   return waitFor(() => {
     const found = view.getByRole("button", { name });

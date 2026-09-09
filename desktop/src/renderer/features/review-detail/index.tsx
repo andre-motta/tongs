@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import type {
   DesktopBridge,
   DiscussionDto,
+  DiscussionsResult,
   ReviewRevisionDto,
   ReviewSnapshotDto,
 } from "../../../shared/bridge.js";
@@ -11,7 +12,6 @@ import type {
   DraftListResult,
   DraftSnapshotDto,
   GeneralCommentParams,
-  ReviewDesktopBridge,
   ReviewMutationCapabilitiesDto,
   ReviewVerdict,
 } from "../../../shared/review.js";
@@ -24,7 +24,7 @@ import {
 import { formatDate, safeError } from "../../core/presentation.js";
 import type { QueryCoordinator } from "../../core/query.js";
 import { SafeMarkdown } from "../../core/safe-markdown.js";
-import { useRetainedRead } from "../../core/use-read.js";
+import { useRetainedRead, type ReadState } from "../../core/use-read.js";
 import {
   ComposerRefusal,
   buffersFor,
@@ -59,8 +59,6 @@ import {
   allocateDiscussionMarkdown,
 } from "../review/thread.js";
 
-/** The reads and writes the Overview general composer puts to the sidecar. */
-interface OverviewBridge extends DesktopBridge, ReviewDesktopBridge {}
 
 export function ReviewHeader({
   route,
@@ -149,9 +147,12 @@ function ReviewOverview({
   const review = route.item.handle;
   const begin = useCallback(() => bridge.getReview(review), [bridge, review]);
   const state = useRetainedRead(queries, `review:${review}`, begin, [review]);
-  // The review-level notes this panel lists come from the same read the
-  // Discussions jump list uses; the coordinator holds one answer per key, so
-  // listing them here does not put a second question to the sidecar.
+  // This route's own discussions read. It is not shared with the Discussions
+  // jump list: `QueryCoordinator` tracks reads while they are in flight and
+  // keeps no answer once one settles, and the jump list calls the bridge
+  // directly rather than through the coordinator. Design 2.3 puts the
+  // review-level notes on this tab, so the read belongs on this tab, and it
+  // is one read per visit here and one per visit there.
   const beginDiscussions = useCallback(
     () => bridge.listDiscussions(review),
     [bridge, review],
@@ -195,16 +196,13 @@ function ReviewOverview({
       )}
       {revision && (
         <GeneralComposer
-          bridge={bridge as OverviewBridge}
+          bridge={bridge}
           review={review}
           revision={revision}
           openExternal={openExternal}
         />
       )}
-      <ReviewLevelDiscussions
-        discussions={notes.value?.discussions ?? []}
-        openExternal={openExternal}
-      />
+      <ReviewLevelDiscussions state={notes} openExternal={openExternal} />
     </>
   );
 }
@@ -401,7 +399,7 @@ function GeneralComposer({
   revision,
   openExternal,
 }: {
-  readonly bridge: OverviewBridge;
+  readonly bridge: DesktopBridge;
   readonly review: string;
   readonly revision: ReviewRevisionDto;
   readonly openExternal: (url: string) => Promise<boolean>;
@@ -462,15 +460,27 @@ function GeneralComposer({
     return null;
   })();
 
+  /**
+   * The states that refuse a durable write, in the words the in-diff composer
+   * already uses for the same states, with the action this composer offers.
+   * The set is `canCaptureDraftInline`'s minus its revision check: an inline
+   * entry carries a revision-bound anchor, a general entry carries no anchor
+   * at all, so a draft bound to an earlier revision can still take one and
+   * migrating it in Your review stays the reader's choice rather than a
+   * precondition here. Every other state it refuses is refused here too,
+   * including a submission that is merely pending: a write accepted then
+   * would be saved at the version the attempt froze and would not reach the
+   * forge in it.
+   */
   const draftReason = ((): string | null => {
     if (quickReason !== null) return quickReason;
     if (workflow.draft.conflict)
       return "This pending review was changed elsewhere. Resolve the conflict in Your review before adding a general comment.";
     if (workflow.draft.remote && workflow.draft.remote.state !== "editable")
-      return "The pending review is no longer editable. Settle it in Your review before adding a general comment.";
+      return "The pending review is locked by its submission attempt. Settle it in Your review before adding a general comment.";
     if (
-      workflow.submission.progress &&
-      workflow.submission.progress.outcome !== "editable"
+      workflow.submission.pending !== null ||
+      workflow.submission.progress !== null
     )
       return "The pending review is bound to a durable submission attempt. Settle it in Your review before adding a general comment.";
     return null;
@@ -791,6 +801,13 @@ function GeneralComposer({
   );
 }
 
+/**
+ * Said while the capability read behind the tiles is in flight. A capability
+ * that has not been answered for is not an unsupported one, and this panel is
+ * the first thing a reader sees on a slow sidecar.
+ */
+const VERDICTS_LOADING = "Verdict support for this review is still loading.";
+
 function QuickVerdicts({
   capabilities,
   blocked,
@@ -823,11 +840,13 @@ function QuickVerdicts({
               (verdict !== "approve" && !bodyAvailable)
             }
             title={
-              supported !== true
-                ? `${text} is unsupported for this review.`
-                : verdict !== "approve" && !bodyAvailable
-                  ? "Enter a review body in the general composer first."
-                  : undefined
+              capabilities === null
+                ? VERDICTS_LOADING
+                : supported !== true
+                  ? `${text} is unsupported for this review.`
+                  : verdict !== "approve" && !bodyAvailable
+                    ? "Enter a review body in the general composer first."
+                    : undefined
             }
             onClick={() => void run(verdict)}
           >
@@ -840,27 +859,43 @@ function QuickVerdicts({
 }
 
 /**
+ * Said when the discussions read fails on this tab. It is the diff surface's
+ * `THREAD_READ_REFUSAL` worded for the notes list, because it is the same
+ * failure of the same operation: what the reader is owed is the statement that
+ * nothing is known, never the statement that there is nothing.
+ */
+const NOTES_READ_REFUSAL =
+  "The published discussions could not be read, so this review shows no review-level notes. Retry, or open the review on the forge.";
+
+/** Said when a refresh fails on top of notes that were read successfully. */
+const NOTES_REFRESH_REFUSAL =
+  "Rereading the discussions failed. Showing the review-level notes from the previous read.";
+
+/**
  * The review-level notes: the discussions that carry no diff anchor and so
  * have nowhere to be jumped to. They are read here rather than in the
  * Discussions jump list, which lists only threads that resolve to a diff
  * position. The Markdown budget is allocated over the whole discussion list in
  * its source order and looked up by id, so a note is allocated the same way
  * here as it is on every other surface that shows it.
+ *
+ * The empty sentence is said only once a read has established the absence. A
+ * read that failed and a read still in flight each get their own words, and
+ * the failure gets a retry of its own, because the page's Refresh button
+ * refreshes the detail read and not this one.
  */
 function ReviewLevelDiscussions({
-  discussions,
+  state,
   openExternal,
 }: {
-  readonly discussions: readonly DiscussionDto[];
+  readonly state: ReadState<DiscussionsResult>;
   readonly openExternal: (url: string) => Promise<boolean>;
 }): ReactNode {
+  const discussions = state.value?.discussions ?? EMPTY_DISCUSSIONS;
   const allocations = useMemo(() => {
     const allocated = allocateDiscussionMarkdown(discussions);
     return new Map(
-      discussions.map((discussion, index) => [
-        discussion.id,
-        allocated[index],
-      ]),
+      discussions.map((discussion, index) => [discussion.id, allocated[index]]),
     );
   }, [discussions]);
   const notes = useMemo(
@@ -870,35 +905,53 @@ function ReviewLevelDiscussions({
   return (
     <section className="panel review-level-discussions">
       <h2 className="section-title">Review discussions</h2>
-      {notes.length === 0 ? (
-        <Notice kind="empty">No review-level discussions yet.</Notice>
-      ) : (
-        notes.map((discussion) => {
-          const allocation = allocations.get(discussion.id);
-          return (
-            <article key={discussion.id} className="review-workflow-thread">
-              <p className="review-workflow-thread-meta">
-                {discussion.root_comment.author.display_name ||
-                  discussion.root_comment.author.username}
-              </p>
-              <DiscussionMarkdownBody
-                allocated={allocation?.root === true}
-                body={discussion.root_comment.body}
-                openExternal={openExternal}
-              />
-              {discussion.root_comment.replies.map((item, index) => (
-                <blockquote key={item.id}>
-                  <DiscussionMarkdownBody
-                    allocated={allocation?.replies[index] === true}
-                    body={item.body}
-                    openExternal={openExternal}
-                  />
-                </blockquote>
-              ))}
-            </article>
-          );
-        })
+      {state.loading && !state.value && (
+        <Notice kind="loading">Loading review discussions…</Notice>
       )}
+      {Boolean(state.error) && (
+        <Notice kind="error">
+          <span>
+            {state.value ? NOTES_REFRESH_REFUSAL : NOTES_READ_REFUSAL}
+          </span>
+          <button
+            className="button button-secondary notice-action"
+            disabled={state.loading}
+            onClick={state.refresh}
+          >
+            {state.value ? "Refresh again" : "Retry"}
+          </button>
+        </Notice>
+      )}
+      {!state.loading && !state.error && notes.length === 0 && (
+        <Notice kind="empty">No review-level discussions yet.</Notice>
+      )}
+      {notes.map((discussion) => {
+        const allocation = allocations.get(discussion.id);
+        return (
+          <article key={discussion.id} className="review-workflow-thread">
+            <p className="review-workflow-thread-meta">
+              {discussion.root_comment.author.display_name ||
+                discussion.root_comment.author.username}
+            </p>
+            <DiscussionMarkdownBody
+              allocated={allocation?.root === true}
+              body={discussion.root_comment.body}
+              openExternal={openExternal}
+            />
+            {discussion.root_comment.replies.map((item, index) => (
+              <blockquote key={item.id}>
+                <DiscussionMarkdownBody
+                  allocated={allocation?.replies[index] === true}
+                  body={item.body}
+                  openExternal={openExternal}
+                />
+              </blockquote>
+            ))}
+          </article>
+        );
+      })}
     </section>
   );
 }
+
+const EMPTY_DISCUSSIONS: readonly DiscussionDto[] = Object.freeze([]);

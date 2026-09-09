@@ -1,8 +1,6 @@
 name: Desktop Fedora RPM
 
 on:
-  pull_request:
-    branches: [feat/desktop-app]
   workflow_dispatch:
 
 permissions:

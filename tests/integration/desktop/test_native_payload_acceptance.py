@@ -2806,6 +2806,209 @@ def test_title_derived_role_requires_exactly_one_field(tmp_path: Path) -> None:
     )
 
 
+def _spawn_bound_browser(process: ProcessObservation, title: str) -> ProcessObservation:
+    return replace(process, raw_argv=(title,), spawn_bound=True)
+
+
+@pytest.mark.parametrize("permuted", [False, True])
+def test_final_verifier_accepts_a_spawn_bound_browser_end_to_end(
+    tmp_path: Path, permuted: bool
+) -> None:
+    """Attempt 12: the browser was first observed only as a compacted title."""
+
+    fixture = _fixture(tmp_path)
+    observations = []
+    for observation in fixture["observations"]:
+        browser = observation.processes[0]
+        title = (
+            _command_line_permuted_title(browser)
+            if permuted
+            else " ".join(browser.argv)
+        )
+        # Exactly what the collector reads from /proc when the browser is first
+        # observed after the title rewrite.
+        compact_first = replace(browser, argv=(title,), raw_argv=(title,))
+        bound = launcher_module._bind_browser_spawn(
+            compact_first, browser.argv, browser.executable
+        )
+        assert bound.spawn_bound is True
+        assert bound.argv == browser.argv
+        observations.append(
+            replace(observation, processes=(bound, *observation.processes[1:]))
+        )
+    fixture["observations"] = tuple(observations)
+
+    assert _verify(fixture).validation == "controlled-fixture-structural-only"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "{joined} --extra",
+        "{joined}x",
+        " {joined}",
+        "{permuted} --extra",
+        "/usr/bin/false --ozone-platform=x11",
+    ],
+)
+def test_final_verifier_rejects_a_spawn_bound_browser_title_difference(
+    tmp_path: Path, title: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    claimed = title.format(
+        joined=" ".join(browser.argv),
+        permuted=_command_line_permuted_title(browser),
+    )
+    _with_process(
+        fixture, browser.pid, lambda process: _spawn_bound_browser(process, claimed)
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError, match="browser spawn-bound argv is not reproducible"
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_spawn_bound_marking_on_a_child(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    _with_process(
+        fixture,
+        103,
+        lambda process: replace(
+            process,
+            raw_argv=(" ".join(process.argv),),
+            spawn_bound=True,
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="spawn-bound marking is not a compacted browser title",
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_spawn_bound_browser_without_a_compacted_title(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="spawn-bound marking is not a compacted browser title",
+    ):
+        acceptance_module._verify_raw_process_argv(replace(browser, spawn_bound=True))
+
+    _with_process(fixture, 100, lambda process: replace(process, spawn_bound=True))
+
+    with pytest.raises(
+        NativeAcceptanceError, match="browser spawn-bound argv is not reproducible"
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_spawn_bound_browser_with_a_foreign_executable(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    foreign = ("/usr/bin/false", *browser.argv[1:])
+    _with_process(
+        fixture,
+        100,
+        lambda process: replace(
+            process,
+            executable="/usr/bin/false",
+            argv=foreign,
+            raw_argv=(" ".join(foreign),),
+            spawn_bound=True,
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError, match="browser executable is outside the installed"
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_reports_detail_for_a_compact_first_browser(
+    tmp_path: Path,
+) -> None:
+    """The attempt 12 message now names the offending observation."""
+
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    compacted = (" ".join(browser.argv),)
+    _with_process(
+        fixture,
+        100,
+        lambda process: replace(process, argv=compacted, raw_argv=compacted),
+    )
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        _verify(fixture)
+
+    message = str(raised.value)
+    assert "browser argv does not name the installed launcher" in message
+    assert "pid=100,ppid=1,role='browser'" in message
+    assert "argv_fields=1" in message
+    assert "--ozone-platform=x11" in message
+
+
+def test_collector_binds_a_compact_first_browser_to_its_spawn_argv(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    for title in (
+        " ".join(browser.argv),
+        _command_line_permuted_title(browser),
+    ):
+        observed = replace(browser, argv=(title,), raw_argv=(title,))
+
+        bound = launcher_module._bind_browser_spawn(
+            observed, browser.argv, browser.executable
+        )
+
+        assert bound.spawn_bound is True
+        assert bound.argv == browser.argv
+        assert bound.raw_argv == (title,)
+        assert bound.role == "browser"
+
+
+@pytest.mark.parametrize(
+    ("title", "executable"),
+    [
+        ("{joined} --extra", None),
+        ("{joined}x", None),
+        ("{joined}", "/usr/bin/false"),
+    ],
+)
+def test_collector_refuses_to_bind_a_foreign_compact_browser(
+    tmp_path: Path, title: str, executable: str | None
+) -> None:
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    claimed = (title.format(joined=" ".join(browser.argv)),)
+    observed = replace(
+        browser,
+        argv=claimed,
+        raw_argv=claimed,
+        executable=browser.executable if executable is None else executable,
+    )
+
+    bound = launcher_module._bind_browser_spawn(
+        observed, browser.argv, browser.executable
+    )
+
+    assert bound is observed
+    assert bound.spawn_bound is False
+
+
 def test_final_verifier_accepts_a_compacted_helper_outside_the_role_map(
     tmp_path: Path,
 ) -> None:
@@ -3488,7 +3691,7 @@ def test_post_exit_output_bound_is_enforced(
     monkeypatch.setattr(
         launcher_module,
         "_collect_owned_tree",
-        lambda _pid, values: values.setdefault(
+        lambda _pid, values, **_kwargs: values.setdefault(
             100, fixture["observations"][0].processes[0]
         ),
     )
@@ -3563,7 +3766,11 @@ def test_initial_observation_retries_transient_proc_miss_without_resetting_deadl
             assert timeout == 2
             return 0
 
-    def collect(_pid: int, observations: dict[int, ProcessObservation]) -> None:
+    def collect(
+        _pid: int,
+        observations: dict[int, ProcessObservation],
+        **_kwargs: Any,
+    ) -> None:
         nonlocal collect_count
         collect_count += 1
         if collect_count >= 2:
@@ -3639,7 +3846,9 @@ def test_never_observed_browser_uses_fresh_group_cleanup(
         launcher_module, "verify_transient_guard", lambda: Path("/guard")
     )
     monkeypatch.setattr(launcher_module.subprocess, "Popen", EarlyProcess)
-    monkeypatch.setattr(launcher_module, "_collect_owned_tree", lambda *_args: None)
+    monkeypatch.setattr(
+        launcher_module, "_collect_owned_tree", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         launcher_module,
         "_peek_unreaped_returncode",
@@ -3709,7 +3918,9 @@ def test_initial_observation_enforces_running_bounds_before_cleanup(
         launcher_module, "verify_transient_guard", lambda: Path("/guard")
     )
     monkeypatch.setattr(launcher_module.subprocess, "Popen", Process)
-    monkeypatch.setattr(launcher_module, "_collect_owned_tree", lambda *_args: None)
+    monkeypatch.setattr(
+        launcher_module, "_collect_owned_tree", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         launcher_module, "_peek_unreaped_returncode", lambda _process: None
     )
@@ -3772,7 +3983,11 @@ def test_initial_observation_at_deadline_cleans_observed_root(
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
             pass
 
-    def collect(_pid: int, observations: dict[int, ProcessObservation]) -> None:
+    def collect(
+        _pid: int,
+        observations: dict[int, ProcessObservation],
+        **_kwargs: Any,
+    ) -> None:
         observations[100] = fixture["observations"][0].processes[0]
 
     monotonic_values = iter((0.0, 0.0, fixture["policy"].deadline_seconds))
@@ -3858,7 +4073,9 @@ def test_lost_unobserved_process_authority_never_signals_numeric_group(
         launcher_module, "verify_transient_guard", lambda: Path("/guard")
     )
     monkeypatch.setattr(launcher_module.subprocess, "Popen", Process)
-    monkeypatch.setattr(launcher_module, "_collect_owned_tree", lambda *_args: None)
+    monkeypatch.setattr(
+        launcher_module, "_collect_owned_tree", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         launcher_module.os,
         "waitid",
@@ -3927,7 +4144,11 @@ def test_initial_collection_failure_cleans_partial_state_before_diagnostic(
             events.append("capture")
             return 19
 
-    def fail_collection(_pid: int, observations: dict[int, ProcessObservation]) -> None:
+    def fail_collection(
+        _pid: int,
+        observations: dict[int, ProcessObservation],
+        **_kwargs: Any,
+    ) -> None:
         if root_observed:
             observations[100] = fixture["observations"][0].processes[0]
         raise NativeAcceptanceError("initial collection sentinel")
@@ -3984,7 +4205,9 @@ def test_initial_collection_base_exception_is_preserved_after_cleanup(
             pass
 
     def interrupt_collection(
-        _pid: int, observations: dict[int, ProcessObservation]
+        _pid: int,
+        observations: dict[int, ProcessObservation],
+        **_kwargs: Any,
     ) -> None:
         observations[100] = fixture["observations"][0].processes[0]
         raise KeyboardInterrupt

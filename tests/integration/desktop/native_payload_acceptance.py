@@ -287,6 +287,10 @@ class ProcessObservation:
     # beginning with the resolved executable. ``title_derived`` implies this and
     # additionally means an audited ``--type`` value was found in the title.
     compact_title: bool = False
+    # True when the browser was first observed only after Chromium's title
+    # rewrite and its canonical ``argv`` was taken from the launcher's own spawn
+    # argv rather than from ``/proc``. ``raw_argv`` then holds the compact title.
+    spawn_bound: bool = False
 
     def __post_init__(self) -> None:
         if self.raw_argv is None:
@@ -1766,6 +1770,11 @@ def _verify_raw_process_argv(process: ProcessObservation) -> None:
                 "title-derived process role is not reproducible"
             )
         return
+    if process.spawn_bound and (process.role != "browser" or raw == process.argv):
+        raise NativeAcceptanceError(
+            "spawn-bound marking is not a compacted browser title: "
+            f"{_process_detail(process)}"
+        )
     if process.compact_title:
         # A compacted title whose ``--type`` value is outside the audited map
         # keeps role ``helper`` and gains nothing: no audited role and no metric
@@ -1876,10 +1885,32 @@ def _verify_process_observations(
     launcher = str((payload_root / FIXED_LAUNCHER_PATH).resolve(strict=True))
     if main[0].executable != launcher:
         raise NativeAcceptanceError(
-            "browser executable is outside the installed payload"
+            "browser executable is outside the installed payload: "
+            f"{_process_detail(main[0])}"
         )
-    if not main[0].argv or main[0].argv[0] != launcher:
-        raise NativeAcceptanceError("browser argv does not name the installed launcher")
+    if main[0].spawn_bound:
+        # The browser was first seen only as a compacted title. Its canonical
+        # argv came from the launcher's own spawn argv, which this verifier does
+        # not trust: ``_verify_main_argv`` below pins every canonical token
+        # against the policy, and the raw field must equal one of the two
+        # deterministic titles of that canonical argv. See failed native
+        # attempt 12.
+        if (
+            main[0].argv[:1] != (launcher,)
+            or main[0].raw_argv is None
+            or len(main[0].raw_argv) != 1
+            or main[0].raw_argv[0]
+            not in accepted_compact_titles("browser", launcher, main[0].argv)
+        ):
+            raise NativeAcceptanceError(
+                "browser spawn-bound argv is not reproducible: "
+                f"{_process_detail(main[0])}"
+            )
+    elif not main[0].argv or main[0].argv[0] != launcher:
+        raise NativeAcceptanceError(
+            "browser argv does not name the installed launcher: "
+            f"{_process_detail(main[0])}"
+        )
     if main[0].cwd != str(Path(policy.safe_cwd).resolve(strict=True)):
         raise NativeAcceptanceError(
             "browser working directory differs from launch policy"

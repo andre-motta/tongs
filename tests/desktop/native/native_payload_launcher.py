@@ -441,7 +441,12 @@ def _launch_native_run(
         next_profile_check = time.monotonic()
         try:
             while process.pid not in observations:
-                _collect_owned_tree(process.pid, observations)
+                _collect_owned_tree(
+                    process.pid,
+                    observations,
+                    spawn_argv=tuple(command),
+                    spawn_executable=str(launcher),
+                )
                 now, next_profile_check = _verify_running_resources(
                     stdout,
                     stderr,
@@ -460,7 +465,12 @@ def _launch_native_run(
                 _verify_run_deadline(now, deadline)
                 time.sleep(POLL_SECONDS)
             while process.poll() is None:
-                _collect_owned_tree(process.pid, observations)
+                _collect_owned_tree(
+                    process.pid,
+                    observations,
+                    spawn_argv=tuple(command),
+                    spawn_executable=str(launcher),
+                )
                 now, next_profile_check = _verify_running_resources(
                     stdout,
                     stderr,
@@ -469,7 +479,12 @@ def _launch_native_run(
                 )
                 _verify_run_deadline(now, deadline)
                 time.sleep(POLL_SECONDS)
-            _collect_owned_tree(process.pid, observations)
+            _collect_owned_tree(
+                process.pid,
+                observations,
+                spawn_argv=tuple(command),
+                spawn_executable=str(launcher),
+            )
             return_code = process.wait(timeout=2)
             if (
                 _stream_size(stdout) > MAX_LOG_BYTES
@@ -516,7 +531,11 @@ def _launch_native_run(
 
 
 def _collect_owned_tree(
-    root_pid: int, observations: dict[int, ProcessObservation]
+    root_pid: int,
+    observations: dict[int, ProcessObservation],
+    *,
+    spawn_argv: tuple[str, ...] = (),
+    spawn_executable: str = "",
 ) -> None:
     pending = [root_pid]
     seen: set[int] = set()
@@ -531,6 +550,8 @@ def _collect_owned_tree(
         if observation is None:
             continue
         previous = observations.get(pid)
+        if pid == root_pid and previous is None and spawn_argv:
+            observation = _bind_browser_spawn(observation, spawn_argv, spawn_executable)
         if previous is not None:
             observation = _validate_process_refresh(previous, observation, observations)
         observations[pid] = observation
@@ -542,6 +563,38 @@ def _collect_owned_tree(
                 "retained owned process evidence exceeds its bound"
             )
         pending.extend(_child_pids(pid))
+
+
+def _bind_browser_spawn(
+    observation: ProcessObservation,
+    spawn_argv: tuple[str, ...],
+    spawn_executable: str,
+) -> ProcessObservation:
+    """Bind a browser first seen compacted to the argv this launcher spawned.
+
+    The launcher created this process, so its spawn argv is ground truth that
+    does not depend on ``/proc``. Failed native attempt 12 observed the browser
+    only after Chromium's title rewrite, which the compact-first rejection
+    deliberately refuses from ``/proc`` alone. The compact field is admitted here
+    only when it equals one of the two deterministic titles of the spawn argv,
+    and the canonical spawn argv is then carried as ``argv`` with the field kept
+    as ``raw_argv``. The pure verifier re-derives both from the run policy.
+    """
+
+    if observation.argv == spawn_argv or len(observation.argv) != 1:
+        return observation
+    if observation.executable != spawn_executable:
+        return observation
+    if observation.argv[0] not in accepted_compact_titles(
+        "browser", spawn_executable, spawn_argv
+    ):
+        return observation
+    return replace(
+        observation,
+        argv=spawn_argv,
+        raw_argv=observation.argv,
+        spawn_bound=True,
+    )
 
 
 def _validate_process_refresh(
@@ -590,6 +643,7 @@ def _validate_process_refresh(
                 argv=previous.argv,
                 title_derived=False,
                 compact_title=False,
+                spawn_bound=previous.spawn_bound,
             )
     parent = observations.get(previous.ppid)
     inherited_parent_image = (

@@ -1034,7 +1034,9 @@ function DiscussionCard({
     <article className="review-workflow-thread" tabIndex={-1}>
       <p className="review-workflow-thread-meta">
         {discussion.root_comment.author.display_name || discussion.root_comment.author.username}
-        {discussion.is_inline ? ` · ${discussion.root_comment.file_path}` : ""}
+        {discussion.is_inline && discussion.root_comment.file_path !== null
+          ? ` · ${discussion.root_comment.file_path}`
+          : ""}
       </p>
       <DiscussionMarkdownBody
         allocated={markdownAllocation?.root === true}

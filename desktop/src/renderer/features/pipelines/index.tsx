@@ -26,7 +26,12 @@ import type {
   FeatureContribution,
   ReviewPanelContribution,
 } from "../../core/navigation.js";
-import { formatDate, RendererReadError, safeError } from "../../core/presentation.js";
+import {
+  formatDate,
+  RendererReadError,
+  safeError,
+  serviceErrorOf,
+} from "../../core/presentation.js";
 import { QueryCoordinator, StaleQueryError } from "../../core/query.js";
 import { useRetainedRead } from "../../core/use-read.js";
 import { ReviewHeader } from "../review-detail/index.js";
@@ -1411,9 +1416,13 @@ function mutationFailureText(error: unknown, uncertain: boolean): string {
 }
 
 function errorCode(error: unknown): string {
-  return error !== null && typeof error === "object" && "code" in error
-    ? String(error.code)
-    : "";
+  if (error !== null && typeof error === "object" && "code" in error)
+    return String(error.code);
+  // A read rejected in the main process keeps no properties, only its message,
+  // so the job log can only see snapshot_expired or revision_changed once the
+  // failure is recovered from that message.  Mutation failures still arrive as
+  // objects and take the branch above unchanged.
+  return serviceErrorOf(error)?.code ?? "";
 }
 
 function shortSha(value: string): string {

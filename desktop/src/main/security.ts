@@ -71,6 +71,24 @@ export function assertParams(method: string, value: unknown): asserts value is J
 }
 
 export function assertResult(method: string, value: unknown): asserts value is JsonValue {
+  // Every failure names the operation and the field that broke the contract.  A
+  // bare "invalid result" hides which row of a paged read was unusable, so the
+  // renderer can only show a generic sentence and the cause is lost.
+  try {
+    assertResultValue(method, value);
+  } catch (error) {
+    throw new Error(`Invalid ${method} result: ${detailOf(error)}`);
+  }
+}
+
+function detailOf(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 0 && message.length <= 200
+    ? message
+    : "the result did not match the desktop contract";
+}
+
+function assertResultValue(method: string, value: unknown): asserts value is JsonValue {
   assertJson(value);
   if (method === "repositories.discover") return assertArrayField(value, "repositories", assertRepository);
   if (method === "repositories.open") return assertRepository(value);
@@ -88,7 +106,7 @@ export function assertResult(method: string, value: unknown): asserts value is J
     return;
   }
   if (method === "diff.open" || method === "diff.page") return assertSnapshot(value, assertDiffRow, assertRevision);
-  if (method === "logs.open" || method === "logs.page") return assertSnapshot(value, (row) => { assertKeys(row, ["text"]); text(row.text, 512 * 1024); }, (revision) => { assertKeys(revision, ["sha256", "byte_count"]); digest(revision.sha256); integer(revision.byte_count, 0); });
+  if (method === "logs.open" || method === "logs.page") return assertSnapshot(value, (row) => { assertKeys(row, ["text"]); boundedText(row.text, 512 * 1024, "text"); }, (revision) => { assertKeys(revision, ["sha256", "byte_count"]); digest(revision.sha256, "sha256"); integer(revision.byte_count, 0, "byte_count"); });
   if (method === "discussions.list") return assertArrayField(value, "discussions", assertDiscussion);
   if (method === "commits.list") return assertArrayField(value, "commits", assertCommit);
   if (method === "pipelines.list" || method === "review_pipelines.list") return assertArrayField(value, "pipelines", (item) => { assertKeys(item, ["handle", "value"]); text(item.handle); assertPipeline(item.value); });
@@ -133,12 +151,16 @@ function assertArray(value: unknown, validate: (item: unknown) => void, maximum 
 }
 function assertArrayField(value: unknown, key: string, validate: (item: unknown) => void): void { assertKeys(value, [key]); assertArray(value[key], validate); }
 function assertExactRecord(value: unknown, keys: readonly string[], validate: (item: unknown) => void): void { assertKeys(value, keys); for (const key of keys) validate(value[key]); }
-function text(value: unknown, maximum = MAX_TEXT): asserts value is string { if (typeof value !== "string" || value.length === 0 || value.length > maximum) throw new Error("Invalid desktop result text"); }
-function nullableText(value: unknown): void { if (value !== null) text(value); }
-function bool(value: unknown): asserts value is boolean { if (typeof value !== "boolean") throw new Error("Invalid desktop result boolean"); }
-function integer(value: unknown, minimum = 0): asserts value is number { if (!Number.isSafeInteger(value) || Number(value) < minimum) throw new Error("Invalid desktop result integer"); }
-function numberOrNull(value: unknown): void { if (value !== null && (typeof value !== "number" || !Number.isFinite(value))) throw new Error("Invalid desktop result number"); }
-function digest(value: unknown): void { if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new Error("Invalid desktop result digest"); }
+function fail(field: string | undefined, requirement: string): never {
+  throw new Error(`${field === undefined ? "a result field" : `field "${field}"`} ${requirement}`);
+}
+function text(value: unknown, maximum = MAX_TEXT, field?: string): asserts value is string { if (typeof value !== "string" || value.length === 0 || value.length > maximum) fail(field, `must be text of 1 to ${maximum} characters`); }
+function boundedText(value: unknown, maximum: number, field?: string): void { if (typeof value !== "string" || value.length > maximum) fail(field, `must be text of at most ${maximum} characters`); }
+function nullableText(value: unknown, field?: string): void { if (value !== null && (typeof value !== "string" || value.length === 0 || value.length > MAX_TEXT)) fail(field, "must be null or non-empty text"); }
+function bool(value: unknown, field?: string): asserts value is boolean { if (typeof value !== "boolean") fail(field, "must be a boolean"); }
+function integer(value: unknown, minimum = 0, field?: string): asserts value is number { if (!Number.isSafeInteger(value) || Number(value) < minimum) fail(field, `must be an integer of at least ${minimum}`); }
+function numberOrNull(value: unknown, field?: string): void { if (value !== null && (typeof value !== "number" || !Number.isFinite(value))) fail(field, "must be null or a finite number"); }
+function digest(value: unknown, field?: string): void { if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) fail(field, "must be a 64-character hex digest"); }
 function assertUser(value: unknown): void {
   assertKeys(value, ["username", "display_name"]); text(value.username);
   if (typeof value.display_name !== "string" || value.display_name.length > MAX_TEXT) throw new Error("Invalid desktop user display name");
@@ -155,7 +177,7 @@ function assertRepository(value: unknown): void {
     throw new Error("Invalid forge type");
   if (Object.hasOwn(value, "hostname")) text(value.hostname, 253);
 }
-function assertRevision(value: unknown): void { assertKeys(value, ["head_sha", "base_sha", "start_sha"]); text(value.head_sha); text(value.base_sha); nullableText(value.start_sha); }
+function assertRevision(value: unknown): void { assertKeys(value, ["head_sha", "base_sha", "start_sha"]); text(value.head_sha, MAX_TEXT, "head_sha"); text(value.base_sha, MAX_TEXT, "base_sha"); nullableText(value.start_sha, "start_sha"); }
 function assertServiceError(value: unknown): void { assertKeys(value, ["code", "message", "retryable"]); text(value.code); text(value.message); bool(value.retryable); }
 const SUMMARY_KEYS = ["number", "title", "author", "state", "is_draft", "source_branch", "target_branch", "ci_status", "created_at", "updated_at", "web_url", "comment_count", "has_conflicts", "labels", "review_decision", "additions", "deletions"] as const;
 function assertReviewSummary(value: unknown): void {
@@ -172,17 +194,17 @@ function assertReviewDetail(value: unknown): void {
   integer(value.changes_count); nullableText(value.detailed_merge_status); numberOrNull(value.draft_notes_count); nullableText(value.status_check_rollup);
 }
 function assertSnapshot(value: unknown, entry: (item: unknown) => void, revision: (item: unknown) => void): void {
-  assertKeys(value, ["snapshot_id", "resource", "revision", "cursor", "next_cursor", "entries"]); text(value.snapshot_id); text(value.resource); revision(value.revision); integer(value.cursor); if (value.next_cursor !== null) integer(value.next_cursor); assertArray(value.entries, entry);
+  assertKeys(value, ["snapshot_id", "resource", "revision", "cursor", "next_cursor", "entries"]); text(value.snapshot_id, MAX_TEXT, "snapshot_id"); text(value.resource, MAX_TEXT, "resource"); revision(value.revision); integer(value.cursor, 0, "cursor"); if (value.next_cursor !== null) integer(value.next_cursor, 0, "next_cursor"); assertArray(value.entries, entry);
 }
 function assertDiffRow(value: unknown): void {
   if (!isRecord(value) || typeof value.kind !== "string") throw new Error("Invalid diff row");
   const common = ["kind", "file_index"];
-  if (value.kind === "file") { assertKeys(value, [...common, "old_path", "new_path", "status", "additions", "deletions", "is_binary", "language", "is_truncated", "is_empty", "is_mode_only", "is_unavailable"]); integer(value.file_index); for (const key of ["old_path", "new_path", "status"] as const) text(value[key]); integer(value.additions); integer(value.deletions); for (const key of ["is_binary", "is_truncated", "is_empty", "is_mode_only", "is_unavailable"] as const) bool(value[key]); nullableText(value.language); return; }
-  if (value.kind === "hunk") { assertKeys(value, [...common, "hunk_index", "header", "old_start", "old_count", "new_start", "new_count", "context_text"]); for (const key of ["file_index", "hunk_index", "old_start", "old_count", "new_start", "new_count"] as const) integer(value[key]); text(value.header); if (typeof value.context_text !== "string") throw new Error("Invalid hunk context"); return; }
-  if (value.kind === "line") { assertKeys(value, [...common, "hunk_index", "old_line", "new_line", "content", "line_type"]); integer(value.file_index); integer(value.hunk_index); numberOrNull(value.old_line); numberOrNull(value.new_line); if (typeof value.content !== "string") throw new Error("Invalid diff content"); text(value.line_type); return; }
+  if (value.kind === "file") { assertKeys(value, [...common, "old_path", "new_path", "status", "additions", "deletions", "is_binary", "language", "is_truncated", "is_empty", "is_mode_only", "is_unavailable"]); integer(value.file_index, 0, "file_index"); for (const key of ["old_path", "new_path", "status"] as const) text(value[key], MAX_TEXT, key); integer(value.additions, 0, "additions"); integer(value.deletions, 0, "deletions"); for (const key of ["is_binary", "is_truncated", "is_empty", "is_mode_only", "is_unavailable"] as const) bool(value[key], key); nullableText(value.language, "language"); return; }
+  if (value.kind === "hunk") { assertKeys(value, [...common, "hunk_index", "header", "old_start", "old_count", "new_start", "new_count", "context_text"]); for (const key of ["file_index", "hunk_index", "old_start", "old_count", "new_start", "new_count"] as const) integer(value[key], 0, key); text(value.header, MAX_TEXT, "header"); if (typeof value.context_text !== "string") fail("context_text", "must be text"); return; }
+  if (value.kind === "line") { assertKeys(value, [...common, "hunk_index", "old_line", "new_line", "content", "line_type"]); integer(value.file_index, 0, "file_index"); integer(value.hunk_index, 0, "hunk_index"); numberOrNull(value.old_line, "old_line"); numberOrNull(value.new_line, "new_line"); if (typeof value.content !== "string") fail("content", "must be text"); text(value.line_type, MAX_TEXT, "line_type"); return; }
   if (value.kind === "split") {
     assertKeys(value, [...common, "hunk_index", "row_index", "old", "new"]);
-    integer(value.file_index); integer(value.hunk_index); integer(value.row_index);
+    integer(value.file_index, 0, "file_index"); integer(value.hunk_index, 0, "hunk_index"); integer(value.row_index, 0, "row_index");
     if (value.old !== null) assertSplitCell(value.old);
     if (value.new !== null) assertSplitCell(value.new);
     if (value.old === null && value.new === null) throw new Error("Invalid empty split row");
@@ -192,13 +214,13 @@ function assertDiffRow(value: unknown): void {
 }
 function assertSplitCell(value: unknown): void {
   assertKeys(value, ["old_line", "new_line", "content", "line_type", "anchor_side"]);
-  numberOrNull(value.old_line); numberOrNull(value.new_line);
-  if (typeof value.content !== "string") throw new Error("Invalid diff content");
-  text(value.line_type);
+  numberOrNull(value.old_line, "old_line"); numberOrNull(value.new_line, "new_line");
+  if (typeof value.content !== "string") fail("content", "must be text");
+  text(value.line_type, MAX_TEXT, "line_type");
   if (value.anchor_side !== null && value.anchor_side !== "old" && value.anchor_side !== "new") throw new Error("Invalid diff anchor side");
 }
-function assertDiscussion(value: unknown): void { assertKeys(value, ["id", "is_inline", "root_comment", "is_resolved", "resolvable"]); text(value.id); bool(value.is_inline); assertComment(value.root_comment); bool(value.is_resolved); bool(value.resolvable); }
-function assertComment(value: unknown, depth = 0): void { if (depth > 16) throw new Error("Discussion replies are too deep"); assertKeys(value, ["id", "author", "body", "created_at", "file_path", "old_line", "new_line", "is_resolved", "replies"]); text(value.id); assertUser(value.author); text(value.body, MAX_IPC_BYTES); text(value.created_at); text(value.file_path); numberOrNull(value.old_line); numberOrNull(value.new_line); bool(value.is_resolved); assertArray(value.replies, (reply) => assertComment(reply, depth + 1), 1000); }
+function assertDiscussion(value: unknown): void { assertKeys(value, ["id", "is_inline", "root_comment", "is_resolved", "resolvable"]); text(value.id, MAX_TEXT, "id"); bool(value.is_inline, "is_inline"); assertComment(value.root_comment); bool(value.is_resolved, "is_resolved"); bool(value.resolvable, "resolvable"); }
+function assertComment(value: unknown, depth = 0): void { if (depth > 16) throw new Error("Discussion replies are too deep"); assertKeys(value, ["id", "author", "body", "created_at", "file_path", "old_line", "new_line", "is_resolved", "replies"]); text(value.id, MAX_TEXT, "id"); assertUser(value.author); boundedText(value.body, MAX_IPC_BYTES, "body"); text(value.created_at, MAX_TEXT, "created_at"); nullableText(value.file_path, "file_path"); numberOrNull(value.old_line, "old_line"); numberOrNull(value.new_line, "new_line"); bool(value.is_resolved, "is_resolved"); assertArray(value.replies, (reply) => assertComment(reply, depth + 1), 1000); }
 function assertCommit(value: unknown): void { assertKeys(value, ["sha", "short_sha", "title", "message", "author", "created_at", "web_url"]); for (const key of ["sha", "short_sha", "title", "message", "web_url"] as const) text(value[key], MAX_IPC_BYTES); assertUser(value.author); nullableText(value.created_at); }
 function assertPipeline(value: unknown): void { assertKeys(value, ["id", "status", "ref", "sha", "web_url", "source", "created_at", "finished_at", "duration_seconds"]); integer(value.id); for (const key of ["status", "ref", "sha", "web_url", "source"] as const) text(value[key]); nullableText(value.created_at); nullableText(value.finished_at); numberOrNull(value.duration_seconds); }
 function assertJob(value: unknown): void { assertKeys(value, ["id", "name", "stage", "status", "web_url", "started_at", "finished_at", "duration_seconds", "allow_failure"]); integer(value.id); for (const key of ["name", "stage", "status", "web_url"] as const) text(value[key]); nullableText(value.started_at); nullableText(value.finished_at); numberOrNull(value.duration_seconds); bool(value.allow_failure); }

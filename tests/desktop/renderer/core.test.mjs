@@ -18,6 +18,7 @@ import {
   RendererReadError,
   safeError,
 } from "../../../desktop/dist/src/renderer/core/presentation.js";
+import { encodeReadFailure } from "../../../desktop/dist/src/shared/bridge.js";
 
 test("markdown remains inert data without HTML or remote resource parsing", () => {
   const blocks = parseInertMarkdown(
@@ -127,6 +128,65 @@ test("renderer errors preserve typed revision and paging messages", () => {
   assert.match(
     safeError(new RendererReadError("pagination_limit", "internal", false)),
     /bounded partial snapshot/,
+  );
+});
+
+test("read failures report the cause instead of one generic sentence", () => {
+  assert.match(
+    safeError(
+      encodeReadFailure(
+        new Error(
+          'Invalid diff.open result: field "language" must be null or non-empty text',
+        ),
+      ),
+    ),
+    /field "language" must be null or non-empty text/,
+  );
+  assert.match(
+    safeError(
+      encodeReadFailure({
+        code: "snapshot_expired",
+        message: "The resource snapshot is invalid or expired; refetch it.",
+        retryable: true,
+      }),
+    ),
+    /snapshot expired/,
+  );
+  assert.equal(
+    safeError(new Error("an opaque failure")),
+    "The local service could not complete this read.",
+  );
+});
+
+test("only the diff surface advises reloading a diff", () => {
+  const threads = safeError(
+    encodeReadFailure(
+      new Error(
+        'Invalid discussions.list result: field "file_path" must be null or non-empty text',
+      ),
+    ),
+  );
+  assert.doesNotMatch(threads, /diff/i);
+  assert.match(threads, /field "file_path" must be null or non-empty text/);
+  assert.match(
+    safeError(
+      new RendererReadError(
+        "invalid_diff_page",
+        "The diff page cursor did not advance.",
+        false,
+      ),
+    ),
+    /inconsistent diff page \(The diff page cursor did not advance\.\)\. Reload the diff/,
+  );
+  // A failure with no usable cause keeps the plain sentence rather than reporting
+  // an absent one.
+  assert.equal(
+    safeError({ code: "internal", retryable: false }),
+    "The local service could not complete this read.",
+  );
+  assert.equal(
+    safeError({ code: "internal", message: "  ", retryable: true }),
+    "The local service could not complete this read. Try again.",
   );
 });
 

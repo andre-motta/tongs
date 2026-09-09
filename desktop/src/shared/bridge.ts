@@ -66,7 +66,8 @@ export type DiffPage = SnapshotPage<DiffRow, ReviewRevisionDto & JsonObject>;
 export interface OpenDiffParams { readonly review: OpaqueHandle; readonly layout?: DiffLayout; readonly max_items?: number; }
 export interface PageParams { readonly snapshot: string; readonly resource: OpaqueHandle; readonly cursor: number; readonly max_items?: number; }
 
-export interface InlineCommentDto { readonly id: string; readonly author: UserDto; readonly body: string; readonly created_at: string; readonly file_path: string; readonly old_line: number | null; readonly new_line: number | null; readonly is_resolved: boolean; readonly replies: readonly InlineCommentDto[]; }
+/** `file_path` is null on a review-level note, which carries no inline position. */
+export interface InlineCommentDto { readonly id: string; readonly author: UserDto; readonly body: string; readonly created_at: string; readonly file_path: string | null; readonly old_line: number | null; readonly new_line: number | null; readonly is_resolved: boolean; readonly replies: readonly InlineCommentDto[]; }
 export interface DiscussionDto { readonly id: string; readonly is_inline: boolean; readonly root_comment: InlineCommentDto; readonly is_resolved: boolean; readonly resolvable: boolean; }
 export interface DiscussionsResult { readonly discussions: readonly DiscussionDto[]; }
 export interface CommitDto { readonly sha: string; readonly short_sha: string; readonly title: string; readonly message: string; readonly author: UserDto; readonly created_at: string | null; readonly web_url: string; }
@@ -128,5 +129,69 @@ export const IPC_CHANNELS = Object.freeze({
   invokePlugin: "tongs:plugins.invoke", setLocation: "tongs:host.set-location", listAssets: "tongs:assets.list",
   cancelRead: "tongs:read.cancel", openExternal: "tongs:external.open", event: "tongs:event",
 } as const);
+
+/**
+ * Electron rebuilds a rejected `invoke` as a fresh Error and keeps only its
+ * message, so a `code` or `retryable` property never survives the read boundary.
+ * The main process therefore encodes the failure into the message and the
+ * renderer decodes it, which is what lets a read report its real cause instead
+ * of one generic sentence for every failure.
+ */
+const READ_FAILURE_MARKER = "tongs-read-failure:";
+const READ_FAILURE_PATTERN = /tongs-read-failure:([%A-Za-z0-9!'()*\-._~]+)/;
+const READ_FAILURE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+const MAX_READ_FAILURE_DETAIL = 240;
+
+export function encodeReadFailure(error: unknown): Error {
+  const source: Record<string, unknown> =
+    error !== null && typeof error === "object"
+      ? (error as Record<string, unknown>)
+      : {};
+  const candidate = typeof source.code === "string" ? source.code : "";
+  const detail = typeof source.message === "string" ? source.message : "";
+  const failure: ServiceErrorDto = {
+    code: READ_FAILURE_CODE.test(candidate) ? candidate : "invalid_response",
+    message: readableDetail(detail),
+    retryable: source.retryable === true,
+  };
+  const encoded = encodeURIComponent(JSON.stringify(failure));
+  return new Error(`${READ_FAILURE_MARKER}${encoded} ${failure.message}`);
+}
+
+export function decodeReadFailure(error: unknown): ServiceErrorDto | null {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : null;
+  const encoded = message === null ? null : READ_FAILURE_PATTERN.exec(message);
+  const payload = encoded === null ? undefined : encoded[1];
+  if (payload === undefined) return null;
+  try {
+    const parsed: unknown = JSON.parse(decodeURIComponent(payload));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const { code, message: detail, retryable } = parsed as Record<string, unknown>;
+    if (
+      typeof code !== "string" ||
+      !READ_FAILURE_CODE.test(code) ||
+      typeof detail !== "string" ||
+      detail.length === 0 ||
+      detail.length > MAX_READ_FAILURE_DETAIL ||
+      typeof retryable !== "boolean"
+    )
+      return null;
+    return Object.freeze({ code, message: detail, retryable });
+  } catch {
+    return null;
+  }
+}
+
+function readableDetail(detail: string): string {
+  const collapsed = detail.replace(/\s+/g, " ").trim();
+  return collapsed.length === 0
+    ? "The desktop read did not complete."
+    : collapsed.slice(0, MAX_READ_FAILURE_DETAIL);
+}
 
 declare global { interface Window { readonly tongs: DesktopBridge; } }

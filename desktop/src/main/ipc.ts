@@ -5,6 +5,7 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 import {
+  encodeReadFailure,
   IPC_CHANNELS,
   type DesktopEvent,
   type JsonObject,
@@ -169,6 +170,29 @@ export class DesktopIpcController {
     validateParams: ParamsValidator = assertParams,
     validateResult: ResultValidator = assertResult,
   ): Promise<JsonValue> {
+    // Reads reject rather than resolve, so the structured failure has to travel
+    // inside the message the renderer receives.  Without it every read failure
+    // arrives as an opaque Error and the cause is lost.
+    try {
+      return await this.performRead(
+        event,
+        method,
+        value,
+        validateParams,
+        validateResult,
+      );
+    } catch (error) {
+      throw encodeReadFailure(error);
+    }
+  }
+
+  private async performRead(
+    event: IpcMainInvokeEvent,
+    method: string,
+    value: unknown,
+    validateParams: ParamsValidator,
+    validateResult: ResultValidator,
+  ): Promise<JsonValue> {
     assertAuthorizedSender(event, this.window.webContents);
     const invocation = parseInvocation(value);
     validateParams(method, invocation.params);
@@ -215,6 +239,18 @@ export class DesktopIpcController {
   }
 
   private async readReview(
+    event: IpcMainInvokeEvent,
+    operation: ReviewOperation,
+    value: unknown,
+  ): Promise<JsonValue> {
+    try {
+      return await this.performReviewRead(event, operation, value);
+    } catch (error) {
+      throw encodeReadFailure(error);
+    }
+  }
+
+  private async performReviewRead(
     event: IpcMainInvokeEvent,
     operation: ReviewOperation,
     value: unknown,

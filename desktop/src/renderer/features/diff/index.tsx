@@ -24,7 +24,11 @@ import type {
   InlineAnchorSelection,
   InlineSelectedLine,
 } from "../../core/navigation.js";
-import { RendererReadError, safeError } from "../../core/presentation.js";
+import {
+  RendererReadError,
+  safeError,
+  serviceErrorOf,
+} from "../../core/presentation.js";
 import { QueryCoordinator } from "../../core/query.js";
 import { ReviewHeader } from "../review-detail/index.js";
 
@@ -288,7 +292,8 @@ function assertNextCursor(page: DiffPage): void {
 }
 
 function invalidPage(message: string): RendererReadError {
-  return new RendererReadError("invalid_response", message, false);
+  // A diff-owned code, so the diff reload advice stays on the diff surface.
+  return new RendererReadError("invalid_diff_page", message, false);
 }
 
 function paginationLimit(message: string): RendererReadError {
@@ -296,11 +301,10 @@ function paginationLimit(message: string): RendererReadError {
 }
 
 function invalidatesSelection(error: unknown): boolean {
+  const failure = serviceErrorOf(error);
   return (
-    error !== null &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error.code === "snapshot_expired" || error.code === "revision_changed")
+    failure !== null &&
+    (failure.code === "snapshot_expired" || failure.code === "revision_changed")
   );
 }
 

@@ -143,7 +143,7 @@ test("diff reconstruction rejects nonprogressing and mismatched page cursors", a
     };
     await assert.rejects(
       loadAllPages("review", "unified", bridge, new QueryCoordinator(bridge)),
-      (error) => error.code === "invalid_response",
+      (error) => error.code === "invalid_diff_page",
     );
     assert.equal(calls, 1);
   }
@@ -164,7 +164,7 @@ test("diff reconstruction rejects a backward first cursor", async () => {
   };
   await assert.rejects(
     loadAllPages("review", "unified", bridge, new QueryCoordinator(bridge)),
-    (error) => error.code === "invalid_response",
+    (error) => error.code === "invalid_diff_page",
   );
 });
 

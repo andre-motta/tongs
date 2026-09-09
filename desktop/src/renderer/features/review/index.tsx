@@ -36,10 +36,7 @@ import type {
   InlineAnchorSelection,
 } from "../../core/navigation.js";
 import { formatDate, safeError } from "../../core/presentation.js";
-import {
-  SafeMarkdown,
-  safeMarkdownPresentationBytes,
-} from "../../core/safe-markdown.js";
+import { SafeMarkdown } from "../../core/safe-markdown.js";
 import { ReviewHeader } from "../review-detail/index.js";
 import {
   ACTIVE_DRAFT_STATES,
@@ -99,8 +96,18 @@ import {
   suggestionDisabledReason,
   type SuggestionForge,
 } from "./suggestion.js";
+import {
+  DiscussionMarkdownBody,
+  allocateDiscussionMarkdown,
+  discussionDiffTarget,
+  type DiscussionMarkdownAllocation,
+} from "./thread.js";
 
-const DISCUSSION_MARKDOWN_BUDGET_BYTES = 256 * 1024;
+// The discussion allocator and the diff target moved to the thread module,
+// which the diff surface now shares. They stay published from here because
+// this panel is where the rest of the app already reaches for them.
+export { allocateDiscussionMarkdown, discussionDiffTarget };
+
 type Confirmation =
   | ReviewAction
   | "submit"
@@ -1148,80 +1155,6 @@ function DiscussionCard({
       )}
     </article>
   );
-}
-
-function DiscussionMarkdownBody({
-  allocated,
-  body,
-  openExternal,
-}: {
-  readonly allocated: boolean;
-  readonly body: string;
-  readonly openExternal: (url: string) => Promise<boolean>;
-}): ReactNode {
-  return allocated ? (
-    <SafeMarkdown openExternal={openExternal} source={body} />
-  ) : (
-    <p className="safe-markdown-aggregate-omission" role="status">
-      Markdown omitted because the discussion display budget was exhausted. Open
-      this review on the forge to read the complete discussion.
-    </p>
-  );
-}
-
-interface DiscussionMarkdownAllocation {
-  readonly root: boolean;
-  readonly replies: readonly boolean[];
-}
-
-export function allocateDiscussionMarkdown(
-  discussions: readonly DiscussionDto[],
-): readonly DiscussionMarkdownAllocation[] {
-  let remaining = DISCUSSION_MARKDOWN_BUDGET_BYTES;
-  let exhausted = false;
-  return Object.freeze(
-    discussions.map((discussion) => {
-      const root = allocate(discussion.root_comment.body);
-      const replies = discussion.root_comment.replies.map((reply) =>
-        allocate(reply.body),
-      );
-      return Object.freeze({ root, replies: Object.freeze(replies) });
-    }),
-  );
-
-  function allocate(source: string): boolean {
-    if (exhausted) return false;
-    const bytes = safeMarkdownPresentationBytes(source);
-    if (bytes > remaining) {
-      exhausted = true;
-      remaining = 0;
-      return false;
-    }
-    remaining -= bytes;
-    return true;
-  }
-}
-
-export function discussionDiffTarget(
-  discussion: DiscussionDto,
-): DiscussionDiffTarget | null {
-  const comment = discussion.root_comment;
-  if (!discussion.is_inline || !comment.file_path) return null;
-  if (Number.isInteger(comment.new_line) && (comment.new_line ?? 0) > 0)
-    return Object.freeze({
-      discussionId: discussion.id,
-      path: comment.file_path,
-      side: "new",
-      line: comment.new_line!,
-    });
-  if (Number.isInteger(comment.old_line) && (comment.old_line ?? 0) > 0)
-    return Object.freeze({
-      discussionId: discussion.id,
-      path: comment.file_path,
-      side: "old",
-      line: comment.old_line!,
-    });
-  return null;
 }
 
 function SuggestionComposer({

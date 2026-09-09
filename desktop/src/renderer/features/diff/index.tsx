@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -13,6 +14,7 @@ import type {
   DiffLayout,
   DiffPage,
   DiffRow,
+  RepositoryDto,
   ReviewRevisionDto,
   SplitDiffCell,
   SplitDiffRow,
@@ -61,6 +63,26 @@ export interface InlineComposerSlot {
   readonly close: () => void;
 }
 
+/**
+ * A press on a line number starts a drag that selects the contiguous range it
+ * covers on that one side. The drag lives on the workspace so a release
+ * anywhere ends it, and it remembers the row it last extended to so that a
+ * pointer moving inside one row does not rebuild the selection on every event.
+ */
+export interface LineRangeDrag {
+  readonly begin: (
+    side: "old" | "new",
+    oldLine: number | null,
+    newLine: number | null,
+  ) => void;
+  readonly extendTo: (
+    side: "old" | "new",
+    oldLine: number | null,
+    newLine: number | null,
+    extend: () => void,
+  ) => void;
+}
+
 export interface LoadedDiff {
   readonly layout: DiffLayout;
   readonly snapshotId: string;
@@ -84,6 +106,7 @@ export function createDiffFeature(): FeatureContribution {
           route={route}
           navigate={context.navigate}
           panels={context.reviewPanels}
+          repositories={context.repositories}
           inlineAnchor={context.inlineAnchor}
           selectInlineAnchor={context.selectInlineAnchor}
         />
@@ -97,6 +120,7 @@ function DiffView({
   route,
   navigate,
   panels,
+  repositories,
   inlineAnchor,
   selectInlineAnchor,
 }: {
@@ -105,11 +129,18 @@ function DiffView({
   readonly route: Extract<AppRoute, { kind: "review" }>;
   readonly navigate: (route: AppRoute) => void;
   readonly panels: FeatureContributionParameters["reviewPanels"];
+  readonly repositories: readonly RepositoryDto[];
   readonly inlineAnchor: InlineAnchorSelection | null;
   readonly selectInlineAnchor: (
     selection: InlineAnchorSelection | null,
   ) => void;
 }): ReactNode {
+  // The suggestion block syntax is the forge's, so the composer needs to know
+  // which forge this review lives on.
+  const forge =
+    repositories.find(
+      (repository) => repository.handle === route.item.repository,
+    )?.forge_type ?? null;
   const [layout, setLayout] = useState<DiffLayout>("unified");
   const [loaded, setLoaded] = useState<LoadedDiff | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -222,6 +253,7 @@ function DiffView({
         <DiffWorkspace
           bridge={bridge}
           review={route.item.handle}
+          forge={forge}
           loaded={loaded}
           selection={inlineAnchor}
           selectAnchor={selectInlineAnchor}
@@ -342,12 +374,14 @@ type FeatureContributionParameters = Parameters<
 function DiffWorkspace({
   bridge,
   review,
+  forge,
   loaded,
   selection,
   selectAnchor,
 }: {
   readonly bridge: DesktopBridge;
   readonly review: string;
+  readonly forge: RepositoryDto["forge_type"] | null;
   readonly loaded: LoadedDiff;
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
@@ -364,7 +398,25 @@ function DiffWorkspace({
     bridge,
     review,
     loaded.revision,
+    forge,
   );
+  const [dragging, setDragging] = useState(false);
+  const dragged = useRef<{
+    readonly side: "old" | "new";
+    readonly oldLine: number | null;
+    readonly newLine: number | null;
+  } | null>(null);
+  // A drag can end anywhere, including outside the diff, so the release is
+  // watched on the document only while a drag is actually running.
+  useEffect(() => {
+    if (!dragging) return;
+    const release = (): void => {
+      dragged.current = null;
+      setDragging(false);
+    };
+    document.addEventListener("mouseup", release);
+    return () => document.removeEventListener("mouseup", release);
+  }, [dragging]);
   // A reloaded diff can retire the row the composer is anchored to. Only an
   // anchor that no longer belongs to the loaded diff is dropped, and its typed
   // text stays in the per-anchor buffer either way.
@@ -419,6 +471,23 @@ function DiffWorkspace({
     close: () => {
       composerController.clearMessage();
       setComposerAnchor(null);
+    },
+  };
+  const drag: LineRangeDrag = {
+    begin: (side, oldLine, newLine) => {
+      dragged.current = { side, oldLine, newLine };
+      setDragging(true);
+    },
+    extendTo: (side, oldLine, newLine, extend) => {
+      const from = dragged.current;
+      if (
+        !from ||
+        from.side !== side ||
+        (from.oldLine === oldLine && from.newLine === newLine)
+      )
+        return;
+      dragged.current = { side, oldLine, newLine };
+      extend();
     },
   };
   const moveFocus = (event: KeyboardEvent<HTMLElement>): void => {
@@ -487,6 +556,7 @@ function DiffWorkspace({
           selection={selection}
           selectAnchor={selectAnchor}
           inline={inline}
+          drag={drag}
         />
       </section>
     </div>
@@ -503,6 +573,7 @@ function DiffRowsWindow({
   selection,
   selectAnchor,
   inline,
+  drag,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -513,6 +584,7 @@ function DiffRowsWindow({
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
   readonly inline: InlineComposerSlot;
+  readonly drag: LineRangeDrag;
 }): ReactNode {
   const [start, setStart] = useState(
     Math.max(0, Math.floor(targetIndex / pageSize) * pageSize),
@@ -542,6 +614,7 @@ function DiffRowsWindow({
                     selection={selection}
                     selectAnchor={selectAnchor}
                     inline={inline}
+                    drag={drag}
                   />
                 ))}
               </div>
@@ -560,6 +633,7 @@ function DiffRowsWindow({
               selection={selection}
               selectAnchor={selectAnchor}
               inline={inline}
+              drag={drag}
             />
           ))}
         </div>
@@ -636,6 +710,7 @@ function DiffRowView({
   selection,
   selectAnchor,
   inline,
+  drag,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -644,6 +719,7 @@ function DiffRowView({
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
   readonly inline: InlineComposerSlot;
+  readonly drag: LineRangeDrag;
 }): ReactNode {
   if (row.kind === "file") {
     const path =
@@ -688,13 +764,18 @@ function DiffRowView({
   };
   const compose = (side: "old" | "new"): void => {
     if (!selectable || !file) return;
-    const inRange =
+    // A row inside a multi-line selection composes on the whole range: the
+    // composer claims it, and the app-owned selection is left as the reader
+    // built it.
+    const range =
       selection !== null &&
       (selection.selectedLines?.length ?? 0) > 1 &&
-      selectionMatchesLine(selection, loaded, file, row, side);
+      selectionMatchesLine(selection, loaded, file, row, side)
+        ? rangeAnchorForSelection(selection, review, loaded, file)
+        : null;
     inline.open(
-      selectionForUnifiedLine(review, loaded, file, row, side),
-      inRange,
+      range ?? selectionForUnifiedLine(review, loaded, file, row, side),
+      range !== null,
     );
   };
   const selected =
@@ -719,6 +800,9 @@ function DiffRowView({
           }
           selectable={selectable}
           choose={(extend) => choose("old", extend)}
+          drag={drag}
+          oldLine={row.old_line}
+          newLine={row.new_line}
         />
         <LineNumberAnchor
           label="new"
@@ -729,6 +813,9 @@ function DiffRowView({
           }
           selectable={selectable}
           choose={(extend) => choose("new", extend)}
+          drag={drag}
+          oldLine={row.old_line}
+          newLine={row.new_line}
         />
         <GutterComment
           selectable={selectable}
@@ -824,12 +911,18 @@ function LineNumberAnchor({
   selected,
   selectable,
   choose,
+  drag,
+  oldLine,
+  newLine,
 }: {
   readonly label: "old" | "new";
   readonly value: number | null;
   readonly selected: boolean;
   readonly selectable: boolean;
   readonly choose: (extend: boolean) => void;
+  readonly drag: LineRangeDrag;
+  readonly oldLine: number | null;
+  readonly newLine: number | null;
 }): ReactNode {
   if (value === null || !selectable)
     return <span className="line-number">{value}</span>;
@@ -838,6 +931,22 @@ function LineNumberAnchor({
       className={`line-number line-anchor${selected ? " line-anchor-selected" : ""}`}
       aria-label={`Select ${label} line ${value}`}
       aria-pressed={selected}
+      onMouseDown={(event) => {
+        if (event.button !== 0) return;
+        // Suppresses the native text selection the drag would otherwise paint
+        // over the diff, and takes back the focus that suppression drops. A
+        // Shift press keeps the range origin it extends from.
+        event.preventDefault();
+        event.currentTarget.focus();
+        choose(event.shiftKey);
+        drag.begin(label, oldLine, newLine);
+      }}
+      onMouseOver={(event) => {
+        // Only a held primary button extends. A release the document listener
+        // never saw cannot leave a plain hover rebuilding the selection.
+        if ((event.buttons & 1) !== 1) return;
+        drag.extendTo(label, oldLine, newLine, () => choose(true));
+      }}
       onClick={(event) => choose(event.shiftKey)}
       onKeyDown={(event) =>
         activateOnKeyboard(event, () => choose(event.shiftKey))
@@ -857,6 +966,7 @@ function SplitPaneRow({
   selection,
   selectAnchor,
   inline,
+  drag,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -866,6 +976,7 @@ function SplitPaneRow({
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
   readonly inline: InlineComposerSlot;
+  readonly drag: LineRangeDrag;
 }): ReactNode {
   if (row.kind === "file")
     return (
@@ -899,6 +1010,7 @@ function SplitPaneRow({
         selection={selection}
         selectAnchor={selectAnchor}
         inline={inline}
+        drag={drag}
       />
       {composerOpen &&
         inline.anchor &&
@@ -951,6 +1063,7 @@ function SplitCell({
   selection,
   selectAnchor,
   inline,
+  drag,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -961,6 +1074,7 @@ function SplitCell({
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
   readonly inline: InlineComposerSlot;
+  readonly drag: LineRangeDrag;
 }): ReactNode {
   const selectable =
     cell?.anchor_side !== null && cell !== null && file !== null;
@@ -984,13 +1098,15 @@ function SplitCell({
   };
   const compose = (): void => {
     if (!selectable || !cell || !file || !cell.anchor_side) return;
-    const inRange =
+    const range =
       selection !== null &&
       (selection.selectedLines?.length ?? 0) > 1 &&
-      selectionMatchesSplitCell(selection, loaded, file, row, cell);
+      selectionMatchesSplitCell(selection, loaded, file, row, cell)
+        ? rangeAnchorForSelection(selection, review, loaded, file)
+        : null;
     inline.open(
-      selectionForSplitCell(review, loaded, file, row, cell),
-      inRange,
+      range ?? selectionForSplitCell(review, loaded, file, row, cell),
+      range !== null,
     );
   };
   return (
@@ -1007,6 +1123,30 @@ function SplitCell({
       data-anchor-side={cell?.anchor_side ?? undefined}
       data-old-line={cell?.old_line ?? undefined}
       data-new-line={cell?.new_line ?? undefined}
+      onMouseDown={
+        selectable && cell?.anchor_side
+          ? (event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.currentTarget.focus();
+              choose(event.shiftKey);
+              drag.begin(cell.anchor_side!, cell.old_line, cell.new_line);
+            }
+          : undefined
+      }
+      onMouseOver={
+        selectable && cell?.anchor_side
+          ? (event) => {
+              if ((event.buttons & 1) !== 1) return;
+              drag.extendTo(
+                cell.anchor_side!,
+                cell.old_line,
+                cell.new_line,
+                () => choose(true),
+              );
+            }
+          : undefined
+      }
       onClick={selectable ? (event) => choose(event.shiftKey) : undefined}
       onKeyDown={
         selectable
@@ -1142,6 +1282,94 @@ export function selectionForSplitCell(
     rangeOriginNewLine: origin.new_line,
     selectedLines: Object.freeze(selected.map((item) => selectedLine(item.cell))),
   });
+}
+
+/**
+ * The selection's span, re-anchored on its last line with its origin on the
+ * first, whichever way the reader built it. Every layer under the composer
+ * reads the anchored line as the end of a range and `start_line` as its
+ * opening, so a drag upward must not hand them a reversed pair, and the
+ * composer row belongs under the bottom of the span either way.
+ */
+function rangeAnchorForSelection(
+  selection: InlineAnchorSelection,
+  review: string,
+  loaded: LoadedDiff,
+  file: DiffFileRow,
+): InlineAnchorSelection | null {
+  const lines = selection.selectedLines ?? [];
+  const opening = lines[0];
+  const closing = lines.at(-1);
+  if (lines.length < 2 || !opening || !closing) return null;
+  if (loaded.layout === "split") {
+    const cells = splitSideRows(
+      loaded,
+      file,
+      selection.hunkIndex,
+      selection.side,
+    );
+    const first = cells.find((item) => sameSelectedLine(item.cell, opening));
+    const last = cells.find((item) => sameSelectedLine(item.cell, closing));
+    if (!first || !last) return null;
+    const base = selectionForSplitCell(
+      review,
+      loaded,
+      file,
+      first.row,
+      first.cell,
+    );
+    return selectionForSplitCell(
+      review,
+      loaded,
+      file,
+      last.row,
+      last.cell,
+      base,
+      true,
+    );
+  }
+  const rows = unifiedSideRows(
+    loaded,
+    file,
+    selection.hunkIndex,
+    selection.side,
+  );
+  const first = rows.find((row) => sameSelectedLine(row, opening));
+  const last = rows.find((row) => sameSelectedLine(row, closing));
+  if (!first || !last) return null;
+  const base = selectionForUnifiedLine(
+    review,
+    loaded,
+    file,
+    first,
+    selection.side,
+  );
+  return selectionForUnifiedLine(
+    review,
+    loaded,
+    file,
+    last,
+    selection.side,
+    base,
+    true,
+  );
+}
+
+function sameSelectedLine(
+  row: {
+    readonly old_line: number | null;
+    readonly new_line: number | null;
+    readonly line_type: string;
+    readonly content: string;
+  },
+  line: InlineSelectedLine,
+): boolean {
+  return (
+    row.old_line === line.oldLine &&
+    row.new_line === line.newLine &&
+    row.line_type === line.lineType &&
+    row.content === line.content
+  );
 }
 
 type SourceRow = Extract<DiffRow, { readonly kind: "line" }>;

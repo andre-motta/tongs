@@ -7,12 +7,24 @@ import type {
   DraftInlineAnchorInputDto,
   DraftSnapshotDto,
   InlineCommentParams,
+  MutationDiffAnchorDto,
   ReviewDesktopBridge,
   ReviewMutationCapabilitiesDto,
 } from "../../../shared/review.js";
 import { reviewMutationMessage } from "../../../shared/review.js";
-import type { InlineAnchorSelection } from "../../core/navigation.js";
+import type {
+  InlineAnchorSelection,
+  InlineSelectedLine,
+} from "../../core/navigation.js";
 import { safeError } from "../../core/presentation.js";
+import { SafeMarkdown } from "../../core/safe-markdown.js";
+import {
+  containsSuggestionBlock,
+  prepareSuggestionTarget,
+  suggestionDisabledReason,
+  suggestionPrefill,
+  type SuggestionForge,
+} from "./suggestion.js";
 import {
   adoptDraft,
   beginDraftSave,
@@ -143,62 +155,149 @@ export function cacheWorkflow(
   workflowCache.set(review, state);
 }
 
-export function mutationAnchor(selection: InlineAnchorSelection): {
-  readonly old_path: string;
-  readonly new_path: string;
-  readonly line: number;
-  readonly side: "LEFT" | "RIGHT";
-} {
-  const line = anchorLine(selection);
+/**
+ * The two ends of a multi-line selection, ordered the way every layer below
+ * the composer reads a range: `first` is the line the range opens on and is
+ * carried as `start_line`, `last` is the line the anchor itself names. A
+ * single-line selection has no range.
+ */
+function rangeEndpoints(selection: InlineAnchorSelection): {
+  readonly first: InlineSelectedLine;
+  readonly last: InlineSelectedLine;
+} | null {
+  const lines = selection.selectedLines ?? [];
+  const opening = lines[0];
+  const closing = lines.at(-1);
+  if (lines.length < 2 || !opening || !closing) return null;
+  const open = sideLine(selection.side, opening);
+  const close = sideLine(selection.side, closing);
+  if (open === null || close === null || open === close) return null;
+  return open < close
+    ? Object.freeze({ first: opening, last: closing })
+    : Object.freeze({ first: closing, last: opening });
+}
+
+function sideLine(
+  side: "old" | "new",
+  line: InlineSelectedLine,
+): number | null {
+  return side === "old" ? line.oldLine : line.newLine;
+}
+
+/** The span a selection covers on its own side, or null for a single line. */
+export function anchorRange(selection: InlineAnchorSelection): {
+  readonly startLine: number;
+  readonly endLine: number;
+} | null {
+  const range = rangeEndpoints(selection);
+  if (!range) return null;
+  const startLine = sideLine(selection.side, range.first);
+  const endLine = sideLine(selection.side, range.last);
+  return startLine === null || endLine === null
+    ? null
+    : Object.freeze({ startLine, endLine });
+}
+
+export function mutationAnchor(
+  selection: InlineAnchorSelection,
+): MutationDiffAnchorDto {
+  const range = rangeEndpoints(selection);
+  const side = selection.side === "old" ? "LEFT" : "RIGHT";
+  const line = range
+    ? sideLine(selection.side, range.last)
+    : anchorLine(selection);
+  const start = range ? sideLine(selection.side, range.first) : null;
   if (line === null)
     throw new Error("The selected diff side has no source line");
   return Object.freeze({
     old_path: selection.oldPath,
     new_path: selection.newPath,
     line,
-    side: selection.side === "old" ? "LEFT" : "RIGHT",
+    side,
+    ...(start === null ? {} : { start_line: start, start_side: side }),
   });
 }
 
 export function draftSelection(
   selection: InlineAnchorSelection,
 ): DraftAnchorSelection {
+  const range = rangeEndpoints(selection);
+  const start = range ? sideLine(selection.side, range.first) : null;
   return Object.freeze({
     review: selection.review,
     revision: selection.revision,
     oldPath: selection.oldPath,
     newPath: selection.newPath,
     side: selection.side,
-    oldLine: selection.oldLine,
-    newLine: selection.newLine,
-    startLine: null,
-    startSide: null,
+    oldLine: range ? range.last.oldLine : selection.oldLine,
+    newLine: range ? range.last.newLine : selection.newLine,
+    startLine: start,
+    startSide: start === null ? null : selection.side,
     contextLines: selection.contextLines,
     contextComplete: selection.contextComplete,
   });
+}
+
+/**
+ * A body carrying a suggestion block is anchored by the suggestion rules,
+ * which differ per forge: GitHub anchors the range and replaces it, GitLab
+ * anchors the first line and encodes the span in the fence. Anything else is
+ * anchored by the selection, range included.
+ */
+function suggestionAware(
+  anchor: InlineAnchorSelection,
+  forge: SuggestionForge | null,
+  body: string,
+): boolean {
+  return (
+    forge !== null &&
+    containsSuggestionBlock(body) &&
+    suggestionDisabledReason(anchor, forge) === null
+  );
+}
+
+function anchorSelectionFor(
+  anchor: InlineAnchorSelection,
+  forge: SuggestionForge | null,
+  body: string,
+): DraftAnchorSelection {
+  return suggestionAware(anchor, forge, body)
+    ? prepareSuggestionTarget(anchor, forge!).draftSelection
+    : draftSelection(anchor);
+}
+
+function mutationAnchorFor(
+  anchor: InlineAnchorSelection,
+  forge: SuggestionForge | null,
+  body: string,
+): MutationDiffAnchorDto {
+  return suggestionAware(anchor, forge, body)
+    ? prepareSuggestionTarget(anchor, forge!).mutationAnchor
+    : mutationAnchor(anchor);
 }
 
 export function anchorLine(selection: InlineAnchorSelection): number | null {
   return selection.side === "old" ? selection.oldLine : selection.newLine;
 }
 
-/** Header text of the composer, and the label the gutter affordance announces. */
+/**
+ * Header text of the composer. A range claims the span the design words as
+ * "Lines A to B (new)"; a single line keeps the wording card #188 shipped.
+ */
 export function anchorLabel(selection: InlineAnchorSelection): string {
-  const line = anchorLine(selection);
-  const lines = selection.selectedLines ?? [];
-  const first = lines[0];
-  const start =
-    first === undefined
-      ? line
-      : selection.side === "old"
-        ? first.oldLine
-        : first.newLine;
-  const span =
-    lines.length > 1 && start !== null && start !== line
-      ? `${selection.side} lines ${start} to ${line}`
-      : `${selection.side} line ${line}`;
+  const range = anchorRange(selection);
+  const span = range
+    ? `Lines ${range.startLine} to ${range.endLine} (${selection.side})`
+    : `${selection.side} line ${anchorLine(selection)}`;
   return `${selection.newPath}, ${span}`;
 }
+
+/**
+ * The one sentence a forge without `multiline_comment` gets. Both writes carry
+ * the same range anchor, so both refuse for the same reason.
+ */
+export const MULTILINE_REFUSAL =
+  "Multi-line comments are unsupported for this review. Select a single line.";
 
 /**
  * A refusal the composer itself authored. Its text is written for the person
@@ -334,16 +433,28 @@ export function BufferedInlineNotes({
  */
 export interface InlineComposerBridge extends ReviewDesktopBridge {
   cancelRead(requestToken: string): Promise<boolean>;
+  openExternal(url: string): Promise<boolean>;
 }
 
 export interface InlineComposerController {
   readonly review: string;
+  readonly forge: SuggestionForge | null;
   readonly pendingReview: boolean;
   readonly pendingCount: number;
   readonly busy: boolean;
   readonly message: string | null;
   readonly quickReason: (anchor: InlineAnchorSelection) => string | null;
   readonly draftReason: (anchor: InlineAnchorSelection) => string | null;
+  /** Why Insert suggestion cannot act on this anchor and this body. */
+  readonly suggestionReason: (
+    anchor: InlineAnchorSelection,
+    body: string,
+  ) => string | null;
+  /** The pre-filled suggestion body, or null when the rules refuse it. */
+  readonly insertSuggestion: (
+    anchor: InlineAnchorSelection,
+    body: string,
+  ) => string | null;
   readonly addToReview: (
     anchor: InlineAnchorSelection,
     body: string,
@@ -352,6 +463,7 @@ export interface InlineComposerController {
     anchor: InlineAnchorSelection,
     body: string,
   ) => Promise<boolean>;
+  readonly openExternal: (url: string) => Promise<boolean>;
   readonly clearMessage: () => void;
 }
 
@@ -359,6 +471,7 @@ export function useInlineReviewComposer(
   bridge: InlineComposerBridge,
   review: string,
   revision: ReviewRevisionDto,
+  forge: SuggestionForge | null = null,
 ): InlineComposerController {
   const [workflow, setWorkflow] = useState<ReviewWorkflowState>(
     () => cachedWorkflow(review) ?? createReviewWorkflowState(review, revision),
@@ -433,6 +546,8 @@ export function useInlineReviewComposer(
         return "Inline comment support for this review is still loading.";
       if (!capabilities.inline_comment)
         return "Inline comments are unsupported for this review.";
+      if (anchorRange(anchor) !== null && !capabilities.multiline_comment)
+        return MULTILINE_REFUSAL;
       if (anchor.review !== review)
         return "Select a source line in the current review diff.";
       if (quickBlocked)
@@ -464,6 +579,45 @@ export function useInlineReviewComposer(
       return null;
     },
     [quickReason, workflow],
+  );
+
+  const suggestionReason = useCallback(
+    (anchor: InlineAnchorSelection, body: string): string | null => {
+      if (capabilities === null)
+        return "Inline comment support for this review is still loading.";
+      if (!capabilities.inline_comment)
+        return "Inline comments are unsupported for this review.";
+      if (anchorRange(anchor) !== null && !capabilities.multiline_comment)
+        return MULTILINE_REFUSAL;
+      const rules = suggestionDisabledReason(anchor, forge);
+      if (rules !== null) return rules;
+      if (containsSuggestionBlock(body))
+        return "This comment already carries a suggestion block.";
+      return null;
+    },
+    [capabilities, forge],
+  );
+
+  const insertSuggestion = useCallback(
+    (anchor: InlineAnchorSelection, body: string): string | null => {
+      const refusal = suggestionReason(anchor, body);
+      if (refusal !== null || forge === null) {
+        setMessage(refusal ?? "The selected review repository is unavailable.");
+        return null;
+      }
+      try {
+        return suggestionPrefill(anchor, forge, body);
+      } catch {
+        // The rules just passed, so a throw here means the selection moved
+        // under the press. Its own text is an invariant, not a sentence for
+        // the reader.
+        setMessage(
+          "The selection changed while the suggestion was prepared. Reselect the lines.",
+        );
+        return null;
+      }
+    },
+    [forge, suggestionReason],
   );
 
   const bindDraft = useCallback(
@@ -544,7 +698,7 @@ export function useInlineReviewComposer(
       setBusy(true);
       setMessage(null);
       try {
-        const captured = await captureAnchor(anchor);
+        const captured = await captureAnchor(anchor, forge, body);
         const bound = await bindDraft(anchor);
         const comment: DraftCommentInputDto = Object.freeze({
           id: crypto.randomUUID(),
@@ -578,7 +732,7 @@ export function useInlineReviewComposer(
         setBusy(false);
       }
     },
-    [apply, bindDraft, draftReason, review, rollBack, saveDraft],
+    [apply, bindDraft, draftReason, forge, review, rollBack, saveDraft],
   );
 
   const commentNow = useCallback(
@@ -597,7 +751,7 @@ export function useInlineReviewComposer(
           operation_id: operationId,
           review,
           revision: anchor.revision,
-          anchor: mutationAnchor(anchor),
+          anchor: mutationAnchorFor(anchor, forge, body),
           body,
         };
         apply((current) => beginQuickIntent(current, operationId, command));
@@ -634,11 +788,17 @@ export function useInlineReviewComposer(
         setBusy(false);
       }
     },
-    [apply, bridge, quickReason, review],
+    [apply, bridge, forge, quickReason, review],
+  );
+
+  const openExternal = useCallback(
+    (url: string): Promise<boolean> => bridge.openExternal(url),
+    [bridge],
   );
 
   return {
     review,
+    forge,
     pendingReview: workflow.draft.remote !== null,
     pendingCount: workflow.draft.remote
       ? workflow.draft.local.comments.length
@@ -647,8 +807,11 @@ export function useInlineReviewComposer(
     message,
     quickReason,
     draftReason,
+    suggestionReason,
+    insertSuggestion,
     addToReview,
     commentNow,
+    openExternal,
     clearMessage,
   };
 }
@@ -669,16 +832,29 @@ function boundElsewhereRefusal(state: ReviewWorkflowState): string {
   return "The pending review is bound to a durable submission attempt. Settle it in the review workflow before adding inline feedback.";
 }
 
-/** `captureDraftAnchor` refuses with sentences written for the reader. */
+/**
+ * The two sentences `captureDraftAnchor` raises for the reader. Only these are
+ * shown verbatim: anything else it can throw is an invariant, and this card
+ * adds range and suggestion anchoring to the same path, so a new invariant
+ * must not become a notice.
+ */
+const CAPTURE_REFUSALS: readonly string[] = Object.freeze([
+  "The selected diff context is partial. Refresh before drafting inline feedback.",
+  "The inline selection changed while its context was captured",
+]);
+
 async function captureAnchor(
   anchor: InlineAnchorSelection,
+  forge: SuggestionForge | null,
+  body: string,
 ): Promise<DraftInlineAnchorInputDto> {
   try {
-    return await captureDraftAnchor(draftSelection(anchor), () =>
-      draftSelection(anchor),
+    return await captureDraftAnchor(anchorSelectionFor(anchor, forge, body), () =>
+      anchorSelectionFor(anchor, forge, body),
     );
   } catch (failure) {
-    throw failure instanceof Error
+    throw failure instanceof Error &&
+      CAPTURE_REFUSALS.includes(failure.message)
       ? new ComposerRefusal(failure.message)
       : failure;
   }
@@ -701,19 +877,28 @@ export function InlineComposer({
   const [body, setBodyState] = useState(() =>
     readInlineBuffer(controller.review, anchor),
   );
+  const [preview, setPreview] = useState(false);
   const editor = useRef<HTMLTextAreaElement | null>(null);
   // The composer is opened from the gutter affordance or from the keyboard, and
   // both leave focus on the row. Taking focus here is what makes Esc and
-  // Ctrl/Cmd+Enter reach the composer that just opened.
+  // Ctrl/Cmd+Enter reach the composer that just opened, and leaving the preview
+  // has to hand focus back to the editor it replaced.
   useEffect(() => {
-    editor.current?.focus();
-  }, []);
+    if (!preview) editor.current?.focus();
+  }, [preview]);
   const setBody = (value: string): void => {
     writeInlineBuffer(controller.review, anchor, value);
     setBodyState(value);
   };
   const quickReason = controller.quickReason(anchor);
   const draftReason = controller.draftReason(anchor);
+  const suggestionReason = controller.suggestionReason(anchor, body);
+  const insertSuggestion = (): void => {
+    const filled = controller.insertSuggestion(anchor, body);
+    if (filled === null) return;
+    setPreview(false);
+    setBody(filled);
+  };
   // A refusal that is already reported as the notice is not repeated as a
   // standing reason underneath it.
   const reasons = [
@@ -753,18 +938,29 @@ export function InlineComposer({
           </span>
         )}
       </div>
-      <textarea
-        ref={editor}
-        className="inline-composer-text"
-        aria-label="Inline review comment"
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-        onKeyDown={(event) => {
-          if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter") return;
-          event.preventDefault();
-          runPrimary();
-        }}
-      />
+      {preview ? (
+        <div className="inline-composer-preview" aria-label="Comment preview">
+          {body.length === 0 ? (
+            <small>Nothing to preview yet.</small>
+          ) : (
+            <SafeMarkdown source={body} openExternal={controller.openExternal} />
+          )}
+        </div>
+      ) : (
+        <textarea
+          ref={editor}
+          className="inline-composer-text"
+          aria-label="Inline review comment"
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          onKeyDown={(event) => {
+            if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter")
+              return;
+            event.preventDefault();
+            runPrimary();
+          }}
+        />
+      )}
       {controller.message !== null && (
         <div className="notice notice-error" role="alert">
           {controller.message}
@@ -774,25 +970,44 @@ export function InlineComposer({
         <small key={reason}>{reason}</small>
       ))}
       <div className="inline-composer-actions">
-        <button className="button button-secondary" onClick={close}>
-          Cancel
-        </button>
-        <button
-          className="button button-secondary"
-          disabled={body.length === 0 || quickReason !== null}
-          title={quickReason ?? undefined}
-          onClick={runQuick}
-        >
-          Add comment now
-        </button>
-        <button
-          className="button"
-          disabled={body.length === 0 || draftReason !== null}
-          title={draftReason ?? undefined}
-          onClick={runPrimary}
-        >
-          {controller.pendingReview ? "Add to review" : "Start a review"}
-        </button>
+        <div className="inline-composer-toolbar">
+          <button
+            className="button button-secondary"
+            disabled={suggestionReason !== null}
+            title={suggestionReason ?? undefined}
+            onClick={insertSuggestion}
+          >
+            Insert suggestion
+          </button>
+          <button
+            className="button button-secondary"
+            aria-pressed={preview}
+            onClick={() => setPreview(!preview)}
+          >
+            Preview
+          </button>
+        </div>
+        <div className="inline-composer-writes">
+          <button className="button button-secondary" onClick={close}>
+            Cancel
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={body.length === 0 || quickReason !== null}
+            title={quickReason ?? undefined}
+            onClick={runQuick}
+          >
+            Add comment now
+          </button>
+          <button
+            className="button"
+            disabled={body.length === 0 || draftReason !== null}
+            title={draftReason ?? undefined}
+            onClick={runPrimary}
+          >
+            {controller.pendingReview ? "Add to review" : "Start a review"}
+          </button>
+        </div>
       </div>
     </section>
   );

@@ -63,13 +63,11 @@
 
 .review-workflow-discussions,
 .review-workflow-compose,
-.review-workflow-composer,
 .review-workflow-draft,
 .review-workflow-progress,
 .review-workflow-recovery,
 .review-workflow-draft-comments,
-.review-workflow-preserved-draft,
-.review-workflow-buffered-inline {
+.review-workflow-preserved-draft {
   display: grid;
   align-content: start;
   gap: 0.75rem;
@@ -102,13 +100,11 @@
 }
 
 .review-workflow-thread,
-.review-workflow-composer,
 .review-workflow-draft,
 .review-workflow-progress,
 .review-workflow-recovery,
 .review-workflow-draft-comment,
-.review-workflow-preserved-draft,
-.review-workflow-buffered-inline {
+.review-workflow-preserved-draft {
   padding: 1rem;
   border: 1px solid var(--border);
   border-radius: 0.75rem;
@@ -116,8 +112,7 @@
 }
 
 .review-workflow-draft-comment,
-.review-workflow-preserved-draft article,
-.review-workflow-buffered-inline article {
+.review-workflow-preserved-draft article {
   padding: 0.65rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
@@ -133,15 +128,17 @@
   font-size: 0.85rem;
 }
 
+.review-workflow-thread-summary {
+  font-size: 0.9rem;
+}
+
 .review-workflow-reply,
-.review-workflow-composer label,
 .review-workflow-draft label {
   display: grid;
   gap: 0.4rem;
 }
 
 .review-workflow-reply textarea,
-.review-workflow-composer textarea,
 .review-workflow-draft textarea {
   box-sizing: border-box;
   width: 100%;
@@ -453,6 +450,9 @@ button {
 }
 .notice-empty {
   border-style: dashed;
+}
+.notice-verdict {
+  border-color: var(--accent);
 }
 .notice-action {
   margin-left: 12px;
@@ -1700,4 +1700,28 @@ button {
   font-size: 0.78rem;
   font-family: var(--mono, monospace);
   opacity: 0.85;
+}
+
+/* The Overview general composer is the in-diff composer itself, so it keeps
+   that component's shape and only stops behaving like a diff row: it sits in a
+   page panel with no fixed row height to fill. */
+.general-composer-panel,
+.review-level-discussions {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  margin-top: 18px;
+  padding: 1rem;
+}
+
+.general-composer-panel .inline-composer.general-composer {
+  height: auto;
+  overflow: visible;
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+.review-level-discussions .review-workflow-thread {
+  background: var(--panel-2);
 }

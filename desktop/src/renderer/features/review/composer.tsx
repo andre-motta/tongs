@@ -15,6 +15,7 @@ import type {
   DraftInlineAnchorInputDto,
   DraftListResult,
   DraftSnapshotDto,
+  GeneralCommentParams,
   InlineCommentParams,
   MutationDiffAnchorDto,
   MutationOutcomeDto,
@@ -87,10 +88,6 @@ export interface ComposerBuffers {
    * one must never reach the other.
    */
   readonly edits: Map<string, string>;
-  readonly suggestions: Map<
-    string,
-    { readonly comment: string; readonly replacement: string }
-  >;
 }
 
 const composerCache = new Map<string, ComposerBuffers>();
@@ -104,7 +101,6 @@ export function buffersFor(review: string): ComposerBuffers {
       inline: new Map(),
       replies: new Map(),
       edits: new Map(),
-      suggestions: new Map(),
     };
     composerCache.set(review, buffers);
   }
@@ -131,26 +127,17 @@ export function anchorIdentity(
   });
 }
 
-export function inlineBufferLabel(key: string): string {
-  try {
-    const value = JSON.parse(key) as {
-      readonly newPath?: unknown;
-      readonly side?: unknown;
-      readonly oldLine?: unknown;
-      readonly newLine?: unknown;
-      readonly revision?: { readonly head_sha?: unknown };
-    };
-    const line = value.side === "old" ? value.oldLine : value.newLine;
-    return `${String(value.newPath)} · ${String(value.side)} line ${String(line)} · revision ${String(value.revision?.head_sha)}`;
-  } catch {
-    return "Earlier inline selection";
-  }
-}
-
+/**
+ * The retained text of one composer. A null anchor is the general composer,
+ * which has one buffer per review rather than one per line, so the three
+ * helpers route it to the review's own general buffer and every anchored
+ * caller keeps the behaviour it had.
+ */
 export function readInlineBuffer(
   review: string,
   anchor: InlineAnchorSelection | null,
 ): string {
+  if (anchor === null) return buffersFor(review).general;
   const key = anchorIdentity(anchor);
   return key === null ? "" : (buffersFor(review).inline.get(key) ?? "");
 }
@@ -160,6 +147,10 @@ export function writeInlineBuffer(
   anchor: InlineAnchorSelection | null,
   body: string,
 ): void {
+  if (anchor === null) {
+    buffersFor(review).general = body;
+    return;
+  }
   const key = anchorIdentity(anchor);
   if (key !== null) buffersFor(review).inline.set(key, body);
 }
@@ -168,6 +159,10 @@ export function clearInlineBuffer(
   review: string,
   anchor: InlineAnchorSelection | null,
 ): void {
+  if (anchor === null) {
+    buffersFor(review).general = "";
+    return;
+  }
   const key = anchorIdentity(anchor);
   if (key !== null) buffersFor(review).inline.delete(key);
 }
@@ -680,68 +675,6 @@ export function sameComposerRevision(
   );
 }
 
-export function Composer({
-  label,
-  body,
-  setBody,
-  disabled,
-  disabledReason,
-  submit,
-}: {
-  readonly label: string;
-  readonly body: string;
-  readonly setBody: (value: string) => void;
-  readonly disabled: boolean;
-  readonly disabledReason: string | null;
-  readonly submit: () => void;
-}): ReactNode {
-  return (
-    <section className="review-workflow-composer">
-      <label>
-        <strong>{label}</strong>
-        <textarea
-          value={body}
-          disabled={disabled}
-          title={disabledReason ?? undefined}
-          onChange={(event) => setBody(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === "Enter")
-              submit();
-          }}
-        />
-      </label>
-      {disabledReason && <small>{disabledReason}</small>}
-      <button className="button" disabled={disabled || !body} onClick={submit}>
-        {label}
-      </button>
-    </section>
-  );
-}
-
-export function BufferedInlineNotes({
-  entries,
-  currentKey,
-}: {
-  readonly entries: ReadonlyMap<string, string>;
-  readonly currentKey: string | null;
-}): ReactNode {
-  const retained = [...entries.entries()].filter(
-    ([key, body]) => key !== currentKey && body.length > 0,
-  );
-  if (retained.length === 0) return null;
-  return (
-    <section className="review-workflow-buffered-inline">
-      <strong>Unsent inline text kept on earlier selections</strong>
-      {retained.map(([key, body]) => (
-        <article key={key}>
-          <small>{inlineBufferLabel(key)}</small>
-          <p>{body}</p>
-        </article>
-      ))}
-    </section>
-  );
-}
-
 /**
  * The two writes the in-diff composer offers, over the paths that already
  * exist: a durable review draft entry through `save_draft`, and the immediate
@@ -785,8 +718,14 @@ export interface InlineComposerController {
   readonly entryReason: string | null;
   readonly busy: boolean;
   readonly message: string | null;
-  readonly quickReason: (anchor: InlineAnchorSelection) => string | null;
-  readonly draftReason: (anchor: InlineAnchorSelection) => string | null;
+  /**
+   * Why the immediate write is refused now, or null. A null anchor asks about
+   * the general write, which is gated on `general_comment` rather than on
+   * `inline_comment` and has no line to check.
+   */
+  readonly quickReason: (anchor: InlineAnchorSelection | null) => string | null;
+  /** The same question for the durable write. A null anchor is a general entry. */
+  readonly draftReason: (anchor: InlineAnchorSelection | null) => string | null;
   /** Why Insert suggestion cannot act on this anchor and this body. */
   readonly suggestionReason: (
     anchor: InlineAnchorSelection,
@@ -797,12 +736,18 @@ export interface InlineComposerController {
     anchor: InlineAnchorSelection,
     body: string,
   ) => string | null;
+  /**
+   * Adds one entry to the pending review and saves it. A null anchor writes a
+   * general entry, which lands in the draft's `comments[]` with kind
+   * `general` and no anchor, and is not the draft `body` the drawer owns.
+   */
   readonly addToReview: (
-    anchor: InlineAnchorSelection,
+    anchor: InlineAnchorSelection | null,
     body: string,
   ) => Promise<boolean>;
+  /** Publishes one comment immediately. A null anchor publishes a general one. */
   readonly commentNow: (
-    anchor: InlineAnchorSelection,
+    anchor: InlineAnchorSelection | null,
     body: string,
   ) => Promise<boolean>;
   /**
@@ -898,41 +843,55 @@ export function useInlineReviewComposer(
   const quickBlocked =
     workflow.quick?.status === "sending" || workflow.quick?.status === "unknown";
   const quickReason = useCallback(
-    (anchor: InlineAnchorSelection): string | null => {
+    (anchor: InlineAnchorSelection | null): string | null => {
       if (capabilities === null)
-        return "Inline comment support for this review is still loading.";
-      if (!capabilities.inline_comment)
-        return "Inline comments are unsupported for this review.";
-      if (anchorRange(anchor) !== null && !capabilities.multiline_comment)
-        return MULTILINE_REFUSAL;
-      if (anchor.review !== review)
-        return "Select a source line in the current review diff.";
+        return anchor === null
+          ? "General comment support for this review is still loading."
+          : "Inline comment support for this review is still loading.";
+      if (anchor === null) {
+        if (!capabilities.general_comment)
+          return "General comments are unsupported for this review.";
+      } else {
+        if (!capabilities.inline_comment)
+          return "Inline comments are unsupported for this review.";
+        if (anchorRange(anchor) !== null && !capabilities.multiline_comment)
+          return MULTILINE_REFUSAL;
+        if (anchor.review !== review)
+          return "Select a source line in the current review diff.";
+      }
       if (quickBlocked)
         return "Resolve or acknowledge the previous action in the review workflow before another mutation.";
       if (busy) return "A review write is already in flight.";
-      if (anchorLine(anchor) === null)
+      if (anchor !== null && anchorLine(anchor) === null)
         return "The selected diff side has no source line.";
       return null;
     },
     [busy, capabilities, quickBlocked, review],
   );
   const draftReason = useCallback(
-    (anchor: InlineAnchorSelection): string | null => {
+    (anchor: InlineAnchorSelection | null): string | null => {
       const shared = quickReason(anchor);
       if (shared !== null) return shared;
-      if (!anchor.contextComplete)
-        return "The selected context is partial. Refresh the complete diff before drafting.";
-      if (
-        !sameComposerRevision(
-          anchor.revision,
-          workflow.displayed.latestObservedRevision,
+      // Only an anchored entry has a selection to be complete or current. The
+      // draft's own states below are checked for both, so a general entry is
+      // refused by the same conflict, lock, revision and submission states an
+      // inline one is, in the same words.
+      if (anchor !== null) {
+        if (!anchor.contextComplete)
+          return "The selected context is partial. Refresh the complete diff before drafting.";
+        if (
+          !sameComposerRevision(
+            anchor.revision,
+            workflow.displayed.latestObservedRevision,
+          )
         )
-      )
-        return "The selected code belongs to an earlier revision. Refresh the diff.";
+          return "The selected code belongs to an earlier revision. Refresh the diff.";
+      }
+      const action = writeAction(anchor);
       if (workflow.draft.conflict)
-        return "This pending review was changed elsewhere. Resolve the conflict in Your review before adding inline feedback.";
+        return `This pending review was changed elsewhere. Resolve the conflict in Your review before ${action}.`;
       if (workflow.draft.remote && !canCaptureDraftInline(workflow))
-        return boundElsewhereRefusal(workflow);
+        return boundElsewhereSentence(workflow, action);
       return null;
     },
     [quickReason, workflow],
@@ -978,7 +937,7 @@ export function useInlineReviewComposer(
   );
 
   const bindDraft = useCallback(
-    async (anchor: InlineAnchorSelection): Promise<ReviewWorkflowState> => {
+    async (boundTo: ReviewRevisionDto): Promise<ReviewWorkflowState> => {
       const current = held.current;
       if (current.draft.remote) return current;
       // Shares whatever active-draft read is already in flight, so a first
@@ -999,7 +958,7 @@ export function useInlineReviewComposer(
         recovered ??
         (await bridge.createReviewDraft({
           review,
-          revision: anchor.revision,
+          revision: boundTo,
         }));
       const bound = apply((state) => adoptDraft(state, draft));
       if (!canCaptureDraftInline(bound))
@@ -1210,7 +1169,10 @@ export function useInlineReviewComposer(
   );
 
   const addToReview = useCallback(
-    async (anchor: InlineAnchorSelection, body: string): Promise<boolean> => {
+    async (
+      anchor: InlineAnchorSelection | null,
+      body: string,
+    ): Promise<boolean> => {
       if (body.length === 0) return false;
       const refusal = draftReason(anchor);
       if (refusal !== null) {
@@ -1220,14 +1182,24 @@ export function useInlineReviewComposer(
       setBusy(true);
       setMessage(null);
       try {
-        const captured = await captureAnchor(anchor, forge, body);
-        const bound = await bindDraft(anchor);
-        const comment: DraftCommentInputDto = Object.freeze({
-          id: crypto.randomUUID(),
-          kind: "inline",
-          body,
-          anchor: captured,
-        });
+        // A general entry has no target to capture and no revision of its own,
+        // so it binds to the revision this surface is displaying.
+        const captured =
+          anchor === null ? null : await captureAnchor(anchor, forge, body);
+        const bound = await bindDraft(anchor?.revision ?? revision);
+        const comment: DraftCommentInputDto =
+          captured === null
+            ? Object.freeze({
+                id: crypto.randomUUID(),
+                kind: "general",
+                body,
+              })
+            : Object.freeze({
+                id: crypto.randomUUID(),
+                kind: "inline",
+                body,
+                anchor: captured,
+              });
         // The entry is added to the shared draft only for the duration of the
         // save. A failed save keeps the local content dirty, so leaving the
         // entry behind would let the obvious retry write the same comment
@@ -1258,11 +1230,23 @@ export function useInlineReviewComposer(
         setBusy(false);
       }
     },
-    [apply, bindDraft, draftReason, forge, review, rollBack, saveDraft],
+    [
+      apply,
+      bindDraft,
+      draftReason,
+      forge,
+      review,
+      revision,
+      rollBack,
+      saveDraft,
+    ],
   );
 
   const commentNow = useCallback(
-    async (anchor: InlineAnchorSelection, body: string): Promise<boolean> => {
+    async (
+      anchor: InlineAnchorSelection | null,
+      body: string,
+    ): Promise<boolean> => {
       if (body.length === 0) return false;
       const refusal = quickReason(anchor);
       if (refusal !== null) {
@@ -1273,16 +1257,27 @@ export function useInlineReviewComposer(
       setMessage(null);
       const operationId = newOperationId("comment");
       try {
-        const command: InlineCommentParams = {
-          operation_id: operationId,
-          review,
-          revision: anchor.revision,
-          anchor: mutationAnchorFor(anchor, forge, body),
-          body,
-        };
+        // The general command carries no anchor and no revision, which is what
+        // makes it the review-level comment operation rather than the inline
+        // one; both are the operations that already exist.
+        const command: InlineCommentParams | GeneralCommentParams =
+          anchor === null
+            ? { operation_id: operationId, review, body }
+            : {
+                operation_id: operationId,
+                review,
+                revision: anchor.revision,
+                anchor: mutationAnchorFor(anchor, forge, body),
+                body,
+              };
         apply((current) => beginQuickIntent(current, operationId, command));
         try {
-          const outcome = await bridge.postInlineReviewComment(command);
+          const outcome =
+            anchor === null
+              ? await bridge.postReviewComment(command as GeneralCommentParams)
+              : await bridge.postInlineReviewComment(
+                  command as InlineCommentParams,
+                );
           const settled = apply((current) =>
             settleQuickIntent(current, operationId, outcome),
           );
@@ -1533,6 +1528,15 @@ const ENTRY_GONE_REFUSAL =
   "That pending comment is no longer part of this review. Refresh the review workflow.";
 
 /** Names the actual reason a bound draft cannot take another inline entry. */
+/**
+ * How a refusal names the write the reader was refused. Every sentence that
+ * ends in an action takes it, so the general and the inline path differ in
+ * that clause alone and never in the state they describe.
+ */
+function writeAction(anchor: InlineAnchorSelection | null): string {
+  return anchor === null ? "adding a general comment" : "adding inline feedback";
+}
+
 function boundElsewhereRefusal(state: ReviewWorkflowState): string {
   return boundElsewhereSentence(state, "adding inline feedback");
 }
@@ -1603,8 +1607,16 @@ export function InlineComposer({
   controller,
   entry,
   close,
+  onBody,
 }: {
-  readonly anchor: InlineAnchorSelection;
+  /**
+   * The line this composer is anchored to, or null for the general composer.
+   * The general mode writes the same two ways over the same controller, so
+   * every refusal, every buffer rule and the pending count are one
+   * implementation; it differs only in having no line to name, no suggestion
+   * to insert from and nowhere to be closed to.
+   */
+  readonly anchor: InlineAnchorSelection | null;
   readonly controller: InlineComposerController;
   /**
    * The pending entry being edited, or null for a new comment. An edit keeps
@@ -1613,7 +1625,14 @@ export function InlineComposer({
    * not offered here.
    */
   readonly entry?: PendingDraftEntry | null;
-  readonly close: () => void;
+  /** Dismisses the composer, where there is something to dismiss it to. */
+  readonly close?: () => void;
+  /**
+   * Publishes the typed text to the surface around the composer. The Overview
+   * quick verdicts submit the body the reader is looking at, so they have to
+   * read the same text this composer holds rather than a copy of it.
+   */
+  readonly onBody?: (body: string) => void;
 }): ReactNode {
   const editing = entry ?? null;
   const [body, setBodyState] = useState(() =>
@@ -1635,6 +1654,10 @@ export function InlineComposer({
   useEffect(() => {
     if (!preview) editor.current?.focus();
   }, [preview]);
+  const publish = onBody;
+  useEffect(() => {
+    publish?.(body);
+  }, [body, publish]);
   const setBody = (value: string): void => {
     if (editing) writeEditBuffer(controller.review, editing.id, value);
     else writeInlineBuffer(controller.review, anchor, value);
@@ -1644,8 +1667,10 @@ export function InlineComposer({
   const draftReason = editing
     ? controller.entryReason
     : controller.draftReason(anchor);
-  const suggestionReason = controller.suggestionReason(anchor, body);
+  const suggestionReason =
+    anchor === null ? null : controller.suggestionReason(anchor, body);
   const insertSuggestion = (): void => {
+    if (anchor === null) return;
     const filled = controller.insertSuggestion(anchor, body);
     if (filled === null) return;
     setPreview(false);
@@ -1665,7 +1690,7 @@ export function InlineComposer({
     if (!done) return;
     if (editing) clearEditBuffer(controller.review, editing.id);
     setBodyState("");
-    close();
+    close?.();
   };
   const runPrimary = (): void => {
     void (editing
@@ -1678,9 +1703,15 @@ export function InlineComposer({
   };
   return (
     <section
-      className="inline-composer"
+      className={
+        anchor === null ? "inline-composer general-composer" : "inline-composer"
+      }
       aria-label={
-        editing ? "Edit pending comment composer" : "Inline comment composer"
+        editing
+          ? "Edit pending comment composer"
+          : anchor === null
+            ? "General comment composer"
+            : "Inline comment composer"
       }
       onKeyDown={(event) => {
         if (event.key === "Escape") {
@@ -1703,7 +1734,7 @@ export function InlineComposer({
             setOverflow(false);
             return;
           }
-          close();
+          close?.();
           return;
         }
         // The primary action belongs to the composer, not to the editor: the
@@ -1718,7 +1749,9 @@ export function InlineComposer({
         <strong>
           {editing && editing.anchor
             ? `${editing.anchor.new_path}, ${pendingAnchorLabel(editing.anchor)}`
-            : anchorLabel(anchor)}
+            : anchor === null
+              ? "General comment"
+              : anchorLabel(anchor)}
         </strong>
         {editing ? (
           <span className="inline-composer-chip">Editing pending comment</span>
@@ -1743,7 +1776,11 @@ export function InlineComposer({
           ref={editor}
           className="inline-composer-text"
           aria-label={
-            editing ? "Pending review comment" : "Inline review comment"
+            editing
+              ? "Pending review comment"
+              : anchor === null
+                ? "General review comment"
+                : "Inline review comment"
           }
           value={body}
           onChange={(event) => setBody(event.target.value)}
@@ -1759,7 +1796,7 @@ export function InlineComposer({
       ))}
       <div className="inline-composer-actions">
         <div className="inline-composer-toolbar">
-          {!editing && (
+          {!editing && anchor !== null && (
             <button
               className="button button-secondary"
               disabled={suggestionReason !== null}
@@ -1791,9 +1828,11 @@ export function InlineComposer({
           )}
         </div>
         <div className="inline-composer-writes">
-          <button className="button button-secondary" onClick={close}>
-            Cancel
-          </button>
+          {close && (
+            <button className="button button-secondary" onClick={close}>
+              Cancel
+            </button>
+          )}
           {!editing && (
             <button
               className="button button-secondary"

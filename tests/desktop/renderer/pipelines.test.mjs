@@ -41,7 +41,9 @@ test("initial pipeline failure does not claim that the review has no pipelines",
   });
   const view = renderFeature(bridge);
 
-  await view.findByText("The local service could not complete this read.");
+  await view.findByText(
+    /The local service could not complete this read: safe (pipeline|job) failure/,
+  );
   assert.equal(
     view.queryByText("No pipelines are available for this review."),
     null,
@@ -61,7 +63,9 @@ test("initial job failure does not claim that the pipeline has no jobs", async (
   });
   const view = renderFeature(bridge);
 
-  await view.findByText("The local service could not complete this read.");
+  await view.findByText(
+    /The local service could not complete this read: safe (pipeline|job) failure/,
+  );
   assert.equal(view.queryByText("This pipeline has no jobs."), null);
 });
 

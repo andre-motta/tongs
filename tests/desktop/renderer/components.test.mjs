@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
 import test, { afterEach } from "node:test";
 import { QueryCoordinator } from "../../../desktop/dist/src/renderer/core/query.js";
 import { createDiffFeature } from "../../../desktop/dist/src/renderer/features/diff/index.js";
@@ -126,6 +128,89 @@ test("diff component changes layout through the typed Python projection request"
       "+from typing import TYPE_CHECKING",
     ),
   );
+});
+
+test("every sandbox diff shape renders from the captured wire page", async () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      path.join(import.meta.dirname, "../fixtures/diff-shapes.json"),
+      "utf8",
+    ),
+  );
+  const paths = [
+    "assets/icon.bin",
+    "docs/guide.md",
+    "src/calc.py",
+    "src/empty_placeholder.py",
+    "src/no_newline.txt",
+    "src/obsolete.py",
+    "src/renamed_module.py",
+    "src/tool.sh",
+  ];
+  const expected = {
+    // GitLab reports binary, emptiness and modes, so each shape keeps its badge.
+    gitlab_unified_page: {
+      "assets/icon.bin": "Binary",
+      "src/empty_placeholder.py": "Empty",
+      "src/renamed_module.py": "Empty",
+      "src/tool.sh": "Mode only",
+    },
+    // The GitHub files endpoint withholds that metadata, so the four shapes
+    // arrive as content the forge did not supply.
+    github_unified_page: {
+      "assets/icon.bin": "Unavailable",
+      "src/empty_placeholder.py": "Unavailable",
+      "src/renamed_module.py": "Unavailable",
+      "src/tool.sh": "Unavailable",
+    },
+  };
+  for (const [key, badges] of Object.entries(expected)) {
+    const bridge = baseBridge({
+      openDiff: () => read(fixture[key]),
+      pageDiff: () => {
+        throw new Error("no next page");
+      },
+    });
+    const feature = createDiffFeature();
+    const view = render(
+      feature.render(featureContext(bridge), {
+        kind: "review",
+        item: reviewItem(),
+        panel: "diff",
+      }),
+    );
+    const files = () => [
+      ...view.container.querySelectorAll(
+        ".file-list .file-item:not(.hunk-item)",
+      ),
+    ];
+    await waitFor(() => assert.equal(files().length, 8));
+    assert.deepEqual(
+      files().map((node) => node.querySelector("span")?.textContent),
+      paths,
+      key,
+    );
+    assert.equal(view.container.querySelector(".notice-error"), null, key);
+    for (const [file, badge] of Object.entries(badges)) {
+      fireEvent.click(
+        files().find((node) => node.textContent?.startsWith(file)),
+      );
+      const heading =
+        file === "src/renamed_module.py"
+          ? "src/legacy_name.py \u2192 src/renamed_module.py"
+          : file;
+      await waitFor(() => {
+        const header = view.container.querySelector(".diff-file");
+        assert.equal(header?.querySelector(".file-path")?.textContent, heading);
+        assert.deepEqual(
+          [...header.querySelectorAll(".badge")].map((node) => node.textContent),
+          [badge],
+          `${key} ${file}`,
+        );
+      });
+    }
+    view.unmount();
+  }
 });
 
 test("diff anchor selection keeps full immutable identity across layouts", async () => {

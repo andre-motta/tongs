@@ -356,6 +356,47 @@ test("discussion diff targets use only actual path and side line data", () => {
   );
 });
 
+test("a review-level note reads with no inline position", async () => {
+  const review = "review-unpositioned-note";
+  const note = {
+    id: "53f505e47aca",
+    is_inline: false,
+    is_resolved: false,
+    resolvable: true,
+    root_comment: {
+      ...discussion().root_comment,
+      id: "note-1",
+      file_path: null,
+      old_line: null,
+      new_line: null,
+    },
+  };
+  assert.equal(discussionDiffTarget(note), null);
+  const bridge = reviewBridge(review, {
+    listDiscussions: () => read({ discussions: [note, discussion()] }),
+  });
+
+  const view = renderFeature(bridge, review);
+
+  const threads = await waitFor(() => {
+    const found = view.container.querySelectorAll(".review-workflow-thread");
+    assert.equal(found.length, 2);
+    return found;
+  });
+  const meta = threads[0].querySelector(".review-workflow-thread-meta");
+  assert.equal(meta.textContent, "Reviewer");
+  assert.match(
+    threads[1].querySelector(".review-workflow-thread-meta").textContent,
+    /src\/example\.py/,
+  );
+  assert.equal(
+    [...threads[0].querySelectorAll("button")].some(
+      (button) => button.textContent === "Show in diff",
+    ),
+    false,
+  );
+});
+
 test("discussion roots and replies use shared safe Markdown without changing source", async () => {
   const review = "review-markdown-discussion";
   const opened = [];

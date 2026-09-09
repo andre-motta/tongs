@@ -38,6 +38,10 @@ def flatten_diff(
 
 
 def _file_wire(file_index: int, file: DiffFile) -> JsonObject:
+    # The wire form of an undetected language is null, not the empty string the
+    # core model uses.  Every desktop row field declared as nullable text must
+    # be either null or non-empty, and one file that breaks that contract makes
+    # the client reject the whole diff page.
     return {
         "kind": "file",
         "file_index": file_index,
@@ -47,7 +51,7 @@ def _file_wire(file_index: int, file: DiffFile) -> JsonObject:
         "additions": file.additions,
         "deletions": file.deletions,
         "is_binary": file.is_binary,
-        "language": file.language,
+        "language": file.language or None,
         "is_truncated": file.is_truncated,
         "is_empty": file.is_empty,
         "is_mode_only": file.is_mode_only,

@@ -1,0 +1,1030 @@
+{
+  "source": "Captured read-only from andre-motta/tongs-test-sandbox pull request 9 and gitlab.com/alustosa/tongs-test-sandbox merge request 8. Eight files, one of every diff shape: binary, modified text, added empty, no trailing newline, deleted, renamed and mode only. GitHub omits patch for four of them.",
+  "github_changes": [
+    {
+      "filename": "assets/icon.bin",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "changes": 0
+    },
+    {
+      "filename": "docs/guide.md",
+      "status": "modified",
+      "additions": 5,
+      "deletions": 0,
+      "changes": 5,
+      "patch": "@@ -1,3 +1,8 @@\n # Fixture guide\n \n Seed document for Tongs acceptance fixtures.\n+\n+## Coverage\n+\n+This pull request carries added, modified, deleted, renamed, mode-only,\n+binary, empty and no-newline file changes."
+    },
+    {
+      "filename": "src/calc.py",
+      "status": "modified",
+      "additions": 10,
+      "deletions": 0,
+      "changes": 10,
+      "patch": "@@ -17,3 +17,13 @@ def divide(left: int, right: int) -> float:\n     if right == 0:\n         raise ZeroDivisionError(\"right must not be zero\")\n     return left / right\n+\n+\n+def modulo(left: int, right: int) -> int:\n+    if right == 0:\n+        raise ZeroDivisionError(\"right must not be zero\")\n+    return left % right\n+\n+\n+def power(base: int, exponent: int) -> int:\n+    return base ** exponent"
+    },
+    {
+      "filename": "src/empty_placeholder.py",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "changes": 0
+    },
+    {
+      "filename": "src/no_newline.txt",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "changes": 2,
+      "patch": "@@ -1 +1 @@\n-no trailing newline marker\n\\ No newline at end of file\n+no trailing newline marker plus one edit\n\\ No newline at end of file"
+    },
+    {
+      "filename": "src/obsolete.py",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 3,
+      "changes": 3,
+      "patch": "@@ -1,3 +0,0 @@\n-\"\"\"Module that a later acceptance fixture deletes.\"\"\"\n-\n-VALUE = 41"
+    },
+    {
+      "filename": "src/renamed_module.py",
+      "status": "renamed",
+      "additions": 0,
+      "deletions": 0,
+      "changes": 0,
+      "previous_filename": "src/legacy_name.py"
+    },
+    {
+      "filename": "src/tool.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "changes": 0
+    }
+  ],
+  "gitlab_changes": [
+    {
+      "diff": "Binary files a/assets/icon.bin and b/assets/icon.bin differ\n",
+      "collapsed": false,
+      "too_large": false,
+      "new_path": "assets/icon.bin",
+      "old_path": "assets/icon.bin",
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "new_file": false,
+      "renamed_file": false,
+      "deleted_file": false,
+      "generated_file": false
+    },
+    {
+      "diff": "@@ -1,3 +1,8 @@\n # Fixture guide\n \n Seed document for Tongs acceptance fixtures.\n+\n+## Coverage\n+\n+This merge request carries added, modified, deleted, renamed, mode-only,\n+binary, empty and no-newline file changes.\n",
+      "collapsed": false,
+      "too_large": false,
+      "new_path": "docs/guide.md",
+      "old_path": "docs/guide.md",
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "new_file": false,
+      "renamed_file": false,
+      "deleted_file": false,
+      "generated_file": false
+    },
+    {
+      "diff": "@@ -17,3 +17,13 @@ def divide(left: int, right: int) -> float:\n     if right == 0:\n         raise ZeroDivisionError(\"right must not be zero\")\n     return left / right\n+\n+\n+def modulo(left: int, right: int) -> int:\n+    if right == 0:\n+        raise ZeroDivisionError(\"right must not be zero\")\n+    return left % right\n+\n+\n+def power(base: int, exponent: int) -> int:\n+    return base ** exponent\n",
+      "collapsed": false,
+      "too_large": false,
+      "new_path": "src/calc.py",
+      "old_path": "src/calc.py",
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "new_file": false,
+      "renamed_file": false,
+      "deleted_file": false,
+      "generated_file": false
+    },
+    {
+      "diff": "",
+      "collapsed": false,
+      "too_large": false,
+      "new_path": "src/empty_placeholder.py",
+      "old_path": "src/empty_placeholder.py",
+      "a_mode": "0",
+      "b_mode": "100644",
+      "new_file": true,
+      "renamed_file": false,
+      "deleted_file": false,
+      "generated_file": false
+    },
+    {
+      "diff": "@@ -1 +1 @@\n-no trailing newline marker\n\\ No newline at end of file\n+no trailing newline marker plus one edit\n\\ No newline at end of file\n",
+      "collapsed": false,
+      "too_large": false,
+      "new_path": "src/no_newline.txt",
+      "old_path": "src/no_newline.txt",
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "new_file": false,
+      "renamed_file": false,
+      "deleted_file": false,
+      "generated_file": false
+    },
+    {
+      "diff": "@@ -1,3 +0,0 @@\n-\"\"\"Module that a later acceptance fixture deletes.\"\"\"\n-\n-VALUE = 41\n",
+      "collapsed": false,
+      "too_large": false,
+      "new_path": "src/obsolete.py",
+      "old_path": "src/obsolete.py",
+      "a_mode": "100644",
+      "b_mode": "0",
+      "new_file": false,
+      "renamed_file": false,
+      "deleted_file": true,
+      "generated_file": false
+    },
+    {
+      "diff": "",
+      "collapsed": false,
+      "too_large": false,
+      "new_path": "src/renamed_module.py",
+      "old_path": "src/legacy_name.py",
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "new_file": false,
+      "renamed_file": true,
+      "deleted_file": false,
+      "generated_file": false
+    },
+    {
+      "diff": "",
+      "collapsed": false,
+      "too_large": false,
+      "new_path": "src/tool.sh",
+      "old_path": "src/tool.sh",
+      "a_mode": "100644",
+      "b_mode": "100755",
+      "new_file": false,
+      "renamed_file": false,
+      "deleted_file": false,
+      "generated_file": false
+    }
+  ],
+  "github_unified_page": {
+    "snapshot_id": "diff-shapes-snapshot",
+    "resource": "review-handle",
+    "revision": {
+      "head_sha": "head",
+      "base_sha": "base",
+      "start_sha": null
+    },
+    "cursor": 0,
+    "next_cursor": null,
+    "entries": [
+      {
+        "kind": "file",
+        "file_index": 0,
+        "old_path": "assets/icon.bin",
+        "new_path": "assets/icon.bin",
+        "status": "modified",
+        "additions": 0,
+        "deletions": 0,
+        "is_binary": false,
+        "language": null,
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": true
+      },
+      {
+        "kind": "file",
+        "file_index": 1,
+        "old_path": "docs/guide.md",
+        "new_path": "docs/guide.md",
+        "status": "modified",
+        "additions": 5,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "markdown",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "hunk",
+        "file_index": 1,
+        "hunk_index": 0,
+        "header": "@@ -1,3 +1,8 @@",
+        "old_start": 1,
+        "old_count": 3,
+        "new_start": 1,
+        "new_count": 8,
+        "context_text": ""
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": 1,
+        "new_line": 1,
+        "content": "# Fixture guide",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": 2,
+        "new_line": 2,
+        "content": "",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": 3,
+        "new_line": 3,
+        "content": "Seed document for Tongs acceptance fixtures.",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 4,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 5,
+        "content": "## Coverage",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 6,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 7,
+        "content": "This pull request carries added, modified, deleted, renamed, mode-only,",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 8,
+        "content": "binary, empty and no-newline file changes.",
+        "line_type": "addition"
+      },
+      {
+        "kind": "file",
+        "file_index": 2,
+        "old_path": "src/calc.py",
+        "new_path": "src/calc.py",
+        "status": "modified",
+        "additions": 10,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "python",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "hunk",
+        "file_index": 2,
+        "hunk_index": 0,
+        "header": "@@ -17,3 +17,13 @@ def divide(left: int, right: int) -> float:",
+        "old_start": 17,
+        "old_count": 3,
+        "new_start": 17,
+        "new_count": 13,
+        "context_text": "def divide(left: int, right: int) -> float:"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": 17,
+        "new_line": 17,
+        "content": "    if right == 0:",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": 18,
+        "new_line": 18,
+        "content": "        raise ZeroDivisionError(\"right must not be zero\")",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": 19,
+        "new_line": 19,
+        "content": "    return left / right",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 20,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 21,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 22,
+        "content": "def modulo(left: int, right: int) -> int:",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 23,
+        "content": "    if right == 0:",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 24,
+        "content": "        raise ZeroDivisionError(\"right must not be zero\")",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 25,
+        "content": "    return left % right",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 26,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 27,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 28,
+        "content": "def power(base: int, exponent: int) -> int:",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 29,
+        "content": "    return base ** exponent",
+        "line_type": "addition"
+      },
+      {
+        "kind": "file",
+        "file_index": 3,
+        "old_path": "src/empty_placeholder.py",
+        "new_path": "src/empty_placeholder.py",
+        "status": "added",
+        "additions": 0,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "python",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": true
+      },
+      {
+        "kind": "file",
+        "file_index": 4,
+        "old_path": "src/no_newline.txt",
+        "new_path": "src/no_newline.txt",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "is_binary": false,
+        "language": "text",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "hunk",
+        "file_index": 4,
+        "hunk_index": 0,
+        "header": "@@ -1 +1 @@",
+        "old_start": 1,
+        "old_count": 1,
+        "new_start": 1,
+        "new_count": 1,
+        "context_text": ""
+      },
+      {
+        "kind": "line",
+        "file_index": 4,
+        "hunk_index": 0,
+        "old_line": 1,
+        "new_line": null,
+        "content": "no trailing newline marker",
+        "line_type": "deletion"
+      },
+      {
+        "kind": "line",
+        "file_index": 4,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": null,
+        "content": "\\ No newline at end of file",
+        "line_type": "no_newline"
+      },
+      {
+        "kind": "line",
+        "file_index": 4,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 1,
+        "content": "no trailing newline marker plus one edit",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 4,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": null,
+        "content": "\\ No newline at end of file",
+        "line_type": "no_newline"
+      },
+      {
+        "kind": "file",
+        "file_index": 5,
+        "old_path": "src/obsolete.py",
+        "new_path": "src/obsolete.py",
+        "status": "deleted",
+        "additions": 0,
+        "deletions": 3,
+        "is_binary": false,
+        "language": "python",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "hunk",
+        "file_index": 5,
+        "hunk_index": 0,
+        "header": "@@ -1,3 +0,0 @@",
+        "old_start": 1,
+        "old_count": 3,
+        "new_start": 0,
+        "new_count": 0,
+        "context_text": ""
+      },
+      {
+        "kind": "line",
+        "file_index": 5,
+        "hunk_index": 0,
+        "old_line": 1,
+        "new_line": null,
+        "content": "\"\"\"Module that a later acceptance fixture deletes.\"\"\"",
+        "line_type": "deletion"
+      },
+      {
+        "kind": "line",
+        "file_index": 5,
+        "hunk_index": 0,
+        "old_line": 2,
+        "new_line": null,
+        "content": "",
+        "line_type": "deletion"
+      },
+      {
+        "kind": "line",
+        "file_index": 5,
+        "hunk_index": 0,
+        "old_line": 3,
+        "new_line": null,
+        "content": "VALUE = 41",
+        "line_type": "deletion"
+      },
+      {
+        "kind": "file",
+        "file_index": 6,
+        "old_path": "src/legacy_name.py",
+        "new_path": "src/renamed_module.py",
+        "status": "renamed",
+        "additions": 0,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "python",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": true
+      },
+      {
+        "kind": "file",
+        "file_index": 7,
+        "old_path": "src/tool.sh",
+        "new_path": "src/tool.sh",
+        "status": "modified",
+        "additions": 0,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "bash",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": true
+      }
+    ]
+  },
+  "gitlab_unified_page": {
+    "snapshot_id": "diff-shapes-snapshot",
+    "resource": "review-handle",
+    "revision": {
+      "head_sha": "head",
+      "base_sha": "base",
+      "start_sha": null
+    },
+    "cursor": 0,
+    "next_cursor": null,
+    "entries": [
+      {
+        "kind": "file",
+        "file_index": 0,
+        "old_path": "assets/icon.bin",
+        "new_path": "assets/icon.bin",
+        "status": "modified",
+        "additions": 0,
+        "deletions": 0,
+        "is_binary": true,
+        "language": null,
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "file",
+        "file_index": 1,
+        "old_path": "docs/guide.md",
+        "new_path": "docs/guide.md",
+        "status": "modified",
+        "additions": 5,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "markdown",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "hunk",
+        "file_index": 1,
+        "hunk_index": 0,
+        "header": "@@ -1,3 +1,8 @@",
+        "old_start": 1,
+        "old_count": 3,
+        "new_start": 1,
+        "new_count": 8,
+        "context_text": ""
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": 1,
+        "new_line": 1,
+        "content": "# Fixture guide",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": 2,
+        "new_line": 2,
+        "content": "",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": 3,
+        "new_line": 3,
+        "content": "Seed document for Tongs acceptance fixtures.",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 4,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 5,
+        "content": "## Coverage",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 6,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 7,
+        "content": "This merge request carries added, modified, deleted, renamed, mode-only,",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 1,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 8,
+        "content": "binary, empty and no-newline file changes.",
+        "line_type": "addition"
+      },
+      {
+        "kind": "file",
+        "file_index": 2,
+        "old_path": "src/calc.py",
+        "new_path": "src/calc.py",
+        "status": "modified",
+        "additions": 10,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "python",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "hunk",
+        "file_index": 2,
+        "hunk_index": 0,
+        "header": "@@ -17,3 +17,13 @@ def divide(left: int, right: int) -> float:",
+        "old_start": 17,
+        "old_count": 3,
+        "new_start": 17,
+        "new_count": 13,
+        "context_text": "def divide(left: int, right: int) -> float:"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": 17,
+        "new_line": 17,
+        "content": "    if right == 0:",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": 18,
+        "new_line": 18,
+        "content": "        raise ZeroDivisionError(\"right must not be zero\")",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": 19,
+        "new_line": 19,
+        "content": "    return left / right",
+        "line_type": "context"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 20,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 21,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 22,
+        "content": "def modulo(left: int, right: int) -> int:",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 23,
+        "content": "    if right == 0:",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 24,
+        "content": "        raise ZeroDivisionError(\"right must not be zero\")",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 25,
+        "content": "    return left % right",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 26,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 27,
+        "content": "",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 28,
+        "content": "def power(base: int, exponent: int) -> int:",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 2,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 29,
+        "content": "    return base ** exponent",
+        "line_type": "addition"
+      },
+      {
+        "kind": "file",
+        "file_index": 3,
+        "old_path": "src/empty_placeholder.py",
+        "new_path": "src/empty_placeholder.py",
+        "status": "added",
+        "additions": 0,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "python",
+        "is_truncated": false,
+        "is_empty": true,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "file",
+        "file_index": 4,
+        "old_path": "src/no_newline.txt",
+        "new_path": "src/no_newline.txt",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "is_binary": false,
+        "language": "text",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "hunk",
+        "file_index": 4,
+        "hunk_index": 0,
+        "header": "@@ -1 +1 @@",
+        "old_start": 1,
+        "old_count": 1,
+        "new_start": 1,
+        "new_count": 1,
+        "context_text": ""
+      },
+      {
+        "kind": "line",
+        "file_index": 4,
+        "hunk_index": 0,
+        "old_line": 1,
+        "new_line": null,
+        "content": "no trailing newline marker",
+        "line_type": "deletion"
+      },
+      {
+        "kind": "line",
+        "file_index": 4,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": null,
+        "content": "\\ No newline at end of file",
+        "line_type": "no_newline"
+      },
+      {
+        "kind": "line",
+        "file_index": 4,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": 1,
+        "content": "no trailing newline marker plus one edit",
+        "line_type": "addition"
+      },
+      {
+        "kind": "line",
+        "file_index": 4,
+        "hunk_index": 0,
+        "old_line": null,
+        "new_line": null,
+        "content": "\\ No newline at end of file",
+        "line_type": "no_newline"
+      },
+      {
+        "kind": "file",
+        "file_index": 5,
+        "old_path": "src/obsolete.py",
+        "new_path": "src/obsolete.py",
+        "status": "deleted",
+        "additions": 0,
+        "deletions": 3,
+        "is_binary": false,
+        "language": "python",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "hunk",
+        "file_index": 5,
+        "hunk_index": 0,
+        "header": "@@ -1,3 +0,0 @@",
+        "old_start": 1,
+        "old_count": 3,
+        "new_start": 0,
+        "new_count": 0,
+        "context_text": ""
+      },
+      {
+        "kind": "line",
+        "file_index": 5,
+        "hunk_index": 0,
+        "old_line": 1,
+        "new_line": null,
+        "content": "\"\"\"Module that a later acceptance fixture deletes.\"\"\"",
+        "line_type": "deletion"
+      },
+      {
+        "kind": "line",
+        "file_index": 5,
+        "hunk_index": 0,
+        "old_line": 2,
+        "new_line": null,
+        "content": "",
+        "line_type": "deletion"
+      },
+      {
+        "kind": "line",
+        "file_index": 5,
+        "hunk_index": 0,
+        "old_line": 3,
+        "new_line": null,
+        "content": "VALUE = 41",
+        "line_type": "deletion"
+      },
+      {
+        "kind": "file",
+        "file_index": 6,
+        "old_path": "src/legacy_name.py",
+        "new_path": "src/renamed_module.py",
+        "status": "renamed",
+        "additions": 0,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "python",
+        "is_truncated": false,
+        "is_empty": true,
+        "is_mode_only": false,
+        "is_unavailable": false
+      },
+      {
+        "kind": "file",
+        "file_index": 7,
+        "old_path": "src/tool.sh",
+        "new_path": "src/tool.sh",
+        "status": "modified",
+        "additions": 0,
+        "deletions": 0,
+        "is_binary": false,
+        "language": "bash",
+        "is_truncated": false,
+        "is_empty": false,
+        "is_mode_only": true,
+        "is_unavailable": false
+      }
+    ]
+  }
+}

@@ -716,7 +716,13 @@ class DesktopSidecarServer:
         self, params: JsonObject, _context: RequestContext
     ) -> object:
         review = self._review_param(params)
-        return {"discussions": await self._session.get_discussions(review)}
+        discussions = await self._session.get_discussions(review)
+        return {
+            "discussions": [
+                _discussion_wire(cast(JsonObject, to_json_value(discussion)))
+                for discussion in discussions
+            ]
+        }
 
     async def _commits_list(
         self, params: JsonObject, _context: RequestContext
@@ -1398,6 +1404,34 @@ def _detail_wire(snapshot: ReviewSnapshot) -> JsonObject:
         }
     )
     return result
+
+
+def _discussion_wire(discussion: JsonObject) -> JsonObject:
+    """Project one thread with its absent inline position expressed as null."""
+    return {
+        **discussion,
+        "root_comment": _comment_wire(
+            cast(JsonObject, discussion["root_comment"]),
+        ),
+    }
+
+
+def _comment_wire(comment: JsonObject) -> JsonObject:
+    """Emit the wire form of a comment without an inline position.
+
+    A review-level note legitimately has no file. The core model spells that
+    absence as an empty path, while the desktop wire spells every absent
+    optional text as null, so one unpositioned note cannot make the client
+    reject the whole discussion list.
+    """
+    return {
+        **comment,
+        "file_path": comment["file_path"] or None,
+        "replies": [
+            _comment_wire(cast(JsonObject, reply))
+            for reply in cast(list[JsonValue], comment["replies"])
+        ],
+    }
 
 
 def _log_entries(encoded: bytes) -> tuple[JsonObject, ...]:

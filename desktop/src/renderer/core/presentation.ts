@@ -1,4 +1,4 @@
-import type { ServiceErrorDto } from "../../shared/bridge.js";
+import { decodeReadFailure, type ServiceErrorDto } from "../../shared/bridge.js";
 
 export class RendererReadError extends Error implements ServiceErrorDto {
   constructor(
@@ -11,18 +11,25 @@ export class RendererReadError extends Error implements ServiceErrorDto {
   }
 }
 
+/** Recover the typed failure a read carries, whether raised here or in main. */
+export function serviceErrorOf(error: unknown): ServiceErrorDto | null {
+  return isServiceError(error) ? error : decodeReadFailure(error);
+}
+
 export function safeError(error: unknown): string {
-  if (isServiceError(error)) {
-    if (error.code === "snapshot_expired")
+  const failure = serviceErrorOf(error);
+  if (failure !== null) {
+    if (failure.code === "snapshot_expired")
       return "This diff snapshot expired. Reload the diff to continue.";
-    if (error.code === "revision_changed")
+    if (failure.code === "revision_changed")
       return "The review changed while its diff was loading. Reload the latest revision.";
-    if (error.code === "pagination_limit")
+    if (failure.code === "pagination_limit")
       return "The diff exceeded the safe desktop paging limit. A bounded partial snapshot is shown.";
-    if (error.code === "invalid_response")
-      return "The local service returned an inconsistent diff page. Reload the diff to try again.";
-    if (error.retryable)
-      return "The local service could not complete this read. Try again.";
+    if (failure.code === "invalid_response")
+      return `The local service returned an inconsistent diff page (${failure.message}). Reload the diff to try again.`;
+    if (failure.retryable)
+      return `The local service could not complete this read: ${failure.message} Try again.`;
+    return `The local service could not complete this read: ${failure.message}`;
   }
   return "The local service could not complete this read.";
 }

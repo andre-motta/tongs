@@ -85,13 +85,41 @@ naming the bound environment means that exact recorded path no longer validates:
 | `The bound Tongs Python environment changed or disappeared.` | The recorded console script or interpreter is gone or was replaced. |
 | `The bound Tongs Python environment could not be validated.` | The environment could be found but did not answer the identity probe. |
 | `The bound Tongs console script has an invalid interpreter.` | The console script's shebang does not name a usable interpreter. |
-| `The bound Tongs console script must name one exact interpreter.` | The shebang or trampoline does not resolve to a single interpreter. |
 | `The bound Tongs core is incompatible with this desktop payload.` | The bound core version is outside the payload's declared compatibility interval. |
 | `The installed desktop launcher is unsafe.` | The launcher inside the payload failed its validation. |
 
 All of these are repair conditions. Run `tongs desktop repair` from the intended
 persistent environment first; use `tongs desktop repair --redownload` only when
 local recovery cannot succeed.
+
+Two console-script failures are not repair conditions, because repair rebinds an
+environment and cannot rewrite a console script that a packaging tool wrote:
+
+**The bound Tongs console script must name one absolute Python interpreter path,
+followed only by the '-E' flag pipx adds. Install Tongs with 'pipx install tongs'
+or 'python -m pip install --user tongs', then retry.**
+
+The shebang has to identify the interpreter without a `PATH` lookup. Three shapes
+are accepted: the plain absolute shim pip and venv write (`#!/usr/bin/python3`),
+the fixed shell trampoline described below, and the pipx shape, which appends
+`-E` to that absolute path when it exposes an app. A `#!/usr/bin/env python3`
+shebang, a relative interpreter path, and any other interpreter flag stay
+rejected, because each of them can resolve to a different Python than the one the
+menu entry was bound to. Only a space or a tab separates the interpreter from
+that flag, matching what the kernel treats as a separator; any other whitespace
+belongs to the path the kernel would execute, so it is rejected as well.
+
+**The bound Tongs console script's shell trampoline must exec one absolute Python
+interpreter path and no arguments. Install Tongs with 'pipx install tongs' or
+'python -m pip install --user tongs', then retry.**
+
+pip and venv write a fixed `/bin/sh` trampoline instead of a plain shebang when
+the environment path contains a space, and Tongs reads the interpreter out of
+that one exact form. This message means the second line is not that form: the
+`exec` preamble or trailing arguments differ, more than one value is quoted, or
+the quoted interpreter is not an absolute path. pipx never rewrites a trampoline,
+so the `-E` flag plays no part here. Reinstall into a supported layout instead of
+editing the console script by hand.
 
 ## Graphics and session
 

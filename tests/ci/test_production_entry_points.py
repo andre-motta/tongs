@@ -353,7 +353,7 @@ def test_the_install_table_matches_the_declared_extras() -> None:
         ("jsonschema", "jsonschema>="),
         ("yaml", "pyyaml>="),
         ("pytest", "pytest>="),
-        ("mkdocs", "mkdocs-material>="),
+        ("mkdocs", "mkdocs=="),
     ):
         assert module in DEV_MODULES
         assert marker in pyproject, marker

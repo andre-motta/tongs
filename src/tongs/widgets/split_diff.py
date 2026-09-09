@@ -472,10 +472,12 @@ class SplitDiffColumn(OptionList):
         )
 
     def _split_view(self) -> SplitDiffView:
-        parent = self.parent
-        if not isinstance(parent, SplitDiffView):
-            raise TypeError("split diff column is detached")
-        return parent
+        # The columns live inside a Horizontal laid out by SplitDiffView.compose,
+        # so the owning view is an ancestor rather than the direct parent.
+        for node in self.ancestors:
+            if isinstance(node, SplitDiffView):
+                return node
+        raise TypeError("split diff column is detached")
 
 
 class SplitDiffView(Widget):

@@ -24,7 +24,10 @@ from tongs.desktop.installer.commands import (
     run_desktop_cli,
 )
 from tongs.desktop.installer.extract import extract_verified_archive
-from tongs.desktop.installer.models import InstallRequest
+from tongs.desktop.installer.models import (
+    PERSISTENT_INSTALL_GUIDANCE,
+    InstallRequest,
+)
 
 from .helpers import documents, verified_metadata
 
@@ -104,7 +107,7 @@ def test_transient_uvx_install_is_rejected_with_persistent_guidance(
     )
 
     assert result == 2
-    assert "pipx install tongs" in errors.getvalue()
+    assert PERSISTENT_INSTALL_GUIDANCE in errors.getvalue()
     assert stage.requests == []
     assert tuple(context.store.paths.staging_root.iterdir()) == ()
 

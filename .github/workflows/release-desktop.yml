@@ -315,7 +315,7 @@ jobs:
           printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
       - name: Attest the archive SBOM with the reviewed SPDX predicate
         id: attest-sbom
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4 reviewed source
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.sbom.outputs.archive }}
           sbom-path: ${{ runner.temp }}/tongs-desktop.spdx.json
@@ -324,7 +324,7 @@ jobs:
           show-summary: false
       - name: Attest the real manifest and archive with GitHub-managed Sigstore
         id: attest
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4 reviewed source
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/tongs-desktop-candidate/archive/desktop-manifest-v1.json

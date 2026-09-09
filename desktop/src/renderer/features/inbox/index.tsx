@@ -61,12 +61,26 @@ const DEFAULT_LIST_SELECTION: InboxListSelection = Object.freeze({
  */
 const listSelections = new Map<string, InboxListSelection>();
 
+/**
+ * Review the list should hand focus back to, recorded only when a card
+ * navigates away and consumed by the first restore that finds it. Keeping this
+ * apart from `selected` is what makes the restore one-shot: `selected` outlives
+ * it for the current-row marking, so a filter change, which remounts the
+ * result list, must not be able to pull focus out of the control just used.
+ */
+const pendingSelectionFocus = new Map<string, string>();
+
 export function inboxListSelection(key: string): InboxListSelection {
   return listSelections.get(key) ?? DEFAULT_LIST_SELECTION;
 }
 
+export function inboxPendingSelectionFocus(key: string): string | null {
+  return pendingSelectionFocus.get(key) ?? null;
+}
+
 export function resetInboxListSelections(): void {
   listSelections.clear();
+  pendingSelectionFocus.clear();
 }
 
 const CI_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
@@ -122,16 +136,33 @@ function InboxView({
   const [listSelection, setListSelection] = useState<InboxListSelection>(() =>
     inboxListSelection(listKey),
   );
+  const [focusTarget, setFocusTarget] = useState<string | null>(() =>
+    inboxPendingSelectionFocus(listKey),
+  );
   const retain = (change: Partial<InboxListSelection>): void => {
     const next = Object.freeze({ ...listSelection, ...change });
     listSelections.set(listKey, next);
     setListSelection(next);
   };
+  const releaseFocusTarget = (): void => {
+    pendingSelectionFocus.delete(listKey);
+    setFocusTarget(null);
+  };
+  const changeFilter = (change: Partial<InboxListSelection>): void => {
+    releaseFocusTarget();
+    retain(change);
+  };
+  const openReview = (handle: string): void => {
+    pendingSelectionFocus.set(listKey, handle);
+    retain({ selected: handle });
+  };
   const reviewScope = listSelection.scope;
   const reviewState = listSelection.state;
   const reviewSort = listSelection.sort;
   const selectScope = (next: ReviewScope): void => {
-    retain(next === "all_open" ? { scope: next } : { scope: next, state: "open" });
+    changeFilter(
+      next === "all_open" ? { scope: next } : { scope: next, state: "open" },
+    );
   };
   const queryIdentity = `${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`;
   const title = repository?.display_name ?? "All reviews";
@@ -167,7 +198,7 @@ function InboxView({
               className={`button ${reviewState === "open" ? "button-active" : "button-secondary"}`}
               data-review-state="open"
               aria-pressed={reviewState === "open"}
-              onClick={() => retain({ state: "open" })}
+              onClick={() => changeFilter({ state: "open" })}
             >
               Open
             </button>
@@ -181,7 +212,7 @@ function InboxView({
                   ? undefined
                   : "Closed and merged reviews are available in All Open."
               }
-              onClick={() => retain({ state: "closed" })}
+              onClick={() => changeFilter({ state: "closed" })}
             >
               Closed &amp; merged
             </button>
@@ -192,7 +223,7 @@ function InboxView({
           <select
             value={reviewSort}
             onChange={(event) =>
-              retain({ sort: event.currentTarget.value as ReviewSort })
+              changeFilter({ sort: event.currentTarget.value as ReviewSort })
             }
           >
             {REVIEW_SORTS.map((option) => (
@@ -215,7 +246,9 @@ function InboxView({
         reviewState={reviewState}
         reviewSort={reviewSort}
         selected={listSelection.selected}
-        select={(handle) => retain({ selected: handle })}
+        select={openReview}
+        focusTarget={focusTarget}
+        releaseFocusTarget={releaseFocusTarget}
         navigate={navigate}
       />
     </>
@@ -234,6 +267,8 @@ function InboxResults({
   reviewSort,
   selected,
   select,
+  focusTarget,
+  releaseFocusTarget,
   navigate,
 }: {
   readonly bridge: DesktopBridge;
@@ -247,6 +282,8 @@ function InboxResults({
   readonly reviewSort: ReviewSort;
   readonly selected: string | null;
   readonly select: (handle: string) => void;
+  readonly focusTarget: string | null;
+  readonly releaseFocusTarget: () => void;
   readonly navigate: (route: AppRoute) => void;
 }): ReactNode {
   const begin = useCallback(
@@ -304,6 +341,8 @@ function InboxResults({
           sort={reviewSort}
           selected={selected}
           select={select}
+          focusTarget={focusTarget}
+          releaseFocusTarget={releaseFocusTarget}
           emptyLabel={emptyReviewLabel(reviewScope, reviewState)}
         />
       )}
@@ -342,6 +381,8 @@ function ReviewList({
   sort,
   selected,
   select,
+  focusTarget,
+  releaseFocusTarget,
   emptyLabel,
 }: {
   readonly result: ReviewListResult;
@@ -349,20 +390,23 @@ function ReviewList({
   readonly sort: ReviewSort;
   readonly selected: string | null;
   readonly select: (handle: string) => void;
+  readonly focusTarget: string | null;
+  readonly releaseFocusTarget: () => void;
   readonly emptyLabel: string;
 }): ReactNode {
   const presentation = inboxPresentation(result);
   const listRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (selected === null) return;
+    if (focusTarget === null) return;
     const target = [
       ...(listRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []),
-    ].find((button) => button.dataset.reviewHandle === selected);
+    ].find((button) => button.dataset.reviewHandle === focusTarget);
     if (!target) return;
     target.focus();
     if (typeof target.scrollIntoView === "function")
       target.scrollIntoView({ block: "nearest" });
-  }, [selected]);
+    releaseFocusTarget();
+  }, [focusTarget]);
   const moveFocus = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (
       event.key !== "ArrowDown" &&

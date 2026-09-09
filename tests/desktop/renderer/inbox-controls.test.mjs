@@ -387,7 +387,7 @@ test("review list filter and selection survive opening a review and returning", 
 
   fireEvent.click(view.getByText("Zulu").closest("button"));
   await view.findByRole("button", { name: "← Reviews" });
-  assert.equal(view.queryByLabelText("Review list controls"), null);
+  assert.equal(Boolean(view.queryByLabelText("Review list controls")), false);
 
   fireEvent.click(view.getByRole("button", { name: "← Reviews" }));
   await view.findByText("Zulu");
@@ -412,11 +412,32 @@ test("review list filter and selection survive opening a review and returning", 
   const restored = view.getByText("Zulu").closest("button");
   assert.equal(restored.getAttribute("aria-current"), "true");
   assert.equal(restored.dataset.reviewHandle, "review-zulu");
-  assert.equal(document.activeElement, restored);
+  assert.equal(document.activeElement?.dataset.reviewHandle, "review-zulu");
   assert.equal(
     view.getByText("Alpha").closest("button").getAttribute("aria-current"),
     null,
   );
+
+  const allOpen = view.getByRole("button", { name: "All Open" });
+  allOpen.focus();
+  fireEvent.click(allOpen);
+  await view.findByText("Zulu");
+  assert.equal(
+    document.activeElement?.dataset.reviewScope,
+    "all_open",
+    "changing the scope must leave focus on the control that was used",
+  );
+  assert.equal(document.activeElement?.dataset.reviewHandle, undefined);
+  assert.equal(
+    view.getByText("Zulu").closest("button").getAttribute("aria-current"),
+    "true",
+  );
+  const closed = view.getByRole("button", { name: "Closed & merged" });
+  closed.focus();
+  fireEvent.click(closed);
+  await view.findByText("Zulu");
+  assert.equal(document.activeElement?.dataset.reviewState, "closed");
+  assert.equal(document.activeElement?.dataset.reviewHandle, undefined);
 });
 
 test("each repository scope keeps its own list selection for the session", async () => {

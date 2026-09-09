@@ -322,23 +322,85 @@ def test_the_sbom_adapter_constants_anchor_the_gate_policy() -> None:
     assert check.receipt_name == "sbom-receipt.json"
 
 
-def test_every_action_in_the_required_call_chain_is_sha_pinned() -> None:
-    chain = (
-        "ci.yml",
-        "desktop-production.yml",
-        "desktop-podman-probe.yml",
-        "release-desktop.yml",
-    )
+#: ``uses:`` values that name something other than a third-party action and
+#: so are never SHA-pinned: a same-repo reusable workflow call, or a
+#: container image reference.
+_UNPINNED_USES_PREFIXES = ("./", "docker://")
+
+
+def _workflow_uses(workflow: dict[str, Any]) -> list[str]:
+    """Every non-local, non-container ``uses:`` value in a parsed workflow.
+
+    Collects both job-level ``uses`` (a reusable-workflow call) and
+    step-level ``uses`` (an action), walking dicts rather than matching line
+    prefixes, so it sees list-form steps (``- uses: ...``) the same as any
+    other form.
+    """
+
+    values: list[str] = []
+    for job in (workflow.get("jobs") or {}).values():
+        if not isinstance(job, dict):
+            continue
+        job_uses = job.get("uses")
+        if isinstance(job_uses, str) and not job_uses.startswith(
+            _UNPINNED_USES_PREFIXES
+        ):
+            values.append(job_uses)
+        for step in job.get("steps") or []:
+            step_uses = step.get("uses") if isinstance(step, dict) else None
+            if isinstance(step_uses, str) and not step_uses.startswith(
+                _UNPINNED_USES_PREFIXES
+            ):
+                values.append(step_uses)
+    return values
+
+
+def test_every_action_in_every_workflow_is_sha_pinned() -> None:
+    """Every non-local ``uses:`` reference, job- or step-level, in every
+    workflow must pin a full commit SHA followed by a trailing ``# v<version>``
+    comment, no exceptions; see issue #149. This globs every ``*.yml`` and
+    ``*.yaml`` file under ``.github/workflows`` instead of an enumerated
+    subset, so a new workflow, a new file extension, or a job-level reusable
+    workflow call is covered automatically rather than by remembering to add
+    it here."""
+
+    workflow_dir = ROOT / ".github/workflows"
+    paths = sorted(workflow_dir.glob("*.yml")) + sorted(workflow_dir.glob("*.yaml"))
     unpinned: list[str] = []
-    for name in chain:
-        for line in (ROOT / ".github/workflows" / name).read_text().splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("uses: actions/"):
-                continue
-            reference = stripped.split("@", 1)[1].split()[0]
-            if re.fullmatch(r"[0-9a-f]{40}", reference) is None:
-                unpinned.append(f"{name}: {stripped}")
+    for path in paths:
+        text = path.read_text()
+        workflow = yaml.safe_load(text)
+        for uses in _workflow_uses(workflow):
+            reference = uses.split("@", 1)[1] if "@" in uses else ""
+            has_sha = re.fullmatch(r"[0-9a-f]{40}", reference) is not None
+            has_version_comment = (
+                re.search(rf"{re.escape(uses)}[ \t]*#[ \t]*v\S", text) is not None
+            )
+            if not (has_sha and has_version_comment):
+                unpinned.append(f"{path.name}: {uses}")
     assert unpinned == []
+
+
+def test_docs_workflow_mkdocs_pin_matches_the_dev_extra() -> None:
+    """``docs.yml`` installs mkdocs directly instead of the ``dev`` extra, so
+    nothing else keeps the two version pins from drifting apart; see issue
+    #149."""
+
+    pyproject_text = (ROOT / "pyproject.toml").read_text()
+    docs_workflow = _load(ROOT / ".github/workflows/docs.yml")
+    install_step = next(
+        step
+        for step in docs_workflow["jobs"]["build"]["steps"]
+        if "mkdocs-material" in str(step.get("run", ""))
+    )
+    pin_pattern = re.compile(r"(mkdocs(?:-material)?)==([0-9][\w.]*)")
+    workflow_pins = dict(pin_pattern.findall(install_step["run"]))
+    pyproject_pins = dict(pin_pattern.findall(pyproject_text))
+    # A non-vacuity check: without it, two empty dicts (a regex that stopped
+    # matching either file) would compare equal below and the test would
+    # pass without having checked anything.
+    assert set(workflow_pins) == {"mkdocs", "mkdocs-material"}
+    assert workflow_pins == pyproject_pins, (workflow_pins, pyproject_pins)
 
 
 def test_every_new_upload_is_retry_safe_and_retained_for_fourteen_days(

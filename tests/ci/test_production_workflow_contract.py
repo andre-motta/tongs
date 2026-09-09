@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 import yaml
 
-from tests.ci.desktop_production_expectations import ARCHIVE, SBOM
+from tests.ci.desktop_production_expectations import archive_adapter, sbom_adapter
 from tests.ci.verify_desktop_ci import REQUIRED_GATE_JOBS
 from tests.ci.verify_desktop_production_gate import (
     ARTIFACT_LIFECYCLE,
@@ -310,14 +310,14 @@ def test_every_gate_artifact_is_uploaded_and_downloaded_under_one_name(
 
 def test_the_archive_adapter_constants_anchor_the_gate_policy() -> None:
     check = _check("desktop-archive-lifecycle")
-    assert check.receipt_name == ARCHIVE.RECEIPT_PATH
-    assert [report.path for report in check.reports] == [ARCHIVE.REPORT_PATH]
-    assert check.stages == tuple(ARCHIVE.STAGE_NAMES)
+    assert check.receipt_name == archive_adapter().RECEIPT_PATH
+    assert [report.path for report in check.reports] == [archive_adapter().REPORT_PATH]
+    assert check.stages == tuple(archive_adapter().STAGE_NAMES)
 
 
 def test_the_sbom_adapter_constants_anchor_the_gate_policy() -> None:
     check = _check("desktop-archive-sbom")
-    assert check.stages == tuple(SBOM.STAGE_NAMES)
+    assert check.stages == tuple(sbom_adapter().STAGE_NAMES)
     assert [report.path for report in check.reports] == ["reports/sbom-evidence.json"]
     assert check.receipt_name == "sbom-receipt.json"
 

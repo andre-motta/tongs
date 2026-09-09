@@ -92,8 +92,38 @@ def _load_module(name: str, path: Path) -> ModuleType:
     return module
 
 
-ARCHIVE = _load_module("production_archive_evidence", ROOT / ARCHIVE_ADAPTER_PROGRAM)
-SBOM = _load_module("production_sbom_evidence", ROOT / SBOM_ADAPTER_PROGRAM)
+_ADAPTERS: dict[str, ModuleType] = {}
+
+
+def _adapter(name: str, program: str) -> ModuleType:
+    """Load one evidence adapter on first use and cache it.
+
+    Loading is lazy and per subcommand on purpose.  The issue #135 SBOM adapter
+    imports ``jsonschema`` and the deterministic SPDX generator; the issue #139
+    archive adapter needs neither.  Importing both eagerly would make the
+    archive receipt depend on the SBOM toolchain, which inverts the direction
+    the #139 assignment fixed: the SBOM consumes the archive receipt, never the
+    other way round.  It would also make the archive job fail on a dependency
+    it has no reason to install.
+    """
+
+    module = _ADAPTERS.get(name)
+    if module is None:
+        module = _load_module(name, ROOT / program)
+        _ADAPTERS[name] = module
+    return module
+
+
+def archive_adapter() -> ModuleType:
+    """Return the issue #139 archive lifecycle adapter."""
+
+    return _adapter("production_archive_evidence", ARCHIVE_ADAPTER_PROGRAM)
+
+
+def sbom_adapter() -> ModuleType:
+    """Return the issue #135 archive SBOM adapter."""
+
+    return _adapter("production_sbom_evidence", SBOM_ADAPTER_PROGRAM)
 
 
 def _read_regular_bytes(path: Path, maximum: int, label: str) -> bytes:
@@ -131,7 +161,7 @@ def artifact_contract_digest(source_root: Path) -> str:
     than producing a value the adapter will reject for the wrong reason.
     """
 
-    helper = getattr(ARCHIVE, "_directory_digest", None)
+    helper = getattr(archive_adapter(), "_directory_digest", None)
     if helper is None:
         _fail(
             "the archive adapter no longer exposes its package directory digest; "
@@ -406,10 +436,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         _require_mode_paths(arguments)
         if arguments.command == "archive-evidence":
-            adapter: Any = ARCHIVE
+            adapter: Any = archive_adapter()
             adapter_argv = archive_evidence_argv(arguments)
         else:
-            adapter = SBOM
+            adapter = sbom_adapter()
             adapter_argv = sbom_evidence_argv(arguments)
     except (OSError, ExpectationError, ValueError, KeyError) as error:
         print(f"production expectations failed: {error}", file=sys.stderr)

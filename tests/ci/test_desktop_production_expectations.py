@@ -11,23 +11,25 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from tests.ci.desktop_production_expectations import (
-    ARCHIVE,
     ARCHIVE_ADAPTER_PROGRAM,
     DESKTOP_RELEASE_VERSION,
     RECEIPT_READER_PROGRAM,
     ROOT,
-    SBOM,
     SBOM_GENERATOR_VERSION,
     USER_ARCHIVE_ARTIFACT_ID,
     ExpectationError,
+    archive_adapter,
     archive_evidence_argv,
     artifact_contract_digest,
     electron_identity,
+    sbom_adapter,
     sbom_evidence_argv,
 )
 
@@ -99,11 +101,11 @@ def test_archive_arguments_parse_with_the_adapter_parser(
     transfer_root: Path, tmp_path: Path
 ) -> None:
     argv = archive_evidence_argv(_namespace(transfer_root, tmp_path))
-    parsed = _parsed(ARCHIVE, argv)
+    parsed = _parsed(archive_adapter(), argv)
     assert parsed.command == "produce"
     assert parsed.expected_source_commit == COMMIT
     assert parsed.expected_source_tree == TREE
-    assert parsed.expected_archive_name == ARCHIVE.ARCHIVE_NAME
+    assert parsed.expected_archive_name == archive_adapter().ARCHIVE_NAME
     assert parsed.expected_archive_artifact_id == USER_ARCHIVE_ARTIFACT_ID
     assert parsed.expected_release_version == DESKTOP_RELEASE_VERSION
     assert parsed.expected_transfer_event == "pull_request"
@@ -124,9 +126,9 @@ def test_archive_consume_arguments_name_the_published_receipt(
             output_root=None,
         )
     )
-    parsed = _parsed(ARCHIVE, argv)
+    parsed = _parsed(archive_adapter(), argv)
     assert parsed.command == "consume"
-    assert parsed.receipt == tmp_path / "gate" / ARCHIVE.RECEIPT_PATH
+    assert parsed.receipt == tmp_path / "gate" / archive_adapter().RECEIPT_PATH
 
 
 def test_archive_arguments_build_a_valid_expectation_object(
@@ -135,9 +137,10 @@ def test_archive_arguments_build_a_valid_expectation_object(
     """The adapter validates caller policy before reading producer evidence."""
 
     parsed = _parsed(
-        ARCHIVE, archive_evidence_argv(_namespace(transfer_root, tmp_path))
+        archive_adapter(),
+        archive_evidence_argv(_namespace(transfer_root, tmp_path)),
     )
-    expectations = ARCHIVE.ArchiveEvidenceExpectations(
+    expectations = archive_adapter().ArchiveEvidenceExpectations(
         source_commit=parsed.expected_source_commit,
         source_tree=parsed.expected_source_tree,
         source_archive_sha256=parsed.expected_source_archive_sha256,
@@ -182,7 +185,7 @@ def test_sbom_arguments_parse_with_the_adapter_parser(
             archive_receipt=receipt,
         )
     )
-    parsed = _parsed(SBOM, argv)
+    parsed = _parsed(sbom_adapter(), argv)
     assert parsed.command == "produce"
     assert parsed.generator_version == SBOM_GENERATOR_VERSION
     assert parsed.expected_tool_commit == COMMIT
@@ -199,7 +202,7 @@ def test_sbom_arguments_build_a_valid_expectation_object(
     receipt = tmp_path / "archive-receipt.json"
     receipt.write_bytes(b"{}\n")
     parsed = _parsed(
-        SBOM,
+        sbom_adapter(),
         sbom_evidence_argv(
             _namespace(
                 transfer_root,
@@ -209,14 +212,16 @@ def test_sbom_arguments_build_a_valid_expectation_object(
             )
         ),
     )
-    SBOM._expectations(parsed).validate()
+    sbom_adapter()._expectations(parsed).validate()
 
 
 def test_electron_identity_matches_the_checked_in_configuration() -> None:
     version, configuration_digest, archive_digest = electron_identity(ROOT)
-    assert version == ARCHIVE.ELECTRON_VERSION
+    assert version == archive_adapter().ELECTRON_VERSION
     configuration = (
-        ROOT / "packaging/desktop/archive" / ARCHIVE.ELECTRON_CONFIGURATION_NAME
+        ROOT
+        / "packaging/desktop/archive"
+        / archive_adapter().ELECTRON_CONFIGURATION_NAME
     )
     assert (
         hashlib.sha256(configuration.read_bytes()).hexdigest() == configuration_digest
@@ -225,7 +230,7 @@ def test_electron_identity_matches_the_checked_in_configuration() -> None:
 
 
 def test_artifact_contract_digest_matches_the_adapter_helper() -> None:
-    assert artifact_contract_digest(ROOT) == ARCHIVE._directory_digest(
+    assert artifact_contract_digest(ROOT) == archive_adapter()._directory_digest(
         ROOT / "src/tongs/desktop/artifact_contract"
     )
 
@@ -234,7 +239,8 @@ def test_tool_digests_match_the_checked_in_programs(
     transfer_root: Path, tmp_path: Path
 ) -> None:
     parsed = _parsed(
-        ARCHIVE, archive_evidence_argv(_namespace(transfer_root, tmp_path))
+        archive_adapter(),
+        archive_evidence_argv(_namespace(transfer_root, tmp_path)),
     )
     for program, derived in (
         (ARCHIVE_ADAPTER_PROGRAM, parsed.expected_adapter_program_sha256),
@@ -286,3 +292,89 @@ def test_reviewed_constants_still_match_the_producer_literals() -> None:
     version, _, _ = electron_identity(ROOT)
     release = (ROOT / ".github/workflows/release-desktop.yml").read_text()
     assert f'ELECTRON_VERSION: "{version}"' in release
+
+
+#: Module names the SBOM chain registers.  ``sbom_evidence`` and the SPDX
+#: generator are loaded by path under these names, so checking ``sys.modules``
+#: for them is what detects an accidental archive-to-SBOM dependency.
+SBOM_CHAIN_MODULES = (
+    "production_sbom_evidence",
+    "desktop_sbom_evidence_generator",
+    "jsonschema",
+)
+
+_ISOLATION_PROBE = """
+import sys, json, types
+
+class _Blocked:
+    def find_module(self, name, path=None):
+        return None
+    def find_spec(self, name, path=None, target=None):
+        if name == "jsonschema" or name.startswith("jsonschema."):
+            raise ImportError("jsonschema is deliberately absent")
+        return None
+
+sys.meta_path.insert(0, _Blocked())
+sys.path.insert(0, {root!r})
+
+from tests.ci.desktop_production_expectations import archive_evidence_argv
+
+class N:
+    pass
+
+n = N()
+for key, value in json.loads({payload!r}).items():
+    setattr(n, key, value)
+argv = archive_evidence_argv(n)
+print(json.dumps({{
+    "argv": argv,
+    "loaded": [name for name in {chain!r} if name in sys.modules],
+}}))
+"""
+
+
+def test_archive_expectations_never_import_the_sbom_chain(
+    transfer_root: Path, tmp_path: Path
+) -> None:
+    """The archive receipt path must not depend on the SBOM toolchain.
+
+    Issue #139 fixed the direction: the SBOM consumes the archive receipt, not
+    the other way round.  Importing the adapters eagerly broke that and made
+    the archive job die on ``jsonschema`` before doing any work.  This runs the
+    archive expectations in a subprocess where importing ``jsonschema`` raises,
+    which is exactly the hosted condition.
+    """
+
+    namespace = _namespace(transfer_root, tmp_path)
+    payload = json.dumps(
+        {
+            key: (str(value) if isinstance(value, Path) else value)
+            for key, value in vars(namespace).items()
+        }
+    )
+    script = _ISOLATION_PROBE.format(
+        root=str(ROOT), payload=payload, chain=SBOM_CHAIN_MODULES
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["loaded"] == []
+    assert "--expected-archive-name" in result["argv"]
+
+
+def test_the_sbom_command_still_loads_its_own_adapter() -> None:
+    """The lazy loader must still return the reviewed #135 module."""
+
+    module = sbom_adapter()
+    assert module.__file__ is not None
+    assert module.__file__.endswith("tests/integration/desktop/sbom_evidence.py")
+    assert callable(module.produce_sbom_evidence)
+    archive = archive_adapter()
+    assert archive.__file__ is not None
+    assert archive.__file__.endswith("tests/integration/desktop/archive_evidence.py")

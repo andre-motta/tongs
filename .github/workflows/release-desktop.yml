@@ -237,12 +237,18 @@ jobs:
         with:
           name: desktop-candidate-input-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/tongs-desktop-candidate
-      - name: Install Sigstore 4.5 and the source-built verifier
+      - name: Install Sigstore 4.5, the SPDX validator, and the source verifier
+        # The deterministic SPDX generator validates against the pinned schema,
+        # so this job needs jsonschema.  It is named explicitly rather than
+        # pulled in with the whole dev extra, because a signing job holding
+        # id-token and attestations write should not also carry a test runner
+        # and a documentation theme.
         run: >-
           "$CANDIDATE_PYTHON" -I -m pip install
           --isolated
           --disable-pip-version-check
           -e .
+          "jsonschema>=4.18,<5"
           "sigstore==${SIGSTORE_VERSION}"
       - name: Require the isolated source-bound signing environment
         run: |

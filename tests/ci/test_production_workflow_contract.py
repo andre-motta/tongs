@@ -322,36 +322,61 @@ def test_the_sbom_adapter_constants_anchor_the_gate_policy() -> None:
     assert check.receipt_name == "sbom-receipt.json"
 
 
-def _actions_uses(workflow: dict[str, Any]) -> list[str]:
-    """Every ``actions/*`` ``uses:`` reference in a parsed workflow, structurally.
+#: ``uses:`` values that name something other than a third-party action and
+#: so are never SHA-pinned: a same-repo reusable workflow call, or a
+#: container image reference.
+_UNPINNED_USES_PREFIXES = ("./", "docker://")
 
-    Walks ``jobs[*].steps[*].uses`` rather than matching line prefixes, so it
-    sees list-form steps (``- uses: ...``) the same as any other form.
+
+def _workflow_uses(workflow: dict[str, Any]) -> list[str]:
+    """Every non-local, non-container ``uses:`` value in a parsed workflow.
+
+    Collects both job-level ``uses`` (a reusable-workflow call) and
+    step-level ``uses`` (an action), walking dicts rather than matching line
+    prefixes, so it sees list-form steps (``- uses: ...``) the same as any
+    other form.
     """
 
-    references: list[str] = []
+    values: list[str] = []
     for job in (workflow.get("jobs") or {}).values():
         if not isinstance(job, dict):
             continue
+        job_uses = job.get("uses")
+        if isinstance(job_uses, str) and not job_uses.startswith(
+            _UNPINNED_USES_PREFIXES
+        ):
+            values.append(job_uses)
         for step in job.get("steps") or []:
-            uses = step.get("uses") if isinstance(step, dict) else None
-            if isinstance(uses, str) and uses.startswith("actions/"):
-                references.append(uses)
-    return references
+            step_uses = step.get("uses") if isinstance(step, dict) else None
+            if isinstance(step_uses, str) and not step_uses.startswith(
+                _UNPINNED_USES_PREFIXES
+            ):
+                values.append(step_uses)
+    return values
 
 
 def test_every_action_in_every_workflow_is_sha_pinned() -> None:
-    """Every ``actions/*`` step in every workflow must pin a full commit SHA,
-    no exceptions; see issue #149.  This globs every ``*.yml`` file under
-    ``.github/workflows`` instead of an enumerated subset, so a new workflow
-    is covered automatically rather than by remembering to add it here."""
+    """Every non-local ``uses:`` reference, job- or step-level, in every
+    workflow must pin a full commit SHA followed by a trailing ``# v<version>``
+    comment, no exceptions; see issue #149. This globs every ``*.yml`` and
+    ``*.yaml`` file under ``.github/workflows`` instead of an enumerated
+    subset, so a new workflow, a new file extension, or a job-level reusable
+    workflow call is covered automatically rather than by remembering to add
+    it here."""
 
+    workflow_dir = ROOT / ".github/workflows"
+    paths = sorted(workflow_dir.glob("*.yml")) + sorted(workflow_dir.glob("*.yaml"))
     unpinned: list[str] = []
-    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
-        workflow = _load(path)
-        for uses in _actions_uses(workflow):
+    for path in paths:
+        text = path.read_text()
+        workflow = yaml.safe_load(text)
+        for uses in _workflow_uses(workflow):
             reference = uses.split("@", 1)[1] if "@" in uses else ""
-            if re.fullmatch(r"[0-9a-f]{40}", reference) is None:
+            has_sha = re.fullmatch(r"[0-9a-f]{40}", reference) is not None
+            has_version_comment = (
+                re.search(rf"{re.escape(uses)}[ \t]*#[ \t]*v\S", text) is not None
+            )
+            if not (has_sha and has_version_comment):
                 unpinned.append(f"{path.name}: {uses}")
     assert unpinned == []
 
@@ -371,7 +396,10 @@ def test_docs_workflow_mkdocs_pin_matches_the_dev_extra() -> None:
     pin_pattern = re.compile(r"(mkdocs(?:-material)?)==([0-9][\w.]*)")
     workflow_pins = dict(pin_pattern.findall(install_step["run"]))
     pyproject_pins = dict(pin_pattern.findall(pyproject_text))
-    assert workflow_pins == {"mkdocs": "1.6.1", "mkdocs-material": "9.7.7"}
+    # A non-vacuity check: without it, two empty dicts (a regex that stopped
+    # matching either file) would compare equal below and the test would
+    # pass without having checked anything.
+    assert set(workflow_pins) == {"mkdocs", "mkdocs-material"}
     assert workflow_pins == pyproject_pins, (workflow_pins, pyproject_pins)
 
 

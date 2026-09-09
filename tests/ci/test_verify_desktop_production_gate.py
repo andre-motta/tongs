@@ -98,8 +98,7 @@ def _lifecycle(check_id: str, *, result: str = "pass") -> bytes:
         "check_id": check_id,
         "result": result,
         "stages": [
-            {"name": "source-admission", "result": "pass"},
-            {"name": "producer-output-binding", "result": "pass"},
+            {"name": name, "result": "pass"} for name in _check(check_id).stages
         ],
     }
     if _check(check_id).requires_source_context:
@@ -129,6 +128,21 @@ def _report_bytes(check_id: str, path: str, report_format: str) -> bytes:
     return _junit("tests.test_example")
 
 
+def _prepared_inputs(commit: str = COMMIT, mode: str = "exact") -> bytes:
+    """Mirror the shape ``packaging/rpm/desktop/prepare_sources.py`` writes."""
+
+    document = {
+        "schema_version": 1,
+        "source": {"commit": commit, "pep440_version": "0.4.2.dev327"},
+        "desktop": {
+            "accepted_source_commit": commit,
+            "file_count": 80,
+            "pairing_mode": mode,
+        },
+    }
+    return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+
+
 def _write(path: Path, payload: bytes) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
@@ -156,6 +170,16 @@ def _build_evidence(root: Path) -> Path:
                     "format": report.report_format,
                 }
             )
+        inputs = []
+        if check.exact_pairing_input is not None:
+            payload = _prepared_inputs()
+            identity = _write(directory / check.exact_pairing_input, payload)
+            inputs.append(
+                {
+                    "path": check.exact_pairing_input,
+                    "sha256": identity["sha256"],
+                }
+            )
         receipt = {
             "schema_version": 1,
             "check_id": check.check_id,
@@ -170,7 +194,7 @@ def _build_evidence(root: Path) -> Path:
             "result": "success",
             "reports": reports,
             "artifacts": [],
-            "inputs": [],
+            "inputs": inputs,
         }
         _write_receipt(directory / check.receipt_name, receipt)
     return root
@@ -707,4 +731,118 @@ def test_gate_rejects_a_bespoke_adapter_that_claims_a_source_context(
         },
     )
     with pytest.raises(GateVerificationError, match="must not claim one"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_a_lifecycle_report_with_an_extra_unknown_stage(
+    evidence: Path,
+) -> None:
+    """Reviewer case D: an added stage must not pass unnoticed."""
+
+    check = _check("desktop-rpm-lifecycle")
+    stages = [{"name": name, "result": "pass"} for name in check.stages]
+    stages.append({"name": "surprise-stage", "result": "pass"})
+    _replace_lifecycle(
+        evidence,
+        check.check_id,
+        {"check_id": check.check_id, "result": "pass", "stages": stages},
+    )
+    with pytest.raises(GateVerificationError, match="unexpected=..surprise-stage"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_a_lifecycle_report_reduced_to_one_stage(
+    evidence: Path,
+) -> None:
+    """Reviewer case E: dropping the rejection and parity stages must fail."""
+
+    check = _check("desktop-rpm-lifecycle")
+    _replace_lifecycle(
+        evidence,
+        check.check_id,
+        {
+            "check_id": check.check_id,
+            "result": "pass",
+            "stages": [{"name": check.stages[0], "result": "pass"}],
+        },
+    )
+    with pytest.raises(GateVerificationError, match="corrupt-and-dependency-rejection"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_reordered_lifecycle_stages(evidence: Path) -> None:
+    check = _check("desktop-installed-core")
+    reordered = list(reversed(check.stages))
+    _replace_lifecycle(
+        evidence,
+        check.check_id,
+        {
+            "check_id": check.check_id,
+            "result": "pass",
+            "stages": [{"name": name, "result": "pass"} for name in reordered],
+        },
+    )
+    with pytest.raises(GateVerificationError, match="stage set mismatch"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_every_configured_check_declares_a_nonempty_stage_set() -> None:
+    for check in REQUIRED_CHECKS:
+        assert check.stages, check.check_id
+        assert len(set(check.stages)) == len(check.stages), check.check_id
+
+
+def _rewrite_prepared_inputs(evidence: Path, payload: bytes) -> None:
+    check = _check("desktop-rpm-lifecycle")
+    directory = evidence / check.evidence_directory
+    identity = _write(directory / check.exact_pairing_input, payload)
+    path = directory / check.receipt_name
+    receipt = _read_receipt(path)
+    for entry in receipt["inputs"]:
+        if entry["path"] == check.exact_pairing_input:
+            entry["sha256"] = identity["sha256"]
+    _write_receipt(path, receipt)
+
+
+def test_gate_rejects_a_reviewed_fixture_pairing(evidence: Path) -> None:
+    """The recorded diagnostic payload must never satisfy the final gate."""
+
+    _rewrite_prepared_inputs(evidence, _prepared_inputs(mode="reviewed-fixture"))
+    with pytest.raises(GateVerificationError, match="rather than 'exact'"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_a_pairing_against_another_source_commit(
+    evidence: Path,
+) -> None:
+    _rewrite_prepared_inputs(
+        evidence, _prepared_inputs(commit="825a4217c5b5e64fc8908c3444f1bd89fd469b2e")
+    )
+    with pytest.raises(GateVerificationError, match="not the checked-out commit"):
+        verify_check_set(evidence, IDENTITY)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not json\n",
+        b"[]\n",
+        b'{"schema_version": 1}\n',
+        b'{"desktop": []}\n',
+        b'{"desktop": {"accepted_source_commit": "' + COMMIT.encode() + b'"}}\n',
+    ],
+)
+def test_gate_rejects_malformed_prepared_inputs(evidence: Path, payload: bytes) -> None:
+    _rewrite_prepared_inputs(evidence, payload)
+    with pytest.raises(GateVerificationError):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_gate_rejects_a_dropped_prepared_inputs_binding(evidence: Path) -> None:
+    check = _check("desktop-rpm-lifecycle")
+    path = evidence / check.evidence_directory / check.receipt_name
+    receipt = _read_receipt(path)
+    receipt["inputs"] = []
+    _write_receipt(path, receipt)
+    with pytest.raises(GateVerificationError, match="source pairing is unproven"):
         verify_check_set(evidence, IDENTITY)

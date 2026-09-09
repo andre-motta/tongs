@@ -279,3 +279,10 @@ def test_reviewed_constants_still_match_the_producer_literals() -> None:
 
     contract = json.loads((ROOT / "packaging/rpm/desktop/manifest.json").read_text())
     assert contract["accepted_desktop"]["release_version"] == DESKTOP_RELEASE_VERSION
+
+    # The trusted signing workflow hardcodes the Electron version to locate the
+    # reviewed runtime configuration.  Nothing else guards that copy, so a bump
+    # of desktop/package.json without it would only fail at file-open time.
+    version, _, _ = electron_identity(ROOT)
+    release = (ROOT / ".github/workflows/release-desktop.yml").read_text()
+    assert f'ELECTRON_VERSION: "{version}"' in release

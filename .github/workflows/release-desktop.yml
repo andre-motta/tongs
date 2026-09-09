@@ -344,15 +344,39 @@ jobs:
           --event "$GITHUB_EVENT_NAME"
           --run-id "$GITHUB_RUN_ID"
           --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Verify the emitted SBOM bundle, predicate and covered subject
+        env:
+          CANDIDATE_SBOM_BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/candidate_attestation.py verify-sbom
+          --root "$CANDIDATE_ROOT"
+          --bundle "$CANDIDATE_SBOM_BUNDLE"
+          --sbom "$RUNNER_TEMP/tongs-desktop.spdx.json"
+          --report-root "$CANDIDATE_ROOT/sbom-attestation-evidence"
+          --repository "$GITHUB_REPOSITORY"
+          --repository-id "$GITHUB_REPOSITORY_ID"
+          --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID"
+          --ref "$GITHUB_REF"
+          --source-commit "$GITHUB_SHA"
+          --source-tree "${{ needs.candidate-archive.outputs.source-tree }}"
+          --event "$GITHUB_EVENT_NAME"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Retain the actual bundle and runtime versions
-        if: ${{ always() && steps.attest.outputs.bundle-path != '' }}
+        if: >-
+          ${{ always() && (steps.attest.outputs.bundle-path != '' ||
+          steps.attest-sbom.outputs.bundle-path != '') }}
         env:
           CANDIDATE_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
           CANDIDATE_SBOM_BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
         run: |
           set -euo pipefail
           mkdir -p "$CANDIDATE_ROOT/attestation-evidence"
-          cp "$CANDIDATE_BUNDLE" "$CANDIDATE_ROOT/attestation-evidence/candidate-attestation.sigstore.json"
+          if [ -n "${CANDIDATE_BUNDLE:-}" ]; then
+            cp "$CANDIDATE_BUNDLE" \
+              "$CANDIDATE_ROOT/attestation-evidence/candidate-attestation.sigstore.json"
+          fi
           if [ -f "$RUNNER_TEMP/tongs-desktop.spdx.json" ]; then
             cp "$RUNNER_TEMP/tongs-desktop.spdx.json" \
               "$CANDIDATE_ROOT/attestation-evidence/tongs-desktop.spdx.json"

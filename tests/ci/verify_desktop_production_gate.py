@@ -85,6 +85,14 @@ class RequiredCheck:
     evidence_directory: str
     receipt_name: str
     reports: tuple[ExpectedReport, ...]
+    #: Exact ordered lifecycle stage names this consumer requires.  Owning the
+    #: set here, rather than accepting whatever a report lists, is what stops a
+    #: later edit to a stage plan from quietly dropping a stage while the gate
+    #: stays green.  It mirrors the reviewed #139 adapter's ``STAGE_NAMES``.
+    stages: tuple[str, ...]
+    #: Receipt-bound input this consumer parses to prove the RPM leg paired
+    #: with the fresh same-source archive rather than a recorded fixture.
+    exact_pairing_input: str | None = None
     #: True for the checks published by the issue #53 stage binder, which
     #: records the checked-out commit alongside the pull request head, base and
     #: event.  The bespoke issue #135 and #139 adapters own their own report
@@ -140,6 +148,10 @@ GPU_GATE_CHECK_ID = "desktop-native-physical-gpu"
 REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     RequiredCheck(
         check_id="core-python-3.12",
+        stages=(
+            "core-suite",
+            "mcp-suite",
+        ),
         workflow="ci",
         job="core",
         evidence_directory="core-python-3.12",
@@ -152,6 +164,10 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="core-python-3.13",
+        stages=(
+            "core-suite",
+            "mcp-suite",
+        ),
         workflow="ci",
         job="core",
         evidence_directory="core-python-3.13",
@@ -164,6 +180,12 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-production-tap",
+        stages=(
+            "exact-lock-shell-build",
+            "production-shell-and-renderer-tap",
+            "plugin-example-compatibility",
+            "draft-and-process-acceptance",
+        ),
         workflow="desktop-production",
         job="desktop-tap",
         evidence_directory="desktop-production-tap",
@@ -184,6 +206,13 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-archive-lifecycle",
+        stages=(
+            "source-admission",
+            "producer-transfer-validation",
+            "archive-contract-license-validation",
+            "reproducibility-output-binding",
+            "source-tool-metadata-validation",
+        ),
         requires_source_context=False,
         workflow="desktop-production",
         job="archive-evidence",
@@ -193,6 +222,12 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-installed-core",
+        stages=(
+            "source-admission",
+            "wheel-record-install-identity",
+            "offline-startup-audit",
+            "terminal-evidence",
+        ),
         workflow="desktop-production",
         job="installed-core",
         evidence_directory="desktop-installed-core",
@@ -203,6 +238,12 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-archive-sbom",
+        stages=(
+            "source-admission",
+            "producer-transfer-validation",
+            "semantic-generation",
+            "determinism",
+        ),
         requires_source_context=False,
         workflow="desktop-production",
         job="archive-sbom",
@@ -212,6 +253,17 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-rpm-lifecycle",
+        stages=(
+            "exact-payload-pairing",
+            "companion-closure-and-source-rebuild",
+            "clean-install-and-installed-payload",
+            "optional-mcp-install-and-removal",
+            "reinstall-stability",
+            "corrupt-and-dependency-rejection",
+            "upgrade-byte-parity",
+            "complete-uninstall",
+        ),
+        exact_pairing_input="inputs/prepared-inputs.json",
         workflow="desktop-production",
         job="rpm-lifecycle",
         evidence_directory="desktop-rpm-lifecycle",
@@ -222,6 +274,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-native-payload-fixture",
+        stages=("verifier-fixture-structure",),
         workflow="desktop-production",
         job="native-payload",
         evidence_directory="desktop-native-payload-fixture",
@@ -361,7 +414,64 @@ def _verify_one_check(
                 f"{expected.report_format!r}"
             )
         _verify_report_outcome(check, expected, directory, bound[path], identity)
+    _verify_exact_pairing(check, directory, bound, identity)
     return str(receipt_path)
+
+
+def _verify_exact_pairing(
+    check: RequiredCheck,
+    directory: Path,
+    bound: dict[str, Any],
+    identity: GateIdentity,
+) -> None:
+    """Require the RPM leg to have paired with this run's own fresh archive.
+
+    The producer chain already refuses the historical fixture path, but the
+    claim the issue makes by name is that the lifecycle ran against the fresh
+    same-source archive.  Reading the producer's own ``prepared-inputs.json``
+    is what turns that from a workflow argument into receipt-bound evidence: a
+    fixture-mode run records ``reviewed-fixture`` and an accepted source commit
+    that differs from the core commit, and both are rejected here.
+    """
+
+    if check.exact_pairing_input is None:
+        return
+    reference = bound.get(check.exact_pairing_input)
+    if reference is None or reference.kind != "input":
+        raise GateVerificationError(
+            f"check {check.check_id!r} does not bind {check.exact_pairing_input!r} "
+            "as an input, so its source pairing is unproven"
+        )
+    payload = RECEIPTS.read_bound_bytes(
+        directory, reference, RECEIPTS.MAX_RECEIPT_BYTES
+    )
+    try:
+        document = json.loads(payload.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise GateVerificationError(
+            f"check {check.check_id!r} prepared inputs are not decodable JSON"
+        ) from error
+    if not isinstance(document, dict):
+        raise GateVerificationError(
+            f"check {check.check_id!r} prepared inputs must be a JSON object"
+        )
+    desktop = document.get("desktop")
+    if not isinstance(desktop, dict):
+        raise GateVerificationError(
+            f"check {check.check_id!r} prepared inputs record no desktop payload"
+        )
+    mode = desktop.get("pairing_mode")
+    if mode != "exact":
+        raise GateVerificationError(
+            f"check {check.check_id!r} paired with mode {mode!r} rather than "
+            "'exact', so the lifecycle did not run against the fresh archive"
+        )
+    accepted = desktop.get("accepted_source_commit")
+    if accepted != identity.commit:
+        raise GateVerificationError(
+            f"check {check.check_id!r} accepted source commit {accepted!r} is "
+            f"not the checked-out commit {identity.commit!r}"
+        )
 
 
 def _verify_report_outcome(
@@ -453,6 +563,14 @@ def _verify_lifecycle_outcome(
     if len(set(names)) != len(names):
         raise GateVerificationError(
             f"check {check.check_id!r} lifecycle report repeats a stage name"
+        )
+    if tuple(names) != check.stages:
+        missing = [name for name in check.stages if name not in names]
+        unexpected = [name for name in names if name not in check.stages]
+        raise GateVerificationError(
+            f"check {check.check_id!r} lifecycle stage set mismatch: "
+            f"missing={missing}, unexpected={unexpected}, "
+            f"observed={names}, required={list(check.stages)}"
         )
 
 

@@ -16,6 +16,9 @@ import type {
   DraftSnapshotDto,
   InlineCommentParams,
   MutationDiffAnchorDto,
+  MutationOutcomeDto,
+  ReplyParams,
+  ResolveParams,
   ReviewDesktopBridge,
   ReviewMutationCapabilitiesDto,
 } from "../../../shared/review.js";
@@ -472,6 +475,17 @@ export interface InlineComposerBridge extends ReviewDesktopBridge {
   openExternal(url: string): Promise<boolean>;
 }
 
+/**
+ * What a thread mutation did, with the sentence for the reader when it did not
+ * happen. The sentence is returned rather than published as the controller's
+ * message: the thread that asked for the write is the surface that has to show
+ * it, and a refusal raised on a thread must not greet an unrelated composer.
+ */
+export interface ThreadMutationResult {
+  readonly ok: boolean;
+  readonly message: string | null;
+}
+
 export interface InlineComposerController {
   readonly review: string;
   readonly forge: SuggestionForge | null;
@@ -506,6 +520,28 @@ export interface InlineComposerController {
     anchor: InlineAnchorSelection,
     body: string,
   ) => Promise<boolean>;
+  /**
+   * The forge's mutation capabilities for this review, or null while the read
+   * is in flight. The in-diff thread rows gate their affordances on the same
+   * answer the composer gates its own on, so one read serves both.
+   */
+  readonly capabilities: ReviewMutationCapabilitiesDto | null;
+  /**
+   * Why a published thread cannot take a reply or a resolution right now, or
+   * null when it can. Threads share the composer's single quick-intent slot,
+   * so an uncertain inline comment blocks a reply and the other way round.
+   */
+  readonly threadReason: (kind: "reply" | "resolve") => string | null;
+  /** Publishes one reply to a published discussion, over the quick path. */
+  readonly replyToThread: (
+    discussionId: string,
+    body: string,
+  ) => Promise<ThreadMutationResult>;
+  /** Resolves or reopens one published discussion, over the quick path. */
+  readonly setThreadResolved: (
+    discussionId: string,
+    resolved: boolean,
+  ) => Promise<ThreadMutationResult>;
   /** Replaces one pending entry's body in place, keeping its id and anchor. */
   readonly updateEntry: (entryId: string, body: string) => Promise<boolean>;
   /** Removes one pending entry from the draft and saves what is left. */
@@ -1040,6 +1076,114 @@ export function useInlineReviewComposer(
     [apply, bridge, forge, quickReason, review],
   );
 
+  const threadReason = useCallback(
+    (kind: "reply" | "resolve"): string | null => {
+      if (capabilities === null)
+        return kind === "reply"
+          ? "Reply support for this review is still loading."
+          : "Resolution support for this review is still loading.";
+      if (kind === "reply" && !capabilities.reply)
+        return "Replies are unsupported for this review.";
+      if (kind === "resolve" && !capabilities.resolve)
+        return "Resolution is unsupported for this review.";
+      if (quickBlocked)
+        return "Resolve or acknowledge the previous action in the review workflow before another mutation.";
+      if (busy) return "A review write is already in flight.";
+      return null;
+    },
+    [busy, capabilities, quickBlocked],
+  );
+
+  /**
+   * The quick path a thread writes over, in the shape `commentNow` already
+   * uses. The in-flight check reads the held state rather than the rendered
+   * one, so a second press in the same tick, from Ctrl/Cmd+Enter and from the
+   * button both, is refused instead of sending the mutation twice (S83).
+   */
+  const runThreadMutation = useCallback(
+    async <T extends { readonly operation_id: string }>(
+      kind: "reply" | "resolve",
+      command: T,
+      send: (value: T) => Promise<MutationOutcomeDto>,
+    ): Promise<ThreadMutationResult> => {
+      const refusal = threadReason(kind);
+      if (refusal !== null) return refused(refusal);
+      const inFlight = held.current.quick;
+      if (inFlight?.status === "sending" || inFlight?.status === "unknown")
+        return refused(QUICK_IN_FLIGHT_REFUSAL);
+      setBusy(true);
+      try {
+        apply((current) =>
+          beginQuickIntent(current, command.operation_id, command),
+        );
+        const outcome = await send(command);
+        const settled = apply((current) =>
+          settleQuickIntent(current, command.operation_id, outcome),
+        );
+        if (outcome.outcome === "known")
+          return Object.freeze({ ok: true, message: null });
+        return refused(
+          settled.quick?.message ?? "The remote result is unknown.",
+        );
+      } catch (failure) {
+        const settled = isUncertainError(failure)
+          ? apply((current) =>
+              markQuickIntentUncertain(current, command.operation_id),
+            )
+          : apply((current) =>
+              rejectQuickIntent(
+                current,
+                command.operation_id,
+                reviewMutationError(failure),
+              ),
+            );
+        return refused(settled.quick?.message ?? reviewMutationError(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [apply, threadReason],
+  );
+
+  const replyToThread = useCallback(
+    async (
+      discussionId: string,
+      body: string,
+    ): Promise<ThreadMutationResult> => {
+      if (body.length === 0) return refused(EMPTY_REPLY_REFUSAL);
+      const command: ReplyParams = {
+        operation_id: newOperationId("reply"),
+        review,
+        revision: held.current.displayed.revision,
+        discussion_id: discussionId,
+        body,
+      };
+      return runThreadMutation("reply", command, (value) =>
+        bridge.replyReviewDiscussion(value),
+      );
+    },
+    [bridge, review, runThreadMutation],
+  );
+
+  const setThreadResolved = useCallback(
+    async (
+      discussionId: string,
+      resolved: boolean,
+    ): Promise<ThreadMutationResult> => {
+      const command: ResolveParams = {
+        operation_id: newOperationId("resolve"),
+        review,
+        revision: held.current.displayed.revision,
+        discussion_id: discussionId,
+        resolved,
+      };
+      return runThreadMutation("resolve", command, (value) =>
+        bridge.resolveReviewDiscussion(value),
+      );
+    },
+    [bridge, review, runThreadMutation],
+  );
+
   const openExternal = useCallback(
     (url: string): Promise<boolean> => bridge.openExternal(url),
     [bridge],
@@ -1060,6 +1204,10 @@ export function useInlineReviewComposer(
     insertSuggestion,
     addToReview,
     commentNow,
+    capabilities,
+    threadReason,
+    replyToThread,
+    setThreadResolved,
     updateEntry,
     removeEntry,
     openExternal,
@@ -1087,6 +1235,15 @@ function pendingAnchor(
     start_side: anchor.start_side ?? null,
     stale,
   });
+}
+
+const QUICK_IN_FLIGHT_REFUSAL =
+  "Resolve or acknowledge the previous action in the review workflow before another mutation.";
+
+const EMPTY_REPLY_REFUSAL = "Type a reply before publishing it.";
+
+function refused(message: string): ThreadMutationResult {
+  return Object.freeze({ ok: false, message });
 }
 
 /** Said when a rollback itself is refused, appended to the failure that caused it. */

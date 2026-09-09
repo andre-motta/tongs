@@ -179,7 +179,7 @@ test("Start a review saves an inline entry for the row and then offers Add to re
   assert.equal(first.anchor.side, "new");
   assert.equal(first.anchor.context_fingerprint.length, 64);
   await waitFor(() =>
-    assert.equal(view.queryByLabelText("Inline comment composer"), null),
+    assert.equal(view.container.querySelectorAll(".inline-composer").length, 0),
   );
 
   // A second anchor keeps its own entry, so no inline target is retargeted.
@@ -523,7 +523,7 @@ test("Add comment now posts the immediate inline mutation and writes no draft", 
     side: "RIGHT",
   });
   await waitFor(() =>
-    assert.equal(view.queryByLabelText("Inline comment composer"), null),
+    assert.equal(view.container.querySelectorAll(".inline-composer").length, 0),
   );
   fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
   assert.equal((await view.findByLabelText("Inline review comment")).value, "");
@@ -895,7 +895,7 @@ test("the Preview toggle renders the typed Markdown and hands focus back", async
   await waitFor(() => assert.equal(saves.length, 1));
   assert.equal(saves[0].content.comments[0].body, "**Guard** the divisor");
   await waitFor(() =>
-    assert.equal(view.queryByLabelText("Inline comment composer"), null),
+    assert.equal(view.container.querySelectorAll(".inline-composer").length, 0),
   );
 
   // The typed text is cleared with the entry, and reopening starts empty.
@@ -1554,6 +1554,761 @@ test("a read-only pending review explains itself once per file, in the words of 
   assert.equal(saves.length, 0);
 });
 
+test("a published thread renders as one collapsed row under the line it is anchored to", async () => {
+  const review = "review-thread-collapsed";
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1", { replies: ["Yes", "Filed as #12"] })]], []),
+    review,
+  );
+  await view.findByLabelText("Discussion thread on new line 11");
+  assert.equal(view.container.querySelectorAll(".diff-thread").length, 1);
+  assert.equal(
+    view.container.querySelector(".diff-thread-summary").textContent,
+    "2 replies, unresolved, last by @author",
+  );
+  // Collapsed means no body: the thread costs the window one row.
+  assert.equal(view.container.querySelectorAll(".diff-thread-body").length, 0);
+  assert.equal(
+    view.container.querySelector(".diff-thread-summary").getAttribute("aria-expanded"),
+    "false",
+  );
+  assert.deepEqual(
+    [...view.container.querySelectorAll(".windowed-items > *")].map((element) =>
+      element.className.split(" ")[0],
+    ),
+    ["diff-file", "diff-hunk", "diff-line", "diff-line", "thread-row", "diff-line"],
+  );
+  // The file header states the totals over the whole file.
+  assert.equal(
+    view.container.querySelector(".file-threads").textContent,
+    "1 thread, 1 unresolved",
+  );
+});
+
+test("the file header counts every anchored thread and how many are unresolved", async () => {
+  const review = "review-thread-counts";
+  const view = renderDiff(
+    threadBridge(
+      review,
+      [
+        [
+          thread("d1", { line: 11 }),
+          thread("d2", { line: 11, resolved: true }),
+          thread("d3", { line: 12, side: "old" }),
+          // A review-level discussion stays in Overview and is never counted here.
+          thread("d4", { inline: false }),
+        ],
+      ],
+      [],
+    ),
+    review,
+  );
+  await view.findByLabelText("Discussion thread on old line 12");
+  assert.equal(
+    view.container.querySelector(".file-threads").textContent,
+    "3 threads, 2 unresolved",
+  );
+  assert.equal(view.container.querySelectorAll(".diff-thread").length, 3);
+  assert.equal(
+    view.container.querySelector(".file-threads").getAttribute("aria-label"),
+    "3 threads, 2 unresolved on this file",
+  );
+});
+
+test("expanding a thread renders its bodies in place and collapsing takes them away", async () => {
+  const review = "review-thread-expand";
+  const view = renderDiff(
+    threadBridge(
+      review,
+      [[thread("d1", { body: "Should this log?", replies: ["It should"] })]],
+      [],
+    ),
+    review,
+  );
+  const summary = await view.findByLabelText(
+    "Summary of the discussion on new line 11",
+  );
+  fireEvent.click(summary);
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".diff-thread-body").length, 1),
+  );
+  assert.equal(summary.getAttribute("aria-expanded"), "true");
+  assert.equal(
+    view.container.querySelector(".diff-thread-body p").textContent,
+    "Should this log?",
+  );
+  assert.equal(
+    view.container.querySelector(".diff-thread-body blockquote p").textContent,
+    "It should",
+  );
+  // The expanded row declares the taller of the two row heights.
+  assert.equal(
+    view.container.querySelectorAll(".thread-row.thread-row-expanded").length,
+    1,
+  );
+  fireEvent.click(summary);
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".diff-thread-body").length, 0),
+  );
+  assert.equal(
+    view.container.querySelectorAll(".thread-row.thread-row-expanded").length,
+    0,
+  );
+});
+
+test("a thread body renders remote Markdown through the safe renderer only", async () => {
+  const review = "review-thread-markdown";
+  const hostile = [
+    "<script>globalThis.__pwned = true;</script>",
+    '<img src="x" onerror="globalThis.__pwned = true">',
+    "[click](javascript:globalThis.__pwned=true)",
+    '<iframe src="https://evil.invalid"></iframe>',
+    '<div onmouseover="globalThis.__pwned = true">hover</div>',
+  ].join("\n\n");
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1", { body: hostile })]], []),
+    review,
+  );
+  fireEvent.click(
+    await view.findByLabelText("Summary of the discussion on new line 11"),
+  );
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".diff-thread-body").length, 1),
+  );
+  assert.equal(
+    view.container.querySelectorAll(
+      ".diff-thread-body script, .diff-thread-body iframe, .diff-thread-body object, .diff-thread-body embed, .diff-thread-body img, .diff-thread-body svg, .diff-thread-body style, .diff-thread-body form",
+    ).length,
+    0,
+  );
+  assert.deepEqual(
+    [...view.container.querySelectorAll(".diff-thread-body a")].map((node) =>
+      node.getAttribute("href"),
+    ),
+    [],
+  );
+  assert.equal(globalThis.__pwned, undefined);
+});
+
+test("Reply publishes exactly one reply, without a resolution, and keeps its text on Escape", async () => {
+  const review = "review-thread-reply";
+  const calls = [];
+  const view = renderDiff(
+    threadBridge(
+      review,
+      [
+        [thread("d1")],
+        [thread("d1", { replies: ["Guarded now"], replyAuthor: "you" })],
+      ],
+      calls,
+    ),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  const editor = await view.findByLabelText(
+    "Reply body for the discussion on new line 11",
+  );
+  // The composer takes focus, so Escape and Ctrl+Enter reach it without a Tab.
+  assert.equal(
+    document.activeElement.getAttribute("aria-label"),
+    "Reply body for the discussion on new line 11",
+  );
+  fireEvent.change(editor, { target: { value: "Guarded now" } });
+  assert.equal(
+    view.getByRole("button", { name: "Reply now" }).disabled,
+    false,
+  );
+
+  // Escape closes the composer and keeps the text on this thread.
+  fireEvent.keyDown(document.activeElement, { key: "Escape" });
+  assert.equal(view.container.querySelectorAll(".diff-thread-composer").length, 0);
+  assert.equal(calls.length, 0);
+  fireEvent.click(
+    view.getByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  assert.equal(
+    (await view.findByLabelText("Reply body for the discussion on new line 11")).value,
+    "Guarded now",
+  );
+
+  fireEvent.click(view.getByRole("button", { name: "Reply now" }));
+  await waitFor(() => assert.equal(calls.length, 1));
+  assert.deepEqual(calls, [["reply", "d1", "Guarded now"]]);
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelector(".diff-thread-summary").textContent,
+      "1 reply, unresolved, last by @you",
+    ),
+  );
+  // One press is one mutation, and no resolution was written.
+  assert.equal(calls.length, 1);
+  assert.equal(view.container.querySelectorAll(".diff-thread-composer").length, 0);
+});
+
+test("the Resolve thread toggle resolves the thread with the same press that replies", async () => {
+  const review = "review-thread-reply-resolve";
+  const calls = [];
+  const view = renderDiff(
+    threadBridge(
+      review,
+      [
+        [thread("d1")],
+        [
+          thread("d1", {
+            replies: ["Guarded now"],
+            replyAuthor: "you",
+            resolved: true,
+          }),
+        ],
+      ],
+      calls,
+    ),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  const editor = await view.findByLabelText(
+    "Reply body for the discussion on new line 11",
+  );
+  const toggle = view.getByLabelText("Resolve thread");
+  assert.equal(toggle.disabled, false);
+  assert.equal(toggle.checked, false);
+  fireEvent.click(toggle);
+  assert.equal(toggle.checked, true);
+  fireEvent.change(editor, { target: { value: "Guarded now" } });
+  fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+  await waitFor(() => assert.equal(calls.length, 2));
+  assert.deepEqual(calls, [
+    ["reply", "d1", "Guarded now"],
+    ["resolve", "d1", true],
+  ]);
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelector(".diff-thread-summary").textContent,
+      "1 reply, resolved, last by @you",
+    ),
+  );
+  // Exactly one mutation per action: no second reply and no second resolution.
+  assert.equal(calls.length, 2);
+});
+
+test("a resolved thread offers Reopen thread and reopens it with the reply", async () => {
+  const review = "review-thread-reopen";
+  const calls = [];
+  const view = renderDiff(
+    threadBridge(
+      review,
+      [
+        [thread("d1", { resolved: true, replies: ["Fixed"] })],
+        [
+          thread("d1", {
+            replies: ["Fixed", "Still wrong"],
+            replyAuthor: "you",
+          }),
+        ],
+      ],
+      calls,
+    ),
+    review,
+  );
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelector(".diff-thread-summary").textContent,
+      "1 reply, resolved, last by @author",
+    ),
+  );
+  fireEvent.click(
+    view.getByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  const editor = await view.findByLabelText(
+    "Reply body for the discussion on new line 11",
+  );
+  assert.equal(view.container.querySelectorAll(".diff-thread-resolve").length, 1);
+  const toggle = view.getByLabelText("Reopen thread");
+  fireEvent.click(toggle);
+  fireEvent.change(editor, { target: { value: "Still wrong" } });
+  fireEvent.click(view.getByRole("button", { name: "Reply now" }));
+  await waitFor(() => assert.equal(calls.length, 2));
+  assert.deepEqual(calls, [
+    ["reply", "d1", "Still wrong"],
+    ["resolve", "d1", false],
+  ]);
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelector(".diff-thread-summary").textContent,
+      "2 replies, unresolved, last by @you",
+    ),
+  );
+});
+
+test("a second press while a reply is in flight writes one mutation, not two", async () => {
+  const review = "review-thread-double-submit";
+  const calls = [];
+  let release = () => {};
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1")]], calls, {
+      replyReviewDiscussion: async (params) => {
+        calls.push(["reply", params.discussion_id, params.body]);
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+        return mutation(params.operation_id);
+      },
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  const editor = await view.findByLabelText(
+    "Reply body for the discussion on new line 11",
+  );
+  fireEvent.change(editor, { target: { value: "Guarded now" } });
+  const button = view.getByRole("button", { name: "Reply now" });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+  assert.equal(calls.length, 1);
+  release();
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".diff-thread-composer").length, 0),
+  );
+  assert.equal(calls.length, 1);
+});
+
+test("the resolve toggle is refused in the forge's own words when the capability is absent", async () => {
+  const review = "review-thread-no-resolve";
+  const calls = [];
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1")]], calls, {
+      getReviewMutationCapabilities: () =>
+        read({ review, capabilities: capabilities({ resolve: false }) }),
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  const editor = await view.findByLabelText(
+    "Reply body for the discussion on new line 11",
+  );
+  const refusal = "Resolution is unsupported for this review.";
+  const toggle = view.getByLabelText("Resolve thread");
+  assert.equal(toggle.disabled, true);
+  assert.equal(toggle.title, refusal);
+  assert.equal(
+    view.container.querySelector(".diff-thread-composer small").textContent,
+    refusal,
+  );
+
+  // The reply still works, and it writes no resolution.
+  fireEvent.change(editor, { target: { value: "Guarded now" } });
+  fireEvent.click(view.getByRole("button", { name: "Reply now" }));
+  await waitFor(() => assert.equal(calls.length, 1));
+  assert.deepEqual(calls, [["reply", "d1", "Guarded now"]]);
+});
+
+test("a thread the forge cannot resolve says so about the thread, not the review", async () => {
+  const review = "review-thread-not-resolvable";
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1", { resolvable: false })]], []),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  await view.findByLabelText("Reply body for the discussion on new line 11");
+  const refusal = "Resolution is unsupported for this discussion.";
+  assert.equal(view.getByLabelText("Resolve thread").disabled, true);
+  assert.equal(view.getByLabelText("Resolve thread").title, refusal);
+  assert.equal(
+    view.container.querySelector(".diff-thread-composer small").textContent,
+    refusal,
+  );
+});
+
+test("a review without the reply capability refuses Reply in its own words", async () => {
+  const review = "review-thread-no-reply";
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1")]], [], {
+      getReviewMutationCapabilities: () =>
+        read({ review, capabilities: capabilities({ reply: false }) }),
+    }),
+    review,
+  );
+  const button = await view.findByRole("button", {
+    name: "Reply to the discussion on new line 11",
+  });
+  await waitFor(() =>
+    assert.equal(button.title, "Replies are unsupported for this review."),
+  );
+  assert.equal(button.disabled, true);
+  fireEvent.click(button);
+  assert.equal(view.container.querySelectorAll(".diff-thread-composer").length, 0);
+});
+
+test("a thread and a pending card on one line render as thread first, card under it", async () => {
+  const review = "review-thread-with-pending";
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1")]], [], {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 2, [inlineEntry("entry-a", "Still pending", 11)])],
+        }),
+    }),
+    review,
+  );
+  await view.findByLabelText("Pending review comment on new line 11");
+  await view.findByLabelText("Discussion thread on new line 11");
+  assert.deepEqual(
+    [...view.container.querySelectorAll(".windowed-items > *")].map((element) =>
+      element.className.split(" ")[0],
+    ),
+    [
+      "diff-file",
+      "diff-hunk",
+      "diff-line",
+      "diff-line",
+      "thread-row",
+      "pending-card-row",
+      "diff-line",
+    ],
+  );
+  assert.equal(view.container.querySelector(".file-pending").textContent, "1 pending");
+  assert.equal(
+    view.container.querySelector(".file-threads").textContent,
+    "1 thread, 1 unresolved",
+  );
+});
+
+test("the split layout renders a thread in its own pane and mirrors the other", async () => {
+  const review = "review-thread-split";
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1")]], [], {
+      openDiff: (params) => read(diffPage(review, params.layout ?? "unified")),
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: "Split" }));
+  await view.findByLabelText("Discussion thread on new line 11");
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-new .thread-row").length,
+    1,
+  );
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-old .thread-row").length,
+    0,
+  );
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-old .thread-row-mirror").length,
+    1,
+  );
+  assert.equal(
+    view.container.querySelectorAll(".split-pane-new .file-threads").length,
+    1,
+  );
+
+  // Expanding the thread takes the taller height in both panes at once.
+  fireEvent.click(
+    view.getByLabelText("Summary of the discussion on new line 11"),
+  );
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll(".split-pane-new .thread-row-expanded").length,
+      1,
+    ),
+  );
+  assert.equal(
+    view.container.querySelectorAll(
+      ".split-pane-old .thread-row-mirror.thread-row-mirror-expanded",
+    ).length,
+    1,
+  );
+});
+
+test("a review with two hundred threads renders only the threads its window holds", async () => {
+  const review = "review-thread-windowed";
+  const discussions = [];
+  for (let line = 1; line <= 200; line += 1)
+    discussions.push(thread(`d${line}`, { line }));
+  const view = renderDiff(
+    threadBridge(review, [discussions], [], {
+      openDiff: (params) =>
+        read(manyLinesPage(review, params.layout ?? "unified", 250)),
+    }),
+    review,
+  );
+  await view.findByLabelText("Discussion thread on new line 1");
+  // 252 rows in one file, 200 rows to a window: the first window holds the
+  // file header, the hunk header and new lines 1 to 198.
+  assert.equal(
+    view.container.querySelector(".window-position").textContent,
+    "1-200 of 252",
+  );
+  assert.equal(view.container.querySelectorAll(".diff-thread").length, 198);
+  assert.ok(view.container.querySelectorAll(".diff-thread").length <= 200);
+  // Every thread is collapsed, so none of the 200 has a body on screen.
+  assert.equal(view.container.querySelectorAll(".diff-thread-body").length, 0);
+  // The header still counts all of them, which is what says there is more.
+  assert.equal(
+    view.container.querySelector(".file-threads").textContent,
+    "200 threads, 200 unresolved",
+  );
+
+  fireEvent.click(view.getByRole("button", { name: "Next rows" }));
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".diff-thread").length, 2),
+  );
+  assert.equal(
+    view.container.querySelector(".window-position").textContent,
+    "201-252 of 252",
+  );
+});
+
+test("threads that could not be read are named as missing rather than shown as none", async () => {
+  const review = "review-thread-read-failure";
+  const view = renderDiff(
+    diffBridge(review, {
+      listDiscussions: () => ({
+        requestToken: crypto.randomUUID(),
+        result: Promise.reject(new Error("sidecar closed")),
+      }),
+    }),
+    review,
+  );
+  await view.findByText(
+    "The published discussions could not be read, so this diff shows no threads. Refresh the diff or open the review on the forge.",
+  );
+  assert.equal(view.container.querySelectorAll(".diff-thread").length, 0);
+  assert.equal(view.container.querySelectorAll(".notice-error").length, 0);
+});
+
+test("a resolution refused after the reply is said on the thread the reply was written on", async () => {
+  const review = "review-thread-resolve-refused";
+  const calls = [];
+  const view = renderDiff(
+    threadBridge(
+      review,
+      [
+        [thread("d1")],
+        [thread("d1", { replies: ["Guarded now"], replyAuthor: "you" })],
+      ],
+      calls,
+      {
+        resolveReviewDiscussion: async (params) => {
+          calls.push(["resolve", params.discussion_id, params.resolved]);
+          throw { code: "forbidden", message: "not allowed" };
+        },
+      },
+    ),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  const editor = await view.findByLabelText(
+    "Reply body for the discussion on new line 11",
+  );
+  fireEvent.click(view.getByLabelText("Resolve thread"));
+  fireEvent.change(editor, { target: { value: "Guarded now" } });
+  fireEvent.click(view.getByRole("button", { name: "Reply now" }));
+  await waitFor(() => assert.equal(calls.length, 2));
+  // The composer is gone, and the sentence is on the thread that asked for it.
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".diff-thread-notice").length, 1),
+  );
+  assert.equal(view.container.querySelectorAll(".diff-thread-composer").length, 0);
+  assert.equal(
+    view.container
+      .querySelector(".diff-thread-notice")
+      .textContent.startsWith("The reply was published."),
+    true,
+  );
+  assert.equal(
+    view.container.querySelectorAll('.diff-thread-notice[role="alert"]').length,
+    1,
+  );
+  // The reply itself landed and the thread is still unresolved.
+  assert.equal(
+    view.container.querySelector(".diff-thread-summary").textContent,
+    "1 reply, unresolved, last by @you",
+  );
+  // A row carrying a sentence takes the height that can show it.
+  assert.equal(
+    view.container.querySelectorAll(".thread-row.thread-row-expanded").length,
+    1,
+  );
+});
+
+test("a failed reread after the reply is named and blocks a second reply on that thread", async () => {
+  const review = "review-thread-reread-failed";
+  const calls = [];
+  let reads = 0;
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1")]], calls, {
+      // Only the reread that follows the reply fails. The read the Refresh
+      // press makes afterwards succeeds, and carries the published reply.
+      listDiscussions: () => {
+        reads += 1;
+        if (reads === 2)
+          return {
+            requestToken: crypto.randomUUID(),
+            result: Promise.reject(new Error("sidecar closed")),
+          };
+        return read({
+          discussions: [
+            reads === 1
+              ? thread("d1")
+              : thread("d1", { replies: ["Guarded now"], replyAuthor: "you" }),
+          ],
+        });
+      },
+    }),
+    review,
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  fireEvent.change(
+    await view.findByLabelText("Reply body for the discussion on new line 11"),
+    { target: { value: "Guarded now" } },
+  );
+  fireEvent.click(view.getByRole("button", { name: "Reply now" }));
+  await waitFor(() => assert.equal(calls.length, 1));
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".diff-thread-notice").length, 1),
+  );
+  const refusal =
+    "The reply was published. Rereading the discussions failed, so this thread is out of date. Refresh the diff before replying again.";
+  assert.equal(
+    view.container.querySelector(".diff-thread-notice").textContent,
+    refusal,
+  );
+  assert.equal(reads, 2);
+
+  // The thread is known to be out of date, so it refuses another reply rather
+  // than let the same one be published twice.
+  const again = view.getByRole("button", {
+    name: "Reply to the discussion on new line 11",
+  });
+  assert.equal(again.disabled, true);
+  assert.equal(
+    again.title,
+    "Rereading the discussions failed, so this thread is out of date. Refresh the diff before replying again.",
+  );
+  fireEvent.click(again);
+  assert.equal(view.container.querySelectorAll(".diff-thread-composer").length, 0);
+  assert.equal(calls.length, 1);
+
+  // Refresh rereads the discussions, which is what the sentence tells the
+  // reader to do, and the thread takes replies again.
+  fireEvent.click(view.getByRole("button", { name: "Refresh" }));
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".diff-thread-notice").length, 0),
+  );
+  assert.equal(reads, 3);
+  assert.equal(
+    view.container.querySelector(".diff-thread-summary").textContent,
+    "1 reply, unresolved, last by @you",
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Reply to the discussion on new line 11" })
+      .disabled,
+    false,
+  );
+});
+
+test("a reply composer opened while a review is pending says the reply publishes at once", async () => {
+  const review = "review-thread-pending-note";
+  const view = renderDiff(
+    threadBridge(review, [[thread("d1")]], [], {
+      listReviewDrafts: () =>
+        read({
+          cursor: 0,
+          next_cursor: null,
+          drafts: [draft(review, 2, [inlineEntry("entry-a", "Still pending", 11)])],
+        }),
+    }),
+    review,
+  );
+  await view.findByLabelText("Pending review comment on new line 11");
+  fireEvent.click(
+    view.getByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  const composer = await view.findByLabelText(
+    "Reply composer for the discussion on new line 11",
+  );
+  assert.equal(
+    composer.querySelector(".diff-thread-immediate").textContent,
+    "This reply publishes immediately. It is not added to your pending review.",
+  );
+  // The action says so too, in the vocabulary the quick inline write uses.
+  assert.equal(view.getByRole("button", { name: "Reply now" }).tagName, "BUTTON");
+});
+
+test("a reply composer with no pending review does not claim one", async () => {
+  const review = "review-thread-no-pending-note";
+  const view = renderDiff(threadBridge(review, [[thread("d1")]], []), review);
+  fireEvent.click(
+    await view.findByRole("button", { name: "Reply to the discussion on new line 11" }),
+  );
+  await view.findByLabelText("Reply body for the discussion on new line 11");
+  assert.equal(
+    view.container.querySelectorAll(".diff-thread-immediate").length,
+    0,
+  );
+});
+
+test("two threads on one line are named by their place among them", async () => {
+  const review = "review-thread-ordinals";
+  const calls = [];
+  const view = renderDiff(
+    threadBridge(
+      review,
+      [[thread("d1"), thread("d2", { body: "And this one?" })]],
+      calls,
+    ),
+    review,
+  );
+  await view.findByLabelText("Discussion thread 1 of 2 on new line 11");
+  await view.findByLabelText("Discussion thread 2 of 2 on new line 11");
+  assert.deepEqual(
+    [...view.container.querySelectorAll(".diff-thread")].map((node) =>
+      node.getAttribute("aria-label"),
+    ),
+    [
+      "Discussion thread 1 of 2 on new line 11",
+      "Discussion thread 2 of 2 on new line 11",
+    ],
+  );
+  assert.deepEqual(
+    [...view.container.querySelectorAll(".diff-thread-heading .button")].map(
+      (node) => node.getAttribute("aria-label"),
+    ),
+    [
+      "Reply to discussion 1 of 2 on new line 11",
+      "Reply to discussion 2 of 2 on new line 11",
+    ],
+  );
+
+  // Answering the second one reaches the second one.
+  fireEvent.click(
+    view.getByRole("button", { name: "Reply to discussion 2 of 2 on new line 11" }),
+  );
+  fireEvent.change(
+    await view.findByLabelText("Reply body for discussion 2 of 2 on new line 11"),
+    { target: { value: "The second one" } },
+  );
+  fireEvent.click(view.getByRole("button", { name: "Reply now" }));
+  await waitFor(() => assert.equal(calls.length, 1));
+  assert.deepEqual(calls, [["reply", "d2", "The second one"]]);
+});
+
 function splitCell(view, side, line) {
   const cell = view.container.querySelector(
     `.split-cell[data-anchor-side="${side}"][data-${side}-line="${line}"]`,
@@ -1630,6 +2385,9 @@ function diffBridge(review, changes = {}) {
     },
     getReviewMutationCapabilities: () =>
       read({ review, capabilities: capabilities() }),
+    // The diff reads the published discussions to place its thread rows, so
+    // every diff bridge answers that read.
+    listDiscussions: () => read({ discussions: [] }),
     listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [] }),
     getReviewDraft: () => read(draft(review, 1, [])),
     createReviewDraft: async () => draft(review, 1, []),
@@ -1729,6 +2487,103 @@ function reviewItem(handle) {
       additions: 1,
       deletions: 1,
     },
+  };
+}
+
+/**
+ * One published discussion anchored to a diff line, in the shape the sidecar
+ * returns it. A review-level discussion is asked for with `inline: false`.
+ */
+function thread(id, changes = {}) {
+  const {
+    line = 11,
+    side = "new",
+    path = "src/calc.py",
+    resolved = false,
+    resolvable = true,
+    body = "Should this log?",
+    author = "alustosa",
+    replies = [],
+    replyAuthor = "author",
+    inline = true,
+  } = changes;
+  const comment = (suffix, commentBody, commentAuthor) => ({
+    id: `${id}-${suffix}`,
+    author: { username: commentAuthor, display_name: "" },
+    body: commentBody,
+    created_at: "2026-09-09T00:00:00Z",
+    file_path: inline ? path : null,
+    old_line: side === "old" && suffix === "root" ? line : null,
+    new_line: side === "new" && suffix === "root" ? line : null,
+    is_resolved: resolved,
+    replies: [],
+  });
+  return {
+    id,
+    is_inline: inline,
+    is_resolved: resolved,
+    resolvable,
+    root_comment: {
+      ...comment("root", body, author),
+      replies: replies.map((text, index) =>
+        comment(`reply-${index}`, text, replyAuthor),
+      ),
+    },
+  };
+}
+
+/**
+ * The diff bridge plus the review's published discussions, with the reply and
+ * resolve mutations recorded in order. `pages` hands out one discussion list
+ * per read, so a test can state what the reread after a reply returns.
+ */
+function threadBridge(review, pages, calls, changes = {}) {
+  let index = 0;
+  return diffBridge(review, {
+    listDiscussions: () => {
+      const discussions = pages[Math.min(index, pages.length - 1)];
+      index += 1;
+      return read({ discussions });
+    },
+    replyReviewDiscussion: async (params) => {
+      calls.push(["reply", params.discussion_id, params.body]);
+      return mutation(params.operation_id);
+    },
+    resolveReviewDiscussion: async (params) => {
+      calls.push(["resolve", params.discussion_id, params.resolved]);
+      return mutation(params.operation_id);
+    },
+    ...changes,
+  });
+}
+
+/** One file of `lineCount` contiguous new-side lines, to fill several windows. */
+function manyLinesPage(review, layout, lineCount) {
+  const page = diffPage(review, layout);
+  const [file, hunk] = page.entries;
+  const sources = [];
+  for (let line = 1; line <= lineCount; line += 1)
+    sources.push({
+      old_line: null,
+      new_line: line,
+      content: `    step(${line})`,
+      line_type: "addition",
+    });
+  return {
+    ...page,
+    snapshot_id: `snapshot-many-${layout}`,
+    entries: [
+      file,
+      {
+        ...hunk,
+        header: `@@ -1,0 +1,${lineCount} @@`,
+        old_start: 1,
+        old_count: 0,
+        new_start: 1,
+        new_count: lineCount,
+      },
+      ...toEntries(sources, layout),
+    ],
   };
 }
 

@@ -43,6 +43,18 @@ import {
   PendingCardMirror,
   type PendingDraftEntry,
 } from "../review/pending-card.js";
+import {
+  DiffThread,
+  DiffThreadMirror,
+  threadFileCountText,
+  threadFileCounts,
+  threadRowClassName,
+  threadRowExpanded,
+  threadsOnLine,
+  useDiscussionThreads,
+  type AnchoredThread,
+  type DiscussionThreadSlot,
+} from "../review/thread.js";
 import { ReviewHeader } from "../review-detail/index.js";
 
 const MAX_DIFF_PAGES = 1000;
@@ -268,6 +280,7 @@ function DiffView({
           review={route.item.handle}
           forge={forge}
           loaded={loaded}
+          reloadToken={reload}
           selection={inlineAnchor}
           selectAnchor={selectInlineAnchor}
         />
@@ -389,6 +402,7 @@ function DiffWorkspace({
   review,
   forge,
   loaded,
+  reloadToken,
   selection,
   selectAnchor,
 }: {
@@ -396,6 +410,8 @@ function DiffWorkspace({
   readonly review: string;
   readonly forge: RepositoryDto["forge_type"] | null;
   readonly loaded: LoadedDiff;
+  /** Bumped by the toolbar's Refresh, so the published threads are reread too. */
+  readonly reloadToken: number;
   readonly selection: InlineAnchorSelection | null;
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
 }): ReactNode {
@@ -415,6 +431,12 @@ function DiffWorkspace({
     review,
     loaded.revision,
     forge,
+  );
+  const threads = useDiscussionThreads(
+    bridge,
+    review,
+    composerController,
+    reloadToken,
   );
   const [dragging, setDragging] = useState(false);
   const dragged = useRef<DragRow | null>(null);
@@ -585,6 +607,9 @@ function DiffWorkspace({
           inline.close();
         }}
       >
+        {threads.loadError && (
+          <Notice kind="warning">{threads.loadError}</Notice>
+        )}
         <DiffRowsWindow
           review={review}
           loaded={loaded}
@@ -597,6 +622,7 @@ function DiffWorkspace({
           inline={inline}
           drag={drag}
           pending={composerController.pending}
+          threads={threads}
         />
       </section>
     </div>
@@ -615,6 +641,7 @@ function DiffRowsWindow({
   inline,
   drag,
   pending,
+  threads,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -627,6 +654,7 @@ function DiffRowsWindow({
   readonly inline: InlineComposerSlot;
   readonly drag: LineRangeDrag;
   readonly pending: readonly PendingDraftEntry[];
+  readonly threads: DiscussionThreadSlot;
 }): ReactNode {
   const [start, setStart] = useState(
     Math.max(0, Math.floor(targetIndex / pageSize) * pageSize),
@@ -638,6 +666,17 @@ function DiffRowsWindow({
   const boundedStart = Math.min(start, Math.max(0, items.length - 1));
   const end = Math.min(items.length, boundedStart + pageSize);
   const windowed = items.slice(boundedStart, end);
+  // The card that spells the refusal out is chosen from the cards this window
+  // actually paints, in the order the reader meets them. Choosing by stored
+  // order instead let the sentence vanish whenever the file's first entry was
+  // paged out of the window or was the entry being edited.
+  const explains = firstRenderedPendingEntry(
+    pending,
+    loaded,
+    file,
+    windowed,
+    inline.editing,
+  );
   return (
     <>
       {loaded.layout === "split" ? (
@@ -658,6 +697,8 @@ function DiffRowsWindow({
                     inline={inline}
                     drag={drag}
                     pending={pending}
+                    explains={explains}
+                    threads={threads}
                   />
                 ))}
               </div>
@@ -678,6 +719,8 @@ function DiffRowsWindow({
               inline={inline}
               drag={drag}
               pending={pending}
+              explains={explains}
+              threads={threads}
             />
           ))}
         </div>
@@ -756,6 +799,8 @@ function DiffRowView({
   inline,
   drag,
   pending,
+  explains,
+  threads,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -766,6 +811,8 @@ function DiffRowView({
   readonly inline: InlineComposerSlot;
   readonly drag: LineRangeDrag;
   readonly pending: readonly PendingDraftEntry[];
+  readonly explains: string | null;
+  readonly threads: DiscussionThreadSlot;
 }): ReactNode {
   if (row.kind === "file") {
     const path =
@@ -778,6 +825,7 @@ function DiffRowView({
         <span className="file-status">{row.status}</span>
         <FileBadges file={row} />
         <PendingFileCount pending={pending} file={row} />
+        <ThreadFileCount threads={threads} file={row} />
       </header>
     );
   }
@@ -832,7 +880,7 @@ function DiffRowView({
     inline.anchor !== null &&
     composerOnUnifiedRow(inline.anchor, loaded, file, row);
   const entries = pendingOnUnifiedRow(pending, file, row);
-  const explains = file === null ? null : (pendingOnFile(pending, file)[0]?.id ?? null);
+  const anchoredThreads = threadsOnUnifiedRow(threads, file, row);
   const editEntry = (entry: PendingDraftEntry): void => {
     if (!file || !entry.anchor) return;
     // The composer takes the row the card sits on, which is the line the
@@ -925,6 +973,15 @@ function DiffRowView({
           />
         </div>
       )}
+      {anchoredThreads.map((thread) => (
+        <div
+          className={threadRowClassName(threads, thread)}
+          role="listitem"
+          key={thread.discussion.id}
+        >
+          <DiffThread thread={thread} slot={threads} />
+        </div>
+      ))}
       {entries.map((entry) =>
         inline.editing?.id === entry.id ? null : (
           <div className="pending-card-row" role="listitem" key={entry.id}>
@@ -979,6 +1036,98 @@ function PendingFileCount({
       {count} pending
     </span>
   );
+}
+
+/**
+ * "N threads, M unresolved" in the file header, over the threads anchored
+ * anywhere in this file rather than over the ones the window paints. The
+ * header is what tells the reader there is more to page to.
+ */
+function ThreadFileCount({
+  threads,
+  file,
+}: {
+  readonly threads: DiscussionThreadSlot;
+  readonly file: DiffFileRow;
+}): ReactNode {
+  const counts = threadFileCounts(threads, file.old_path, file.new_path);
+  if (counts.threads === 0) return null;
+  const text = threadFileCountText(counts);
+  return (
+    <span className="file-threads" aria-label={`${text} on this file`}>
+      {text}
+    </span>
+  );
+}
+
+/**
+ * The published threads that belong under one unified row. A unified row can
+ * carry both sides of the diff, so both sides are read, new side first, which
+ * is the order the file's own columns are in.
+ */
+function threadsOnUnifiedRow(
+  threads: DiscussionThreadSlot,
+  file: DiffFileRow | null,
+  row: Extract<DiffRow, { readonly kind: "line" }>,
+): readonly AnchoredThread[] {
+  if (!file) return EMPTY_THREADS;
+  const onNew = threadsOnLine(threads, file.new_path, "new", row.new_line);
+  const onOld = threadsOnLine(threads, file.old_path, "old", row.old_line);
+  if (onOld.length === 0) return onNew;
+  if (onNew.length === 0) return onOld;
+  return [...onNew, ...onOld];
+}
+
+/** The same match on a split row, read through the cell each side owns. */
+function threadsOnSplitRow(
+  threads: DiscussionThreadSlot,
+  file: DiffFileRow | null,
+  row: SplitDiffRow,
+): readonly AnchoredThread[] {
+  if (!file) return EMPTY_THREADS;
+  const onNew =
+    row.new?.anchor_side === "new"
+      ? threadsOnLine(threads, file.new_path, "new", row.new.new_line)
+      : EMPTY_THREADS;
+  const onOld =
+    row.old?.anchor_side === "old"
+      ? threadsOnLine(threads, file.old_path, "old", row.old.old_line)
+      : EMPTY_THREADS;
+  if (onOld.length === 0) return onNew;
+  if (onNew.length === 0) return onOld;
+  return [...onNew, ...onOld];
+}
+
+const EMPTY_THREADS: readonly AnchoredThread[] = Object.freeze([]);
+
+/**
+ * The pending entry that carries the once-per-file refusal sentence: the first
+ * one this window paints, skipping the entry whose card has given way to the
+ * composer that is editing it. A sentence chosen by stored order disappeared
+ * whenever that entry was outside the window or under edit, which is the S44
+ * refusal going silent on a read-only review.
+ */
+function firstRenderedPendingEntry(
+  pending: readonly PendingDraftEntry[],
+  loaded: LoadedDiff,
+  file: DiffFileRow | null,
+  windowed: readonly DiffRow[],
+  editing: PendingDraftEntry | null,
+): string | null {
+  if (!file || pending.length === 0) return null;
+  for (const row of windowed) {
+    const entries =
+      loaded.layout === "split"
+        ? row.kind === "split"
+          ? pendingOnSplitRow(pending, file, row)
+          : []
+        : row.kind === "line"
+          ? pendingOnUnifiedRow(pending, file, row)
+          : [];
+    for (const entry of entries)
+      if (entry.id !== editing?.id) return entry.id;
+  }
+  return null;
 }
 
 /** The pending entries whose stored anchor names this file. */
@@ -1142,6 +1291,8 @@ function SplitPaneRow({
   inline,
   drag,
   pending,
+  explains,
+  threads,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -1153,6 +1304,8 @@ function SplitPaneRow({
   readonly inline: InlineComposerSlot;
   readonly drag: LineRangeDrag;
   readonly pending: readonly PendingDraftEntry[];
+  readonly explains: string | null;
+  readonly threads: DiscussionThreadSlot;
 }): ReactNode {
   if (row.kind === "file")
     return (
@@ -1163,6 +1316,7 @@ function SplitPaneRow({
         <span className="file-status">{row.status}</span>
         <FileBadges file={row} />
         {side === "new" && <PendingFileCount pending={pending} file={row} />}
+        {side === "new" && <ThreadFileCount threads={threads} file={row} />}
       </header>
     );
   if (row.kind === "hunk")
@@ -1179,7 +1333,10 @@ function SplitPaneRow({
   // does not own the anchor side renders one spacer per card and the two
   // independent pane grids stay on the same rows.
   const entries = pendingOnSplitRow(pending, file, row);
-  const explains = file === null ? null : (pendingOnFile(pending, file)[0]?.id ?? null);
+  // Both panes read the same thread list for the same row, and the pane that
+  // does not own the anchored side renders one spacer per thread, so the two
+  // grids stay on the same rows however many threads a line carries.
+  const anchoredThreads = threadsOnSplitRow(threads, file, row);
   const editEntry = (entry: PendingDraftEntry): void => {
     const cell = entry.anchor ? row[entry.anchor.side] : null;
     if (!file || !entry.anchor || !cell) return;
@@ -1225,6 +1382,22 @@ function SplitPaneRow({
             aria-hidden="true"
           />
         ))}
+      {anchoredThreads.map((thread) =>
+        thread.target.side === side ? (
+          <div
+            className={threadRowClassName(threads, thread)}
+            role="listitem"
+            key={thread.discussion.id}
+          >
+            <DiffThread thread={thread} slot={threads} />
+          </div>
+        ) : (
+          <DiffThreadMirror
+            key={thread.discussion.id}
+            expanded={threadRowExpanded(threads, thread)}
+          />
+        ),
+      )}
       {entries.map((entry) =>
         inline.editing?.id === entry.id ? null : entry.anchor?.side === side ? (
           <div className="pending-card-row" role="listitem" key={entry.id}>

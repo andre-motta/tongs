@@ -154,14 +154,20 @@ its existing durable attempt; an unknown submission offers explicit choices to
 retry remaining steps, return the draft to editing, or mark it submitted after
 you inspect the forge.
 
-Suggestions are available from a valid selection in the current complete diff.
-Select contiguous new-side lines in either **Unified** or **Split** layout,
-then choose **Suggest replacement**. Deletions, old-side selections, partial
-diffs, unavailable files, and selections from an earlier revision cannot
-produce a suggestion. Edit both the optional explanation and replacement
-code before choosing **Post quick suggestion** or **Add suggestion to draft**;
-**Cancel and keep text** leaves the entered text available. GitHub suggestions
-use its `suggestion` block, while GitLab uses its `suggestion:-0+N` form.
+Suggestions come from the in-diff composer, not the Discussions panel. Select
+one or more contiguous new-side lines in either **Unified** or **Split**
+layout by dragging over the line numbers, Shift-clicking a second line, or
+focusing a line number and pressing ++shift+enter++ to extend the range
+within the same hunk. Opening the composer on that selection offers **Insert
+suggestion**, which pre-fills a suggestion block built from the selected
+source: GitHub gets a `suggestion` fence over the whole range, GitLab gets a
+`suggestion:-0+N` fence anchored on the first line, where N is one less than
+the number of selected source lines. Old-side selections, non-contiguous
+lines, deletion rows, and a partial diff all refuse **Insert suggestion** in
+their own words; refresh the diff to complete a partial selection. Edit the
+block or add an explanation above it, use **Preview** to check the rendered
+Markdown, then choose **Add comment now** for an immediate comment or
+**Start a review** / **Add to review** to add it to a durable draft.
 
 ## Work with a diff
 
@@ -200,11 +206,6 @@ the latest diff. If paging reaches a safety bound, it keeps a bounded partial
 view and explains that the diff is incomplete. Invalid or inconsistent page
 data is reported as an error rather than being silently combined with another
 revision.
-
-The diff toolbar also provides **Suggest replacement** when the selected
-context meets the rules above. Suggestions are limited to the current
-revision and contiguous new-side source lines. The layout changes how the
-selection is displayed, not which side can be suggested.
 
 ## Review keyboard map
 

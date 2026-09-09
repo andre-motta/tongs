@@ -45,7 +45,9 @@ import {
   ACTIVE_DRAFT_STATES,
   BufferedInlineNotes,
   Composer,
+  MULTILINE_REFUSAL,
   anchorIdentity,
+  anchorRange,
   buffersFor,
   cacheWorkflow,
   cachedWorkflow,
@@ -205,6 +207,12 @@ function ReviewWorkflow({
   );
   const quickBlocked =
     workflow?.quick?.status === "sending" || workflow?.quick?.status === "unknown";
+  // The selection this panel writes is the diff's, so a range reaches this
+  // composer too and has to meet the same capability the in-diff one checks.
+  const multilineBlocked =
+    context.inlineAnchor !== null &&
+    anchorRange(context.inlineAnchor) !== null &&
+    mutationCapabilities?.multiline_comment !== true;
   const setGeneralBody = (body: string): void => {
     buffersFor(review).general = body;
     setGeneralBodyState(body);
@@ -963,6 +971,7 @@ function ReviewWorkflow({
               disabled={
                 mutationCapabilities?.inline_comment !== true ||
                 quickBlocked ||
+                multilineBlocked ||
                 context.inlineAnchor?.review !== review ||
                 (Boolean(workflow?.draft.remote) &&
                   (context.inlineAnchor?.contextComplete !== true ||
@@ -1823,6 +1832,8 @@ function inlineDisabledReason(
     return "Inline comments are unsupported for this review.";
   if (!anchor || anchor.review !== review)
     return "Select a source line in the current review diff.";
+  if (anchorRange(anchor) !== null && capabilities.multiline_comment !== true)
+    return MULTILINE_REFUSAL;
   if (durable && !anchor.contextComplete)
     return "The selected context is partial. Refresh the complete diff before drafting.";
   if (durable && workflow && !canCaptureDraftInline(workflow))

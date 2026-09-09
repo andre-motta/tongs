@@ -892,6 +892,60 @@ test("composer buffers survive panel navigation and remain bound to review and a
   assert.equal(view.getByLabelText("Quick inline comment").value, "");
 });
 
+test("the panel's inline comment carries the range the diff selected", async () => {
+  const review = "review-panel-range";
+  const posts = [];
+  const bridge = reviewBridge(review, {
+    postInlineReviewComment: async (params) => {
+      posts.push(params);
+      return mutation(params.operation_id);
+    },
+  });
+  const range = inlineSelection(review, "head", 6, [
+    sourceLine(null, 4, "  first()", "addition"),
+    sourceLine(null, 5, "  second()", "addition"),
+    sourceLine(null, 6, "  third()", "addition"),
+  ]);
+  const view = renderFeature(bridge, review, { inlineAnchor: range });
+  const inline = await view.findByLabelText("Quick inline comment");
+  assert.equal(inline.disabled, false);
+  fireEvent.change(inline, { target: { value: "Three statements" } });
+  fireEvent.click(view.getByRole("button", { name: "Quick inline comment" }));
+  await waitFor(() => assert.equal(posts.length, 1));
+  assert.deepEqual(posts[0].anchor, {
+    old_path: "src/example.py",
+    new_path: "src/example.py",
+    line: 6,
+    side: "RIGHT",
+    start_line: 4,
+    start_side: "RIGHT",
+  });
+});
+
+test("the panel refuses a range when the forge has no multiline capability", async () => {
+  const review = "review-panel-no-multiline";
+  const posts = [];
+  const bridge = reviewBridge(review, {
+    getReviewMutationCapabilities: () =>
+      read({ review, capabilities: capabilities({ multiline_comment: false }) }),
+    postInlineReviewComment: async (params) => {
+      posts.push(params);
+      return mutation(params.operation_id);
+    },
+  });
+  const range = inlineSelection(review, "head", 5, [
+    sourceLine(null, 4, "  first()", "addition"),
+    sourceLine(null, 5, "  second()", "addition"),
+  ]);
+  const view = renderFeature(bridge, review, { inlineAnchor: range });
+  const inline = await view.findByLabelText("Quick inline comment");
+  await waitFor(() => assert.equal(inline.disabled, true));
+  const refusal =
+    "Multi-line comments are unsupported for this review. Select a single line.";
+  assert.equal(view.getByText(refusal).textContent, refusal);
+  assert.equal(posts.length, 0);
+});
+
 function renderFeature(bridge, review, contextChanges = {}) {
   const feature = createReviewFeature(bridge);
   const item = reviewItem(review);

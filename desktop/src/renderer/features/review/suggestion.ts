@@ -113,3 +113,34 @@ export function prepareSuggestionTarget(
     draftSelection,
   });
 }
+
+/**
+ * A fenced suggestion block, in either forge's syntax. A body that already
+ * carries one must not be wrapped in another: the second fence would open
+ * inside the first block and the reader would lose both.
+ */
+const SUGGESTION_BLOCK = /^`{3,}suggestion(?::-\d+\+\d+)?[ \t]*$/m;
+
+export function containsSuggestionBlock(body: string): boolean {
+  return SUGGESTION_BLOCK.test(body);
+}
+
+/**
+ * The composer's Insert suggestion pre-fill: the selected new-side source
+ * lines wrapped in the block this forge understands, with whatever the reader
+ * had already typed kept above it as the explanation. The rules are the
+ * existing ones, so an old-side or partial selection refuses here too.
+ */
+export function suggestionPrefill(
+  selection: InlineAnchorSelection,
+  forge: SuggestionForge,
+  comment = "",
+): string {
+  const target = prepareSuggestionTarget(selection, forge);
+  return formatSuggestionBody(
+    target.originalCode,
+    target.originalLineCount,
+    forge,
+    comment,
+  );
+}

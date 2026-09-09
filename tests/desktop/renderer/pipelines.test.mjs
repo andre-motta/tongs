@@ -8,6 +8,7 @@ import {
   loadLogPages,
   sanitizeLogText,
 } from "../../../desktop/dist/src/renderer/features/pipelines/index.js";
+import { encodeReadFailure } from "../../../desktop/dist/src/shared/bridge.js";
 
 const desktopRequire = createRequire(
   new URL("../../../desktop/package.json", import.meta.url),
@@ -362,6 +363,36 @@ test("rapid pipeline switching discards late job and log reads", async () => {
 
   assert.equal(view.queryByText("build-201"), null);
   assert.ok(cancelled.includes("late-jobs"));
+});
+
+test("job log recovery advice survives a rejection from the main process", async () => {
+  const failures = [
+    ["snapshot_expired", "This log snapshot expired. Reload the job log to continue."],
+    ["revision_changed", "The job log changed while loading. Reload the current log."],
+  ];
+  for (const [code, advice] of failures) {
+    const bridge = baseBridge({
+      openLog: () =>
+        read(
+          Promise.reject(
+            new Error(
+              `Error invoking remote method 'tongs:logs.open': Error: ${
+                encodeReadFailure({
+                  code,
+                  message: "The resource snapshot is invalid or expired; refetch it.",
+                  retryable: true,
+                }).message
+              }`,
+            ),
+          ),
+        ),
+    });
+
+    const view = renderFeature(bridge);
+
+    await view.findByText(advice);
+    view.unmount();
+  }
 });
 
 test("log reconstruction enforces identity, revision, line, and text bounds", async () => {

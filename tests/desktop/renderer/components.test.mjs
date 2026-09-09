@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import test, { afterEach } from "node:test";
 import { QueryCoordinator } from "../../../desktop/dist/src/renderer/core/query.js";
+import { encodeReadFailure } from "../../../desktop/dist/src/shared/bridge.js";
 import { createDiffFeature } from "../../../desktop/dist/src/renderer/features/diff/index.js";
 import { createInboxFeature } from "../../../desktop/dist/src/renderer/features/inbox/index.js";
 import {
@@ -346,8 +347,24 @@ test("Shift+Enter extends a keyboard diff selection across new-side source lines
   );
 });
 
+// The main process rejects a read, and Electron rebuilds that rejection as a
+// fresh Error carrying only the message, so the typed object below is the shape
+// a renderer-raised failure has and the wrapped Error is the shape every failure
+// from main actually has.
+const REJECTION_SHAPES = [
+  ["typed failure", (failure) => failure],
+  [
+    "failure from the main process",
+    (failure) =>
+      new Error(
+        `Error invoking remote method 'tongs:diff.open': Error: ${encodeReadFailure(failure).message}`,
+      ),
+  ],
+];
+
 for (const code of ["snapshot_expired", "revision_changed"]) {
-  test(`diff ${code} service failure clears the app-owned anchor`, async () => {
+  for (const [shape, rejection] of REJECTION_SHAPES) {
+  test(`diff ${code} ${shape} clears the app-owned anchor`, async () => {
     let openReads = 0;
     const observed = [];
     const bridge = baseBridge({
@@ -355,11 +372,13 @@ for (const code of ["snapshot_expired", "revision_changed"]) {
         read(
           openReads++ === 0
             ? diffPage("unified")
-            : Promise.reject({
-                code,
-                message: "safe service failure",
-                retryable: true,
-              }),
+            : Promise.reject(
+                rejection({
+                  code,
+                  message: "safe service failure",
+                  retryable: true,
+                }),
+              ),
         ),
     });
     const feature = createDiffFeature();
@@ -399,6 +418,7 @@ for (const code of ["snapshot_expired", "revision_changed"]) {
     assert.equal(openReads, 2);
     assert.equal(observed.at(-1), null);
   });
+  }
 }
 
 test("overview and commits expose refresh and retry after retained failures", async () => {

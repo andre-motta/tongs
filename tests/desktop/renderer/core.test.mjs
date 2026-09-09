@@ -158,6 +158,38 @@ test("read failures report the cause instead of one generic sentence", () => {
   );
 });
 
+test("only the diff surface advises reloading a diff", () => {
+  const threads = safeError(
+    encodeReadFailure(
+      new Error(
+        'Invalid discussions.list result: field "file_path" must be null or non-empty text',
+      ),
+    ),
+  );
+  assert.doesNotMatch(threads, /diff/i);
+  assert.match(threads, /field "file_path" must be null or non-empty text/);
+  assert.match(
+    safeError(
+      new RendererReadError(
+        "invalid_diff_page",
+        "The diff page cursor did not advance.",
+        false,
+      ),
+    ),
+    /inconsistent diff page \(The diff page cursor did not advance\.\)\. Reload the diff/,
+  );
+  // A failure with no usable cause keeps the plain sentence rather than reporting
+  // an absent one.
+  assert.equal(
+    safeError({ code: "internal", retryable: false }),
+    "The local service could not complete this read.",
+  );
+  assert.equal(
+    safeError({ code: "internal", message: "  ", retryable: true }),
+    "The local service could not complete this read. Try again.",
+  );
+});
+
 test("navigator publishes typed route changes", () => {
   const navigator = new Navigator();
   const routes = [];

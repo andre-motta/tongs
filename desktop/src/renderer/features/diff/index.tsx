@@ -292,7 +292,8 @@ function assertNextCursor(page: DiffPage): void {
 }
 
 function invalidPage(message: string): RendererReadError {
-  return new RendererReadError("invalid_response", message, false);
+  // A diff-owned code, so the diff reload advice stays on the diff surface.
+  return new RendererReadError("invalid_diff_page", message, false);
 }
 
 function paginationLimit(message: string): RendererReadError {

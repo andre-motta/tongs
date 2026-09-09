@@ -149,6 +149,11 @@ five misleading "mcp not installed" skips because FastMCP was removed. This is a
 pre-existing optional dependency compatibility problem. Validation uses MCP v1 in
 the temporary environment, without modifying production dependency declarations.
 
+**Correction, 2026-09-08:** the 157-finding, four-file Ruff baseline above is
+historical. `ruff check src/ tests/` and `ruff format --check src/ tests/` both
+pass cleanly on the current tree (0 findings; 235 files already formatted),
+verified directly with Ruff 0.16.6.
+
 ## Active assignment checkpoint
 
 Foundation: `a33d8d3eb4274f072aaf2d50b0092ed4249a00d1`, independently reviewed by
@@ -223,6 +228,12 @@ passed: 618 core, 7 backend, 10 frontend, 10 Electron, and 14 webview. New-code
 lint/format and the strict documentation build passed. Baseline core lint/format
 remains unmet and is not waived.
 
+**Correction, 2026-09-08:** the 618/659 test counts above are the historical
+prototype-comparison baseline, not the current count. The current tree collects
+1754 tests under `tests/` excluding `tests/test_mcp` (all passing) and 1759 total
+including `tests/test_mcp`, verified directly with `pytest --collect-only` and a
+full `pytest` run. 28 `.mjs` test files exist under `tests/desktop/`.
+
 The retained acceptance package is `spikes/desktop/proof/README.md`; the shell
 comparison and proposed production design are in `spikes/desktop/DECISION.md`.
 Evidence includes actual application captures, versioned input/output hashes,
@@ -248,14 +259,15 @@ The CTO selected Electron and made hardware GPU acceleration a mandatory product
 and release gate. The existing --disable-gpu evidence remains a historical fixture
 result. GPU investigation is tracked in [#25](https://github.com/andre-motta/tongs/issues/25).
 
-The CTO authorized Astra-owned GitHub branch `feat/desktop-app`, bootstrapped from
-reviewed comparison/evidence `58cf120` plus the independently reviewed workflow
+The CTO authorized orchestrator-owned GitHub branch `feat/desktop-app`, bootstrapped
+from reviewed comparison/evidence `58cf120` plus the independently reviewed workflow
 update. Agents use issue-scoped `feat/<work-item>` branches in isolated worktrees,
-may sign off and push their commits, and open PRs into `feat/desktop-app`. Independent
-Sol review remains required; Astra alone gives the final engineering disposition,
-resolves integration conflicts, verifies affected checks and merges. After feature
-completion Astra opens the complete evidence-backed PR into `main` for Andre's
-review. Main merge, release/tag and deployment are not pre-authorized.
+may sign off and push their commits, and open PRs into `feat/desktop-app`.
+Independent senior review remains required; the orchestrator alone gives the final
+engineering disposition, resolves integration conflicts, verifies affected checks
+and merges. After feature completion the orchestrator opens the complete
+evidence-backed PR into `main` for Andre's review. Main merge, release/tag and
+deployment are not pre-authorized.
 
 This project override is [#23](https://github.com/andre-motta/tongs/issues/23) and
 is defined in [the SDLC profile](../SDLC.md). It supersedes earlier local-only
@@ -264,8 +276,8 @@ comparison branch remains retained, and the dirty main checkout is preserved.
 
 Every change and gate decision must be issue-tracked. Work is split into small,
 independently verifiable tasks with explicit native dependencies, owned files and
-stable interfaces. Astra dispatches only ready items whose prerequisite merge
-commits exist in the feature branch and have been verified, respecting actual
+stable interfaces. The orchestrator dispatches only ready items whose prerequisite
+merge commits exist in the feature branch and have been verified, respecting actual
 concurrency and shared-file ownership. Use the project work-item and PR templates.
 
 | Issue | Work | Prerequisites | State / next action |
@@ -292,8 +304,15 @@ status above. The current verified feature head is
 `42c8bfce1db1a38eb872872d1b324e02aadc3ea6`.
 [CI run 34147002731](https://github.com/andre-motta/tongs/actions/runs/34147002731)
 passed all six displayed checks, including the required aggregate. No branch
-protection or ruleset has been configured; Astra checks the required statuses
-before integration. Main remains `c8ead224a92d33486c9d97aa27568b8136cb7cb0`.
+protection or ruleset has been configured; the orchestrator checks the required
+statuses before integration. Main remains `c8ead224a92d33486c9d97aa27568b8136cb7cb0`.
+
+**Correction, 2026-09-08:** the feature head above is the historical checkpoint
+recorded at the time, not the current state. `feat/desktop-app` has advanced
+hundreds of commits past it, and S1, S2, S4, S6, S10, S15a, S16, and S17 from the
+[production design](desktop-production.md) are implemented in the current tree.
+The `main` reference above is still accurate: `main` remains
+`c8ead224a92d33486c9d97aa27568b8136cb7cb0`, verified directly.
 
 | Issue / PR | Verified feature merge | Result |
 | --- | --- | --- |
@@ -320,9 +339,9 @@ These choices establish the production baseline under #22. Independent engineeri
 review and verified feature integration precede dispatch. No production slice is
 represented as implemented.
 
-After design integration, Astra publishes the issue graph, dispatches ready work,
-consumes handoffs, directs independent review/corrections, verifies CI and
-serializes integration. Reevaluate readiness after every integration. Do not leave
+After design integration, the orchestrator publishes the issue graph, dispatches
+ready work, consumes handoffs, directs independent review/corrections, verifies CI
+and serializes integration. Reevaluate readiness after every integration. Do not leave
 finished agent handoffs idle waiting for the CTO to point out ready PRs. Persist
 current assignments, prerequisite merge SHAs, review findings and next actions.
 Issues stay open until accepted main delivery. Final main merge and publication

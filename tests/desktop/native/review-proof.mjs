@@ -9,6 +9,88 @@ import { DesktopIpcController } from "../../../desktop/dist/src/main/ipc.js";
 import { APP_DOCUMENT, isAllowedAppUrl } from "../../../desktop/dist/src/main/security.js";
 import { SidecarTransport } from "../../../desktop/dist/src/main/sidecar.js";
 
+/**
+ * Repointed for the #181 review-surface redesign (rerun prep for #55). The old
+ * surfaces this script drove no longer exist: the Discussions panel "Quick
+ * comment" field and its composer, "Suggest replacement" / "Post quick
+ * suggestion" / "Add suggestion to draft", the separate "Replacement code" and
+ * "Optional explanation" fields, "Start review" / "Resume review", and the
+ * "Review body" / "Verdict" single-select drawer fields are all gone. Every
+ * label and aria-label below was read directly from the renderer source at
+ * head `ecb7f851aec9362aa71ed178bcd8a55250e5d32f` (`origin/feat/desktop-app`,
+ * the head with every #181 card integrated):
+ *
+ * - Tabs (`desktop/src/renderer/features/review-detail/index.tsx`,
+ *   `features/diff/index.tsx`, `features/review/index.tsx`): "Overview",
+ *   "Files changed", "Discussions", "Commits".
+ * - General comment, Overview only (`review-detail/index.tsx`, mounted inside
+ *   `.panel.general-composer-panel`; rendered by
+ *   `features/review/composer.tsx` `InlineComposer` with `anchor: null`):
+ *   section `aria-label="General comment composer"`, textarea
+ *   `aria-label="General review comment"`.
+ * - In-diff comment, Files changed only (`features/diff/index.tsx`, same
+ *   `InlineComposer` with a line/range anchor): section
+ *   `aria-label="Inline comment composer"`, textarea
+ *   `aria-label="Inline review comment"`, button "Insert suggestion"
+ *   (disabled until mutation capabilities load and a valid new-side
+ *   selection exists; refuses a body that already carries a suggestion
+ *   block), button "Preview".
+ * - Composer write actions, both composers, same implementation
+ *   (`composer.tsx` `InlineComposer`): button "Add comment now" (immediate
+ *   write), primary button "Start a review" (no pending review yet) or
+ *   "Add to review" (one already open) or "Save changes" (editing a pending
+ *   entry); overflow button `aria-label="More review actions"` text "More",
+ *   then "Discard review" -> "Confirm discard of {subject}".
+ * - Gutter affordance (`features/diff/index.tsx` `GutterComment`): button
+ *   `aria-label="Comment on {old|new} line {N}"`, text "+". Opens the in-diff
+ *   composer on the current line/range selection.
+ * - Line selection (`features/diff/index.tsx` `LineNumberAnchor`): button
+ *   `aria-label="Select {old|new} line {N}"` -- unchanged by #181, kept as
+ *   evidence it was checked, not assumed.
+ * - Pending entries (`features/review/pending-card.tsx` `PendingCard`,
+ *   `features/review/drawer.tsx` `DrawerEntryRow`): button
+ *   `aria-label="Edit pending comment on {label}"` text "Edit", button
+ *   `aria-label="Delete pending comment on {label}"` text "Delete".
+ * - Published threads (`features/review/thread.tsx`): row button
+ *   `aria-label="Reply to {reference}"` text "Reply" opens the reply
+ *   composer; inside it, textarea `aria-label="Reply body for {reference}"`,
+ *   checkbox label "Resolve thread" / "Reopen thread", button "Reply now".
+ * - Discussions panel (`features/review/index.tsx` `ThreadJumpList`): a pure
+ *   jump list now, no composer, no reply or resolve control, and no way to
+ *   start a review. Button "Show in diff" per row is unchanged.
+ * - "Your review" drawer (`features/review/drawer.tsx`): toggle button
+ *   `aria-label="Your review, {N} pending"` text "Your review"; drawer
+ *   `aria-label="Your review"`; its own close button
+ *   `aria-label="Close your review"` text "Close" (same text as the MR-level
+ *   "Close" action below -- the drawer must be closed via its aria-label
+ *   before that action is pressed). Inside: label "Summary" wrapping a
+ *   textarea; `role="radiogroup" aria-label="Verdict"` with tile `<label>`s
+ *   "Comment" / "Approve" / "Request changes", each wrapping a radio input;
+ *   button "Save summary and verdict" ("Saving…" while in flight); "Discard
+ *   review" -> "Confirm discard of {subject}"; "Submit review" -> "Confirm
+ *   submit review"; each pending entry's body renders in
+ *   `.review-drawer-entry-body`, general/reply entries grouped under
+ *   "Review-level".
+ * - MR-level actions (`features/review/index.tsx` `ActionButtons`), untouched
+ *   by #181: "Merge" / "Close" / "Reopen" / "Remove approval" ->
+ *   "Confirm {label}"; a rejected action reports through
+ *   `role="alert"` inside `.review-workflow-shell` with the message from
+ *   `desktop/src/shared/review.ts` `REVIEW_MUTATION_MESSAGES.conflict`,
+ *   unchanged: "The review changed remotely. Refresh it before choosing
+ *   another action."
+ * - Uncertainty acknowledgment (`review-detail/index.tsx` and
+ *   `features/review/index.tsx`, unchanged): button "I inspected the forge;
+ *   acknowledge uncertainty".
+ *
+ * Not used here, and left untouched: `features/diff/index.tsx` still renders
+ * a disabled-by-default "Suggest replacement" button in the diff toolbar that
+ * navigates to the Discussions panel, which no longer has anywhere to receive
+ * that navigation (`ThreadJumpList` offers no composer). That looks like
+ * leftover wiring from the #181 migration rather than a blessed control; the
+ * issue #55 rerun-prep comment names "Insert suggestion" as the intended
+ * replacement, so that is what this script drives.
+ */
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "tongs",
@@ -139,16 +221,21 @@ async function runProof() {
     controller.register();
     await window.loadURL(APP_DOCUMENT);
 
-    mark("exercise discussions and navigation buffer");
+    mark("exercise overview general composer and navigation buffer");
     await navigateToReview();
     const initial = await evaluate(`
-      const composer = labelled("Quick comment");
-      setValue(composer, "kept across panel navigation");
       button("Overview").click();
-      await waitFor("overview", () => button("Discussions"));
-      button("Discussions").click();
-      await waitFor("workflow", () => document.querySelector(".review-workflow-shell"));
-      const restored = labelled("Quick comment");
+      await waitFor("overview general composer", () =>
+        document.querySelector('section[aria-label="General comment composer"]'));
+      const composer = labelled("General review comment");
+      setValue(composer, "kept across panel navigation");
+      button("Files changed").click();
+      await waitFor("source diff", () =>
+        document.querySelector('button[aria-label="Select new line 3"]'));
+      button("Overview").click();
+      await waitFor("overview general composer restored", () =>
+        document.querySelector('section[aria-label="General comment composer"]'));
+      const restored = labelled("General review comment");
       if (restored.value !== "kept across panel navigation")
         throw new Error("ordinary panel navigation lost the composer buffer");
       return snapshot();
@@ -157,7 +244,7 @@ async function runProof() {
 
     mark("exercise controlled discovery removal and restoration");
     await evaluate(`
-      setValue(labelled("Quick comment"), "kept across discovery removal");
+      setValue(labelled("General review comment"), "kept across discovery removal");
       return true;
     `);
     await writeFile(discoveryControl, "removed\n", { mode: 0o600 });
@@ -194,8 +281,9 @@ async function runProof() {
     `);
     await navigateToReview();
     const discoveryRestoration = await evaluate(`
+      button("Overview").click();
       const composer = await waitFor("restored discovery buffer", () =>
-        labelled("Quick comment"));
+        labelled("General review comment"));
       if (composer.value !== "kept across discovery removal")
         throw new Error("discovery reconciliation lost the unsent review buffer");
       if ([...document.querySelectorAll("main > .notice")].some((item) =>
@@ -206,7 +294,7 @@ async function runProof() {
     const discoveryRestorationScreenshot = await capture(
       "02-controlled-discovery-restoration.png",
     );
-    await evaluate(`setValue(labelled("Quick comment"), ""); return true;`);
+    await evaluate(`setValue(labelled("General review comment"), ""); return true;`);
 
     mark("author and post a controlled multiline GitHub suggestion");
     const suggestion = await evaluate(`
@@ -225,18 +313,32 @@ async function runProof() {
         [3, 4, 5].every((number) => document.querySelector(
           'button[aria-label="Select new line ' + number + '"][aria-pressed="true"]',
         )));
-      const suggest = await waitFor("enabled suggestion action", () => {
-        const action = button("Suggest replacement");
+      document.querySelector('button[aria-label="Comment on new line 5"]').click();
+      const body = await waitFor("in-diff composer", () =>
+        labelled("Inline review comment"));
+      const insert = await waitFor("enabled Insert suggestion action", () => {
+        const action = button("Insert suggestion");
         return action && !action.disabled ? action : null;
       });
-      suggest.click();
-      const replacement = await waitFor("suggestion replacement", () =>
-        labelled("Replacement code"));
-      if (replacement.value !== "before\\nnew value\\nafter")
+      insert.click();
+      if (body.value !== "\u0060\u0060\u0060suggestion\\nbefore\\nnew value\\nafter\\n\u0060\u0060\u0060")
         throw new Error("suggestion was not seeded from exact selected source");
-      setValue(labelled("Optional explanation"), "Use the guarded replacement");
-      setValue(replacement, "  replacement(\u0060value\u0060)  ");
-      button("Post quick suggestion").click();
+      // The reader's note is typed, then Insert suggestion combines it with a
+      // freshly recomputed block; the block content is then edited in place,
+      // which is what the single shared textarea replaces the old separate
+      // "Replacement code" and "Optional explanation" fields with.
+      setValue(body, "");
+      setValue(body, "Use the guarded replacement");
+      const insertAgain = await waitFor("enabled Insert suggestion action, second press", () => {
+        const action = button("Insert suggestion");
+        return action && !action.disabled ? action : null;
+      });
+      insertAgain.click();
+      setValue(
+        body,
+        "Use the guarded replacement\\n\\n\u0060\u0060\u0060suggestion\\n  replacement(\u0060value\u0060)  \\n\u0060\u0060\u0060",
+      );
+      button("Add comment now").click();
       return snapshot();
     `);
     await waitForAction("create_inline_comment", 1);
@@ -244,6 +346,8 @@ async function runProof() {
 
     mark("resolve the discussion jump against the current loaded diff");
     const discussionJump = await evaluate(`
+      button("Discussions").click();
+      await waitFor("review workflow", () => document.querySelector(".review-workflow-shell"));
       const show = await waitFor("show discussion in diff", () => button("Show in diff"));
       show.click();
       await waitFor("discussion diff target", () =>
@@ -258,12 +362,18 @@ async function runProof() {
     `);
 
     mark("exercise known and unknown quick comments without replay");
-    await sendComposer("Quick comment", "controlled known quick comment");
     await evaluate(`
-      await waitFor("known quick completion", () => labelled("Quick comment")?.value === "");
+      button("Overview").click();
+      await waitFor("overview general composer", () =>
+        document.querySelector('section[aria-label="General comment composer"]'));
       return true;
     `);
-    await sendComposer("Quick comment", "controlled unknown remote result");
+    await sendComposer("General review comment", "Add comment now", "controlled known quick comment");
+    await evaluate(`
+      await waitFor("known quick completion", () => labelled("General review comment")?.value === "");
+      return true;
+    `);
+    await sendComposer("General review comment", "Add comment now", "controlled unknown remote result");
     const unknown = await evaluate(`
       await waitFor("unknown result", () =>
         document.body.innerText.includes("remote result is unknown"));
@@ -278,38 +388,73 @@ async function runProof() {
     `);
 
     mark("create, inspect, and save a durable draft");
-    await clickButton("Start review");
     await evaluate(`
-      await waitFor("draft", () => document.body.innerText.includes("Draft review active"));
+      // The redesign has no standalone "Start review": the same primary write
+      // button reads "Start a review" until a pending review exists, then
+      // "Add to review" on every composer after. This first durable write is
+      // what starts it.
       button("Files changed").click();
       const line = await waitFor("durable suggestion source", () =>
         document.querySelector('button[aria-label="Select new line 4"]'));
       line.click();
-      const suggest = await waitFor("enabled durable suggestion action", () => {
-        const action = button("Suggest replacement");
+      document.querySelector('button[aria-label="Comment on new line 4"]').click();
+      const body = await waitFor("in-diff composer", () => labelled("Inline review comment"));
+      const insert = await waitFor("enabled Insert suggestion action", () => {
+        const action = button("Insert suggestion");
         return action && !action.disabled ? action : null;
       });
-      suggest.click();
-      const replacement = await waitFor("durable suggestion replacement", () =>
-        labelled("Replacement code"));
-      if (replacement.value !== "new value")
+      insert.click();
+      if (body.value !== "\u0060\u0060\u0060suggestion\\nnew value\\n\u0060\u0060\u0060")
         throw new Error("durable suggestion did not retain exact source text");
-      setValue(replacement, "durable_value");
-      button("Add suggestion to draft").click();
+      setValue(body, "\u0060\u0060\u0060suggestion\\ndurable_value\\n\u0060\u0060\u0060");
+      const start = await waitFor("enabled primary composer action", () => {
+        const action = [...document.querySelectorAll(".inline-composer-writes button.button:not(.button-secondary):not(.button-danger)")][0];
+        return action && !action.disabled ? action : null;
+      });
+      if (start.textContent.trim() !== "Start a review")
+        throw new Error("first durable write did not read Start a review");
+      start.click();
+      await waitFor("durable suggestion pending card", () => document.querySelector(".pending-card"));
+      return true;
+    `);
+    await evaluate(`
+      button("Overview").click();
+      await waitFor("overview general composer", () =>
+        document.querySelector('section[aria-label="General comment composer"]'));
+      setValue(labelled("General review comment"), "Durable general draft comment");
+      const add = await waitFor("enabled Add to review action", () => {
+        const action = [...document.querySelectorAll(".inline-composer-writes button.button:not(.button-secondary):not(.button-danger)")][0];
+        return action && !action.disabled ? action : null;
+      });
+      if (add.textContent.trim() !== "Add to review")
+        throw new Error("second durable write did not read Add to review");
+      add.click();
+      await waitFor("general draft entry saved", () => labelled("General review comment")?.value === "");
+      return true;
+    `);
+    await evaluate(`
       button("Discussions").click();
-      await waitFor("draft workflow", () => document.querySelector(".review-workflow-shell"));
-      setValue(labelled("Add general draft comment"), "Durable general draft comment");
-      button("Add general draft comment").click();
-      await waitFor("draft comment", () =>
-        [...document.querySelectorAll(".review-workflow-draft-comment textarea")]
-          .some((item) => item.value === "Durable general draft comment"));
-      setValue(labelled("Review body"), "Durable review body after renderer and sidecar restart");
-      setValue(labelled("Verdict"), "approve");
+      await waitFor("review workflow", () => document.querySelector(".review-workflow-shell"));
+      buttonAria("Your review, ").click();
+      await waitFor("your review drawer", () => document.querySelector('[aria-label="Your review"]'));
+      return true;
+    `);
+    await evaluate(`
+      const entryText = () =>
+        [...document.querySelectorAll(".review-drawer-entry-body")].map((item) => item.textContent);
+      await waitFor("durable general entry", () =>
+        entryText().some((text) => text.includes("Durable general draft comment")));
+      if (!entryText().some((text) => text.includes("durable_value")))
+        throw new Error("durable suggestion entry missing from Your review drawer");
+      setValue(labelled("Summary"), "Durable review body after renderer and sidecar restart");
+      // S54 names the Comment verdict specifically; this is the scenario's
+      // automated counterpart, so the tile choice has to match it.
+      labelled("Comment").click();
       return snapshot();
     `);
-    await clickButton("Save draft");
+    await clickButton("Save summary and verdict");
     await evaluate(`
-      await waitFor("saved draft", () => button("Save draft")?.disabled === true);
+      await waitFor("saved draft", () => button("Save summary and verdict")?.disabled === true);
       return true;
     `);
     const draftScreenshot = await capture("06-draft-review-dark.png");
@@ -320,18 +465,28 @@ async function runProof() {
     await assets.refresh();
     await window.loadURL(APP_DOCUMENT);
     await navigateToReview();
-    await clickButton("Resume review");
+    await evaluate(`
+      // Recovery is automatic in the redesign: the shared workflow state adopts
+      // the one active durable draft on mount, with no "Resume review" press.
+      button("Discussions").click();
+      await waitFor("review workflow", () => document.querySelector(".review-workflow-shell"));
+      buttonAria("Your review, ").click();
+      await waitFor("your review drawer", () => document.querySelector('[aria-label="Your review"]'));
+      return true;
+    `);
     const recoveredDraft = await evaluate(`
       await waitFor("recovered draft body", () =>
-        labelled("Review body")?.value ===
+        labelled("Summary")?.value ===
           "Durable review body after renderer and sidecar restart");
-      const recoveredComments = [
-        ...document.querySelectorAll(".review-workflow-draft-comment textarea"),
-      ].map((item) => item.value);
-      if (!recoveredComments.includes("Durable general draft comment"))
+      const entryText = () =>
+        [...document.querySelectorAll(".review-drawer-entry-body")].map((item) => item.textContent);
+      if (!entryText().some((text) => text.includes("Durable general draft comment")))
         throw new Error("durable general draft comment was not recovered");
-      if (!recoveredComments.includes(
-          "\u0060\u0060\u0060suggestion\\ndurable_value\\n\u0060\u0060\u0060"))
+      // .review-drawer-entry-body renders through SafeMarkdown, so a fenced
+      // suggestion block never reaches the DOM as literal backtick text; the
+      // fence becomes a rendered code block and textContent carries only the
+      // code, the same as the entryText() check just above.
+      if (!entryText().some((text) => text.includes("durable_value")))
         throw new Error("durable suggestion was not recovered");
       return snapshot();
     `);
@@ -348,6 +503,14 @@ async function runProof() {
     const submittedScreenshot = await capture("08-submitted-review.png");
 
     mark("exercise known conflict and merge action");
+    // "Close" is ambiguous while the drawer is open: its own close button
+    // reads "Close" too. Dismiss it by aria-label before the MR-level action.
+    await evaluate(`
+      const closeDrawer = document.querySelector('button[aria-label="Close your review"]');
+      if (closeDrawer) closeDrawer.click();
+      await waitFor("drawer closed", () => document.querySelector('[aria-label="Your review"]') === null);
+      return true;
+    `);
     await clickButton("Close");
     await clickButton("Confirm Close");
     const conflict = await evaluate(`
@@ -629,18 +792,21 @@ async function navigateToReview() {
     await new Promise((resolve) => setTimeout(resolve, 100));
     document.querySelector('.review-card[data-review-number="46"]').click();
     await waitFor("review overview", () => document.querySelector(".review-header"));
-    const discussions = await waitFor("discussions tab", () => button("Discussions"));
-    discussions.click();
-    await waitFor("review workflow", () => document.querySelector(".review-workflow-shell"));
     return true;
   `);
 }
 
-async function sendComposer(label, body) {
+/**
+ * Sets `body` in the field labelled `fieldLabel` and presses the button
+ * labelled `buttonLabel`. The redesign separates the two: a composer's
+ * textarea and its write actions no longer share one label the way the old
+ * "Quick comment" field and its own same-named button did.
+ */
+async function sendComposer(fieldLabel, buttonLabel, body) {
   await evaluate(`
-    const composer = await waitFor(${JSON.stringify(label)}, () => labelled(${JSON.stringify(label)}));
+    const composer = await waitFor(${JSON.stringify(fieldLabel)}, () => labelled(${JSON.stringify(fieldLabel)}));
     setValue(composer, ${JSON.stringify(body)});
-    button(${JSON.stringify(label)}).click();
+    button(${JSON.stringify(buttonLabel)}).click();
     return true;
   `);
 }
@@ -692,9 +858,32 @@ async function evaluate(body) {
       const button = (label) => [...document.querySelectorAll("button")].find(
         (item) => item.textContent.trim() === label,
       );
-      const labelled = (label) => [...document.querySelectorAll("label")].find(
-        (item) => item.textContent.includes(label),
-      )?.querySelector("textarea,select,input") ?? null;
+      // For a button whose text is not exact-matchable because it carries a
+      // dynamic suffix, such as "Your review" and its live pending count in
+      // aria-label="Your review, {N} pending".
+      const buttonAria = (prefix) => [...document.querySelectorAll("button")].find(
+        (item) => (item.getAttribute("aria-label") || "").startsWith(prefix),
+      );
+      // Most composer and pending-card fields carry their accessible name as
+      // an aria-label directly on the control (composer.tsx's "General
+      // review comment" / "Inline review comment" / "Pending review
+      // comment" textareas have no wrapping <label> at all). The drawer's
+      // "Summary" field and its "Comment" / "Approve" / "Request changes"
+      // verdict tiles are the opposite: a <label> wraps the control and
+      // carries the text, with no aria-label on the control itself. Try the
+      // aria-label form first, then fall back to the <label>-wrapping form,
+      // so one helper covers both shapes correctly instead of assuming
+      // either one everywhere.
+      const labelled = (label) => {
+        const byAria = document.querySelector(
+          'textarea[aria-label="' + label + '"], input[aria-label="' + label
+            + '"], select[aria-label="' + label + '"]',
+        );
+        if (byAria) return byAria;
+        return [...document.querySelectorAll("label")].find(
+          (item) => item.textContent.includes(label),
+        )?.querySelector("textarea,select,input") ?? null;
+      };
       const setValue = (element, value) => {
         const prototype = element instanceof HTMLTextAreaElement
           ? HTMLTextAreaElement.prototype
@@ -708,8 +897,8 @@ async function evaluate(body) {
       const snapshot = () => ({
         title: document.querySelector(".view-title")?.textContent ?? null,
         workflow: document.querySelector(".review-workflow-shell")?.innerText ?? null,
-        draftBody: labelled("Review body")?.value ?? null,
-        quickBody: labelled("Quick comment")?.value ?? null,
+        draftBody: labelled("Summary")?.value ?? null,
+        quickBody: labelled("General review comment")?.value ?? null,
         processGlobal: typeof globalThis.process,
         requireGlobal: typeof globalThis.require,
       });

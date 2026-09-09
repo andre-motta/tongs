@@ -46,8 +46,6 @@ import {
   canStartSubmission,
   chooseRemoteDraft,
   conflictDraftSave,
-  discardDraft,
-  discardDraftRefusal,
   dismissSupersededDraft,
   draftNeedsRevisionRecovery,
   editDraft,
@@ -244,6 +242,10 @@ export interface ReviewDrawerController {
   readonly migrate: () => Promise<void>;
   readonly discard: () => Promise<void>;
   readonly discardReason: string | null;
+  /** What a discard would destroy, for the confirmation and its button. */
+  readonly discardSubject: string;
+  /** The full sentence a reader confirms before the discard is carried out. */
+  readonly discardPrompt: string;
   readonly removeEntry: (entryId: string) => Promise<boolean>;
   readonly updateEntry: (entryId: string, body: string) => Promise<boolean>;
   readonly clearMessage: () => void;
@@ -598,30 +600,30 @@ export function useReviewDrawer(
     }
   }, [apply, bridge, held, review]);
 
+  // Discard is the composer controller's, taken verbatim, for the same reason
+  // Edit and Delete are: the drawer button and the composer overflow entry must
+  // send the identical `drafts.discard` call and leave the identical state
+  // behind, and one implementation is how that stays true. The drawer's own
+  // slot is cleared first because it wins over the composer's when both hold a
+  // sentence: a refused discard has to report its own reason rather than an
+  // older unrelated failure, and one that succeeds must not leave that failure
+  // standing beside an emptied review.
   const discard = useCallback(async (): Promise<void> => {
-    const current = held.current;
-    const remote = current.draft.remote;
-    const refusal = discardDraftRefusal(current);
-    if (refusal !== null || !remote) {
-      setMessage(refusal ?? "No pending review is open to discard.");
-      return;
-    }
-    setBusy(true);
     setMessage(null);
-    try {
-      await bridge.discardReviewDraft({
-        review,
-        draft_id: remote.id,
-        expected_version: remote.version,
-      });
-      apply(discardDraft);
-      setDraftCandidates((items) => items.filter((item) => item.id !== remote.id));
-    } catch (reason) {
-      setMessage(drawerFailureMessage(reason));
-    } finally {
-      setBusy(false);
-    }
-  }, [apply, bridge, held, review]);
+    await composer.discardReview();
+  }, [composer.discardReview]);
+
+  // A draft this session discarded is no longer a candidate to recover. The
+  // composer publishes the id rather than the drawer deriving it, so a discard
+  // taken from the in-diff overflow prunes this list exactly as one taken from
+  // the button beside it does.
+  const discardedDraftId = composer.discardedDraftId;
+  useEffect(() => {
+    if (discardedDraftId === null) return;
+    setDraftCandidates((items) =>
+      items.filter((item) => item.id !== discardedDraftId),
+    );
+  }, [discardedDraftId]);
 
   const groups = useMemo(
     () => groupPendingEntries(composer.pending),
@@ -652,7 +654,9 @@ export function useReviewDrawer(
     dismissSuperseded,
     migrate,
     discard,
-    discardReason: discardDraftRefusal(workflow),
+    discardReason: composer.discardReason,
+    discardSubject: composer.discardSubject,
+    discardPrompt: composer.discardPrompt,
     removeEntry: composer.removeEntry,
     updateEntry: composer.updateEntry,
     clearMessage: () => {
@@ -847,6 +851,14 @@ function ReviewDrawer({
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
+        // An armed confirmation is the nearest thing Escape can answer. It is
+        // cancelled without closing, so backing out of a destructive question
+        // does not also take away the drawer the reader was working in, and a
+        // second Escape then closes as it always did.
+        if (confirmation !== null) {
+          setConfirmation(null);
+          return;
+        }
         close();
       }}
     >
@@ -976,7 +988,7 @@ function ReviewDrawer({
               }}
             >
               {confirmation === "discard"
-                ? `Confirm discard of ${controller.pendingCount} pending comment(s) and the summary`
+                ? `Confirm discard of ${controller.discardSubject}`
                 : "Discard review"}
             </button>
             <button
@@ -999,8 +1011,7 @@ function ReviewDrawer({
           </div>
           {confirmation === "discard" && (
             <p role="status" className="review-drawer-confirm">
-              Discard {controller.pendingCount} pending comment(s) and the
-              summary? This cannot be undone.
+              {controller.discardPrompt}
             </p>
           )}
         </>

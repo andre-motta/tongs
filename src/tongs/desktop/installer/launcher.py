@@ -29,6 +29,7 @@ from tongs.desktop.installer.models import InstallerError, InstallerErrorCode
 from tongs.desktop.protocol import PROTOCOL_MAJOR
 from tongs.plugins.desktop import DESKTOP_PLUGIN_API_MAJOR
 
+_XWAYLAND_SWITCH = "--ozone-platform=x11"
 _PROBE_TIMEOUT_SECONDS = 5.0
 _MAX_PROBE_BYTES = 4096
 _VERSION_PROBE = (
@@ -194,6 +195,7 @@ def validate_bound_launch(
         )
     arguments = (
         os.fspath(payload.launcher_path),
+        *xwayland_launch_arguments(),
         "--tongs-python-executable",
         os.fspath(environment.interpreter_path),
         "--tongs-core-version",
@@ -202,6 +204,25 @@ def validate_bound_launch(
         os.fspath(payload.target_path),
     )
     return DesktopLaunch(payload.launcher_path, arguments, core_version)
+
+
+def xwayland_launch_arguments(
+    *,
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Select XWayland exactly when the desktop shell would otherwise refuse.
+
+    ``desktop/src/main/index.ts`` throws unless argv selects the X11 ozone
+    backend when it runs on Linux with ``WAYLAND_DISPLAY`` set. That guard keys
+    on nothing else, so this mirror keys on nothing else either: no session type
+    and no desktop name. An empty ``WAYLAND_DISPLAY`` is falsy on both sides.
+    """
+    values = os.environ if environ is None else environ
+    current = sys.platform if platform is None else platform
+    if current == "linux" and values.get("WAYLAND_DISPLAY"):
+        return (_XWAYLAND_SWITCH,)
+    return ()
 
 
 def validate_environment_binding(environment: BoundPythonEnvironment) -> None:
@@ -443,4 +464,5 @@ __all__ = [
     "locate_console_script",
     "validate_bound_launch",
     "validate_environment_binding",
+    "xwayland_launch_arguments",
 ]

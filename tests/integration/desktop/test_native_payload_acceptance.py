@@ -3547,8 +3547,15 @@ os.waitpid(child, 0)
         assert before.argv == parent.argv
 
         os.write(release_write, b"x")
+        # Refs #210: a slow host can schedule the collector between the fork
+        # and the child's execv, so /proc/<pid>/exe (the same field the
+        # collector reads) is polled here until it observably lands on the
+        # sleep binary. Only then is the owned tree sampled, so `after` below
+        # can never race the exec: a bounded deadline keeps this fail-closed
+        # instead of hanging if the exec never happens.
         sleep_executable = str(Path("/usr/bin/sleep").resolve(strict=True))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 5
+        current_executable = ""
         while time.monotonic() < deadline:
             try:
                 current_executable = str(
@@ -3560,7 +3567,11 @@ os.waitpid(child, 0)
                 break
             time.sleep(0.01)
         else:
-            pytest.fail("forked child did not exec the declared test executable")
+            pytest.fail(
+                "forked child did not exec the declared test executable "
+                f"within the deadline: expected {sleep_executable!r}, "
+                f"last observed {current_executable!r}"
+            )
 
         launcher_module._collect_owned_tree(process.pid, observations)
         after = observations[child_pid]

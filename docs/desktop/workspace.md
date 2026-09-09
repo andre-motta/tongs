@@ -195,10 +195,18 @@ Use **Refresh jobs** to reload the selected pipeline's jobs. Each job shows its
 status, name, and stage. A pipeline with no jobs shows **This pipeline has no
 jobs.** Select a job to open **Log · _job name_**. The log view provides
 **Refresh log**, line numbers, bounded windows, and a **Search log** field.
-Enter a search term or press `/` while the pipeline view is focused, then use
-**Previous match** and **Next match**. The match counter reports the selected
-match and total matches; **No matches** is shown when appropriate. Empty output
-shows **This job has no log output.**
+Enter a search term, or press ++slash++ anywhere in the Pipelines tab while no
+text field holds the keyboard. Matches are filtered as you type and the first
+one is selected. ++enter++ hands the keyboard back to the log, where ++n++ and
+++shift+n++ step to the next and previous match and wrap around; **Previous
+match** and **Next match** do the same with the mouse. The match counter reports
+the selected match and total matches; **No matches** is shown when appropriate.
+++escape++ closes the search, clears the term, and restores the row window and
+the control that held focus when the search opened. **Refresh log** also ends an
+open search: it clears the term and the selected match and restores the row
+window, and it leaves the keyboard focus where it is. The search keys act only
+on this view, so they are ignored while a dialog such as **Clear shared API
+cache?** is open. Empty output shows **This job has no log output.**
 
 The log view also provides **Open log in editor**, which is bound to ++f2++
 while the log is loaded. It starts the configured graphical editor with a

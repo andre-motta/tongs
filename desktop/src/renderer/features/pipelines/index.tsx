@@ -293,10 +293,7 @@ function PipelinesView({
   );
 
   return (
-    <section
-      className="ci-page"
-      onKeyDown={(event) => focusLogSearch(event)}
-    >
+    <section className="ci-page">
       <ReviewHeader route={route} navigate={navigate} panels={panels} />
       <div className="ci-toolbar">
         <div>
@@ -732,6 +729,14 @@ function LogPanel({
 function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
   const [query, setQuery] = useState("");
   const [selectedMatch, setSelectedMatch] = useState(0);
+  const [windowStart, setWindowStart] = useState(0);
+  const searchInput = useRef<HTMLInputElement | null>(null);
+  // Set while "/" owns the search box, so Escape can put the log window and the
+  // focus back exactly where the search started.
+  const openedFrom = useRef<{
+    readonly start: number;
+    readonly focus: HTMLElement | null;
+  } | null>(null);
   const search = query.toLocaleLowerCase();
   const matches = useMemo(
     () =>
@@ -742,19 +747,128 @@ function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
         : [],
     [loaded.lines, search],
   );
-  useEffect(() => setSelectedMatch(0), [query, loaded.snapshotId]);
-  const target = matches[selectedMatch] ?? 0;
+  useEffect(() => setSelectedMatch(0), [query]);
+  // A refresh replaces the log the search was filtering, so it ends the search
+  // outright and puts the row window back where the search started.
+  useEffect(() => {
+    const opened = openedFrom.current;
+    openedFrom.current = null;
+    setQuery("");
+    setSelectedMatch(0);
+    if (opened) setWindowStart(opened.start);
+  }, [loaded.snapshotId]);
+  const target = matches[selectedMatch] ?? null;
+  useEffect(() => {
+    if (target === null) return;
+    setWindowStart(Math.floor(target / LOG_WINDOW_SIZE) * LOG_WINDOW_SIZE);
+  }, [target]);
+
+  const step = useCallback(
+    (delta: number) => {
+      if (matches.length === 0) return;
+      setSelectedMatch(
+        (current) => (current + delta + matches.length) % matches.length,
+      );
+    },
+    [matches.length],
+  );
+  const openSearch = useCallback(() => {
+    const input = searchInput.current;
+    if (!input) return;
+    const owner = input.ownerDocument;
+    const active = owner.activeElement as HTMLElement | null;
+    if (openedFrom.current === null) {
+      openedFrom.current = {
+        start: windowStart,
+        focus: active && active !== owner.body ? active : null,
+      };
+    }
+    input.focus();
+    input.select();
+  }, [windowStart]);
+  const closeSearch = useCallback(() => {
+    const opened = openedFrom.current;
+    openedFrom.current = null;
+    setQuery("");
+    setSelectedMatch(0);
+    if (opened) setWindowStart(opened.start);
+    if (opened?.focus?.isConnected) opened.focus.focus();
+    else searchInput.current?.blur();
+  }, []);
+
+  // The log lives inside a page that is not itself focusable, so a keystroke
+  // typed with nothing focused is delivered to the document body and never
+  // bubbles through the React tree. Listen on the document instead, for as long
+  // as a log is on screen.
+  useEffect(() => {
+    const input = searchInput.current;
+    const owner = input?.ownerDocument;
+    if (!input || !owner) return;
+    // These keys belong to the pipelines page. Anything aimed at another part of
+    // the shell, including a modal dialog rendered beside the routed content, is
+    // none of this view's business.
+    const region = input.closest(".ci-page");
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.defaultPrevented
+      )
+        return;
+      const target = event.target as Node | null;
+      if (target === null) return;
+      if (target !== owner.body && !(region?.contains(target) ?? false)) return;
+      // A modal dialog owns the keyboard even for a keystroke that landed on the
+      // document body, so never pull focus out from behind one.
+      if (owner.querySelector('[aria-modal="true"]') !== null) return;
+      const active = owner.activeElement as HTMLElement | null;
+      const inSearch = active !== null && active === input;
+      if (event.key === "/" && !isTextEntry(active)) {
+        event.preventDefault();
+        openSearch();
+        return;
+      }
+      if (
+        event.key === "Escape" &&
+        (inSearch || query !== "" || openedFrom.current !== null)
+      ) {
+        event.preventDefault();
+        closeSearch();
+        return;
+      }
+      if (
+        (event.key === "n" || event.key === "N") &&
+        !isTextEntry(active) &&
+        matches.length > 0
+      ) {
+        event.preventDefault();
+        step(event.key === "n" ? 1 : -1);
+      }
+    };
+    owner.addEventListener("keydown", onKeyDown);
+    return () => owner.removeEventListener("keydown", onKeyDown);
+  }, [closeSearch, matches.length, openSearch, query, step]);
+
   return (
     <>
       <div className="ci-log-toolbar">
         <label>
           <span>Search log</span>
           <input
+            ref={searchInput}
             className="ci-log-search"
             type="search"
             value={query}
             placeholder="Press / to search"
+            title="Press / to search, Enter then n or N to step matches, Escape to close"
             onChange={(event) => setQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              // Enter hands the log back the keyboard so n and N can step.
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              event.currentTarget.blur();
+            }}
           />
         </label>
         <span className="ci-match-count" role="status">
@@ -767,20 +881,14 @@ function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
         <button
           className="button button-secondary"
           disabled={matches.length === 0}
-          onClick={() =>
-            setSelectedMatch((current) =>
-              (current - 1 + matches.length) % matches.length,
-            )
-          }
+          onClick={() => step(-1)}
         >
           Previous match
         </button>
         <button
           className="button button-secondary"
           disabled={matches.length === 0}
-          onClick={() =>
-            setSelectedMatch((current) => (current + 1) % matches.length)
-          }
+          onClick={() => step(1)}
         >
           Next match
         </button>
@@ -790,9 +898,10 @@ function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
       ) : (
         <LogWindow
           lines={loaded.lines}
-          targetIndex={target}
+          start={windowStart}
+          setStart={setWindowStart}
           matches={new Set(matches)}
-          selectedMatch={matches[selectedMatch] ?? null}
+          selectedMatch={target}
         />
       )}
     </>
@@ -801,22 +910,17 @@ function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
 
 function LogWindow({
   lines,
-  targetIndex,
+  start,
+  setStart,
   matches,
   selectedMatch,
 }: {
   readonly lines: readonly string[];
-  readonly targetIndex: number;
+  readonly start: number;
+  readonly setStart: (start: number) => void;
   readonly matches: ReadonlySet<number>;
   readonly selectedMatch: number | null;
 }): ReactNode {
-  const [start, setStart] = useState(
-    Math.floor(targetIndex / LOG_WINDOW_SIZE) * LOG_WINDOW_SIZE,
-  );
-  useEffect(
-    () => setStart(Math.floor(targetIndex / LOG_WINDOW_SIZE) * LOG_WINDOW_SIZE),
-    [targetIndex],
-  );
   const boundedStart = Math.min(start, Math.max(0, lines.length - 1));
   const end = Math.min(lines.length, boundedStart + LOG_WINDOW_SIZE);
   return (
@@ -1333,23 +1437,16 @@ function moveButtonFocus(event: KeyboardEvent<HTMLElement>): void {
   next.click();
 }
 
-function focusLogSearch(event: KeyboardEvent<HTMLElement>): void {
-  if (
-    event.key !== "/" ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.altKey ||
-    event.target instanceof HTMLInputElement
-  ) {
-    return;
-  }
-  const input = event.currentTarget.querySelector<HTMLInputElement>(
-    ".ci-log-search",
+/** True when a keystroke belongs to the focused control rather than the view. */
+function isTextEntry(element: Element | null): boolean {
+  if (element === null) return false;
+  const tag = element.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    (element as HTMLElement).isContentEditable === true
   );
-  if (input) {
-    event.preventDefault();
-    input.focus();
-  }
 }
 
 function isPipelineRefreshEvent(

@@ -826,7 +826,11 @@ test("a partial diff cannot produce a suggestion", async () => {
 
 test("the Preview toggle renders the typed Markdown and hands focus back", async () => {
   const review = "review-composer-preview";
-  const view = renderDiff(wideBridge(review), review);
+  const saves = [];
+  const view = renderDiff(
+    wideBridge(review, { saveReviewDraft: recorder(review, saves) }),
+    review,
+  );
   fireEvent.click(
     await view.findByRole("button", { name: "Comment on new line 12" }),
   );
@@ -858,13 +862,188 @@ test("the Preview toggle renders the typed Markdown and hands focus back", async
   assert.equal(rendered.querySelectorAll("strong").length, 1);
   assert.equal(rendered.querySelector("strong").textContent, "Guard");
 
-  // The typed text survives the round trip and stays on this anchor.
-  fireEvent.click(view.getByRole("button", { name: "Preview" }));
+  // The primary action belongs to the composer, so the key still fires while
+  // the preview stands in for the editor.
+  fireEvent.keyDown(view.getByLabelText("Comment preview"), {
+    key: "Enter",
+    ctrlKey: true,
+  });
+  await waitFor(() => assert.equal(saves.length, 1));
+  assert.equal(saves[0].content.comments[0].body, "**Guard** the divisor");
+  await waitFor(() =>
+    assert.equal(view.queryByLabelText("Inline comment composer"), null),
+  );
+
+  // The typed text is cleared with the entry, and reopening starts empty.
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 12" }));
+  assert.equal((await view.findByLabelText("Inline review comment")).value, "");
+});
+
+test("a drag over the split line numbers selects the range and the composer claims it", async () => {
+  const review = "review-composer-split-drag";
+  const saves = [];
+  const view = renderDiff(
+    wideBridge(review, { saveReviewDraft: recorder(review, saves) }),
+    review,
+  );
+  fireEvent.click(await view.findByText("Split"));
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll('.split-cell[data-anchor-side="new"]')
+        .length,
+      4,
+    ),
+  );
+  fireEvent.mouseDown(splitNumber(view, "new", 11));
+  fireEvent.mouseOver(splitNumber(view, "new", 13), { buttons: 1 });
+  fireEvent.mouseUp(document);
   assert.equal(
-    view.getByLabelText("Inline review comment").value,
-    "**Guard** the divisor",
+    view.container.querySelectorAll(".split-cell.line-selected").length,
+    3,
+  );
+
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 12" }));
+  await view.findByLabelText("Inline comment composer");
+  assert.equal(view.container.querySelectorAll(".inline-composer").length, 1);
+  assert.equal(
+    view.container.querySelectorAll(".inline-composer-mirror").length,
+    1,
+  );
+  assert.equal(
+    view.container.querySelectorAll(".split-cell.line-selected").length,
+    3,
+  );
+  assert.equal(
+    view.getByText("src/calc.py, Lines 11 to 13 (new)").textContent,
+    "src/calc.py, Lines 11 to 13 (new)",
+  );
+  fireEvent.change(view.getByLabelText("Inline review comment"), {
+    target: { value: "Three statements at once" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  const anchor = saves[0].content.comments[0].anchor;
+  assert.equal(anchor.side, "new");
+  assert.equal(anchor.new_line, 13);
+  assert.equal(anchor.start_line, 11);
+  assert.equal(anchor.start_side, "new");
+});
+
+test("a split Shift-click range built upward records the start before the end", async () => {
+  const review = "review-composer-split-shift";
+  const saves = [];
+  const view = renderDiff(
+    wideBridge(review, { saveReviewDraft: recorder(review, saves) }),
+    review,
+  );
+  fireEvent.click(await view.findByText("Split"));
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll('.split-cell[data-anchor-side="new"]')
+        .length,
+      4,
+    ),
+  );
+  fireEvent.click(splitCell(view, "new", 13));
+  fireEvent.click(splitCell(view, "new", 11), { shiftKey: true });
+  assert.equal(
+    view.container.querySelectorAll(".split-cell.line-selected").length,
+    3,
+  );
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
+  await view.findByLabelText("Inline comment composer");
+  assert.equal(
+    view.getByText("src/calc.py, Lines 11 to 13 (new)").textContent,
+    "src/calc.py, Lines 11 to 13 (new)",
+  );
+  fireEvent.change(view.getByLabelText("Inline review comment"), {
+    target: { value: "Built from the bottom up" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  const anchor = saves[0].content.comments[0].anchor;
+  assert.equal(anchor.new_line, 13);
+  assert.equal(anchor.start_line, 11);
+  assert.equal(anchor.start_side, "new");
+});
+
+test("the drag affordance is the line number, so diff code stays selectable", async () => {
+  const review = "review-composer-selectable";
+  const view = renderDiff(wideBridge(review), review);
+  await waitFor(() => assert.equal(lineAnchors(view).length, 6));
+
+  // fireEvent returns false when a handler called preventDefault, which is
+  // what suppresses the browser's own text selection.
+  assert.equal(
+    fireEvent.mouseDown(
+      view.container.querySelector('.line-content[role="button"]'),
+    ),
+    true,
+  );
+  assert.equal(fireEvent.mouseDown(lineAnchor(view, "new", 12)), false);
+
+  fireEvent.click(view.getByText("Split"));
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll('.split-cell[data-anchor-side="new"]')
+        .length,
+      4,
+    ),
+  );
+  assert.equal(
+    fireEvent.mouseDown(
+      splitCell(view, "new", 12).querySelector(".line-content"),
+    ),
+    true,
+  );
+  assert.equal(fireEvent.mouseDown(splitNumber(view, "new", 12)), false);
+  assert.equal(
+    view.container.querySelectorAll(".split-cell.line-selected").length,
+    1,
   );
 });
+
+test("a drag that overshoots into the next hunk stops at the boundary", async () => {
+  const review = "review-composer-hunk-boundary";
+  const view = renderDiff(
+    wideBridge(review, {
+      openDiff: (params) => read(twoHunkPage(review, params.layout ?? "unified")),
+    }),
+    review,
+  );
+  await waitFor(() => assert.equal(lineAnchors(view).length, 9));
+  fireEvent.mouseDown(lineAnchor(view, "new", 11));
+  fireEvent.mouseOver(lineAnchor(view, "new", 13), { buttons: 1 });
+  assert.equal(view.container.querySelectorAll(".line-selected").length, 3);
+
+  // The second hunk cannot join the range, and the range the reader built is
+  // not discarded either.
+  fireEvent.mouseOver(lineAnchor(view, "new", 31), { buttons: 1 });
+  assert.equal(view.container.querySelectorAll(".line-selected").length, 3);
+  assert.equal(view.container.querySelectorAll(".notice-error").length, 0);
+  fireEvent.mouseUp(document);
+
+  fireEvent.click(view.getByRole("button", { name: "Comment on new line 12" }));
+  await view.findByLabelText("Inline comment composer");
+  assert.equal(
+    view.getByText("src/calc.py, Lines 11 to 13 (new)").textContent,
+    "src/calc.py, Lines 11 to 13 (new)",
+  );
+});
+
+function splitCell(view, side, line) {
+  const cell = view.container.querySelector(
+    `.split-cell[data-anchor-side="${side}"][data-${side}-line="${line}"]`,
+  );
+  assert.ok(cell, `no ${side} split cell for line ${line}`);
+  return cell;
+}
+
+function splitNumber(view, side, line) {
+  const number = splitCell(view, side, line).querySelector(".line-number");
+  assert.ok(number, `no ${side} number column for line ${line}`);
+  return number;
+}
 
 function lineAnchors(view) {
   return view.container.querySelectorAll(".line-anchor");
@@ -1015,6 +1194,48 @@ function truncatedDiffPage(review, layout) {
     ...page,
     snapshot_id: `snapshot-truncated-${layout}`,
     entries: [{ ...file, is_truncated: true }, ...rest],
+  };
+}
+
+/** The wide hunk plus a second one, to drag across the boundary between them. */
+function twoHunkPage(review, layout) {
+  const page = widePage(review, layout);
+  const second = [
+    {
+      old_line: 30,
+      new_line: 30,
+      content: "def main():",
+      line_type: "context",
+    },
+    {
+      old_line: null,
+      new_line: 31,
+      content: "    divide(1, 0)",
+      line_type: "addition",
+    },
+  ];
+  return {
+    ...page,
+    snapshot_id: `snapshot-two-hunk-${layout}`,
+    entries: [
+      ...page.entries,
+      {
+        kind: "hunk",
+        file_index: 0,
+        hunk_index: 1,
+        header: "@@ -30,1 +30,2 @@",
+        old_start: 30,
+        old_count: 1,
+        new_start: 30,
+        new_count: 2,
+        context_text: "def main():",
+      },
+      ...toEntries(second, layout).map((entry) => ({
+        ...entry,
+        hunk_index: 1,
+        ...(entry.kind === "split" ? { row_index: entry.row_index + 5 } : {}),
+      })),
+    ],
   };
 }
 

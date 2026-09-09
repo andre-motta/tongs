@@ -63,24 +63,24 @@ export interface InlineComposerSlot {
   readonly close: () => void;
 }
 
+/** The row a drag started on, or the row it is being extended to. */
+export interface DragRow {
+  readonly side: "old" | "new";
+  readonly hunkIndex: number;
+  readonly oldLine: number | null;
+  readonly newLine: number | null;
+}
+
 /**
  * A press on a line number starts a drag that selects the contiguous range it
- * covers on that one side. The drag lives on the workspace so a release
- * anywhere ends it, and it remembers the row it last extended to so that a
- * pointer moving inside one row does not rebuild the selection on every event.
+ * covers on that one side of that one hunk. The drag lives on the workspace so
+ * a release anywhere ends it, and it remembers the row it last extended to so
+ * that a pointer moving inside one row does not rebuild the selection on every
+ * event.
  */
 export interface LineRangeDrag {
-  readonly begin: (
-    side: "old" | "new",
-    oldLine: number | null,
-    newLine: number | null,
-  ) => void;
-  readonly extendTo: (
-    side: "old" | "new",
-    oldLine: number | null,
-    newLine: number | null,
-    extend: () => void,
-  ) => void;
+  readonly begin: (row: DragRow) => void;
+  readonly extendTo: (row: DragRow, extend: () => void) => void;
 }
 
 export interface LoadedDiff {
@@ -401,11 +401,7 @@ function DiffWorkspace({
     forge,
   );
   const [dragging, setDragging] = useState(false);
-  const dragged = useRef<{
-    readonly side: "old" | "new";
-    readonly oldLine: number | null;
-    readonly newLine: number | null;
-  } | null>(null);
+  const dragged = useRef<DragRow | null>(null);
   // A drag can end anywhere, including outside the diff, so the release is
   // watched on the document only while a drag is actually running.
   useEffect(() => {
@@ -474,19 +470,20 @@ function DiffWorkspace({
     },
   };
   const drag: LineRangeDrag = {
-    begin: (side, oldLine, newLine) => {
-      dragged.current = { side, oldLine, newLine };
+    begin: (row) => {
+      dragged.current = row;
       setDragging(true);
     },
-    extendTo: (side, oldLine, newLine, extend) => {
+    extendTo: (row, extend) => {
       const from = dragged.current;
-      if (
-        !from ||
-        from.side !== side ||
-        (from.oldLine === oldLine && from.newLine === newLine)
-      )
+      // A range lives on one side of one hunk, because that is the only shape
+      // the anchor can carry. An overshoot into the next hunk or the other
+      // side stops the range where it is instead of collapsing it to the row
+      // the pointer happens to be over.
+      if (!from || from.side !== row.side || from.hunkIndex !== row.hunkIndex)
         return;
-      dragged.current = { side, oldLine, newLine };
+      if (from.oldLine === row.oldLine && from.newLine === row.newLine) return;
+      dragged.current = row;
       extend();
     },
   };
@@ -801,6 +798,7 @@ function DiffRowView({
           selectable={selectable}
           choose={(extend) => choose("old", extend)}
           drag={drag}
+          hunkIndex={row.hunk_index}
           oldLine={row.old_line}
           newLine={row.new_line}
         />
@@ -814,6 +812,7 @@ function DiffRowView({
           selectable={selectable}
           choose={(extend) => choose("new", extend)}
           drag={drag}
+          hunkIndex={row.hunk_index}
           oldLine={row.old_line}
           newLine={row.new_line}
         />
@@ -887,7 +886,13 @@ function GutterComment({
       className="gutter-comment"
       aria-label={`Comment on ${side} line ${line}`}
       title="Comment on this line"
-      onClick={compose}
+      onClick={(event) => {
+        // The split cell is itself a select control, so the press has to stop
+        // here: letting it bubble would re-select this one row and collapse
+        // the range the composer just claimed.
+        event.stopPropagation();
+        compose();
+      }}
     >
       +
     </button>
@@ -912,6 +917,7 @@ function LineNumberAnchor({
   selectable,
   choose,
   drag,
+  hunkIndex,
   oldLine,
   newLine,
 }: {
@@ -921,9 +927,11 @@ function LineNumberAnchor({
   readonly selectable: boolean;
   readonly choose: (extend: boolean) => void;
   readonly drag: LineRangeDrag;
+  readonly hunkIndex: number;
   readonly oldLine: number | null;
   readonly newLine: number | null;
 }): ReactNode {
+  const dragRow: DragRow = { side: label, hunkIndex, oldLine, newLine };
   if (value === null || !selectable)
     return <span className="line-number">{value}</span>;
   return (
@@ -939,13 +947,13 @@ function LineNumberAnchor({
         event.preventDefault();
         event.currentTarget.focus();
         choose(event.shiftKey);
-        drag.begin(label, oldLine, newLine);
+        drag.begin(dragRow);
       }}
       onMouseOver={(event) => {
         // Only a held primary button extends. A release the document listener
         // never saw cannot leave a plain hover rebuilding the selection.
         if ((event.buttons & 1) !== 1) return;
-        drag.extendTo(label, oldLine, newLine, () => choose(true));
+        drag.extendTo(dragRow, () => choose(true));
       }}
       onClick={(event) => choose(event.shiftKey)}
       onKeyDown={(event) =>
@@ -1090,6 +1098,7 @@ function SplitCell({
   readonly inline: InlineComposerSlot;
   readonly drag: LineRangeDrag;
 }): ReactNode {
+  const cellNode = useRef<HTMLDivElement | null>(null);
   const selectable =
     cell?.anchor_side !== null && cell !== null && file !== null;
   const selected =
@@ -1110,6 +1119,15 @@ function SplitCell({
       ),
     );
   };
+  const draggable = selectable && cell !== null && cell.anchor_side !== null;
+  const dragRow: DragRow | null = draggable
+    ? {
+        side: cell.anchor_side,
+        hunkIndex: row.hunk_index,
+        oldLine: cell.old_line,
+        newLine: cell.new_line,
+      }
+    : null;
   const compose = (): void => {
     if (!selectable || !cell || !file || !cell.anchor_side) return;
     const range =
@@ -1125,6 +1143,7 @@ function SplitCell({
   };
   return (
     <div
+      ref={cellNode}
       className={`split-cell split-${visualSide}${cell ? ` line-${cell.line_type}` : " split-empty"}${selectable ? " selectable-line" : ""}${selected ? " line-selected" : ""}`}
       role={selectable ? "button" : "listitem"}
       tabIndex={selectable ? 0 : undefined}
@@ -1137,30 +1156,6 @@ function SplitCell({
       data-anchor-side={cell?.anchor_side ?? undefined}
       data-old-line={cell?.old_line ?? undefined}
       data-new-line={cell?.new_line ?? undefined}
-      onMouseDown={
-        selectable && cell?.anchor_side
-          ? (event) => {
-              if (event.button !== 0) return;
-              event.preventDefault();
-              event.currentTarget.focus();
-              choose(event.shiftKey);
-              drag.begin(cell.anchor_side!, cell.old_line, cell.new_line);
-            }
-          : undefined
-      }
-      onMouseOver={
-        selectable && cell?.anchor_side
-          ? (event) => {
-              if ((event.buttons & 1) !== 1) return;
-              drag.extendTo(
-                cell.anchor_side!,
-                cell.old_line,
-                cell.new_line,
-                () => choose(true),
-              );
-            }
-          : undefined
-      }
       onClick={selectable ? (event) => choose(event.shiftKey) : undefined}
       onKeyDown={
         selectable
@@ -1177,7 +1172,32 @@ function SplitCell({
     >
       {cell && (
         <>
-          <span className="line-number">
+          <span
+            className="line-number"
+            // The drag affordance is the number column on both layouts
+            // (design 2.1). Binding it to the whole cell would suppress the
+            // native text selection over the code column, which is how a
+            // reader copies a line out of the diff.
+            onMouseDown={
+              draggable
+                ? (event) => {
+                    if (event.button !== 0) return;
+                    event.preventDefault();
+                    cellNode.current?.focus();
+                    choose(event.shiftKey);
+                    drag.begin(dragRow!);
+                  }
+                : undefined
+            }
+            onMouseOver={
+              draggable
+                ? (event) => {
+                    if ((event.buttons & 1) !== 1) return;
+                    drag.extendTo(dragRow!, () => choose(true));
+                  }
+                : undefined
+            }
+          >
             {visualSide === "old" ? cell.old_line : cell.new_line}
           </span>
           <GutterComment
@@ -1311,6 +1331,10 @@ function rangeAnchorForSelection(
   loaded: LoadedDiff,
   file: DiffFileRow,
 ): InlineAnchorSelection | null {
+  // `selectedLines` is always a slice of the side's rows in document order
+  // (`selectionForUnifiedLine`, `selectionForSplitCell`), so the first entry
+  // opens the span and the last one closes it. `rangeEndpoints` in the
+  // composer orders by line number and agrees with this for the same reason.
   const lines = selection.selectedLines ?? [];
   const opening = lines[0];
   const closing = lines.at(-1);

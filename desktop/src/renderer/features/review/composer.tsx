@@ -925,9 +925,17 @@ export function InlineComposer({
       className="inline-composer"
       aria-label="Inline comment composer"
       onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+          return;
+        }
+        // The primary action belongs to the composer, not to the editor: the
+        // preview replaces the textarea, and the key has to keep working from
+        // the toolbar and the preview too.
+        if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter") return;
         event.preventDefault();
-        close();
+        runPrimary();
       }}
     >
       <div className="inline-composer-heading">
@@ -953,12 +961,6 @@ export function InlineComposer({
           aria-label="Inline review comment"
           value={body}
           onChange={(event) => setBody(event.target.value)}
-          onKeyDown={(event) => {
-            if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter")
-              return;
-            event.preventDefault();
-            runPrimary();
-          }}
         />
       )}
       {controller.message !== null && (

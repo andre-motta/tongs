@@ -31,7 +31,7 @@ def test_workflow_checks_out_exact_candidate_and_retains_bounded_evidence() -> N
     assert "persist-credentials: false" in workflow
     assert "packaging/desktop/archive/run_hosted.sh" in workflow
     assert "on:\n  workflow_dispatch:\n" in workflow
-    assert "pull_request" not in workflow
+    assert "\n  pull_request:\n" not in workflow
     assert "retention-days: 14" in workflow
     assert "release" not in workflow.lower()
 

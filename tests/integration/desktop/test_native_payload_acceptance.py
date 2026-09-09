@@ -3547,30 +3547,35 @@ os.waitpid(child, 0)
         assert before.argv == parent.argv
 
         os.write(release_write, b"x")
-        # Refs #210: a slow host can schedule the collector between the fork
-        # and the child's execv, so /proc/<pid>/exe (the same field the
-        # collector reads) is polled here until it observably lands on the
-        # sleep binary. Only then is the owned tree sampled, so `after` below
-        # can never race the exec: a bounded deadline keeps this fail-closed
-        # instead of hanging if the exec never happens.
+        # Refs #210: the kernel publishes the new /proc/<pid>/exe link early in
+        # execve (begin_new_exec), but the new argv area that /proc/<pid>/cmdline
+        # reads from is only published at the end of the exec. That leaves a real
+        # window where exe already resolves to the sleep binary while cmdline is
+        # still empty. Waiting on exe alone can break inside that window: with an
+        # empty cmdline, `_observe_process` returns None on the empty argv, and
+        # `_collect_owned_tree` silently keeps the pre-exec observation instead of
+        # refreshing it, which is exactly how the CI flake in #210 reproduced. So
+        # the wait below polls the collector's own `_observe_process` and requires
+        # a complete observation, matching both the executable and the argv the
+        # collector would retain, before the owned tree is sampled.
         sleep_executable = str(Path("/usr/bin/sleep").resolve(strict=True))
+        sleep_argv = ("/usr/bin/sleep", "30")
         deadline = time.monotonic() + 5
-        current_executable = ""
+        observed: ProcessObservation | None = None
         while time.monotonic() < deadline:
-            try:
-                current_executable = str(
-                    Path(f"/proc/{child_pid}/exe").resolve(strict=True)
-                )
-            except FileNotFoundError:
-                current_executable = ""
-            if current_executable == sleep_executable:
+            observed = launcher_module._observe_process(child_pid, process.pid)
+            if (
+                observed is not None
+                and observed.executable == sleep_executable
+                and observed.argv == sleep_argv
+            ):
                 break
             time.sleep(0.01)
         else:
             pytest.fail(
-                "forked child did not exec the declared test executable "
-                f"within the deadline: expected {sleep_executable!r}, "
-                f"last observed {current_executable!r}"
+                "forked child did not exec the declared test executable within "
+                f"the deadline: expected {sleep_executable!r} {sleep_argv!r}, "
+                f"last observation {observed!r}"
             )
 
         launcher_module._collect_owned_tree(process.pid, observations)

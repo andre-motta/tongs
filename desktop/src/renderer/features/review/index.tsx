@@ -52,8 +52,10 @@ import {
   canSaveDraft,
   canStartSubmission,
   captureDraftAnchor,
+  chooseRemoteDraft,
   conflictDraftSave,
   createReviewWorkflowState,
+  dismissSupersededDraft,
   draftNeedsRevisionRecovery,
   editDraft,
   failSubmission,
@@ -357,6 +359,26 @@ function ReviewWorkflow({
       }
       setError(reviewMutationError(reason));
     }
+  };
+
+  const keepLocalDraftText = async (): Promise<void> => {
+    const current = workflowRef.current;
+    if (!current?.draft.conflict) return;
+    const kept = apply(keepLocalDraft);
+    if (!canSaveDraft(kept)) {
+      setError("Edit or remove empty draft comments, then save your kept text.");
+      return;
+    }
+    await saveDraft();
+  };
+
+  const takeRemoteDraftText = (): void => {
+    const current = workflowRef.current;
+    const remote = current?.draft.conflict;
+    if (!remote) return;
+    setError(null);
+    apply(chooseRemoteDraft);
+    setDraftCandidates([remote]);
   };
 
   const migrateDraft = async (): Promise<void> => {
@@ -821,7 +843,12 @@ function ReviewWorkflow({
               {draftCandidates.length === 1 ? "Resume review" : "Start review"}
             </button>
           ) : (
-            <strong>Draft review active</strong>
+            <>
+              <strong>Draft review active</strong>
+              <span className="review-workflow-thread-meta">
+                Stored version {workflow.draft.remote.version}
+              </span>
+            </>
           )}
           <ActionButtons
             capabilities={actionCapabilities}
@@ -979,7 +1006,9 @@ function ReviewWorkflow({
                 workflow={workflow}
                 edit={(content) => apply((state) => editDraft(state, content))}
                 save={() => void saveDraft()}
-                keepLocal={() => apply(keepLocalDraft)}
+                keepLocal={() => void keepLocalDraftText()}
+                takeRemote={takeRemoteDraftText}
+                dismissSuperseded={() => apply(dismissSupersededDraft)}
                 migrate={() => void migrateDraft()}
                 submit={submitDraft}
                 confirmation={confirmation}
@@ -1345,6 +1374,8 @@ function DraftEditor({
   edit,
   save,
   keepLocal,
+  takeRemote,
+  dismissSuperseded,
   migrate,
   submit,
   confirmation,
@@ -1355,6 +1386,8 @@ function DraftEditor({
   readonly edit: (content: DraftContentInputDto) => void;
   readonly save: () => void;
   readonly keepLocal: () => void;
+  readonly takeRemote: () => void;
+  readonly dismissSuperseded: () => void;
   readonly migrate: () => void;
   readonly submit: () => Promise<void>;
   readonly confirmation: Confirmation | null;
@@ -1398,8 +1431,57 @@ function DraftEditor({
       )}
       {workflow.draft.conflict && (
         <Notice kind="warning">
-          The durable draft changed elsewhere. Your unsaved text is preserved.
-          <button className="button button-secondary" onClick={keepLocal}>Keep my text</button>
+          <p>
+            The stored draft advanced to version {workflow.draft.conflict.version} while
+            your text was unsaved. Neither side was discarded. Both are shown below;
+            choose one deliberately.
+          </p>
+          <div className="review-workflow-conflict">
+            <article>
+              <strong>Your text, typed in this window and not stored</strong>
+              <textarea
+                readOnly
+                aria-label="My unsaved draft text"
+                value={draftContentTranscript(workflow.draft.local)}
+              />
+            </article>
+            <article>
+              <strong>
+                Stored draft version {workflow.draft.conflict.version}, written by another
+                writer of this draft store such as a second window or the terminal
+                interface, updated {workflow.draft.conflict.updated_at}
+              </strong>
+              <textarea
+                readOnly
+                aria-label="Stored draft text"
+                value={draftContentTranscript(workflow.draft.conflict)}
+              />
+            </article>
+          </div>
+          <div className="review-workflow-row">
+            <button className="button" onClick={keepLocal}>
+              Keep my text and save over version {workflow.draft.conflict.version}
+            </button>
+            <button className="button button-secondary" onClick={takeRemote}>
+              Take the stored version and keep mine to copy
+            </button>
+          </div>
+        </Notice>
+      )}
+      {workflow.draft.supersededLocal && (
+        <Notice kind="warning">
+          <p>
+            Your earlier text was replaced by the stored version and was never saved.
+            Copy anything you still need, then dismiss it.
+          </p>
+          <textarea
+            readOnly
+            aria-label="My superseded draft text"
+            value={draftContentTranscript(workflow.draft.supersededLocal)}
+          />
+          <button className="button button-secondary" onClick={dismissSuperseded}>
+            Dismiss my superseded text
+          </button>
         </Notice>
       )}
       <label>
@@ -1823,6 +1905,13 @@ function inlineDisabledReason(
   if (durable && workflow && !canCaptureDraftInline(workflow))
     return "The draft is bound to an earlier revision or a durable submission attempt.";
   return null;
+}
+
+function draftContentTranscript(content: DraftContentInputDto): string {
+  const sections = [content.body, `Verdict: ${content.verdict ?? "none"}`];
+  for (const comment of content.comments)
+    sections.push(`${draftCommentLabel(comment)}\n${comment.body}`);
+  return sections.join("\n\n");
 }
 
 function draftCommentLabel(comment: DraftCommentInputDto): string {

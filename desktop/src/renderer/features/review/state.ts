@@ -32,6 +32,11 @@ export interface DraftEditorState {
   readonly local: DraftContentInputDto;
   readonly dirty: boolean;
   readonly conflict: DraftSnapshotDto | null;
+  /**
+   * Local text displaced by an explicit take-theirs conflict resolution. It is
+   * retained verbatim so the caller can copy it, and cleared only on request.
+   */
+  readonly supersededLocal: DraftContentInputDto | null;
   readonly preservedStaleDrafts: readonly DraftSnapshotDto[];
   readonly pendingSave: {
     readonly review: string;
@@ -108,6 +113,7 @@ export function createReviewWorkflowState(
       local: EMPTY_CONTENT,
       dirty: false,
       conflict: null,
+      supersededLocal: null,
       preservedStaleDrafts: Object.freeze([]),
       pendingSave: null,
     }),
@@ -313,6 +319,7 @@ export function adoptDraft(
       local: contentOf(remote),
       dirty: false,
       conflict: null,
+      supersededLocal: state.draft.supersededLocal,
       preservedStaleDrafts: state.draft.preservedStaleDrafts,
       pendingSave: null,
     }),
@@ -359,6 +366,7 @@ export function forkDraftToCurrentRevision(
       local: contentOf(fresh),
       dirty: false,
       conflict: null,
+      supersededLocal: state.draft.supersededLocal,
       preservedStaleDrafts: preserved,
       pendingSave: null,
     }),
@@ -422,6 +430,7 @@ export function finishDraftSave(
       local: editedDuringSave ? state.draft.local : contentOf(remote),
       dirty: editedDuringSave,
       conflict: null,
+      supersededLocal: state.draft.supersededLocal,
       preservedStaleDrafts: state.draft.preservedStaleDrafts,
       pendingSave: null,
     }),
@@ -460,15 +469,30 @@ export function failDraftSave(state: ReviewWorkflowState): ReviewWorkflowState {
 export function chooseRemoteDraft(state: ReviewWorkflowState): ReviewWorkflowState {
   const remote = state.draft.conflict;
   if (!remote) throw new Error("No conflicting draft exists");
+  const adopted = contentOf(remote);
+  const displaced = state.draft.local;
   return replace(state, {
     draft: Object.freeze({
       remote,
-      local: contentOf(remote),
+      local: adopted,
       dirty: false,
       conflict: null,
+      supersededLocal: sameContent(displaced, adopted)
+        ? state.draft.supersededLocal
+        : displaced,
       preservedStaleDrafts: state.draft.preservedStaleDrafts,
       pendingSave: null,
     }),
+  });
+}
+
+export function dismissSupersededDraft(
+  state: ReviewWorkflowState,
+): ReviewWorkflowState {
+  if (!state.draft.supersededLocal)
+    throw new Error("No superseded local draft text is retained");
+  return replace(state, {
+    draft: Object.freeze({ ...state.draft, supersededLocal: null }),
   });
 }
 

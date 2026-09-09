@@ -66,6 +66,24 @@
   min-width: 0;
 }
 
+.review-workflow-conflict {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.review-workflow-conflict article {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--panel-2);
+}
+
 .review-workflow-thread-list {
   display: grid;
   gap: 0.75rem;

@@ -291,7 +291,7 @@ export function assertReviewBoundResult<M extends ReviewRpcMethod>(
     assertEqual(result.review, params.review, "Review draft result");
     assertEqual(result.id, params.draft_id, "Review draft result");
     if (method === "drafts.save")
-      assertEqual(result.version, (params.expected_version as number) + 1, "Review draft result");
+      assertAdvanced(result.version, params.expected_version, "Review draft result");
     return;
   }
   if (method === "drafts.discard") {
@@ -890,6 +890,21 @@ function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean
 
 function assertEqual(left: unknown, right: unknown, subject: string): void {
   if (left !== right) throw new Error(`${subject} does not match its request`);
+}
+
+// A durable compare-and-swap save only guarantees that the stored version moved
+// past the version the caller held. Requiring exactly one step turned any other
+// advance into an unconfirmable result, which the renderer cannot resolve; a
+// version divergence has to stay a conflict the caller can settle.
+function assertAdvanced(left: unknown, right: unknown, subject: string): void {
+  if (
+    typeof left !== "number" ||
+    typeof right !== "number" ||
+    !Number.isSafeInteger(left) ||
+    left <= right
+  ) {
+    throw new Error(`${subject} does not match its request`);
+  }
 }
 
 function assertRevisionEqual(

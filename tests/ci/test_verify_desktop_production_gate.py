@@ -846,3 +846,42 @@ def test_gate_rejects_a_dropped_prepared_inputs_binding(evidence: Path) -> None:
     _write_receipt(path, receipt)
     with pytest.raises(GateVerificationError, match="source pairing is unproven"):
         verify_check_set(evidence, IDENTITY)
+
+
+@pytest.mark.parametrize("check_id", ["core-python-3.12", "core-python-3.13"])
+def test_gate_rejects_a_core_report_from_outside_the_test_suite(
+    evidence: Path, check_id: str
+) -> None:
+    """Reviewer case F2: a passing report from an unrelated module must fail.
+
+    Every classname the real core run emits begins with ``tests.``, so a report
+    whose cases come from somewhere else is not the core suite even when it
+    passes.
+    """
+
+    check = _check(check_id)
+    directory = evidence / check.evidence_directory
+    payload = _junit("spikes.desktop.tests.test_backend")
+    identity = _write(directory / "reports/core.junit.xml", payload)
+    path = directory / check.receipt_name
+    receipt = _read_receipt(path)
+    for entry in receipt["reports"]:
+        if entry["path"] == "reports/core.junit.xml":
+            entry["size"] = identity["size"]
+            entry["sha256"] = identity["sha256"]
+    _write_receipt(path, receipt)
+    with pytest.raises(GateVerificationError, match="did not pass"):
+        verify_check_set(evidence, IDENTITY)
+
+
+def test_both_core_reports_are_bound_to_their_suites() -> None:
+    for check_id in ("core-python-3.12", "core-python-3.13"):
+        prefixes = {
+            report.path: report.classname_prefix
+            for report in _check(check_id).reports
+            if report.report_format == PYTEST_JUNIT
+        }
+        assert prefixes == {
+            "reports/core.junit.xml": "tests.",
+            "reports/mcp.junit.xml": "tests.test_mcp.",
+        }

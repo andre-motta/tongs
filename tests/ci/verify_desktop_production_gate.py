@@ -158,7 +158,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
         receipt_name="core-receipt.json",
         reports=(
             ExpectedReport("reports/core-evidence.json", ARTIFACT_LIFECYCLE),
-            ExpectedReport("reports/core.junit.xml", PYTEST_JUNIT),
+            ExpectedReport("reports/core.junit.xml", PYTEST_JUNIT, "tests."),
             ExpectedReport("reports/mcp.junit.xml", PYTEST_JUNIT, "tests.test_mcp."),
         ),
     ),
@@ -174,7 +174,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
         receipt_name="core-receipt.json",
         reports=(
             ExpectedReport("reports/core-evidence.json", ARTIFACT_LIFECYCLE),
-            ExpectedReport("reports/core.junit.xml", PYTEST_JUNIT),
+            ExpectedReport("reports/core.junit.xml", PYTEST_JUNIT, "tests."),
             ExpectedReport("reports/mcp.junit.xml", PYTEST_JUNIT, "tests.test_mcp."),
         ),
     ),

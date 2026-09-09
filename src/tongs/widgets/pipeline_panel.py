@@ -306,7 +306,7 @@ class PipelinePanel(Widget, can_focus=True):
         card_idx = 0
         self._job_card_map: dict[int, int] = {}
         for stage_name, stage_jobs in stages.items():
-            scroll.mount(Static(f"\n  [bold]{stage_name}[/]"))
+            scroll.mount(Static(f"\n  [bold]{escape(stage_name)}[/]"))
             for job_idx, job in stage_jobs:
                 card = JobCard(job)
                 card.id = f"job-card-{g}-{card_idx}"
@@ -550,7 +550,7 @@ class PipelinePanel(Widget, can_focus=True):
             with self.app.suspend():
                 subprocess.run([*shlex.split(editor_cmd), tmp_path], check=False)
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            self.app.notify(f"Editor failed: {exc}")
+            self.app.notify(f"Editor failed: {escape(str(exc))}")
         finally:
             if tmp_path:
                 with suppress(OSError):

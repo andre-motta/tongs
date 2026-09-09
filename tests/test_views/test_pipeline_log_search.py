@@ -7,6 +7,7 @@ forge that returns a multi-line job log.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -51,6 +52,14 @@ def _with_log(app: TongsApp, forge) -> None:
         return JOB_LOG
 
     forge.get_job_log = get_job_log
+
+
+# A markup regression crashes the app inside a render, and a pilot wait after
+# that never resolves. Bound the two tests that drive forge-supplied brackets so
+# a regression reports in seconds instead of stalling a runner. The crashed app
+# also leaves its sqlite worker threads open, which delays interpreter exit; that
+# leak lives in the session cleanup path, not in these tests.
+CRASH_BUDGET_SECONDS = 20
 
 
 def _status_text(panel: PipelinePanel) -> str:
@@ -203,7 +212,10 @@ async def test_bracketed_log_text_and_query_do_not_crash_the_app(
 
     forge.get_job_log = get_job_log
 
-    async with app.run_test(size=(120, 34), notifications=True) as pilot:
+    async with (
+        asyncio.timeout(CRASH_BUDGET_SECONDS),
+        app.run_test(size=(120, 34), notifications=True) as pilot,
+    ):
         _screen, panel = await _open_job_log(app, pilot)
 
         await pilot.press("slash")
@@ -231,16 +243,29 @@ async def test_bracketed_log_text_and_query_do_not_crash_the_app(
 
 
 @pytest.mark.asyncio
-async def test_bracketed_job_name_renders_in_the_log_header(tmp_path: Path) -> None:
+async def test_bracketed_job_name_and_stage_render_in_the_pipeline_panel(
+    tmp_path: Path,
+) -> None:
+    """Job names and stage names come from the forge, so brackets are literal."""
     app, forge = _app(tmp_path)
     _with_log(app, forge)
-    forge.job = replace(forge.job, name="build [/all] stage")
+    forge.job = replace(forge.job, name="build [/all]", stage="deploy [/prod]")
 
-    async with app.run_test(size=(120, 34), notifications=True) as pilot:
+    async with (
+        asyncio.timeout(CRASH_BUDGET_SECONDS),
+        app.run_test(size=(120, 34), notifications=True) as pilot,
+    ):
         _screen, panel = await _open_job_log(app, pilot)
         assert app.is_running
+
         header = panel.query_one("#job-log-header", Static).render().plain
-        assert "build [/all] stage" in header
+        assert "build [/all]" in header
+        assert "deploy [/prod]" in header
+
+        stage_headers = [
+            static.render().plain for static in panel.query("#job-list-scroll Static")
+        ]
+        assert any("deploy [/prod]" in text for text in stage_headers)
 
 
 @pytest.mark.asyncio

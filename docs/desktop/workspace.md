@@ -206,6 +206,43 @@ context meets the rules above. Suggestions are limited to the current
 revision and contiguous new-side source lines. The layout changes how the
 selection is displayed, not which side can be suggested.
 
+## Review keyboard map
+
+The review surfaces answer a small keyboard map. Every key acts from anywhere
+on the review page, including with nothing focused at all, and every key stands
+down while a text field, a `contenteditable` region, a select control, or a
+modal dialog holds the keyboard, and whenever a modifier the binding does not
+name is held.
+
+| Key | Desktop | Terminal interface |
+|-----|---------|--------------------|
+| `c` | Comment on the focused row or the current selection | `c` (diff viewer, MR detail) |
+| `Shift+C` | Open **Your review** | `Ctrl+G` (MR detail) |
+| `]` / `[` | Next / previous changed file, wrapping | `n` / `Shift+N` (diff viewer) |
+| `n` / `p` | Next / previous thread or pending comment, wrapping | `]` / `[` (diff viewer, next / previous comment) |
+| `r` | Reply to the focused thread | `r` (diff viewer, discussion tab) |
+| `Ctrl+Enter` / `Cmd+Enter` | Primary composer action | `Ctrl+S` (comment editor) |
+| `Esc` | Close the composer and keep the text | `Esc` (comment editor, cancel) |
+| `v` | Cycle the verdict in **Your review** | `v` (review draft) |
+
+`]`, `[`, `n` and `p` wrap at both ends. `n` and `p` walk the threads and
+pending comments of the file on screen in the order they are laid out; `r`
+replies to the thread they last landed on, and is refused for the same reasons
+the thread's own **Reply** button is. `c` composes on the row that holds the
+focus, or on the selection when nothing does, and a multi-line selection
+composes on the whole range. `Ctrl+Enter` (`Cmd+Enter` on macOS) runs the
+composer's primary action and carries its refusals, so an empty comment is
+refused exactly as pressing the button is. `Esc` closes the composer and keeps
+the typed text for the same review and the same anchor; typed inside the
+composer it answers the nearest question first, cancelling an armed **Discard
+review** confirmation, then the **More review actions** overflow, and only then
+closing. While **Your review** is open it owns the keyboard: `v` cycles its
+verdict tiles through the verdicts this review can record, and `Esc` closes it.
+
+The terminal interface's own bindings are listed in the
+[keybinding reference](../reference/keybindings.md), which carries the same
+table with the divergences spelled out.
+
 ## Read descriptions and discussions
 
 Descriptions and discussions support ordinary Markdown formatting, including

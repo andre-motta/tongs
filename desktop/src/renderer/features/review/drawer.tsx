@@ -31,6 +31,7 @@ import {
   type InlineComposerBridge,
   type InlineComposerController,
 } from "./composer.js";
+import { useReviewKeyMap } from "./keys.js";
 import {
   pendingEntryLabel,
   staleRibbonText,
@@ -112,6 +113,62 @@ export function subscribePendingEdit(listener: () => void): () => void {
 /** Forgets any outstanding request. Exported so tests start from a clean slate. */
 export function clearPendingEdit(): void {
   pendingEditRequest = null;
+}
+
+const drawerOpenListeners = new Map<string, Set<() => void>>();
+
+/**
+ * Opens **Your review** from outside the header that mounts it, which is what
+ * Shift+C does from the diff. It is a request rather than a shared open flag
+ * for the same reason Edit is: the drawer's open state belongs to the mount,
+ * and the diff has no business holding it. The answer says whether a mount
+ * took the request, so a key pressed on a surface with no drawer is left
+ * unclaimed instead of being swallowed.
+ */
+export function requestDrawerOpen(review: string): boolean {
+  const listeners = drawerOpenListeners.get(review);
+  if (listeners === undefined || listeners.size === 0) return false;
+  for (const listener of [...listeners]) listener();
+  return true;
+}
+
+export function subscribeDrawerOpen(
+  review: string,
+  listener: () => void,
+): () => void {
+  const listeners = drawerOpenListeners.get(review) ?? new Set<() => void>();
+  drawerOpenListeners.set(review, listeners);
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) drawerOpenListeners.delete(review);
+  };
+}
+
+/**
+ * The verdicts this review can actually record, in the order the tiles show
+ * them and the order `v` cycles them, which is the order the terminal
+ * interface cycles them in too (`review_submit.action_cycle_verdict`).
+ */
+export function allowedVerdicts(
+  capabilities: ReviewMutationCapabilitiesDto | null,
+): readonly ReviewVerdict[] {
+  if (capabilities === null) return [];
+  const allowed: ReviewVerdict[] = [];
+  if (capabilities.comment_verdict) allowed.push("comment");
+  if (capabilities.approve) allowed.push("approve");
+  if (capabilities.request_changes) allowed.push("request_changes");
+  return allowed;
+}
+
+/** The next verdict `v` moves to, wrapping, from whatever is recorded now. */
+export function nextVerdict(
+  allowed: readonly ReviewVerdict[],
+  current: ReviewVerdict | null,
+): ReviewVerdict | null {
+  if (allowed.length === 0) return null;
+  const at = current === null ? -1 : allowed.indexOf(current);
+  return allowed[(at + 1) % allowed.length] ?? null;
 }
 
 /** Where the drawer sends the reader when a pending entry is jumped to. */
@@ -764,6 +821,14 @@ export function ReviewDrawerMount({
   useEffect(() => {
     if (open) panel.current?.focus();
   }, [open]);
+  // Shift+C from the diff opens the same drawer this button opens. It only
+  // opens: a drawer already on screen owns the keyboard, and Escape is what
+  // closes it, so the key never becomes a toggle that could close a drawer the
+  // reader is typing in.
+  useEffect(
+    () => subscribeDrawerOpen(controller.review, () => setOpen(true)),
+    [controller.review],
+  );
   return (
     <>
       <button
@@ -841,9 +906,31 @@ function ReviewDrawer({
     canSaveDraft(workflow) || !workflow.draft.dirty
       ? null
       : saveRefusal(workflow);
+  // The panel is held as state as well as in the mount's ref, because the
+  // keyboard map subscribes to the document that owns the panel and has to be
+  // told when that node arrives.
+  const [panelNode, setPanelNode] = useState<HTMLDivElement | null>(null);
+  const verdicts = allowedVerdicts(capabilities);
+  useReviewKeyMap(panelNode, [
+    {
+      key: "v",
+      run: (): boolean => {
+        // `v` records a verdict, so it stands down for the same reasons the
+        // tiles are disabled: nothing to choose from, or a submission holding
+        // the draft.
+        const next = locked ? null : nextVerdict(verdicts, content.verdict);
+        if (next === null) return false;
+        controller.setVerdict(next);
+        return true;
+      },
+    },
+  ]);
   return (
     <div
-      ref={panelRef}
+      ref={(node) => {
+        panelRef.current = node;
+        setPanelNode(node);
+      }}
       className="review-drawer"
       role="dialog"
       aria-label="Your review"
@@ -1285,21 +1372,17 @@ function VerdictTiles({
   readonly disabled: boolean;
   readonly setVerdict: (verdict: ReviewVerdict | null) => void;
 }): ReactNode {
-  const tiles: readonly { readonly value: ReviewVerdict; readonly label: string }[] =
-    [
-      { value: "comment", label: "Comment" },
-      { value: "approve", label: "Approve" },
-      { value: "request_changes", label: "Request changes" },
-    ];
-  const allowed = tiles.filter((tile) =>
-    capabilities === null
-      ? false
-      : tile.value === "comment"
-        ? capabilities.comment_verdict
-        : tile.value === "approve"
-          ? capabilities.approve
-          : capabilities.request_changes,
-  );
+  const labels: Readonly<Record<ReviewVerdict, string>> = {
+    comment: "Comment",
+    approve: "Approve",
+    request_changes: "Request changes",
+  };
+  // The same list `v` cycles, so the tiles and the key can never disagree
+  // about which verdicts this review records or in which order.
+  const allowed = allowedVerdicts(capabilities).map((value) => ({
+    value,
+    label: labels[value],
+  }));
   if (capabilities === null)
     return (
       <section className="review-drawer-verdict" aria-label="Verdict">

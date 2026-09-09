@@ -995,6 +995,86 @@ test("durable recovery loads and binds the attempt draft instead of another cand
   assert.equal(view.queryByDisplayValue("first draft"), null);
 });
 
+test("the Overview route puts one read of each kind the composer and the notes need", async () => {
+  const review = "review-overview-reads";
+  const counts = { detail: 0, discussions: 0, drafts: 0, capabilities: 0 };
+  const bridge = reviewBridge(review, {
+    getReview: () => {
+      counts.detail += 1;
+      return read(snapshot(review));
+    },
+    listDiscussions: () => {
+      counts.discussions += 1;
+      return read({ discussions: [] });
+    },
+    listReviewDrafts: () => {
+      counts.drafts += 1;
+      return read({ cursor: 0, next_cursor: null, drafts: [] });
+    },
+    getReviewMutationCapabilities: () => {
+      counts.capabilities += 1;
+      return read({ review, capabilities: capabilities() });
+    },
+  });
+  const view = renderOverview(bridge, review);
+  await view.findByLabelText("General review comment");
+  await settle();
+  // Each is this route's own single read. None is shared with the Discussions
+  // route, which asks its own pair; closing that gap needs a settled-result
+  // cache in the shared reader and stays a follow-up.
+  assert.deepEqual(counts, {
+    detail: 1,
+    discussions: 1,
+    drafts: 1,
+    capabilities: 1,
+  });
+});
+
+test("the Overview composer is the shared composer in its general mode", async () => {
+  const review = "review-general-mode";
+  const view = renderOverview(reviewBridge(review), review);
+  await view.findByLabelText("General review comment");
+  const composer = view.container.querySelector(".inline-composer");
+  assert.equal(composer.getAttribute("aria-label"), "General comment composer");
+  assert.equal(
+    composer.querySelector(".inline-composer-heading strong").textContent,
+    "General comment",
+  );
+  const names = [...composer.querySelectorAll("button")].map(
+    (button) => button.textContent,
+  );
+  // There is no line to suggest from and nothing to be dismissed to.
+  assert.equal(names.filter((name) => name === "Insert suggestion").length, 0);
+  assert.equal(names.filter((name) => name === "Cancel").length, 0);
+  assert.equal(names.filter((name) => name === "Preview").length, 1);
+  assert.equal(names.filter((name) => name === "Add comment now").length, 1);
+  assert.equal(names.filter((name) => name === "Start a review").length, 1);
+});
+
+test("the comment verdict reads the body the composer is holding", async () => {
+  const review = "review-verdict-body";
+  const verdicts = [];
+  const bridge = reviewBridge(review, {
+    submitReviewVerdict: async (params) => {
+      verdicts.push(params);
+      return mutation(params.operation_id);
+    },
+  });
+  const view = renderOverview(bridge, review);
+  await view.findByLabelText("General review comment");
+  const comment = view.getByRole("button", { name: "Submit comment verdict" });
+  await waitFor(() => assert.equal(comment.disabled, true));
+  assert.equal(comment.title, "Enter a review body in the general composer first.");
+
+  fireEvent.change(view.getByLabelText("General review comment"), {
+    target: { value: "the verdict body" },
+  });
+  fireEvent.click(await enabledButton(view, "Submit comment verdict"));
+  await waitFor(() => assert.equal(verdicts.length, 1));
+  assert.equal(verdicts[0].body, "the verdict body");
+  assert.equal(verdicts[0].verdict, "comment");
+});
+
 test("a failed review-level discussions read is stated, not reported as an absence", async () => {
   const review = "review-notes-failure";
   let attempts = 0;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type {
   DesktopBridge,
   DiscussionDto,
@@ -7,11 +7,6 @@ import type {
   ReviewSnapshotDto,
 } from "../../../shared/bridge.js";
 import type {
-  DraftCommentInputDto,
-  DraftContentInputDto,
-  DraftListResult,
-  DraftSnapshotDto,
-  GeneralCommentParams,
   ReviewMutationCapabilitiesDto,
   ReviewVerdict,
 } from "../../../shared/review.js";
@@ -21,44 +16,31 @@ import {
   type FeatureContribution,
   type ReviewPanelContribution,
 } from "../../core/navigation.js";
+import type { RepositoryDto } from "../../../shared/bridge.js";
 import { formatDate, safeError } from "../../core/presentation.js";
 import type { QueryCoordinator } from "../../core/query.js";
 import { SafeMarkdown } from "../../core/safe-markdown.js";
 import { useRetainedRead, type ReadState } from "../../core/use-read.js";
 import {
-  ComposerRefusal,
-  buffersFor,
-  composerFailureMessage,
-  isConflictError,
+  InlineComposer,
+  clearInlineBuffer,
   isUncertainError,
   newOperationId,
-  readActiveDrafts,
-  readMutationCapabilities,
-  recoverDraft,
-  releaseActiveDrafts,
-  releaseMutationCapabilities,
   reviewMutationError,
-  useSharedReviewWorkflow,
+  useInlineReviewComposer,
 } from "../review/composer.js";
 import {
   acknowledgeQuickUncertainty,
-  adoptDraft,
-  beginDraftSave,
   beginQuickIntent,
-  conflictDraftSave,
-  editDraft,
-  failDraftSave,
-  finishDraftSave,
   markQuickIntentUncertain,
   rejectQuickIntent,
   settleQuickIntent,
-  type ReviewWorkflowState,
 } from "../review/state.js";
+import type { SuggestionForge } from "../review/suggestion.js";
 import {
   DiscussionMarkdownBody,
   allocateDiscussionMarkdown,
 } from "../review/thread.js";
-
 
 export function ReviewHeader({
   route,
@@ -129,6 +111,7 @@ export function createReviewOverviewFeature(): FeatureContribution {
         <ReviewOverview
           bridge={context.bridge}
           queries={context.queries}
+          repositories={context.repositories}
           route={route}
           navigate={context.navigate}
           panels={context.reviewPanels}
@@ -140,11 +123,16 @@ export function createReviewOverviewFeature(): FeatureContribution {
 function ReviewOverview({
   bridge,
   queries,
+  repositories,
   route,
   navigate,
   panels,
 }: ReviewProps): ReactNode {
   const review = route.item.handle;
+  const forge =
+    repositories.find(
+      (repository) => repository.handle === route.item.repository,
+    )?.forge_type ?? null;
   const begin = useCallback(() => bridge.getReview(review), [bridge, review]);
   const state = useRetainedRead(queries, `review:${review}`, begin, [review]);
   // This route's own discussions read. It is not shared with the Discussions
@@ -199,7 +187,7 @@ function ReviewOverview({
           bridge={bridge}
           review={review}
           revision={revision}
-          openExternal={openExternal}
+          forge={forge}
         />
       )}
       <ReviewLevelDiscussions state={notes} openExternal={openExternal} />
@@ -218,6 +206,7 @@ export function createCommitsFeature(): FeatureContribution {
         <Commits
           bridge={context.bridge}
           queries={context.queries}
+          repositories={context.repositories}
           route={route}
           navigate={context.navigate}
           panels={context.reviewPanels}
@@ -290,6 +279,7 @@ function Commits({
 interface ReviewProps {
   readonly bridge: DesktopBridge;
   readonly queries: QueryCoordinator;
+  readonly repositories: readonly RepositoryDto[];
   readonly route: Extract<AppRoute, { kind: "review" }>;
   readonly navigate: (route: AppRoute) => void;
   readonly panels: readonly ReviewPanelContribution[];
@@ -382,266 +372,33 @@ function Notice({
 }
 
 /**
- * The general-comment composer, in the shape the in-diff composer already
- * uses: two writes that never relabel in place, a Preview toggle, and text
- * kept in the review's own general buffer so it returns only to this review.
+ * The general-comment surface on Overview. The composer itself is the shared
+ * in-diff composer in its general mode, so the two writes, every refusal, the
+ * pending count and the retained text are one implementation rather than a
+ * copy of one: an entry added here is refused by exactly the states that
+ * refuse an inline one, a submission in flight included.
  *
- * The primary write adds an entry with no anchor, which is what makes it a
- * general entry rather than an inline one and keeps it out of the review's
- * Summary, the draft `body` the drawer owns. The write paths are spelled here
- * rather than taken from the in-diff controller because that controller binds
- * every write to an `InlineAnchorSelection`; generalising it is the follow-up
- * this card names rather than an edit made under a concurrent card.
+ * What this component adds around it is what belongs to the review rather
+ * than to the comment: the standing of an immediate write whose result is
+ * unknown, and the quick verdicts, which submit the text the reader is
+ * looking at and so read the composer's own body.
  */
 function GeneralComposer({
   bridge,
   review,
   revision,
-  openExternal,
+  forge,
 }: {
   readonly bridge: DesktopBridge;
   readonly review: string;
   readonly revision: ReviewRevisionDto;
-  readonly openExternal: (url: string) => Promise<boolean>;
+  readonly forge: SuggestionForge | null;
 }): ReactNode {
-  const shared = useSharedReviewWorkflow(bridge, review, revision);
-  const { workflow, held, apply } = shared;
-  const [capabilities, setCapabilities] =
-    useState<ReviewMutationCapabilitiesDto | null>(null);
-  const [body, setBodyState] = useState(() => buffersFor(review).general);
-  const [preview, setPreview] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const controller = useInlineReviewComposer(bridge, review, revision, forge);
+  const { workflow, apply } = controller.shared;
+  const [body, setBody] = useState("");
   const [confirmation, setConfirmation] = useState<ReviewVerdict | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    let read: ReturnType<typeof readMutationCapabilities> | null = null;
-    try {
-      read = readMutationCapabilities(bridge, review);
-      void read.result.then(
-        (result) => {
-          if (live) setCapabilities(result.capabilities);
-        },
-        () => {
-          if (live) setCapabilities(null);
-        },
-      );
-    } catch {
-      setCapabilities(null);
-    }
-    return () => {
-      live = false;
-      if (read) releaseMutationCapabilities(bridge, review, read);
-    };
-  }, [bridge, review]);
-
-  useEffect(() => setBodyState(buffersFor(review).general), [review]);
-
-  const setBody = (value: string): void => {
-    buffersFor(review).general = value;
-    setBodyState(value);
-  };
-
   const quick = workflow.quick;
-  const pendingReview = workflow.draft.remote !== null;
-  const pendingCount = workflow.draft.local.comments.length;
-  const quickBlocked =
-    workflow.quick?.status === "sending" || workflow.quick?.status === "unknown";
-
-  const quickReason = ((): string | null => {
-    if (capabilities === null)
-      return "General comment support for this review is still loading.";
-    if (!capabilities.general_comment)
-      return "General comments are unsupported for this review.";
-    if (quickBlocked)
-      return "Resolve or acknowledge the previous action in the review workflow before another mutation.";
-    if (busy) return "A review write is already in flight.";
-    return null;
-  })();
-
-  /**
-   * The states that refuse a durable write, in the words the in-diff composer
-   * already uses for the same states, with the action this composer offers.
-   * The set is `canCaptureDraftInline`'s minus its revision check: an inline
-   * entry carries a revision-bound anchor, a general entry carries no anchor
-   * at all, so a draft bound to an earlier revision can still take one and
-   * migrating it in Your review stays the reader's choice rather than a
-   * precondition here. Every other state it refuses is refused here too,
-   * including a submission that is merely pending: a write accepted then
-   * would be saved at the version the attempt froze and would not reach the
-   * forge in it.
-   */
-  const draftReason = ((): string | null => {
-    if (quickReason !== null) return quickReason;
-    if (workflow.draft.conflict)
-      return "This pending review was changed elsewhere. Resolve the conflict in Your review before adding a general comment.";
-    if (workflow.draft.remote && workflow.draft.remote.state !== "editable")
-      return "The pending review is locked by its submission attempt. Settle it in Your review before adding a general comment.";
-    if (
-      workflow.submission.pending !== null ||
-      workflow.submission.progress !== null
-    )
-      return "The pending review is bound to a durable submission attempt. Settle it in Your review before adding a general comment.";
-    return null;
-  })();
-
-  const bindDraft = async (): Promise<ReviewWorkflowState> => {
-    const current = held.current;
-    if (current.draft.remote) return current;
-    // Shares whatever active-draft read is already in flight, for the same
-    // reason the in-diff composer does: a first press during mount adoption
-    // asks the sidecar one question rather than two identical ones.
-    const read = readActiveDrafts(bridge, review);
-    let result: DraftListResult;
-    try {
-      result = await read.result;
-    } finally {
-      releaseActiveDrafts(bridge, review, read);
-    }
-    if (result.drafts.length > 1)
-      throw new ComposerRefusal(
-        "Several pending reviews were recovered. Resume one in Your review before commenting.",
-      );
-    const draft =
-      result.drafts[0] ??
-      (await bridge.createReviewDraft({ review, revision }));
-    return apply((state) => adoptDraft(state, draft));
-  };
-
-  const saveDraft = async (): Promise<void> => {
-    const current = apply(beginDraftSave);
-    const remote = current.draft.remote;
-    const pending = current.draft.pendingSave;
-    if (!remote || !pending)
-      throw new ComposerRefusal(
-        "The pending review is not ready to save. Settle it in Your review before adding a general comment.",
-      );
-    try {
-      const saved = await bridge.saveReviewDraft({
-        review,
-        draft_id: remote.id,
-        expected_version: pending.expectedVersion,
-        content: pending.content,
-      });
-      apply((latest) => finishDraftSave(latest, saved));
-    } catch (failure) {
-      const conflicting = isConflictError(failure)
-        ? await recoverDraft(bridge, review, remote.id)
-        : null;
-      if (conflicting) apply((latest) => conflictDraftSave(latest, conflicting));
-      else apply(failDraftSave);
-      throw failure;
-    }
-  };
-
-  /**
-   * Undoes the local entry a failed save was carrying, so the obvious retry
-   * cannot write the same general comment twice. A draft that was clean before
-   * the entry is restored from its own remote snapshot rather than by content,
-   * which leaves `dirty` unset on content nothing changed.
-   */
-  const rollBack = (
-    remote: DraftSnapshotDto | null,
-    wasDirty: boolean,
-    content: DraftContentInputDto,
-  ): boolean => {
-    try {
-      apply((current) => {
-        const bound = current.draft.remote;
-        return remote &&
-          !wasDirty &&
-          !current.draft.conflict &&
-          bound?.id === remote.id &&
-          bound.version === remote.version
-          ? adoptDraft(current, remote)
-          : editDraft(current, content);
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  const commentNow = async (): Promise<void> => {
-    if (body.length === 0) return;
-    if (quickReason !== null) {
-      setMessage(quickReason);
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    const operationId = newOperationId("comment");
-    const command: GeneralCommentParams = {
-      operation_id: operationId,
-      review,
-      body,
-    };
-    try {
-      apply((current) => beginQuickIntent(current, operationId, command));
-      try {
-        const outcome = await bridge.postReviewComment(command);
-        apply((current) => settleQuickIntent(current, operationId, outcome));
-        if (outcome.outcome === "known") setBody("");
-      } catch (failure) {
-        // The intent's own standing is the notice below; reporting it here as
-        // well would say the same thing twice about one write.
-        apply((current) =>
-          isUncertainError(failure)
-            ? markQuickIntentUncertain(current, operationId)
-            : rejectQuickIntent(
-                current,
-                operationId,
-                reviewMutationError(failure),
-              ),
-        );
-      }
-    } catch (failure) {
-      setMessage(composerFailureMessage(failure));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const addToReview = async (): Promise<void> => {
-    if (body.length === 0) return;
-    if (draftReason !== null) {
-      setMessage(draftReason);
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    try {
-      const bound = await bindDraft();
-      const comment: DraftCommentInputDto = Object.freeze({
-        id: crypto.randomUUID(),
-        kind: "general",
-        body,
-      });
-      const restored = bound.draft.local;
-      const wasDirty = bound.draft.dirty;
-      apply((current) =>
-        editDraft(current, {
-          ...current.draft.local,
-          comments: [...current.draft.local.comments, comment],
-        }),
-      );
-      try {
-        await saveDraft();
-      } catch (failure) {
-        if (!rollBack(bound.draft.remote, wasDirty, restored))
-          throw new ComposerRefusal(
-            `${composerFailureMessage(failure)} The general comment stayed in the pending review; open Your review and remove it before retrying.`,
-          );
-        throw failure;
-      }
-      setBody("");
-    } catch (failure) {
-      setMessage(composerFailureMessage(failure));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const runQuickVerdict = async (verdict: ReviewVerdict): Promise<void> => {
     if (workflow.draft.remote) return;
@@ -658,84 +415,37 @@ function GeneralComposer({
       body: verdict === "approve" ? "" : body,
     };
     setConfirmation(null);
-    setBusy(true);
+    apply((current) => beginQuickIntent(current, operationId, command));
     try {
-      apply((current) => beginQuickIntent(current, operationId, command));
-      try {
-        const outcome = await bridge.submitReviewVerdict(command);
-        apply((current) => settleQuickIntent(current, operationId, outcome));
-        if (verdict !== "approve" && outcome.outcome === "known") setBody("");
-      } catch (failure) {
-        apply((current) =>
-          isUncertainError(failure)
-            ? markQuickIntentUncertain(current, operationId)
-            : rejectQuickIntent(
-                current,
-                operationId,
-                reviewMutationError(failure),
-              ),
-        );
-      }
+      const outcome = await bridge.submitReviewVerdict(command);
+      apply((current) => settleQuickIntent(current, operationId, outcome));
+      if (verdict !== "approve" && outcome.outcome === "known")
+        clearInlineBuffer(review, null);
     } catch (failure) {
-      setMessage(composerFailureMessage(failure));
-    } finally {
-      setBusy(false);
+      apply((current) =>
+        isUncertainError(failure)
+          ? markQuickIntentUncertain(current, operationId)
+          : rejectQuickIntent(
+              current,
+              operationId,
+              reviewMutationError(failure),
+            ),
+      );
     }
   };
 
-  // A refusal already reported as the notice is not repeated underneath it.
-  const reasons = [
-    ...new Set(
-      [draftReason, quickReason].filter(
-        (reason): reason is string => reason !== null && reason !== message,
-      ),
-    ),
-  ];
   return (
-    <section
-      className="panel review-workflow-composer general-composer"
-      aria-label="General comment composer"
-      onKeyDown={(event) => {
-        if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter") return;
-        event.preventDefault();
-        void addToReview();
-      }}
-    >
-      <div className="inline-composer-heading">
-        <strong>General comment</strong>
-        {pendingReview && (
-          <span className="inline-composer-chip">
-            Review in progress, {pendingCount} pending
-          </span>
-        )}
-      </div>
-      {preview ? (
-        <div className="inline-composer-preview" aria-label="Comment preview">
-          {body.length === 0 ? (
-            <small>Nothing to preview yet.</small>
-          ) : (
-            <SafeMarkdown source={body} openExternal={openExternal} />
-          )}
-        </div>
-      ) : (
-        <textarea
-          className="inline-composer-text"
-          aria-label="General review comment"
-          value={body}
-          onChange={(event) => setBody(event.target.value)}
-        />
-      )}
-      {message !== null && (
-        <div className="notice notice-error" role="alert">
-          {message}
-        </div>
-      )}
+    <section className="panel general-composer-panel">
+      <InlineComposer anchor={null} controller={controller} onBody={setBody} />
       {quick?.message && (
         <div
           className={`notice notice-${quick.status === "rejected" ? "error" : "warning"}`}
           role={quick.status === "rejected" ? "alert" : "status"}
         >
-          <span>{quick.message}</span>
+          {/* The composer already reports the sentence it was given, so it is
+              not said twice; what is only here is the way out of an unknown
+              result, which otherwise blocks every further write. */}
+          {quick.message !== controller.message && <span>{quick.message}</span>}
           {quick.status === "unknown" && (
             <button
               className="button button-secondary notice-action"
@@ -750,48 +460,19 @@ function GeneralComposer({
           )}
         </div>
       )}
-      {reasons.map((reason) => (
-        <small key={reason}>{reason}</small>
-      ))}
-      <div className="inline-composer-actions">
-        <div className="inline-composer-toolbar">
-          <button
-            className="button button-secondary"
-            aria-pressed={preview}
-            onClick={() => setPreview(!preview)}
-          >
-            Preview
-          </button>
-        </div>
-        <div className="inline-composer-writes">
-          <button
-            className="button button-secondary"
-            disabled={body.length === 0 || quickReason !== null}
-            title={quickReason ?? undefined}
-            onClick={() => void commentNow()}
-          >
-            Add comment now
-          </button>
-          <button
-            className="button"
-            disabled={body.length === 0 || draftReason !== null}
-            title={draftReason ?? undefined}
-            onClick={() => void addToReview()}
-          >
-            {pendingReview ? "Add to review" : "Start a review"}
-          </button>
-        </div>
-      </div>
-      {!pendingReview && (
+      {!controller.pendingReview ? (
         <QuickVerdicts
-          capabilities={capabilities}
-          blocked={quickBlocked || busy}
+          capabilities={controller.capabilities}
+          blocked={
+            quick?.status === "sending" ||
+            quick?.status === "unknown" ||
+            controller.busy
+          }
           bodyAvailable={body.length > 0}
           confirmation={confirmation}
           run={runQuickVerdict}
         />
-      )}
-      {pendingReview && (
+      ) : (
         <p className="review-workflow-thread-meta" role="status">
           The summary, the verdict, submission and recovery live in Your review,
           on the Discussions tab.

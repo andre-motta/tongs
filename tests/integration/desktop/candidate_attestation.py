@@ -68,6 +68,13 @@ from tongs.desktop.installer.models import (
 )
 
 SIGSTORE_VERSION: Final = "4.5.0"
+#: in-toto statement type carried by every attestation this module verifies.
+INTOTO_STATEMENT_TYPE: Final = "https://in-toto.io/Statement/v1"
+#: Predicate the reviewed attest action emits for an SPDX document, built as
+#: ``https://spdx.dev/Document/v<version>`` from the document's own
+#: ``spdxVersion``.  The predicate params are the SBOM object itself, so the
+#: statement can be compared with the generated file rather than trusted.
+SPDX_PREDICATE_PREFIX: Final = "https://spdx.dev/Document/v"
 CANDIDATE_ARCHIVE_NAME: Final = "tongs-desktop-0.5.0-fedora44-x86_64.tar.gz"
 TRANSFER_MANIFEST_NAME: Final = "candidate-attestation-transfer-v1.json"
 ALLOWED_REFS: Final = frozenset(
@@ -486,6 +493,177 @@ def verify_candidate(
         _canonical_json(report)
     )
     return report
+
+
+def spdx_predicate_type(document: Mapping[str, Any]) -> str:
+    """Derive the predicate type the reviewed action builds for this document."""
+
+    version = document.get("spdxVersion")
+    if not isinstance(version, str) or not version.startswith("SPDX-"):
+        _fail("SBOM does not declare a usable spdxVersion")
+    suffix = version.split("-", 1)[1]
+    if not suffix or any(character not in "0123456789." for character in suffix):
+        _fail("SBOM spdxVersion is malformed")
+    return f"{SPDX_PREDICATE_PREFIX}{suffix}"
+
+
+def validate_sbom_statement(
+    statement: Mapping[str, Any],
+    *,
+    document: Mapping[str, Any],
+    subject_name: str,
+    subject_sha256: str,
+) -> None:
+    """Require the SBOM attestation to cover this exact archive and document.
+
+    Placing an SBOM file beside an attestation is not SBOM attestation.  This
+    requires the emitted statement to carry the SPDX predicate type derived
+    from the document, the document itself as the predicate, and exactly one
+    subject whose name and digest are the archive the caller built.
+    """
+
+    if not isinstance(statement, Mapping):
+        _fail("SBOM statement must be a JSON object")
+    if statement.get("_type") != INTOTO_STATEMENT_TYPE:
+        _fail("SBOM statement type is not an in-toto statement")
+    expected_type = spdx_predicate_type(document)
+    observed_type = statement.get("predicateType")
+    if observed_type != expected_type:
+        _fail(
+            f"SBOM predicate type {observed_type!r} is not the expected "
+            f"{expected_type!r}"
+        )
+    subjects = statement.get("subject")
+    if not isinstance(subjects, list) or len(subjects) != 1:
+        _fail("SBOM attestation must cover exactly one subject")
+    subject = subjects[0]
+    if not isinstance(subject, Mapping):
+        _fail("SBOM subject must be a JSON object")
+    if subject.get("name") != subject_name:
+        _fail(
+            f"SBOM subject name {subject.get('name')!r} is not the covered "
+            f"archive {subject_name!r}"
+        )
+    digest = subject.get("digest")
+    if not isinstance(digest, Mapping) or digest.get("sha256") != subject_sha256:
+        _fail("SBOM subject digest does not match the covered archive")
+    if statement.get("predicate") != document:
+        _fail("SBOM predicate is not the generated SPDX document")
+
+
+def verify_sbom_attestation(
+    root: Path,
+    bundle_path: Path,
+    sbom_path: Path,
+    report_root: Path,
+    identity: CandidateIdentity,
+    *,
+    verifier: Verifier | None = None,
+) -> dict[str, Any]:
+    """Verify the emitted SBOM bundle under the same trusted build identity."""
+
+    if importlib.metadata.version("sigstore") != SIGSTORE_VERSION:
+        _fail(f"candidate verifier requires sigstore {SIGSTORE_VERSION}")
+    archive = _validate_producer_output(root, identity.source_commit)
+    subjects = _subject_digests(root, archive)
+    document = _decode_json(
+        _read_regular_bytes(sbom_path, _MAX_JSON_BYTES), "generated SBOM"
+    )
+    bundle_document = _read_regular_bytes(bundle_path, _MAX_BUNDLE_BYTES)
+    try:
+        bundle = Bundle.from_json(bundle_document)
+    except (InvalidBundle, ValueError, TypeError) as error:
+        raise CandidateAttestationError("SBOM Sigstore bundle is invalid") from error
+    if verifier is None:
+        try:
+            verifier = Verifier.production()
+        except Exception as error:
+            raise CandidateAttestationError(
+                "Sigstore production trust root initialization failed"
+            ) from error
+    try:
+        payload_type, payload = verifier.verify_dsse(
+            bundle, candidate_verification_policy(identity)
+        )
+    except VerificationError as error:
+        raise CandidateAttestationError(
+            "SBOM cryptographic identity verification failed"
+        ) from error
+    if payload_type != INTOTO_PAYLOAD_TYPE:
+        _fail("SBOM DSSE payload type is invalid")
+    statement = _decode_json(payload, "verified SBOM DSSE payload")
+    validate_sbom_statement(
+        statement,
+        document=document,
+        subject_name=archive,
+        subject_sha256=subjects[archive],
+    )
+
+    negatives: list[dict[str, str]] = []
+    mutated_document = {**document, "name": "substituted-document"}
+    _expect_sbom_rejection(
+        negatives,
+        "mismatched_predicate_document",
+        statement,
+        mutated_document,
+        archive,
+        subjects[archive],
+    )
+    stripped = {key: value for key, value in statement.items() if key != "predicate"}
+    _expect_sbom_rejection(
+        negatives,
+        "missing_predicate",
+        stripped,
+        document,
+        archive,
+        subjects[archive],
+    )
+    _expect_sbom_rejection(
+        negatives,
+        "mismatched_subject_digest",
+        statement,
+        document,
+        archive,
+        "0" * 64,
+    )
+
+    report_root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    (report_root / "verified-sbom-dsse-payload.json").write_bytes(payload)
+    report = {
+        "result": "pass",
+        "archive": archive,
+        "archive_sha256": subjects[archive],
+        "predicate_type": spdx_predicate_type(document),
+        "payload_type": payload_type,
+        "negatives": negatives,
+        "scope": (
+            "SBOM predicate attestation over the unpublished candidate archive; "
+            "no release, tag or publication is implied"
+        ),
+    }
+    (report_root / "sbom-attestation-report.json").write_bytes(_canonical_json(report))
+    return report
+
+
+def _expect_sbom_rejection(
+    negatives: list[dict[str, str]],
+    case: str,
+    statement: Mapping[str, Any],
+    document: Mapping[str, Any],
+    subject_name: str,
+    subject_sha256: str,
+) -> None:
+    try:
+        validate_sbom_statement(
+            statement,
+            document=document,
+            subject_name=subject_name,
+            subject_sha256=subject_sha256,
+        )
+    except CandidateAttestationError:
+        negatives.append({"case": case, "rejected_stage": "sbom_statement"})
+        return
+    _fail(f"SBOM negative case {case!r} was not rejected")
 
 
 def _cryptographic_baseline(
@@ -1047,6 +1225,12 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--bundle", type=Path, required=True)
     verify.add_argument("--report-root", type=Path, required=True)
     _add_identity_arguments(verify)
+    verify_sbom = commands.add_parser("verify-sbom")
+    verify_sbom.add_argument("--root", type=Path, required=True)
+    verify_sbom.add_argument("--bundle", type=Path, required=True)
+    verify_sbom.add_argument("--sbom", type=Path, required=True)
+    verify_sbom.add_argument("--report-root", type=Path, required=True)
+    _add_identity_arguments(verify_sbom)
     return parser
 
 
@@ -1064,6 +1248,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 identity,
             )
             print("real unpublished candidate attestation verified")
+        elif arguments.command == "verify-sbom":
+            identity = _candidate_identity_from_arguments(arguments)
+            root = arguments.root.resolve(strict=True)
+            verify_sbom_attestation(
+                root,
+                arguments.bundle,
+                arguments.sbom,
+                arguments.report_root,
+                identity,
+            )
+            print("real unpublished candidate SBOM attestation verified")
         else:
             identity = _transfer_identity_from_arguments(arguments)
             root = arguments.root.resolve(strict=True)
@@ -1079,7 +1274,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 print("candidate transfer identity and files verified")
     except (CandidateAttestationError, OSError) as error:
-        if arguments.command == "verify":
+        if arguments.command in {"verify", "verify-sbom"}:
             arguments.report_root.mkdir(mode=0o755, parents=True, exist_ok=True)
             failure = {
                 "schema_version": 1,

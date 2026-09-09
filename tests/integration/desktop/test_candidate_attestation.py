@@ -712,7 +712,11 @@ def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
     assert "CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python" in workflow
     assert workflow.count('"$CANDIDATE_PYTHON" -I -m pip install') == 3
     assert '"$CANDIDATE_PYTHON" -I -m pytest' in workflow
-    assert workflow.count('"$CANDIDATE_PYTHON" -I\n') == 3
+    # prepare-transfer, validate-transfer, verify and verify-sbom.  Every
+    # candidate command must run through the isolated source-built interpreter.
+    assert workflow.count('"$CANDIDATE_PYTHON" -I\n') == 4
+    for command in ("prepare-transfer", "validate-transfer", "verify", "verify-sbom"):
+        assert f"candidate_attestation.py {command}\n" in workflow
     assert workflow.count("--isolated") == 3
     assert workflow.count("PYTHONNOUSERSITE=1") == 3
     assert workflow.count("site.ENABLE_USER_SITE is False") == 3
@@ -785,3 +789,141 @@ def test_verify_cli_retains_a_fail_closed_result(tmp_path: Path) -> None:
     )
     assert failure["result"] == "fail"
     assert failure["candidate"] == "UNPUBLISHED"
+
+
+def _spdx_document() -> dict[str, object]:
+    return {
+        "spdxVersion": "SPDX-2.3",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": "tongs-desktop",
+        "dataLicense": "CC0-1.0",
+        "packages": [],
+    }
+
+
+def _sbom_statement(
+    archive: str, digest: str, document: dict[str, object]
+) -> dict[str, object]:
+    return {
+        "_type": candidate.INTOTO_STATEMENT_TYPE,
+        "predicateType": candidate.spdx_predicate_type(document),
+        "subject": [{"name": archive, "digest": {"sha256": digest}}],
+        "predicate": document,
+    }
+
+
+def test_spdx_predicate_type_is_derived_from_the_document_version() -> None:
+    assert (
+        candidate.spdx_predicate_type(_spdx_document())
+        == "https://spdx.dev/Document/v2.3"
+    )
+    assert candidate.spdx_predicate_type({"spdxVersion": "SPDX-3.0"}) == (
+        "https://spdx.dev/Document/v3.0"
+    )
+
+
+@pytest.mark.parametrize(
+    "document",
+    [{}, {"spdxVersion": "2.3"}, {"spdxVersion": "SPDX-"}, {"spdxVersion": "SPDX-x"}],
+)
+def test_spdx_predicate_type_rejects_a_malformed_version(
+    document: dict[str, object],
+) -> None:
+    with pytest.raises(candidate.CandidateAttestationError):
+        candidate.spdx_predicate_type(document)
+
+
+def test_sbom_statement_accepts_the_emitted_shape() -> None:
+    document = _spdx_document()
+    candidate.validate_sbom_statement(
+        _sbom_statement("archive.tar.gz", "a" * 64, document),
+        document=document,
+        subject_name="archive.tar.gz",
+        subject_sha256="a" * 64,
+    )
+
+
+def test_sbom_statement_rejects_the_provenance_bundle_predicate() -> None:
+    """Handing the provenance statement to the SBOM check must fail."""
+
+    document = _spdx_document()
+    provenance = _sbom_statement("archive.tar.gz", "a" * 64, document)
+    provenance["predicateType"] = "https://slsa.dev/provenance/v1"
+    with pytest.raises(candidate.CandidateAttestationError, match="predicate type"):
+        candidate.validate_sbom_statement(
+            provenance,
+            document=document,
+            subject_name="archive.tar.gz",
+            subject_sha256="a" * 64,
+        )
+
+
+def test_sbom_statement_rejects_a_missing_predicate() -> None:
+    document = _spdx_document()
+    statement = _sbom_statement("archive.tar.gz", "a" * 64, document)
+    del statement["predicate"]
+    with pytest.raises(
+        candidate.CandidateAttestationError, match="not the generated SPDX document"
+    ):
+        candidate.validate_sbom_statement(
+            statement,
+            document=document,
+            subject_name="archive.tar.gz",
+            subject_sha256="a" * 64,
+        )
+
+
+def test_sbom_statement_rejects_a_predicate_from_another_document() -> None:
+    document = _spdx_document()
+    statement = _sbom_statement("archive.tar.gz", "a" * 64, document)
+    with pytest.raises(
+        candidate.CandidateAttestationError, match="not the generated SPDX document"
+    ):
+        candidate.validate_sbom_statement(
+            statement,
+            document={**document, "name": "another-document"},
+            subject_name="archive.tar.gz",
+            subject_sha256="a" * 64,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ({"_type": "https://in-toto.io/Statement/v0.1"}, "in-toto statement"),
+        ({"subject": []}, "exactly one subject"),
+        (
+            {
+                "subject": [
+                    {"name": "archive.tar.gz", "digest": {"sha256": "a" * 64}},
+                    {"name": "other", "digest": {"sha256": "b" * 64}},
+                ]
+            },
+            "exactly one subject",
+        ),
+        (
+            {"subject": [{"name": "other.tar.gz", "digest": {"sha256": "a" * 64}}]},
+            "not the covered archive",
+        ),
+        (
+            {"subject": [{"name": "archive.tar.gz", "digest": {"sha256": "b" * 64}}]},
+            "subject digest does not match",
+        ),
+        (
+            {"subject": [{"name": "archive.tar.gz", "digest": {"sha1": "a" * 40}}]},
+            "subject digest does not match",
+        ),
+    ],
+)
+def test_sbom_statement_rejects_subject_and_type_substitutions(
+    mutation: dict[str, object], match: str
+) -> None:
+    document = _spdx_document()
+    statement = {**_sbom_statement("archive.tar.gz", "a" * 64, document), **mutation}
+    with pytest.raises(candidate.CandidateAttestationError, match=match):
+        candidate.validate_sbom_statement(
+            statement,
+            document=document,
+            subject_name="archive.tar.gz",
+            subject_sha256="a" * 64,
+        )

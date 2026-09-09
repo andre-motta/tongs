@@ -64,7 +64,7 @@ done
 
 for build in a b; do
   podman run --rm \
-    --volume "$work_root:/work:rw" \
+    --volume "$work_root:/work:rw,Z" \
     "$image_tag" \
     /bin/bash "/work/source-$build/packaging/desktop/archive/build_in_container.sh" \
     "/work/source-$build" "/work/output-$build" "/work/$electron_name" \

@@ -77,8 +77,8 @@ podman image inspect "$builder_image" >"$output_dir/builder-image.inspect.json"
 podman run --rm \
     --cap-drop=all \
     --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" \
-    --volume "$output_dir:/evidence:rw" \
+    --volume "$repo_root:/checkout:ro,z" \
+    --volume "$output_dir:/evidence:rw,Z" \
     "$builder_image" \
     python3 /checkout/packaging/rpm/python-dependencies/audit_providers.py \
         --manifest /checkout/packaging/rpm/python-dependencies/manifest.json \
@@ -87,8 +87,8 @@ podman run --rm \
 podman run --rm \
     --cap-drop=all \
     --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" \
-    --volume "$prepared:/prepared:rw" \
+    --volume "$repo_root:/checkout:ro,z" \
+    --volume "$prepared:/prepared:rw,Z" \
     "$builder_image" \
     python3 /checkout/packaging/rpm/python-dependencies/prepare_sources.py \
         --manifest /checkout/packaging/rpm/python-dependencies/manifest.json \
@@ -98,9 +98,9 @@ podman run --rm \
     --cap-drop=all \
     --network=none \
     --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" \
-    --volume "$prepared:/prepared:ro" \
-    --volume "$srpms:/srpms:rw" \
+    --volume "$repo_root:/checkout:ro,z" \
+    --volume "$prepared:/prepared:ro,z" \
+    --volume "$srpms:/srpms:rw,Z" \
     "$builder_image" \
     /checkout/packaging/rpm/python-dependencies/build_rpms.sh \
         --source-dir /prepared \
@@ -115,9 +115,9 @@ podman run --rm \
 
 podman run --rm \
     --security-opt=no-new-privileges \
-    --volume "$repo_root:/checkout:ro" \
-    --volume "$rpms:/rpms:ro" \
-    --volume "$install_evidence:/evidence:rw" \
+    --volume "$repo_root:/checkout:ro,z" \
+    --volume "$rpms:/rpms:ro,z" \
+    --volume "$install_evidence:/evidence:rw,Z" \
     "$base_image" \
     /checkout/packaging/rpm/python-dependencies/install_and_verify.sh \
         --rpm-dir /rpms \

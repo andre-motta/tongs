@@ -103,6 +103,6 @@ podman run --rm \
     --userns=keep-id \
     --env "TONGS_HEAD_SHA=$head_sha" \
     --env "TONGS_SOURCE_SHA=$source_sha" \
-    --volume "$repo_root:/checkout:ro" \
-    --volume "$output_dir:/output:rw" \
+    --volume "$repo_root:/checkout:ro,z" \
+    --volume "$output_dir:/output:rw,Z" \
     "$image_id" "${inject_failure[@]}"

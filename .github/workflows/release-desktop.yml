@@ -20,6 +20,8 @@ permissions:
 env:
   PYTHON_VERSION: "3.12"
   SIGSTORE_VERSION: "4.5.0"
+  ELECTRON_VERSION: "44.2.0"
+  SBOM_GENERATOR_VERSION: "1.0.0"
 
 jobs:
   no-signing-validation:
@@ -279,6 +281,41 @@ jobs:
           --event "$GITHUB_EVENT_NAME"
           --run-id "$GITHUB_RUN_ID"
           --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Generate the deterministic archive SBOM for the signed subject
+        id: sbom
+        run: |
+          set -euo pipefail
+          epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          source_digest=$(sha256sum "$CANDIDATE_SOURCE_ARCHIVE" | cut -d' ' -f1)
+          name=$("$CANDIDATE_PYTHON" -I -c \
+            'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"][0]["name"])' \
+            "$CANDIDATE_ROOT/archive/desktop-manifest-v1.json")
+          archive="$CANDIDATE_ROOT/archive/$name"
+          archive_digest=$(sha256sum "$archive" | cut -d' ' -f1)
+          electron_digest=$("$CANDIDATE_PYTHON" -I -c \
+            'import json,sys; print(json.load(open(sys.argv[1]))["upstream_archive"]["sha256"])' \
+            "packaging/desktop/archive/electron-runtime-${ELECTRON_VERSION}-linux-x64.json")
+          "$CANDIDATE_PYTHON" -I scripts/build_desktop_sbom.py \
+            --input-root "$CANDIDATE_ROOT" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --expected-source-tree "${{ needs.candidate-archive.outputs.source-tree }}" \
+            --expected-source-archive-sha256 "$source_digest" \
+            --expected-source-date-epoch "$epoch" \
+            --expected-archive-sha256 "$archive_digest" \
+            --expected-electron-archive-sha256 "$electron_digest" \
+            --generator-version "$SBOM_GENERATOR_VERSION" \
+            --schema tests/packaging/desktop/sbom/schema/spdx-2.3.schema.json \
+            --output "$RUNNER_TEMP/tongs-desktop.spdx.json"
+          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+      - name: Attest the archive SBOM with the reviewed SPDX predicate
+        id: attest-sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4 reviewed source
+        with:
+          subject-path: ${{ steps.sbom.outputs.archive }}
+          sbom-path: ${{ runner.temp }}/tongs-desktop.spdx.json
+          push-to-registry: false
+          create-storage-record: false
+          show-summary: false
       - name: Attest the real manifest and archive with GitHub-managed Sigstore
         id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4 reviewed source
@@ -307,14 +344,47 @@ jobs:
           --event "$GITHUB_EVENT_NAME"
           --run-id "$GITHUB_RUN_ID"
           --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Verify the emitted SBOM bundle, predicate and covered subject
+        env:
+          CANDIDATE_SBOM_BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/candidate_attestation.py verify-sbom
+          --root "$CANDIDATE_ROOT"
+          --bundle "$CANDIDATE_SBOM_BUNDLE"
+          --sbom "$RUNNER_TEMP/tongs-desktop.spdx.json"
+          --report-root "$CANDIDATE_ROOT/sbom-attestation-evidence"
+          --repository "$GITHUB_REPOSITORY"
+          --repository-id "$GITHUB_REPOSITORY_ID"
+          --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID"
+          --ref "$GITHUB_REF"
+          --source-commit "$GITHUB_SHA"
+          --source-tree "${{ needs.candidate-archive.outputs.source-tree }}"
+          --event "$GITHUB_EVENT_NAME"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Retain the actual bundle and runtime versions
-        if: ${{ always() && steps.attest.outputs.bundle-path != '' }}
+        if: >-
+          ${{ always() && (steps.attest.outputs.bundle-path != '' ||
+          steps.attest-sbom.outputs.bundle-path != '') }}
         env:
           CANDIDATE_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          CANDIDATE_SBOM_BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
         run: |
           set -euo pipefail
           mkdir -p "$CANDIDATE_ROOT/attestation-evidence"
-          cp "$CANDIDATE_BUNDLE" "$CANDIDATE_ROOT/attestation-evidence/candidate-attestation.sigstore.json"
+          if [ -n "${CANDIDATE_BUNDLE:-}" ]; then
+            cp "$CANDIDATE_BUNDLE" \
+              "$CANDIDATE_ROOT/attestation-evidence/candidate-attestation.sigstore.json"
+          fi
+          if [ -f "$RUNNER_TEMP/tongs-desktop.spdx.json" ]; then
+            cp "$RUNNER_TEMP/tongs-desktop.spdx.json" \
+              "$CANDIDATE_ROOT/attestation-evidence/tongs-desktop.spdx.json"
+          fi
+          if [ -n "${CANDIDATE_SBOM_BUNDLE:-}" ]; then
+            cp "$CANDIDATE_SBOM_BUNDLE" \
+              "$CANDIDATE_ROOT/attestation-evidence/candidate-sbom.sigstore.json"
+          fi
           "$CANDIDATE_PYTHON" -I --version > "$CANDIDATE_ROOT/attestation-evidence/python-version.txt"
           "$CANDIDATE_PYTHON" -I -m pip freeze --all > "$CANDIDATE_ROOT/attestation-evidence/python-packages.txt"
       - name: Upload bounded candidate attestation evidence

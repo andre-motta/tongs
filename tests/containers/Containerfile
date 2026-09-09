@@ -20,8 +20,9 @@ RUN dnf install --assumeyes --setopt=install_weak_deps=False \
         'mcp[cli]==1.29.1' \
         platformdirs\>=4.0 \
         pyperclip\>=1.8 \
-        pytest-asyncio\>=0.24 \
         pytest\>=8.0 \
+        pytest-asyncio\>=0.24 \
+        pyyaml\>=6.0 \
         setuptools\>=68 \
         textual\>=1.0 \
         wheel \

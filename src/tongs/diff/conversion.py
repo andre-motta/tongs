@@ -97,11 +97,13 @@ def convert_forge_changes(
     empty, rename-only or truncated file according to the available metadata.
 
     GitHub's files endpoint withholds binary, mode and emptiness metadata, so
-    the shapes it does determine are derived from the fields it does send and
-    the remainder stays explicitly unavailable.  Missing patch text alone is
-    never treated as evidence that a file is binary; only a cheap local suffix
-    probe on a file the forge says has no changed lines is, and no derivation
-    here issues a forge request.
+    the shapes it does determine are derived from the fields it does send plus
+    a cheap local reading of the path, and the remainder stays explicitly
+    unavailable.  Missing patch text alone is never evidence of any shape: for
+    a file the forge says has no changed lines, a known binary suffix reads as
+    binary, a path that resolves to a text lexer licenses the rename-only and
+    empty readings, and a path that says neither leaves the file unavailable.
+    Every derivation here is local, and none issues a forge request.
     """
 
     return tuple(_convert_change(change) for change in changes)
@@ -144,31 +146,24 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
         reported_deletions if reported_deletions is not None else parsed_deletions
     )
     has_hunks = bool(hunks)
+    path = new_path or old_path
+    # One Pygments lookup per file, reused below as the text signal and further
+    # down as the reported language.
+    path_language = _detect_language(path)
 
     # GitHub omits ``patch`` and reports zero counts for a binary, empty,
-    # rename-only or mode-only file without saying which one it is.  Derive
-    # the shapes its remaining fields determine, and leave the rest explicitly
-    # unavailable instead of guessing between binary and a mode change.
+    # rename-only or mode-only file, and its payload for a binary file is the
+    # same whether or not the bytes changed.  So a withheld patch is only ever
+    # read through the path: a known binary suffix means binary, a resolved
+    # text lexer licenses the content-free readings below, and a path that says
+    # neither leaves the file explicitly unavailable.
     withholds_patch = not _has_patch_key(change)
     reports_no_lines = _reports_no_line_change(change)
-    # A rename the forge describes with no content change: GitLab returns an
-    # empty diff, GitHub omits the patch and reports zero changes.  Both are
-    # rename-only, which is a stronger statement than an empty file.
-    is_rename_only = (
-        not has_hunks
-        and not is_binary
-        and status is FileStatus.RENAMED
-        and old_path != new_path
-        and (reports_no_lines or _has_explicit_empty_patch(change))
-    )
-    if (
-        not is_binary
-        and not is_rename_only
-        and not has_hunks
-        and withholds_patch
-        and reports_no_lines
-        and _has_binary_suffix(new_path or old_path)
-    ):
+    withheld_no_lines = not has_hunks and withholds_patch and reports_no_lines
+    # Settle binary before every other withheld-patch shape.  A binary path
+    # must never reach the rename-only or empty derivations, because both of
+    # those assert there is no content change to review.
+    if not is_binary and withheld_no_lines and _has_binary_suffix(path):
         is_binary = True
 
     is_mode_only = (
@@ -209,14 +204,37 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
     )
 
     explicit_empty = _first_bool(change, "is_empty", "empty", "empty_diff")
+
+    # A rename the forge describes with no content change.  GitLab states it
+    # with an empty patch body; GitHub only omits the patch, so that reading
+    # needs a text signal from the path, or a renamed binary whose bytes also
+    # changed would claim there is nothing to review.  Any explicit forge flag
+    # to the contrary wins, which keeps this state exclusive and stops it from
+    # contradicting something the forge actually reported.
+    is_rename_only = (
+        not has_hunks
+        and not is_binary
+        and not is_truncated
+        and not is_mode_only
+        and explicit_empty is not True
+        and status is FileStatus.RENAMED
+        and old_path != new_path
+        and (
+            _has_explicit_empty_patch(change)
+            or (withheld_no_lines and bool(path_language))
+        )
+    )
+
     if explicit_empty is None:
-        # An added or deleted file the forge reports with zero changed lines
-        # and no patch is empty on one side, which is a fact about the file
-        # rather than a gap in the response.
+        # GitLab states emptiness with an empty patch body.  GitHub sends an
+        # added or deleted binary file exactly as it sends an added or deleted
+        # empty file, so Empty is inferred there only when the path resolves to
+        # a text lexer.  Without that signal the payload does not separate the
+        # two, and the file stays unavailable instead.
         reports_empty_content = _has_explicit_empty_patch(change) or (
-            withholds_patch
-            and reports_no_lines
+            withheld_no_lines
             and status in (FileStatus.ADDED, FileStatus.DELETED)
+            and bool(path_language)
         )
         is_empty = (
             reports_empty_content
@@ -240,7 +258,7 @@ def _convert_change(change: Mapping[str, object]) -> DiffFile:
 
     language = _string(change.get("language"))
     if language is None:
-        language = _detect_language(new_path or old_path)
+        language = path_language
         if not language and parsed_file is not None:
             language = parsed_file.language
 

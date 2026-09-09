@@ -360,3 +360,134 @@ def test_a_rename_carrying_content_is_not_rename_only() -> None:
 
     assert file.is_rename_only is False
     assert file.hunks
+
+
+def test_a_renamed_binary_never_claims_it_carries_no_content_change() -> None:
+    """GitHub sends one payload for a binary file, changed bytes or not.
+
+    Claiming rename-only there would tell a reviewer to skip a file whose
+    content did change, which is worse than reporting nothing at all.
+    """
+
+    listed_suffix, unlisted_suffix, no_suffix, text = convert_forge_changes(
+        (
+            _github_file(
+                filename="assets/new.png",
+                status="renamed",
+                previous_filename="assets/old.png",
+            ),
+            _github_file(
+                filename="models/new.gguf",
+                status="renamed",
+                previous_filename="models/old.gguf",
+            ),
+            _github_file(
+                filename="bin/new",
+                status="renamed",
+                previous_filename="bin/old",
+            ),
+            _github_file(
+                filename="src/new_module.py",
+                status="renamed",
+                previous_filename="src/old_module.py",
+            ),
+        )
+    )
+
+    assert (listed_suffix.is_rename_only, listed_suffix.is_binary) == (False, True)
+    assert (unlisted_suffix.is_rename_only, unlisted_suffix.is_unavailable) == (
+        False,
+        True,
+    )
+    assert (no_suffix.is_rename_only, no_suffix.is_unavailable) == (False, True)
+    # A path that resolves to a text lexer keeps the rename-only reading, so
+    # the sandbox shape this feature exists for is unaffected.
+    assert text.is_rename_only is True
+    assert all(file.old_path != file.new_path for file in (listed_suffix, text))
+
+
+def test_gitlab_rename_states_are_read_from_its_patch_body_not_the_path() -> None:
+    """GitLab says which rename is content-free, so the path is not consulted."""
+
+    content_free, binary = convert_forge_changes(
+        (
+            {
+                "old_path": "assets/old.png",
+                "new_path": "assets/new.png",
+                "renamed_file": True,
+                "diff": "",
+            },
+            {
+                "old_path": "assets/old.webp",
+                "new_path": "assets/new.webp",
+                "renamed_file": True,
+                "diff": "Binary files a/assets/old.webp and b/assets/new.webp differ\n",
+            },
+        )
+    )
+
+    assert content_free.is_rename_only is True
+    assert (binary.is_binary, binary.is_rename_only) == (True, False)
+
+
+def test_empty_is_inferred_only_where_the_path_carries_a_text_signal() -> None:
+    """GitHub sends an added binary file exactly as it sends an empty one.
+
+    Without a text signal the payload cannot separate them, so the file stays
+    unavailable rather than asserting it has no content.
+    """
+
+    files = convert_forge_changes(
+        (
+            _github_file(filename="models/x.gguf", status="added"),
+            _github_file(filename="bin/tool", status="added"),
+            _github_file(filename="dist/pkg.tgz", status="removed"),
+            _github_file(filename="data/x.parquet", status="removed"),
+            _github_file(filename="src/empty_placeholder.py", status="added"),
+            _github_file(filename="notes/empty.txt", status="removed"),
+        )
+    )
+    unknown = files[:4]
+    text = files[4:]
+
+    assert [file.is_unavailable for file in unknown] == [True] * 4
+    assert [file.is_empty for file in unknown] == [False] * 4
+    assert [file.is_empty for file in text] == [True, True]
+    assert [file.is_unavailable for file in text] == [False, False]
+
+
+def test_a_derived_state_never_contradicts_an_explicit_forge_flag() -> None:
+    """Each file reaches the renderer with at most one metadata state."""
+
+    flags = ("is_binary", "is_truncated", "is_empty", "is_mode_only", "is_rename_only")
+    mode_changed, too_large, explicitly_empty = convert_forge_changes(
+        (
+            {
+                "old_path": "src/old.py",
+                "new_path": "src/new.py",
+                "renamed_file": True,
+                "diff": "",
+                "mode_changed": True,
+            },
+            _github_file(
+                filename="src/new.py",
+                status="renamed",
+                previous_filename="src/old.py",
+                too_large=True,
+            ),
+            _github_file(
+                filename="src/new.py",
+                status="renamed",
+                previous_filename="src/old.py",
+                is_empty=True,
+            ),
+        )
+    )
+
+    assert mode_changed.is_mode_only is True
+    assert too_large.is_truncated is True
+    assert explicitly_empty.is_empty is True
+    for file in (mode_changed, too_large, explicitly_empty):
+        assert file.is_rename_only is False
+        assert sum(getattr(file, flag) for flag in flags) == 1
+        assert file.is_unavailable is False

@@ -98,10 +98,11 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 - `additions`, `deletions` -- computed counts
 - `is_binary: bool`
 - `language: str` -- detected from file extension
-- `is_truncated`, `is_empty`, `is_mode_only`, `is_unavailable` -- explicit
-  reasons a forge-described file has incomplete or absent content hunks
-- `is_metadata_only` -- derived property for binary, empty, mode-only, or
-  unavailable files
+- `is_truncated`, `is_empty`, `is_mode_only`, `is_rename_only`,
+  `is_unavailable` -- explicit reasons a forge-described file has incomplete or
+  absent content hunks; at most one of them is set per file
+- `is_metadata_only` -- derived property for binary, empty, mode-only,
+  rename-only, or unavailable files
 
 **SplitDiffRow:**
 - `old: DiffLine | None`, `new: DiffLine | None` -- independent references to
@@ -128,7 +129,7 @@ Used by the terminal renderer to select Rich syntax highlighting.
 2. **SQL comments (`-- ...`):** only treated as file boundary if next line starts with `+++ `. Inside a hunk, `--` is a deletion line.
 3. **No-newline marker:** `\ No newline at end of file` is preserved as `LineType.NO_NEWLINE` with both linenos as None.
 4. **Binary files:** detected via `Binary files` line. DiffFile has `is_binary=True` and empty hunks.
-5. **Renamed files without content change:** detected via `rename from`/`rename to` lines. DiffFile has `status=RENAMED` and may have empty hunks.
+5. **Renamed files without content change:** detected via `rename from`/`rename to` lines. DiffFile has `status=RENAMED` and may have empty hunks. From a forge change payload the same shape sets `is_rename_only`.
 6. **Files with only metadata changes** (mode change, no content): results in DiffFile with empty hunks.
 7. **Hunk count defaults:** `@@ -1 +1,3 @@` means old_count=1 (omitted comma means count of 1).
 
@@ -220,15 +221,42 @@ aggregate counts, then classifies absent or incomplete patch text on each
 
 - `is_truncated` covers explicit truncation flags, incomplete hunks, aggregate
   count shortfalls, or positive change counts without a body.
-- `is_empty` covers an explicitly empty patch with no other reason.
+- `is_empty` covers an explicitly empty patch, and an added or deleted file the
+  forge reports with zero changed lines and no patch whose path resolves to a
+  text lexer.
 - `is_mode_only` covers a reported mode change without content hunks.
-- `is_unavailable` is the conservative fallback when content is absent without
-  enough metadata to classify it.
+- `is_rename_only` covers a rename or copy the forge describes with no content
+  change: an explicitly empty patch, or a withheld patch with zero reported
+  lines and a path that resolves to a text lexer.
+- `is_unavailable` is the conservative fallback when content is absent and the
+  payload does not determine which of the states above applies.
 
 Binary is independent of missing content; an absent patch alone is never binary
-evidence. The widget renders all of these files in the tree with paths and
-counts. It labels binary files separately and uses one generic unavailable-
-content message for other no-hunk states instead of inventing an empty diff.
+evidence.
+
+GitHub's pull-request files endpoint sends the same payload (no `patch`,
+`additions`/`deletions`/`changes` all zero) for a binary, empty, rename-only or
+mode-only file, and for a binary file whether or not its bytes changed. For such
+a payload the path is the only remaining signal, and it is read locally with no
+extra request: a known binary suffix (`_BINARY_SUFFIXES`) reads as binary and is
+settled first, a path that resolves to a text lexer licenses the rename-only and
+empty readings, and a path that says neither leaves the file unavailable. Never
+let a withheld patch produce a state that asserts there is no content change
+unless the path carries that text signal, and never derive a state that
+contradicts a flag the forge reported explicitly. Mode-only is not derivable on
+GitHub at all: no cheap endpoint carries file modes, so those files stay
+unavailable.
+
+The widget renders all of these files in the tree with paths and counts.
+`placeholder_message()` in `src/tongs/widgets/split_diff.py` is the single
+source of the one-line message for a file with no content hunks, shared by
+`SplitDiffView` and `DiffContent` so both layouts say the same thing. It names
+the state (`[Binary file]`, `[Empty file]`, `[File mode changed]`,
+`[Renamed with no content change]`) and, for `is_unavailable`, says the forge
+did not expose the state rather than inventing a size limit or an empty diff.
+The desktop badge map in `desktop/src/renderer/features/diff/index.tsx` mirrors
+these states, so a new state must be added to the model, the projection, the DTO
+validator, the bridge type, the badge map and this widget together.
 
 ## Bulk Pygments Highlighting
 

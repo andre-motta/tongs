@@ -36,7 +36,7 @@ import type {
   FeatureContext,
   InlineAnchorSelection,
 } from "../../core/navigation.js";
-import { safeError } from "../../core/presentation.js";
+import { formatDate, safeError } from "../../core/presentation.js";
 import {
   SafeMarkdown,
   safeMarkdownPresentationBytes,
@@ -64,6 +64,7 @@ import {
   finishSubmission,
   forkDraftToCurrentRevision,
   keepLocalDraft,
+  keepLocalDraftRefusal,
   markQuickIntentUncertain,
   observeReviewRevision,
   portableDraftContent,
@@ -364,11 +365,13 @@ function ReviewWorkflow({
   const keepLocalDraftText = async (): Promise<void> => {
     const current = workflowRef.current;
     if (!current?.draft.conflict) return;
-    const kept = apply(keepLocalDraft);
-    if (!canSaveDraft(kept)) {
-      setError("Edit or remove empty draft comments, then save your kept text.");
+    const refusal = keepLocalDraftRefusal(current);
+    if (refusal !== null) {
+      setError(refusal);
       return;
     }
+    setError(null);
+    apply(keepLocalDraft);
     await saveDraft();
   };
 
@@ -1008,7 +1011,9 @@ function ReviewWorkflow({
                 save={() => void saveDraft()}
                 keepLocal={() => void keepLocalDraftText()}
                 takeRemote={takeRemoteDraftText}
-                dismissSuperseded={() => apply(dismissSupersededDraft)}
+                dismissSuperseded={(version) =>
+                  apply((state) => dismissSupersededDraft(state, version))
+                }
                 migrate={() => void migrateDraft()}
                 submit={submitDraft}
                 confirmation={confirmation}
@@ -1387,7 +1392,7 @@ function DraftEditor({
   readonly save: () => void;
   readonly keepLocal: () => void;
   readonly takeRemote: () => void;
-  readonly dismissSuperseded: () => void;
+  readonly dismissSuperseded: (displacedByVersion: number) => void;
   readonly migrate: () => void;
   readonly submit: () => Promise<void>;
   readonly confirmation: Confirmation | null;
@@ -1432,13 +1437,16 @@ function DraftEditor({
       {workflow.draft.conflict && (
         <Notice kind="warning">
           <p>
-            The stored draft advanced to version {workflow.draft.conflict.version} while
-            your text was unsaved. Neither side was discarded. Both are shown below;
-            choose one deliberately.
+            The stored draft is now version {workflow.draft.conflict.version}
+            {workflow.draft.conflictHeldVersion === null
+              ? ""
+              : `, and you were editing version ${workflow.draft.conflictHeldVersion}`}
+            . Neither side was discarded. Both are shown below; choose one deliberately.
           </p>
           <div className="review-workflow-conflict">
             <article>
-              <strong>Your text, typed in this window and not stored</strong>
+              <strong>Your text, not stored</strong>
+              <p className="review-workflow-thread-meta">Typed in this window.</p>
               <textarea
                 readOnly
                 aria-label="My unsaved draft text"
@@ -1446,11 +1454,12 @@ function DraftEditor({
               />
             </article>
             <article>
-              <strong>
-                Stored draft version {workflow.draft.conflict.version}, written by another
-                writer of this draft store such as a second window or the terminal
-                interface, updated {workflow.draft.conflict.updated_at}
-              </strong>
+              <strong>Stored draft, version {workflow.draft.conflict.version}</strong>
+              <p className="review-workflow-thread-meta">
+                Saved outside this window, last updated{" "}
+                {formatDate(workflow.draft.conflict.updated_at)}. This draft store
+                records no author, so the writer is not identified.
+              </p>
               <textarea
                 readOnly
                 aria-label="Stored draft text"
@@ -1468,22 +1477,26 @@ function DraftEditor({
           </div>
         </Notice>
       )}
-      {workflow.draft.supersededLocal && (
-        <Notice kind="warning">
+      {workflow.draft.supersededLocalDrafts.map((superseded) => (
+        <Notice kind="warning" key={superseded.displacedByVersion}>
           <p>
-            Your earlier text was replaced by the stored version and was never saved.
-            Copy anything you still need, then dismiss it.
+            Your text was replaced by stored version {superseded.displacedByVersion} and
+            was never saved. Copy anything you still need, then dismiss it. A later
+            conflict adds another copy rather than replacing this one.
           </p>
           <textarea
             readOnly
-            aria-label="My superseded draft text"
-            value={draftContentTranscript(workflow.draft.supersededLocal)}
+            aria-label={`My superseded draft text replaced by version ${superseded.displacedByVersion}`}
+            value={draftContentTranscript(superseded.content)}
           />
-          <button className="button button-secondary" onClick={dismissSuperseded}>
-            Dismiss my superseded text
+          <button
+            className="button button-secondary"
+            onClick={() => dismissSuperseded(superseded.displacedByVersion)}
+          >
+            Dismiss my text replaced by version {superseded.displacedByVersion}
           </button>
         </Notice>
-      )}
+      ))}
       <label>
         Review body
         <textarea

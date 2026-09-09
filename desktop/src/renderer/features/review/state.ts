@@ -32,11 +32,15 @@ export interface DraftEditorState {
   readonly local: DraftContentInputDto;
   readonly dirty: boolean;
   readonly conflict: DraftSnapshotDto | null;
+  /** Version this window held when `conflict` was recorded, for the notice. */
+  readonly conflictHeldVersion: number | null;
   /**
-   * Local text displaced by an explicit take-theirs conflict resolution. It is
-   * retained verbatim so the caller can copy it, and cleared only on request.
+   * Every local text displaced by an explicit take-theirs resolution, retained
+   * verbatim so the caller can copy it. Retention is additive: a later conflict
+   * appends, so a second resolution can never discard what the first kept. An
+   * entry leaves only when its own dismissal is requested.
    */
-  readonly supersededLocal: DraftContentInputDto | null;
+  readonly supersededLocalDrafts: readonly SupersededDraftText[];
   readonly preservedStaleDrafts: readonly DraftSnapshotDto[];
   readonly pendingSave: {
     readonly review: string;
@@ -45,6 +49,12 @@ export interface DraftEditorState {
     readonly expectedVersion: number;
     readonly content: DraftContentInputDto;
   } | null;
+}
+
+export interface SupersededDraftText {
+  /** Stored version that displaced this text. Versions only ever advance. */
+  readonly displacedByVersion: number;
+  readonly content: DraftContentInputDto;
 }
 
 export type PendingSubmission =
@@ -113,7 +123,8 @@ export function createReviewWorkflowState(
       local: EMPTY_CONTENT,
       dirty: false,
       conflict: null,
-      supersededLocal: null,
+      conflictHeldVersion: null,
+      supersededLocalDrafts: Object.freeze([]),
       preservedStaleDrafts: Object.freeze([]),
       pendingSave: null,
     }),
@@ -309,6 +320,7 @@ export function adoptDraft(
         ...state.draft,
         remote,
         conflict: remote,
+        conflictHeldVersion: state.draft.remote.version,
         pendingSave: null,
       }),
     });
@@ -319,7 +331,8 @@ export function adoptDraft(
       local: contentOf(remote),
       dirty: false,
       conflict: null,
-      supersededLocal: state.draft.supersededLocal,
+      conflictHeldVersion: null,
+      supersededLocalDrafts: state.draft.supersededLocalDrafts,
       preservedStaleDrafts: state.draft.preservedStaleDrafts,
       pendingSave: null,
     }),
@@ -366,7 +379,8 @@ export function forkDraftToCurrentRevision(
       local: contentOf(fresh),
       dirty: false,
       conflict: null,
-      supersededLocal: state.draft.supersededLocal,
+      conflictHeldVersion: null,
+      supersededLocalDrafts: state.draft.supersededLocalDrafts,
       preservedStaleDrafts: preserved,
       pendingSave: null,
     }),
@@ -430,7 +444,8 @@ export function finishDraftSave(
       local: editedDuringSave ? state.draft.local : contentOf(remote),
       dirty: editedDuringSave,
       conflict: null,
-      supersededLocal: state.draft.supersededLocal,
+      conflictHeldVersion: null,
+      supersededLocalDrafts: state.draft.supersededLocalDrafts,
       preservedStaleDrafts: state.draft.preservedStaleDrafts,
       pendingSave: null,
     }),
@@ -449,6 +464,7 @@ export function conflictDraftSave(
       ...state.draft,
       remote,
       conflict: remote,
+      conflictHeldVersion: pending.expectedVersion,
       pendingSave: null,
       dirty: true,
     }),
@@ -477,9 +493,16 @@ export function chooseRemoteDraft(state: ReviewWorkflowState): ReviewWorkflowSta
       local: adopted,
       dirty: false,
       conflict: null,
-      supersededLocal: sameContent(displaced, adopted)
-        ? state.draft.supersededLocal
-        : displaced,
+      conflictHeldVersion: null,
+      supersededLocalDrafts: sameContent(displaced, adopted)
+        ? state.draft.supersededLocalDrafts
+        : Object.freeze([
+            ...state.draft.supersededLocalDrafts,
+            Object.freeze({
+              displacedByVersion: remote.version,
+              content: displaced,
+            }),
+          ]),
       preservedStaleDrafts: state.draft.preservedStaleDrafts,
       pendingSave: null,
     }),
@@ -488,26 +511,55 @@ export function chooseRemoteDraft(state: ReviewWorkflowState): ReviewWorkflowSta
 
 export function dismissSupersededDraft(
   state: ReviewWorkflowState,
+  displacedByVersion: number,
 ): ReviewWorkflowState {
-  if (!state.draft.supersededLocal)
-    throw new Error("No superseded local draft text is retained");
+  const remaining = state.draft.supersededLocalDrafts.filter(
+    (item) => item.displacedByVersion !== displacedByVersion,
+  );
+  if (remaining.length === state.draft.supersededLocalDrafts.length)
+    throw new Error("No superseded local draft text is retained for that version");
   return replace(state, {
-    draft: Object.freeze({ ...state.draft, supersededLocal: null }),
+    draft: Object.freeze({
+      ...state.draft,
+      supersededLocalDrafts: Object.freeze(remaining),
+    }),
   });
 }
 
 export function keepLocalDraft(state: ReviewWorkflowState): ReviewWorkflowState {
   const remote = state.draft.conflict;
   if (!remote) throw new Error("No conflicting draft exists");
+  if (remote.state !== "editable")
+    throw new Error("The conflicting draft is no longer editable");
   return replace(state, {
     draft: Object.freeze({
       ...state.draft,
       remote,
       conflict: null,
+      conflictHeldVersion: null,
       dirty: true,
       pendingSave: null,
     }),
   });
+}
+
+/**
+ * Why keeping the local text cannot be saved over the conflicting draft, or
+ * null when it can. Evaluated on the conflicted state so a refusal leaves the
+ * comparison and the take-theirs choice in place.
+ */
+export function keepLocalDraftRefusal(state: ReviewWorkflowState): string | null {
+  const conflict = state.draft.conflict;
+  if (!conflict) return "No draft conflict is waiting to be resolved.";
+  if (conflict.state === "submitted")
+    return "The stored draft was already submitted, so nothing can be saved over it. Take the stored version and copy your text out.";
+  if (conflict.state !== "editable")
+    return "The stored draft is held by a submission attempt elsewhere, so nothing can be saved over it yet. Take the stored version and copy your text out.";
+  if (hasEmptyDraftComment(state.draft.local))
+    return "Edit or remove empty draft comments, then keep your text.";
+  if (!canSaveDraft(keepLocalDraft(state)))
+    return "Your kept text cannot be saved over the stored draft yet. Take the stored version and copy your text out.";
+  return null;
 }
 
 export function beginSubmission(

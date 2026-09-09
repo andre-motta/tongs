@@ -260,6 +260,14 @@ test("a log refresh ends an open search and restores the row window", async () =
   assert.equal(focused(), SEARCH);
 });
 
+test("the search keys are released when the view unmounts", async () => {
+  const view = await openLog();
+  view.unmount();
+
+  assert.equal(fireEvent.keyDown(document.body, { key: "/" }), true);
+  assert.equal(focused(), BODY);
+});
+
 async function openLog({ controller = null, varySnapshot = false } = {}) {
   const bridge = logBridge(varySnapshot);
   const context = featureContext(bridge);

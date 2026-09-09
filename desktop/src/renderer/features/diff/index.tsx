@@ -34,9 +34,15 @@ import {
 import { QueryCoordinator } from "../../core/query.js";
 import {
   InlineComposer,
+  anchorIdentity,
   useInlineReviewComposer,
   type InlineComposerController,
 } from "../review/composer.js";
+import {
+  PendingCard,
+  PendingCardMirror,
+  type PendingDraftEntry,
+} from "../review/pending-card.js";
 import { ReviewHeader } from "../review-detail/index.js";
 
 const MAX_DIFF_PAGES = 1000;
@@ -51,6 +57,12 @@ export interface InlineComposerSlot {
   readonly controller: InlineComposerController;
   readonly anchor: InlineAnchorSelection | null;
   /**
+   * The pending entry the open composer is editing, or null when it is
+   * collecting a new comment. The card for that entry gives way to the
+   * composer, so the entry is never shown twice.
+   */
+  readonly editing: PendingDraftEntry | null;
+  /**
    * `keepSelection` leaves the app-owned line selection alone, which is what a
    * row inside an existing multi-line selection needs: card #188 composes on a
    * single line, and discarding the range the reader built with the shipped
@@ -59,6 +71,7 @@ export interface InlineComposerSlot {
   readonly open: (
     anchor: InlineAnchorSelection,
     keepSelection?: boolean,
+    entry?: PendingDraftEntry | null,
   ) => void;
   readonly close: () => void;
 }
@@ -394,6 +407,9 @@ function DiffWorkspace({
   const [target, setTarget] = useState(0);
   const [composerAnchor, setComposerAnchor] =
     useState<InlineAnchorSelection | null>(null);
+  const [editingEntry, setEditingEntry] = useState<PendingDraftEntry | null>(
+    null,
+  );
   const composerController = useInlineReviewComposer(
     bridge,
     review,
@@ -417,12 +433,14 @@ function DiffWorkspace({
   // anchor that no longer belongs to the loaded diff is dropped, and its typed
   // text stays in the per-anchor buffer either way.
   useEffect(() => {
-    setComposerAnchor((anchor) =>
-      anchor === null || anchorBelongsToLoadedDiff(anchor, review, loaded)
-        ? anchor
-        : null,
-    );
-  }, [loaded, review]);
+    if (
+      composerAnchor === null ||
+      anchorBelongsToLoadedDiff(composerAnchor, review, loaded)
+    )
+      return;
+    setComposerAnchor(null);
+    setEditingEntry(null);
+  }, [composerAnchor, loaded, review]);
   useEffect(() => {
     setSelected(files[0]?.file_index ?? 0);
     setTarget(0);
@@ -456,17 +474,41 @@ function DiffWorkspace({
   const visible = loaded.rows.filter((row) => row.file_index === selected);
   const selectedFile =
     files.find((file) => file.file_index === selected) ?? null;
+  // The entry the composer is editing is re-read from the controller on every
+  // render, so a save that rewrote the pending list cannot leave the composer
+  // holding a body the store no longer has.
+  const editing =
+    editingEntry === null
+      ? null
+      : (composerController.pending.find(
+          (entry) => entry.id === editingEntry.id,
+        ) ?? null);
+  // A pending entry that leaves the review while its editor is open takes the
+  // editor with it, rather than turning into a composer for a new comment on
+  // the same line.
+  useEffect(() => {
+    if (
+      editingEntry === null ||
+      composerController.pending.some((entry) => entry.id === editingEntry.id)
+    )
+      return;
+    setComposerAnchor(null);
+    setEditingEntry(null);
+  }, [composerController.pending, editingEntry]);
   const inline: InlineComposerSlot = {
     controller: composerController,
     anchor: composerAnchor,
-    open: (anchor, keepSelection = false) => {
+    editing,
+    open: (anchor, keepSelection = false, entry = null) => {
       composerController.clearMessage();
       if (!keepSelection) selectAnchor(anchor);
       setComposerAnchor(anchor);
+      setEditingEntry(entry);
     },
     close: () => {
       composerController.clearMessage();
       setComposerAnchor(null);
+      setEditingEntry(null);
     },
   };
   const drag: LineRangeDrag = {
@@ -554,6 +596,7 @@ function DiffWorkspace({
           selectAnchor={selectAnchor}
           inline={inline}
           drag={drag}
+          pending={composerController.pending}
         />
       </section>
     </div>
@@ -571,6 +614,7 @@ function DiffRowsWindow({
   selectAnchor,
   inline,
   drag,
+  pending,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -582,6 +626,7 @@ function DiffRowsWindow({
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
   readonly inline: InlineComposerSlot;
   readonly drag: LineRangeDrag;
+  readonly pending: readonly PendingDraftEntry[];
 }): ReactNode {
   const [start, setStart] = useState(
     Math.max(0, Math.floor(targetIndex / pageSize) * pageSize),
@@ -612,6 +657,7 @@ function DiffRowsWindow({
                     selectAnchor={selectAnchor}
                     inline={inline}
                     drag={drag}
+                    pending={pending}
                   />
                 ))}
               </div>
@@ -631,6 +677,7 @@ function DiffRowsWindow({
               selectAnchor={selectAnchor}
               inline={inline}
               drag={drag}
+              pending={pending}
             />
           ))}
         </div>
@@ -708,6 +755,7 @@ function DiffRowView({
   selectAnchor,
   inline,
   drag,
+  pending,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -717,6 +765,7 @@ function DiffRowView({
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
   readonly inline: InlineComposerSlot;
   readonly drag: LineRangeDrag;
+  readonly pending: readonly PendingDraftEntry[];
 }): ReactNode {
   if (row.kind === "file") {
     const path =
@@ -728,6 +777,7 @@ function DiffRowView({
         <strong className="file-path">{path}</strong>
         <span className="file-status">{row.status}</span>
         <FileBadges file={row} />
+        <PendingFileCount pending={pending} file={row} />
       </header>
     );
   }
@@ -781,6 +831,19 @@ function DiffRowView({
   const composerOpen =
     inline.anchor !== null &&
     composerOnUnifiedRow(inline.anchor, loaded, file, row);
+  const entries = pendingOnUnifiedRow(pending, file, row);
+  const explains = file === null ? null : (pendingOnFile(pending, file)[0]?.id ?? null);
+  const editEntry = (entry: PendingDraftEntry): void => {
+    if (!file || !entry.anchor) return;
+    // The composer takes the row the card sits on, which is the line the
+    // stored anchor names. Nothing is recaptured: the entry keeps the anchor
+    // it was saved with, and the selection the reader built is left alone.
+    inline.open(
+      selectionForUnifiedLine(review, loaded, file, row, entry.anchor.side),
+      true,
+      entry,
+    );
+  };
   return (
     <>
       <div
@@ -854,14 +917,117 @@ function DiffRowView({
       {composerOpen && inline.anchor && (
         <div className="inline-composer-row" role="listitem">
           <InlineComposer
+            key={composerKey(inline)}
             anchor={inline.anchor}
             controller={inline.controller}
+            entry={inline.editing}
             close={inline.close}
           />
         </div>
       )}
+      {entries.map((entry) =>
+        inline.editing?.id === entry.id ? null : (
+          <div className="pending-card-row" role="listitem" key={entry.id}>
+            <PendingCard
+              entry={entry}
+              reason={inline.controller.entryReason}
+              explain={entry.id === explains}
+              busy={inline.controller.busy}
+              openExternal={inline.controller.openExternal}
+              edit={() => editEntry(entry)}
+              remove={() => void inline.controller.removeEntry(entry.id)}
+            />
+          </div>
+        ),
+      )}
     </>
   );
+}
+
+/**
+ * The composer keeps the text it is collecting in its own state, so it has to
+ * be remounted whenever what it is composing changes. A new comment and one or
+ * more pending cards share a row, and Edit swaps the composer's shape without
+ * moving it, so without this key React reconciles the two and one comment's
+ * unsent text is saved into another.
+ */
+function composerKey(slot: InlineComposerSlot): string {
+  return slot.editing
+    ? `edit:${slot.editing.id}`
+    : `new:${anchorIdentity(slot.anchor)}`;
+}
+
+/**
+ * "N pending" in the file header, counting the entries anchored to this file.
+ * The composer chip counts the whole review, so the header says which scope it
+ * is naming.
+ */
+function PendingFileCount({
+  pending,
+  file,
+}: {
+  readonly pending: readonly PendingDraftEntry[];
+  readonly file: DiffFileRow;
+}): ReactNode {
+  const count = pendingOnFile(pending, file).length;
+  if (count === 0) return null;
+  return (
+    <span
+      className="file-pending"
+      aria-label={`${count} pending review comments on this file`}
+    >
+      {count} pending
+    </span>
+  );
+}
+
+/** The pending entries whose stored anchor names this file. */
+function pendingOnFile(
+  pending: readonly PendingDraftEntry[],
+  file: DiffFileRow,
+): readonly PendingDraftEntry[] {
+  return pending.filter(
+    (entry) =>
+      entry.anchor !== null &&
+      entry.anchor.old_path === file.old_path &&
+      entry.anchor.new_path === file.new_path,
+  );
+}
+
+/**
+ * The entries that belong under one unified row. A range entry is anchored on
+ * the line that closes it, so its card lands under the end of the range, which
+ * is where the composer that wrote it stood.
+ */
+function pendingOnUnifiedRow(
+  pending: readonly PendingDraftEntry[],
+  file: DiffFileRow | null,
+  row: Extract<DiffRow, { readonly kind: "line" }>,
+): readonly PendingDraftEntry[] {
+  if (!file) return [];
+  return pendingOnFile(pending, file).filter((entry) => {
+    const anchor = entry.anchor!;
+    return anchor.side === "old"
+      ? row.old_line !== null && row.old_line === anchor.old_line
+      : row.new_line !== null && row.new_line === anchor.new_line;
+  });
+}
+
+/** The same match on a split row, read through the cell the anchor names. */
+function pendingOnSplitRow(
+  pending: readonly PendingDraftEntry[],
+  file: DiffFileRow | null,
+  row: SplitDiffRow,
+): readonly PendingDraftEntry[] {
+  if (!file) return [];
+  return pendingOnFile(pending, file).filter((entry) => {
+    const anchor = entry.anchor!;
+    const cell = row[anchor.side];
+    if (!cell || cell.anchor_side !== anchor.side) return false;
+    return anchor.side === "old"
+      ? cell.old_line !== null && cell.old_line === anchor.old_line
+      : cell.new_line !== null && cell.new_line === anchor.new_line;
+  });
 }
 
 /**
@@ -975,6 +1141,7 @@ function SplitPaneRow({
   selectAnchor,
   inline,
   drag,
+  pending,
 }: {
   readonly review: string;
   readonly loaded: LoadedDiff;
@@ -985,6 +1152,7 @@ function SplitPaneRow({
   readonly selectAnchor: (selection: InlineAnchorSelection | null) => void;
   readonly inline: InlineComposerSlot;
   readonly drag: LineRangeDrag;
+  readonly pending: readonly PendingDraftEntry[];
 }): ReactNode {
   if (row.kind === "file")
     return (
@@ -994,6 +1162,7 @@ function SplitPaneRow({
         </strong>
         <span className="file-status">{row.status}</span>
         <FileBadges file={row} />
+        {side === "new" && <PendingFileCount pending={pending} file={row} />}
       </header>
     );
   if (row.kind === "hunk")
@@ -1006,6 +1175,20 @@ function SplitPaneRow({
   const composerOpen =
     inline.anchor !== null &&
     composerOnSplitRow(inline.anchor, loaded, file, row);
+  // Both panes read the same entry list for the same row, so the pane that
+  // does not own the anchor side renders one spacer per card and the two
+  // independent pane grids stay on the same rows.
+  const entries = pendingOnSplitRow(pending, file, row);
+  const explains = file === null ? null : (pendingOnFile(pending, file)[0]?.id ?? null);
+  const editEntry = (entry: PendingDraftEntry): void => {
+    const cell = entry.anchor ? row[entry.anchor.side] : null;
+    if (!file || !entry.anchor || !cell) return;
+    inline.open(
+      selectionForSplitCell(review, loaded, file, row, cell),
+      true,
+      entry,
+    );
+  };
   return (
     <>
       <SplitCell
@@ -1025,8 +1208,10 @@ function SplitPaneRow({
         (inline.anchor.side === side ? (
           <div className="inline-composer-row" role="listitem">
             <InlineComposer
+              key={composerKey(inline)}
               anchor={inline.anchor}
               controller={inline.controller}
+              entry={inline.editing}
               close={inline.close}
             />
           </div>
@@ -1040,6 +1225,23 @@ function SplitPaneRow({
             aria-hidden="true"
           />
         ))}
+      {entries.map((entry) =>
+        inline.editing?.id === entry.id ? null : entry.anchor?.side === side ? (
+          <div className="pending-card-row" role="listitem" key={entry.id}>
+            <PendingCard
+              entry={entry}
+              reason={inline.controller.entryReason}
+              explain={entry.id === explains}
+              busy={inline.controller.busy}
+              openExternal={inline.controller.openExternal}
+              edit={() => editEntry(entry)}
+              remove={() => void inline.controller.removeEntry(entry.id)}
+            />
+          </div>
+        ) : (
+          <PendingCardMirror key={entry.id} />
+        ),
+      )}
     </>
   );
 }
@@ -1625,7 +1827,11 @@ export function resolveDiscussionTarget(
     file.is_truncated ||
     file.is_unavailable ||
     file.is_empty ||
-    file.is_mode_only
+    file.is_mode_only ||
+    // A rename-only file projects no source rows, so no discussion line can
+    // resolve into it. It is deliberately absent from `contextIsComplete`:
+    // that flag means the held content is partial, which a rename is not.
+    file.is_rename_only
   )
     return null;
   if (loaded.layout === "split") {

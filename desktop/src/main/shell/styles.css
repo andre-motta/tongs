@@ -18,6 +18,14 @@
   --warning: #efb650;
   --addition: #123626;
   --deletion: #3e1d25;
+  /*
+   * The composer row, the pending card row and the spacers that keep the split
+   * panes aligned share these heights. They live here rather than on
+   * .diff-workspace because the rows that consume them are not all inside it,
+   * and a token with one owner cannot drift from its fallback.
+   */
+  --inline-composer-height: 17rem;
+  --pending-card-height: 9rem;
 }
 
 .review-workflow-shell {
@@ -908,12 +916,6 @@ button {
   color: var(--muted);
 }
 .diff-workspace {
-  /*
-   * The composer row and the spacer that keeps the split panes aligned share
-   * this height. #190 can set it from a measured composer when pending cards
-   * render under the same anchor.
-   */
-  --inline-composer-height: 17rem;
   min-height: 480px;
   display: grid;
   grid-template-columns: minmax(180px, 25%) minmax(0, 1fr);
@@ -1111,8 +1113,77 @@ button {
 .inline-composer-row,
 .inline-composer-mirror {
   box-sizing: border-box;
-  height: var(--inline-composer-height, 17rem);
+  height: var(--inline-composer-height);
   padding: 0.5rem 0.75rem 0.75rem 55px;
+}
+
+/*
+ * A pending entry is a row of the diff under the line its anchor names, on the
+ * same fixed-height terms as the composer: the card scrolls internally so the
+ * mirrored spacer in the other split pane always matches it.
+ */
+.pending-card-row,
+.pending-card-mirror {
+  box-sizing: border-box;
+  height: var(--pending-card-height);
+  padding: 0.25rem 0.75rem 0.5rem 55px;
+}
+.pending-card {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  overflow: auto;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: 0.5rem;
+  background: var(--panel-2);
+}
+.pending-card-stale {
+  border-left-color: var(--muted);
+}
+.pending-card-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.pending-badge {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.pending-card-anchor {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.pending-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+.pending-card-ribbon {
+  margin: 0;
+  padding: 2px 8px;
+  border-radius: 0.35rem;
+  background: var(--deletion);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+.pending-card-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.file-pending {
+  margin-left: auto;
+  color: var(--warning);
+  font-size: 12px;
+  white-space: nowrap;
 }
 .inline-composer {
   display: grid;

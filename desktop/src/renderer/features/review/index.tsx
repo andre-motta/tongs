@@ -57,6 +57,7 @@ import {
   isUncertainError,
   mutationAnchor,
   newOperationId,
+  recoverDraft,
   reviewMutationError,
   type ComposerBuffers,
 } from "./composer.js";
@@ -1776,18 +1777,6 @@ function QuickVerdicts({
 
 function Notice({ kind, children }: { readonly kind: string; readonly children: ReactNode }): ReactNode {
   return <div className={`notice notice-${kind}`} role={kind === "error" ? "alert" : "status"}>{children}</div>;
-}
-
-async function recoverDraft(
-  bridge: ReviewDesktopBridge,
-  review: string,
-  draftId: string,
-): Promise<DraftSnapshotDto | null> {
-  try {
-    return await bridge.getReviewDraft({ review, draft_id: draftId }).result;
-  } catch {
-    return null;
-  }
 }
 
 async function recoverLatestSubmission(

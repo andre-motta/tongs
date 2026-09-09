@@ -16,6 +16,8 @@ import {
   conflictDraftSave,
   contextFingerprint,
   createReviewWorkflowState,
+  discardConfirmationPrompt,
+  discardSubject,
   dismissSupersededDraft,
   draftNeedsRevisionRecovery,
   editDraft,
@@ -541,6 +543,90 @@ test("context fingerprint matches Python length-prefixed UTF-8 and rejects chang
     captureDraftAnchor({ ...selection, contextComplete: false }, () => selection),
     /context is partial/,
   );
+});
+
+/**
+ * The wording the drawer and the composer overflow both put in front of the
+ * reader. The corner the two surfaces cannot reach on their own is a review
+ * whose comments are all gone: it must not claim comments it does not have,
+ * and it must not offer a summary that was never written.
+ */
+test("the discard confirmation names only what the draft actually holds", () => {
+  const base = createReviewWorkflowState(review, revision);
+  const summaryOnly = adoptDraft(base, draft(1, "a summary and nothing else"));
+  assert.equal(discardSubject(summaryOnly), "the summary");
+  assert.equal(
+    discardConfirmationPrompt(summaryOnly),
+    "Discard the summary? This cannot be undone.",
+  );
+
+  const empty = adoptDraft(base, draft(1, "   "));
+  assert.equal(discardSubject(empty), "this pending review");
+  assert.equal(
+    discardConfirmationPrompt(empty),
+    "Discard this pending review? This cannot be undone.",
+  );
+
+  const both = adoptDraft(base, {
+    ...draft(2, "a summary"),
+    comments: [
+      { id: "c1", kind: "general", body: "one" },
+      { id: "c2", kind: "general", body: "two" },
+    ],
+  });
+  assert.equal(discardSubject(both), "2 pending comments and the summary");
+  assert.equal(
+    discardConfirmationPrompt(both),
+    "Discard 2 pending comments and the summary? This cannot be undone.",
+  );
+
+  const oneComment = adoptDraft(base, {
+    ...draft(3, ""),
+    comments: [{ id: "c1", kind: "general", body: "one" }],
+  });
+  assert.equal(discardSubject(oneComment), "1 pending comment");
+
+  // A chosen verdict is content the reader entered and the discard destroys
+  // it, so the sentence names it rather than letting it go unannounced.
+  const everything = adoptDraft(base, {
+    ...draft(4, "a summary"),
+    verdict: "request_changes",
+    comments: [
+      { id: "c1", kind: "general", body: "one" },
+      { id: "c2", kind: "general", body: "two" },
+    ],
+  });
+  assert.equal(
+    discardSubject(everything),
+    "2 pending comments, the summary and the verdict",
+  );
+  assert.equal(
+    discardConfirmationPrompt(everything),
+    "Discard 2 pending comments, the summary and the verdict? This cannot be undone.",
+  );
+
+  const verdictOnly = adoptDraft(base, { ...draft(5, ""), verdict: "approve" });
+  assert.equal(discardSubject(verdictOnly), "the verdict");
+  assert.equal(
+    discardConfirmationPrompt(verdictOnly),
+    "Discard the verdict? This cannot be undone.",
+  );
+
+  const commentAndVerdict = adoptDraft(base, {
+    ...draft(6, "   "),
+    verdict: "comment",
+    comments: [{ id: "c1", kind: "general", body: "one" }],
+  });
+  assert.equal(
+    discardSubject(commentAndVerdict),
+    "1 pending comment and the verdict",
+  );
+
+  const summaryAndVerdict = adoptDraft(base, {
+    ...draft(7, "a summary"),
+    verdict: "comment",
+  });
+  assert.equal(discardSubject(summaryAndVerdict), "the summary and the verdict");
 });
 
 function draft(version, body) {

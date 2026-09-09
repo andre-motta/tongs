@@ -747,10 +747,15 @@ function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
         : [],
     [loaded.lines, search],
   );
-  useEffect(() => setSelectedMatch(0), [query, loaded.snapshotId]);
-  // A refresh keeps the reader where they were, but it ends any open search.
+  useEffect(() => setSelectedMatch(0), [query]);
+  // A refresh replaces the log the search was filtering, so it ends the search
+  // outright and puts the row window back where the search started.
   useEffect(() => {
+    const opened = openedFrom.current;
     openedFrom.current = null;
+    setQuery("");
+    setSelectedMatch(0);
+    if (opened) setWindowStart(opened.start);
   }, [loaded.snapshotId]);
   const target = matches[selectedMatch] ?? null;
   useEffect(() => {
@@ -796,8 +801,13 @@ function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
   // bubbles through the React tree. Listen on the document instead, for as long
   // as a log is on screen.
   useEffect(() => {
-    const owner = searchInput.current?.ownerDocument;
-    if (!owner) return;
+    const input = searchInput.current;
+    const owner = input?.ownerDocument;
+    if (!input || !owner) return;
+    // These keys belong to the pipelines page. Anything aimed at another part of
+    // the shell, including a modal dialog rendered beside the routed content, is
+    // none of this view's business.
+    const region = input.closest(".ci-page");
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (
         event.ctrlKey ||
@@ -806,14 +816,23 @@ function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
         event.defaultPrevented
       )
         return;
+      const target = event.target as Node | null;
+      if (target === null) return;
+      if (target !== owner.body && !(region?.contains(target) ?? false)) return;
+      // A modal dialog owns the keyboard even for a keystroke that landed on the
+      // document body, so never pull focus out from behind one.
+      if (owner.querySelector('[aria-modal="true"]') !== null) return;
       const active = owner.activeElement as HTMLElement | null;
-      const inSearch = active !== null && active === searchInput.current;
+      const inSearch = active !== null && active === input;
       if (event.key === "/" && !isTextEntry(active)) {
         event.preventDefault();
         openSearch();
         return;
       }
-      if (event.key === "Escape" && (inSearch || openedFrom.current !== null)) {
+      if (
+        event.key === "Escape" &&
+        (inSearch || query !== "" || openedFrom.current !== null)
+      ) {
         event.preventDefault();
         closeSearch();
         return;
@@ -829,7 +848,7 @@ function LogViewer({ loaded }: { readonly loaded: LoadedLog }): ReactNode {
     };
     owner.addEventListener("keydown", onKeyDown);
     return () => owner.removeEventListener("keydown", onKeyDown);
-  }, [closeSearch, matches.length, openSearch, step]);
+  }, [closeSearch, matches.length, openSearch, query, step]);
 
   return (
     <>

@@ -1123,6 +1123,87 @@ test("the comment verdict reads the body the composer is holding", async () => {
   );
 });
 
+test("an unsupported verdict names its capability even while another verdict stands", async () => {
+  const review = "review-verdict-unsupported";
+  const bridge = reviewBridge(review, {
+    getReviewMutationCapabilities: () =>
+      read({ review, capabilities: capabilities({ request_changes: false }) }),
+  });
+  const view = renderOverview(bridge, review);
+  await view.findByLabelText("General review comment");
+  fireEvent.change(view.getByLabelText("General review comment"), {
+    target: { value: "a body" },
+  });
+  fireEvent.click(await enabledButton(view, "Submit comment verdict"));
+  await view.findByText("Comment verdict submitted.");
+
+  // A missing capability is permanent; a standing lasts until the next
+  // comment, so the tile names the one that will still be true tomorrow.
+  assert.equal(
+    view.getByRole("button", { name: "Request changes" }).title,
+    "Request changes is unsupported for this review.",
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Approve review" }).title,
+    "Comment verdict submitted.",
+  );
+});
+
+test("a verdict in flight never takes the text written while it was open", async () => {
+  const review = "review-verdict-midflight";
+  const verdicts = [];
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const bridge = reviewBridge(review, {
+    submitReviewVerdict: async (params) => {
+      verdicts.push(params);
+      await gate;
+      return mutation(params.operation_id);
+    },
+  });
+  const view = renderOverview(bridge, review);
+  await view.findByLabelText("General review comment");
+  fireEvent.change(view.getByLabelText("General review comment"), {
+    target: { value: "the submitted body" },
+  });
+  fireEvent.click(await enabledButton(view, "Submit comment verdict"));
+  await waitFor(() => assert.equal(verdicts.length, 1));
+  assert.equal(verdicts[0].body, "the submitted body");
+
+  // The box stays writable for the round trip, which is exactly when a reader
+  // carries on writing.
+  assert.equal(
+    view.getByLabelText("General review comment").disabled,
+    false,
+  );
+  fireEvent.change(view.getByLabelText("General review comment"), {
+    target: { value: "a new note typed during the flight" },
+  });
+  assert.equal(readInlineBuffer(review, null), "a new note typed during the flight");
+
+  release();
+  await view.findByText("Comment verdict submitted.");
+  await settle(4);
+
+  // The verdict still has its standing, and the newer text is untouched in
+  // both the box and the store.
+  assert.equal(
+    view.container.querySelectorAll(".notice-verdict").length,
+    1,
+  );
+  assert.equal(
+    view.getByLabelText("General review comment").value,
+    "a new note typed during the flight",
+  );
+  assert.equal(
+    readInlineBuffer(review, null),
+    "a new note typed during the flight",
+  );
+  assert.equal(verdicts.length, 1);
+});
+
 test("a failed review-level discussions read is stated, not reported as an absence", async () => {
   const review = "review-notes-failure";
   let attempts = 0;

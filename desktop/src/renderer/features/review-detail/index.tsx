@@ -26,6 +26,7 @@ import {
   clearInlineBuffer,
   isUncertainError,
   newOperationId,
+  readInlineBuffer,
   reviewMutationError,
   useInlineReviewComposer,
 } from "../review/composer.js";
@@ -436,7 +437,14 @@ function GeneralComposer({
       // did nothing, and the obvious answer would be to press again.
       if (outcome.outcome !== "known") return;
       setSubmitted(verdict);
-      if (verdict !== "approve") {
+      // Only the text that was submitted is cleared. The box stays writable
+      // for the round trip, so a reader who kept typing has something newer in
+      // it than the verdict carried, and taking that would be the one place in
+      // this app where unsent text is discarded without being offered back.
+      if (
+        verdict !== "approve" &&
+        readInlineBuffer(review, null) === command.body
+      ) {
         clearInlineBuffer(review, null);
         setComposerEpoch((epoch) => epoch + 1);
       }
@@ -566,16 +574,18 @@ function QuickVerdicts({
               blocked ||
               (verdict !== "approve" && !bodyAvailable)
             }
+            // An unsupported capability is permanent and a standing is not, so
+            // the tile names the reason that will still be true tomorrow first.
             title={
               capabilities === null
                 ? VERDICTS_LOADING
-                : standing !== null
-                  ? standing
-                  : supported !== true
+                : supported !== true
                   ? `${text} is unsupported for this review.`
-                  : verdict !== "approve" && !bodyAvailable
-                    ? "Enter a review body in the general composer first."
-                    : undefined
+                  : standing !== null
+                    ? standing
+                    : verdict !== "approve" && !bodyAvailable
+                      ? "Enter a review body in the general composer first."
+                      : undefined
             }
             onClick={() => void run(verdict)}
           >

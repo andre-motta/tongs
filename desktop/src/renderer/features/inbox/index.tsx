@@ -1,5 +1,7 @@
 import {
   useCallback,
+  useEffect,
+  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -36,6 +38,37 @@ const REVIEW_SORTS: readonly {
   { value: "author", label: "Author" },
 ]);
 
+export interface InboxListSelection {
+  readonly scope: ReviewScope;
+  readonly state: "open" | "closed";
+  readonly sort: ReviewSort;
+  readonly selected: string | null;
+}
+
+const DEFAULT_LIST_SELECTION: InboxListSelection = Object.freeze({
+  scope: "all_open",
+  state: "open",
+  sort: "updated",
+  selected: null,
+});
+
+/**
+ * Session memory of each review list, keyed by repository scope. Opening a
+ * review unmounts the list, so without this the chosen scope, state, sort and
+ * the review the user was on are all lost on the most repeated navigation in
+ * the app. It records only presentation choices; the scope values handed to
+ * `listReviews` are unchanged.
+ */
+const listSelections = new Map<string, InboxListSelection>();
+
+export function inboxListSelection(key: string): InboxListSelection {
+  return listSelections.get(key) ?? DEFAULT_LIST_SELECTION;
+}
+
+export function resetInboxListSelections(): void {
+  listSelections.clear();
+}
+
 const CI_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
   failed: 0,
   running: 1,
@@ -54,6 +87,7 @@ export function createInboxFeature(): FeatureContribution {
     render: (context, route) =>
       route.kind === "inbox" ? (
         <InboxView
+          key={route.repository?.handle ?? "all"}
           bridge={context.bridge}
           queries={context.queries}
           route={route}
@@ -84,12 +118,20 @@ function InboxView({
   readonly navigate: (route: AppRoute) => void;
 }): ReactNode {
   const repository = route.repository;
-  const [reviewScope, setReviewScope] = useState<ReviewScope>("all_open");
-  const [reviewState, setReviewState] = useState<"open" | "closed">("open");
-  const [reviewSort, setReviewSort] = useState<ReviewSort>("updated");
+  const listKey = repository?.handle ?? "all";
+  const [listSelection, setListSelection] = useState<InboxListSelection>(() =>
+    inboxListSelection(listKey),
+  );
+  const retain = (change: Partial<InboxListSelection>): void => {
+    const next = Object.freeze({ ...listSelection, ...change });
+    listSelections.set(listKey, next);
+    setListSelection(next);
+  };
+  const reviewScope = listSelection.scope;
+  const reviewState = listSelection.state;
+  const reviewSort = listSelection.sort;
   const selectScope = (next: ReviewScope): void => {
-    setReviewScope(next);
-    if (next !== "all_open") setReviewState("open");
+    retain(next === "all_open" ? { scope: next } : { scope: next, state: "open" });
   };
   const queryIdentity = `${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`;
   const title = repository?.display_name ?? "All reviews";
@@ -125,7 +167,7 @@ function InboxView({
               className={`button ${reviewState === "open" ? "button-active" : "button-secondary"}`}
               data-review-state="open"
               aria-pressed={reviewState === "open"}
-              onClick={() => setReviewState("open")}
+              onClick={() => retain({ state: "open" })}
             >
               Open
             </button>
@@ -139,7 +181,7 @@ function InboxView({
                   ? undefined
                   : "Closed and merged reviews are available in All Open."
               }
-              onClick={() => setReviewState("closed")}
+              onClick={() => retain({ state: "closed" })}
             >
               Closed &amp; merged
             </button>
@@ -150,7 +192,7 @@ function InboxView({
           <select
             value={reviewSort}
             onChange={(event) =>
-              setReviewSort(event.currentTarget.value as ReviewSort)
+              retain({ sort: event.currentTarget.value as ReviewSort })
             }
           >
             {REVIEW_SORTS.map((option) => (
@@ -172,6 +214,8 @@ function InboxView({
         reviewScope={reviewScope}
         reviewState={reviewState}
         reviewSort={reviewSort}
+        selected={listSelection.selected}
+        select={(handle) => retain({ selected: handle })}
         navigate={navigate}
       />
     </>
@@ -188,6 +232,8 @@ function InboxResults({
   reviewScope,
   reviewState,
   reviewSort,
+  selected,
+  select,
   navigate,
 }: {
   readonly bridge: DesktopBridge;
@@ -199,6 +245,8 @@ function InboxResults({
   readonly reviewScope: ReviewScope;
   readonly reviewState: "open" | "closed";
   readonly reviewSort: ReviewSort;
+  readonly selected: string | null;
+  readonly select: (handle: string) => void;
   readonly navigate: (route: AppRoute) => void;
 }): ReactNode {
   const begin = useCallback(
@@ -254,6 +302,8 @@ function InboxResults({
           result={state.value}
           navigate={navigate}
           sort={reviewSort}
+          selected={selected}
+          select={select}
           emptyLabel={emptyReviewLabel(reviewScope, reviewState)}
         />
       )}
@@ -290,14 +340,29 @@ function ReviewList({
   result,
   navigate,
   sort,
+  selected,
+  select,
   emptyLabel,
 }: {
   readonly result: ReviewListResult;
   readonly navigate: (route: AppRoute) => void;
   readonly sort: ReviewSort;
+  readonly selected: string | null;
+  readonly select: (handle: string) => void;
   readonly emptyLabel: string;
 }): ReactNode {
   const presentation = inboxPresentation(result);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selected === null) return;
+    const target = [
+      ...(listRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+    ].find((button) => button.dataset.reviewHandle === selected);
+    if (!target) return;
+    target.focus();
+    if (typeof target.scrollIntoView === "function")
+      target.scrollIntoView({ block: "nearest" });
+  }, [selected]);
   const moveFocus = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (
       event.key !== "ArrowDown" &&
@@ -343,10 +408,17 @@ function ReviewList({
           className="review-list"
           role="list"
           aria-label="Review results"
+          ref={listRef}
           onKeyDown={moveFocus}
         >
           {sortReviewItems(result.items, sort).map((item) => (
-            <ReviewCard key={item.handle} item={item} navigate={navigate} />
+            <ReviewCard
+              key={item.handle}
+              item={item}
+              selected={item.handle === selected}
+              select={select}
+              navigate={navigate}
+            />
           ))}
         </div>
       )}
@@ -406,17 +478,26 @@ function emptyReviewLabel(
 
 function ReviewCard({
   item,
+  selected,
+  select,
   navigate,
 }: {
   readonly item: ReviewListItemDto;
+  readonly selected: boolean;
+  readonly select: (handle: string) => void;
   readonly navigate: (route: AppRoute) => void;
 }): ReactNode {
   return (
     <button
-      className="review-card"
+      className={`review-card${selected ? " review-card-selected" : ""}`}
       role="listitem"
       data-review-number={item.summary.number}
-      onClick={() => navigate({ kind: "review", item, panel: "overview" })}
+      data-review-handle={item.handle}
+      aria-current={selected ? "true" : undefined}
+      onClick={() => {
+        select(item.handle);
+        navigate({ kind: "review", item, panel: "overview" });
+      }}
     >
       <span className={`state state-${item.summary.ci_status}`}>
         {item.summary.ci_status}

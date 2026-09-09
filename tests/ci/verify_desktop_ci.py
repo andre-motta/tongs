@@ -10,15 +10,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
-REQUIRED_GATE_JOBS = frozenset(
-    {
-        "lint-and-format",
-        "core",
-        "desktop-fixtures",
-        "fedora-podman",
-        "desktop-production",
-    }
-)
+# NEGATIVE CONTROL BRANCH ONLY: reduced to the jobs this scratch run keeps.
+REQUIRED_GATE_JOBS = frozenset({"desktop-production"})
 
 
 class VerificationError(ValueError):

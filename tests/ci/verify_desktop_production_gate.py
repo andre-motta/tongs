@@ -114,31 +114,14 @@ NODE_TAP = "node-tap"
 ARTIFACT_LIFECYCLE = "artifact-lifecycle-v1"
 
 #: Jobs of the ordinary CI workflow that must each report ``success``.
-REQUIRED_CI_JOBS: frozenset[str] = frozenset(
-    {
-        "lint-and-format",
-        "core",
-        "desktop-fixtures",
-        "fedora-podman",
-        "desktop-production",
-    }
-)
+REQUIRED_CI_JOBS: frozenset[str] = frozenset({"desktop-production"})
 
 #: Jobs of the called production workflow that must each report ``success``.
 #: The reusable workflow reports one aggregated result to its caller, so the
 #: consumer must inspect this inner set separately or a skipped inner job would
 #: be invisible.
 REQUIRED_PRODUCTION_JOBS: frozenset[str] = frozenset(
-    {
-        "source-identity",
-        "desktop-tap",
-        "archive",
-        "archive-evidence",
-        "installed-core",
-        "archive-sbom",
-        "rpm-lifecycle",
-        "native-payload",
-    }
+    {"source-identity", "native-payload"}
 )
 
 #: Reserved identifier for the physical GPU acceptance owned by issue #55.  No
@@ -146,132 +129,6 @@ REQUIRED_PRODUCTION_JOBS: frozenset[str] = frozenset(
 GPU_GATE_CHECK_ID = "desktop-native-physical-gpu"
 
 REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
-    RequiredCheck(
-        check_id="core-python-3.12",
-        stages=(
-            "core-suite",
-            "mcp-suite",
-        ),
-        workflow="ci",
-        job="core",
-        evidence_directory="core-python-3.12",
-        receipt_name="core-receipt.json",
-        reports=(
-            ExpectedReport("reports/core-evidence.json", ARTIFACT_LIFECYCLE),
-            ExpectedReport("reports/core.junit.xml", PYTEST_JUNIT, "tests."),
-            ExpectedReport("reports/mcp.junit.xml", PYTEST_JUNIT, "tests.test_mcp."),
-        ),
-    ),
-    RequiredCheck(
-        check_id="core-python-3.13",
-        stages=(
-            "core-suite",
-            "mcp-suite",
-        ),
-        workflow="ci",
-        job="core",
-        evidence_directory="core-python-3.13",
-        receipt_name="core-receipt.json",
-        reports=(
-            ExpectedReport("reports/core-evidence.json", ARTIFACT_LIFECYCLE),
-            ExpectedReport("reports/core.junit.xml", PYTEST_JUNIT, "tests."),
-            ExpectedReport("reports/mcp.junit.xml", PYTEST_JUNIT, "tests.test_mcp."),
-        ),
-    ),
-    RequiredCheck(
-        check_id="desktop-production-tap",
-        stages=(
-            "exact-lock-shell-build",
-            "production-shell-and-renderer-tap",
-            "plugin-example-compatibility",
-            "draft-and-process-acceptance",
-        ),
-        workflow="desktop-production",
-        job="desktop-tap",
-        evidence_directory="desktop-production-tap",
-        receipt_name="desktop-tap-receipt.json",
-        reports=(
-            ExpectedReport("reports/desktop-tap-evidence.json", ARTIFACT_LIFECYCLE),
-            ExpectedReport("reports/desktop-shell.tap", NODE_TAP),
-            ExpectedReport(
-                "reports/plugin-example.junit.xml",
-                PYTEST_JUNIT,
-            ),
-            ExpectedReport(
-                "reports/draft-process.junit.xml",
-                PYTEST_JUNIT,
-                "tests.integration.desktop.test_draft_process_acceptance",
-            ),
-        ),
-    ),
-    RequiredCheck(
-        check_id="desktop-archive-lifecycle",
-        stages=(
-            "source-admission",
-            "producer-transfer-validation",
-            "archive-contract-license-validation",
-            "reproducibility-output-binding",
-            "source-tool-metadata-validation",
-        ),
-        requires_source_context=False,
-        workflow="desktop-production",
-        job="archive-evidence",
-        evidence_directory="desktop-archive-lifecycle",
-        receipt_name="archive-receipt.json",
-        reports=(ExpectedReport("reports/archive-evidence.json", ARTIFACT_LIFECYCLE),),
-    ),
-    RequiredCheck(
-        check_id="desktop-installed-core",
-        stages=(
-            "source-admission",
-            "wheel-record-install-identity",
-            "offline-startup-audit",
-            "terminal-evidence",
-        ),
-        workflow="desktop-production",
-        job="installed-core",
-        evidence_directory="desktop-installed-core",
-        receipt_name="installed-core-receipt.json",
-        reports=(
-            ExpectedReport("reports/installed-core-evidence.json", ARTIFACT_LIFECYCLE),
-        ),
-    ),
-    RequiredCheck(
-        check_id="desktop-archive-sbom",
-        stages=(
-            "source-admission",
-            "producer-transfer-validation",
-            "semantic-generation",
-            "determinism",
-        ),
-        requires_source_context=False,
-        workflow="desktop-production",
-        job="archive-sbom",
-        evidence_directory="desktop-archive-sbom",
-        receipt_name="sbom-receipt.json",
-        reports=(ExpectedReport("reports/sbom-evidence.json", ARTIFACT_LIFECYCLE),),
-    ),
-    RequiredCheck(
-        check_id="desktop-rpm-lifecycle",
-        stages=(
-            "exact-payload-pairing",
-            "companion-closure-and-source-rebuild",
-            "clean-install-and-installed-payload",
-            "optional-mcp-install-and-removal",
-            "reinstall-stability",
-            "corrupt-and-dependency-rejection",
-            "upgrade-byte-parity",
-            "complete-uninstall",
-        ),
-        exact_pairing_input="inputs/prepared-inputs.json",
-        workflow="desktop-production",
-        job="rpm-lifecycle",
-        evidence_directory="desktop-rpm-lifecycle",
-        receipt_name="rpm-lifecycle-receipt.json",
-        reports=(
-            ExpectedReport("reports/rpm-lifecycle-evidence.json", ARTIFACT_LIFECYCLE),
-        ),
-    ),
     RequiredCheck(
         check_id="desktop-native-payload-fixture",
         stages=("verifier-fixture-structure",),

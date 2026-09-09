@@ -447,7 +447,9 @@ async function runProof() {
       if (!entryText().some((text) => text.includes("durable_value")))
         throw new Error("durable suggestion entry missing from Your review drawer");
       setValue(labelled("Summary"), "Durable review body after renderer and sidecar restart");
-      labelled("Approve").click();
+      // S54 names the Comment verdict specifically; this is the scenario's
+      // automated counterpart, so the tile choice has to match it.
+      labelled("Comment").click();
       return snapshot();
     `);
     await clickButton("Save summary and verdict");
@@ -480,8 +482,11 @@ async function runProof() {
         [...document.querySelectorAll(".review-drawer-entry-body")].map((item) => item.textContent);
       if (!entryText().some((text) => text.includes("Durable general draft comment")))
         throw new Error("durable general draft comment was not recovered");
-      if (!entryText().some((text) =>
-          text.includes("\u0060\u0060\u0060suggestion\\ndurable_value\\n\u0060\u0060\u0060")))
+      // .review-drawer-entry-body renders through SafeMarkdown, so a fenced
+      // suggestion block never reaches the DOM as literal backtick text; the
+      // fence becomes a rendered code block and textContent carries only the
+      // code, the same as the entryText() check just above.
+      if (!entryText().some((text) => text.includes("durable_value")))
         throw new Error("durable suggestion was not recovered");
       return snapshot();
     `);
@@ -859,9 +864,26 @@ async function evaluate(body) {
       const buttonAria = (prefix) => [...document.querySelectorAll("button")].find(
         (item) => (item.getAttribute("aria-label") || "").startsWith(prefix),
       );
-      const labelled = (label) => [...document.querySelectorAll("label")].find(
-        (item) => item.textContent.includes(label),
-      )?.querySelector("textarea,select,input") ?? null;
+      // Most composer and pending-card fields carry their accessible name as
+      // an aria-label directly on the control (composer.tsx's "General
+      // review comment" / "Inline review comment" / "Pending review
+      // comment" textareas have no wrapping <label> at all). The drawer's
+      // "Summary" field and its "Comment" / "Approve" / "Request changes"
+      // verdict tiles are the opposite: a <label> wraps the control and
+      // carries the text, with no aria-label on the control itself. Try the
+      // aria-label form first, then fall back to the <label>-wrapping form,
+      // so one helper covers both shapes correctly instead of assuming
+      // either one everywhere.
+      const labelled = (label) => {
+        const byAria = document.querySelector(
+          'textarea[aria-label="' + label + '"], input[aria-label="' + label
+            + '"], select[aria-label="' + label + '"]',
+        );
+        if (byAria) return byAria;
+        return [...document.querySelectorAll("label")].find(
+          (item) => item.textContent.includes(label),
+        )?.querySelector("textarea,select,input") ?? null;
+      };
       const setValue = (element, value) => {
         const prototype = element instanceof HTMLTextAreaElement
           ? HTMLTextAreaElement.prototype

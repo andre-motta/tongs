@@ -59,8 +59,13 @@ test("mounted app reconciles successful discovery without losing review work", a
   fireEvent.click(button("Discussions"));
   await waitFor(() => assert.ok(labelled("Quick comment")));
   fireEvent.click(button("Start review"));
-  await waitFor(() => assert.ok(labelled("Review body")));
-  setValue(labelled("Review body"), "unsaved local draft body");
+  // The review body is the drawer's Summary now, so the unsaved text this
+  // scenario protects is typed there and read back from there.
+  await waitFor(() => assert.equal(hasDrawerToggle(), true));
+  fireEvent.click(drawerToggle());
+  await waitFor(() => assert.equal(labelledValue("Summary"), ""));
+  setValue(labelled("Summary"), "unsaved local draft body");
+  fireEvent.click(drawerToggle());
   setValue(labelled("Add general draft comment"), "unsent general composer");
 
   fireEvent.click(button("Files changed"));
@@ -127,9 +132,12 @@ test("mounted app reconciles successful discovery without losing review work", a
   fireEvent.click(button("Repo A restored"));
   fireEvent.click(await awaitReview("Persistent review"));
   fireEvent.click(await awaitButton("Discussions"));
+  await waitFor(() => assert.equal(hasDrawerToggle(), true));
+  fireEvent.click(drawerToggle());
   await waitFor(() =>
-    assert.equal(labelled("Review body")?.value, "unsaved local draft body"),
+    assert.equal(labelledValue("Summary"), "unsaved local draft body"),
   );
+  fireEvent.click(drawerToggle());
   assert.equal(
     labelled("Add general draft comment").value,
     "unsent general composer",
@@ -468,6 +476,23 @@ function reviewButton(name) {
   return [...document.querySelectorAll(".review-card")].find((item) =>
     item.querySelector(".review-title")?.textContent.trim() === name,
   );
+}
+
+/** The "Your review" button, which carries a count and so has no fixed text. */
+function drawerToggle() {
+  return document.querySelector(".review-drawer-toggle") ?? undefined;
+}
+
+/**
+ * Booleans and strings rather than elements, so a failed wait reports what it
+ * looked for instead of serialising the mounted tree into the failure.
+ */
+function hasDrawerToggle() {
+  return document.querySelectorAll(".review-drawer-toggle").length === 1;
+}
+
+function labelledValue(name) {
+  return labelled(name)?.value ?? null;
 }
 
 function labelled(name) {

@@ -13,6 +13,7 @@ import type {
   DraftContentInputDto,
   DraftInlineAnchorDto,
   DraftInlineAnchorInputDto,
+  DraftListResult,
   DraftSnapshotDto,
   InlineCommentParams,
   MutationDiffAnchorDto,
@@ -41,6 +42,7 @@ import {
   type SuggestionForge,
 } from "./suggestion.js";
 import {
+  ReviewWorkflowRefusal,
   adoptDraft,
   beginDraftSave,
   beginQuickIntent,
@@ -187,11 +189,276 @@ export function cachedWorkflow(review: string): ReviewWorkflowState | null {
   return workflowCache.get(review) ?? null;
 }
 
+/**
+ * Surfaces waiting to be told that the shared workflow state of a review
+ * changed. Before the drawer, one review feature mounted per route, so a
+ * surface could hold its own copy and never see another one write. The drawer
+ * opens over the Changes tab, so the in-diff composer and the drawer are
+ * mounted at the same time and write the same durable draft: a private copy
+ * would let one of them save over a version the other had already advanced.
+ */
+const workflowListeners = new Map<
+  string,
+  Set<(state: ReviewWorkflowState) => void>
+>();
+
 export function cacheWorkflow(
   review: string,
   state: ReviewWorkflowState,
 ): void {
   workflowCache.set(review, state);
+  const listeners = workflowListeners.get(review);
+  if (!listeners) return;
+  // A copy, because a listener is free to unsubscribe while being notified.
+  for (const listener of [...listeners]) listener(state);
+}
+
+/**
+ * Watches the shared workflow state of one review. The returned function
+ * unsubscribes, so it is what a mount effect hands back directly.
+ */
+export function subscribeWorkflow(
+  review: string,
+  listener: (state: ReviewWorkflowState) => void,
+): () => void {
+  let listeners = workflowListeners.get(review);
+  if (!listeners) {
+    listeners = new Set();
+    workflowListeners.set(review, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    const current = workflowListeners.get(review);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) workflowListeners.delete(review);
+  };
+}
+
+/**
+ * One active-draft read, shared by every surface that asks for it while it is
+ * still in flight. Mount adoption and the first `bindDraft` of a press used to
+ * issue an identical read each, which put two of the same question to the
+ * sidecar on every first "Start a review". A read is shared only until it
+ * settles: a later caller asks a fresh question rather than being answered
+ * from a stale one.
+ */
+interface SharedDraftRead {
+  readonly requestToken: string;
+  readonly result: Promise<DraftListResult>;
+  refs: number;
+  settled: boolean;
+}
+
+const draftReads = new Map<string, SharedDraftRead>();
+
+export function readActiveDrafts(
+  bridge: Pick<InlineComposerBridge, "listReviewDrafts">,
+  review: string,
+): SharedDraftRead {
+  const existing = draftReads.get(review);
+  if (existing) {
+    existing.refs += 1;
+    return existing;
+  }
+  const read = bridge.listReviewDrafts({
+    review,
+    states: ACTIVE_DRAFT_STATES,
+    max_items: 100,
+  });
+  const shared: SharedDraftRead = {
+    requestToken: read.requestToken,
+    result: read.result,
+    refs: 1,
+    settled: false,
+  };
+  draftReads.set(review, shared);
+  const forget = (): void => {
+    shared.settled = true;
+    if (draftReads.get(review) === shared) draftReads.delete(review);
+  };
+  void read.result.then(forget, forget);
+  return shared;
+}
+
+/**
+ * Drops one surface's claim on a shared read. The read is cancelled only when
+ * the last claim goes and it has not already answered, so one surface leaving
+ * can never cancel the read another is still waiting on.
+ */
+export function releaseActiveDrafts(
+  bridge: Pick<InlineComposerBridge, "cancelRead">,
+  review: string,
+  shared: SharedDraftRead,
+): void {
+  shared.refs -= 1;
+  if (shared.refs > 0 || shared.settled) return;
+  if (draftReads.get(review) === shared) draftReads.delete(review);
+  cancelQuietly(bridge, shared.requestToken);
+}
+
+/**
+ * One mutation-capabilities read, shared while it is in flight for the same
+ * reason the active-draft read is: the drawer and the in-diff composer gate
+ * their affordances on the same answer, and mount at the same time, so one
+ * question reaches the sidecar rather than two identical ones.
+ */
+interface SharedCapabilitiesRead {
+  readonly requestToken: string;
+  readonly result: Promise<{
+    readonly capabilities: ReviewMutationCapabilitiesDto;
+  }>;
+  refs: number;
+  settled: boolean;
+}
+
+const capabilityReads = new Map<string, SharedCapabilitiesRead>();
+
+export function readMutationCapabilities(
+  bridge: Pick<InlineComposerBridge, "getReviewMutationCapabilities">,
+  review: string,
+): SharedCapabilitiesRead {
+  const existing = capabilityReads.get(review);
+  if (existing) {
+    existing.refs += 1;
+    return existing;
+  }
+  const read = bridge.getReviewMutationCapabilities(review);
+  const shared: SharedCapabilitiesRead = {
+    requestToken: read.requestToken,
+    result: read.result,
+    refs: 1,
+    settled: false,
+  };
+  capabilityReads.set(review, shared);
+  const forget = (): void => {
+    shared.settled = true;
+    if (capabilityReads.get(review) === shared) capabilityReads.delete(review);
+  };
+  void read.result.then(forget, forget);
+  return shared;
+}
+
+export function releaseMutationCapabilities(
+  bridge: Pick<InlineComposerBridge, "cancelRead">,
+  review: string,
+  shared: SharedCapabilitiesRead,
+): void {
+  shared.refs -= 1;
+  if (shared.refs > 0 || shared.settled) return;
+  if (capabilityReads.get(review) === shared) capabilityReads.delete(review);
+  cancelQuietly(bridge, shared.requestToken);
+}
+
+/** The shared workflow state of one review, and the only way to change it. */
+export interface SharedReviewWorkflow {
+  readonly workflow: ReviewWorkflowState;
+  /** The state as of the last change, readable inside an async step. */
+  readonly held: { readonly current: ReviewWorkflowState };
+  readonly apply: (
+    change: (current: ReviewWorkflowState) => ReviewWorkflowState,
+  ) => ReviewWorkflowState;
+}
+
+/**
+ * The one review workflow state, held by the module and read by every surface
+ * of that review. Each surface renders from the same object and publishes
+ * through the same `apply`, so the drawer and the in-diff composer cannot hold
+ * two versions of one durable draft between them.
+ *
+ * Mount adoption lives here rather than in any one surface: a durable draft
+ * written by the TUI, by another window or by an earlier run is the same
+ * pending review every surface writes to, and reading it once is what makes
+ * the pending count, the primary label and the pending cards describe the
+ * state before the first press instead of after it. Exactly one active draft
+ * is adopted; several are a choice the drawer owns, and `bindDraft` still
+ * refuses them in its own words on the first write.
+ */
+export function useSharedReviewWorkflow(
+  bridge: Pick<InlineComposerBridge, "listReviewDrafts" | "cancelRead">,
+  review: string,
+  revision: ReviewRevisionDto,
+): SharedReviewWorkflow {
+  const [workflow, setWorkflow] = useState<ReviewWorkflowState>(
+    () => cachedWorkflow(review) ?? createReviewWorkflowState(review, revision),
+  );
+  const held = useRef(workflow);
+  const apply = useCallback(
+    (
+      change: (current: ReviewWorkflowState) => ReviewWorkflowState,
+    ): ReviewWorkflowState => {
+      const next = change(held.current);
+      held.current = next;
+      // Publishing notifies every other surface of this review, including this
+      // one, whose own listener recognises the object it just wrote.
+      cacheWorkflow(review, next);
+      setWorkflow(next);
+      return next;
+    },
+    [review],
+  );
+  useEffect(
+    () =>
+      subscribeWorkflow(review, (next) => {
+        if (next === held.current) return;
+        held.current = next;
+        setWorkflow(next);
+      }),
+    [review],
+  );
+  useEffect(() => {
+    const current = held.current;
+    const durable =
+      current.draft.remote !== null ||
+      current.quick !== null ||
+      current.submission.progress !== null;
+    if (
+      current.displayed.review === review &&
+      (durable ||
+        sameComposerRevision(current.displayed.latestObservedRevision, revision))
+    ) {
+      cacheWorkflow(review, current);
+      return;
+    }
+    const next =
+      (current.displayed.review === review ? null : cachedWorkflow(review)) ??
+      createReviewWorkflowState(review, revision);
+    held.current = next;
+    cacheWorkflow(review, next);
+    setWorkflow(next);
+  }, [review, revision.base_sha, revision.head_sha, revision.start_sha]);
+  useEffect(() => {
+    let live = true;
+    const current = held.current;
+    if (current.draft.remote !== null || current.draft.dirty) return;
+    let shared: SharedDraftRead | null = null;
+    try {
+      shared = readActiveDrafts(bridge, review);
+      void shared.result.then(
+        (result) => {
+          const draft = result.drafts[0];
+          if (!live || result.drafts.length !== 1 || !draft) return;
+          const latest = held.current;
+          if (
+            latest.draft.remote !== null ||
+            latest.draft.dirty ||
+            latest.displayed.review !== draft.review
+          )
+            return;
+          apply((state) => adoptDraft(state, draft));
+        },
+        () => undefined,
+      );
+    } catch {
+      // A read that cannot even be dispatched leaves the surface in the
+      // no-draft state it already holds; the first write recovers it.
+    }
+    return () => {
+      live = false;
+      if (shared) releaseActiveDrafts(bridge, review, shared);
+    };
+  }, [apply, bridge, review]);
+  return { workflow, held, apply };
 }
 
 /**
@@ -351,8 +618,15 @@ export class ComposerRefusal extends Error {
 }
 
 /** The sentence to show for a failed composer action. */
+/**
+ * The sentence for a failed composer action. A deliberate refusal, raised here
+ * or by the workflow state, keeps its own words; anything else keeps the
+ * generic reporting boundary, so an untyped internal failure never reaches the
+ * reader as advice.
+ */
 export function composerFailureMessage(value: unknown): string {
-  return value instanceof ComposerRefusal
+  return value instanceof ComposerRefusal ||
+    value instanceof ReviewWorkflowRefusal
     ? value.message
     : reviewMutationError(value);
 }
@@ -489,6 +763,13 @@ export interface ThreadMutationResult {
 export interface InlineComposerController {
   readonly review: string;
   readonly forge: SuggestionForge | null;
+  /**
+   * The review's one workflow state and the only writer of it. Published so
+   * the drawer can add the review-level writes (summary, verdict, submission,
+   * conflict, migration, discard) to the same state this controller reads,
+   * rather than holding a second copy of one durable draft.
+   */
+  readonly shared: SharedReviewWorkflow;
   readonly pendingReview: boolean;
   readonly pendingCount: number;
   /**
@@ -556,54 +837,20 @@ export function useInlineReviewComposer(
   revision: ReviewRevisionDto,
   forge: SuggestionForge | null = null,
 ): InlineComposerController {
-  const [workflow, setWorkflow] = useState<ReviewWorkflowState>(
-    () => cachedWorkflow(review) ?? createReviewWorkflowState(review, revision),
-  );
-  const held = useRef(workflow);
+  // The state, the reader of the state and the only writer of it are shared
+  // with every other surface of this review, the drawer included.
+  const shared = useSharedReviewWorkflow(bridge, review, revision);
+  const { workflow, held, apply } = shared;
   const [capabilities, setCapabilities] =
     useState<ReviewMutationCapabilitiesDto | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const apply = useCallback(
-    (
-      change: (current: ReviewWorkflowState) => ReviewWorkflowState,
-    ): ReviewWorkflowState => {
-      const next = change(held.current);
-      held.current = next;
-      cacheWorkflow(review, next);
-      setWorkflow(next);
-      return next;
-    },
-    [review],
-  );
-  useEffect(() => {
-    const current = held.current;
-    const durable =
-      current.draft.remote !== null ||
-      current.quick !== null ||
-      current.submission.progress !== null;
-    if (
-      current.displayed.review === review &&
-      (durable ||
-        sameComposerRevision(current.displayed.latestObservedRevision, revision))
-    ) {
-      cacheWorkflow(review, current);
-      return;
-    }
-    const next =
-      (current.displayed.review === review ? null : cachedWorkflow(review)) ??
-      createReviewWorkflowState(review, revision);
-    held.current = next;
-    cacheWorkflow(review, next);
-    setWorkflow(next);
-  }, [review, revision.base_sha, revision.head_sha, revision.start_sha]);
   useEffect(() => {
     let live = true;
-    let token: string | null = null;
+    let shared: SharedCapabilitiesRead | null = null;
     try {
-      const read = bridge.getReviewMutationCapabilities(review);
-      token = read.requestToken;
-      void read.result.then(
+      shared = readMutationCapabilities(bridge, review);
+      void shared.result.then(
         (result) => {
           if (live) setCapabilities(result.capabilities);
         },
@@ -616,52 +863,9 @@ export function useInlineReviewComposer(
     }
     return () => {
       live = false;
-      cancelQuietly(bridge, token);
+      if (shared) releaseMutationCapabilities(bridge, review, shared);
     };
   }, [bridge, review]);
-
-  // A durable draft written by the TUI, by another window or by an earlier run
-  // is the same pending review this composer writes to. Reading it once on
-  // mount is what makes the chip, the primary label and the pending cards
-  // describe the state before the first press instead of after it. Exactly one
-  // active draft is adopted: several are a choice the review workflow owns, and
-  // `bindDraft` still refuses them in its own words on the first write.
-  useEffect(() => {
-    let live = true;
-    let token: string | null = null;
-    const current = held.current;
-    if (current.draft.remote !== null || current.draft.dirty) return;
-    try {
-      const read = bridge.listReviewDrafts({
-        review,
-        states: ACTIVE_DRAFT_STATES,
-        max_items: 100,
-      });
-      token = read.requestToken;
-      void read.result.then(
-        (result) => {
-          const draft = result.drafts[0];
-          if (!live || result.drafts.length !== 1 || !draft) return;
-          const latest = held.current;
-          if (
-            latest.draft.remote !== null ||
-            latest.draft.dirty ||
-            latest.displayed.review !== draft.review
-          )
-            return;
-          apply((state) => adoptDraft(state, draft));
-        },
-        () => undefined,
-      );
-    } catch {
-      // A read that cannot even be dispatched leaves the composer in the
-      // no-draft state it already holds; the first write recovers it.
-    }
-    return () => {
-      live = false;
-      cancelQuietly(bridge, token);
-    };
-  }, [apply, bridge, review]);
 
   const clearMessage = useCallback(() => setMessage(null), []);
   const quickBlocked =
@@ -699,7 +903,7 @@ export function useInlineReviewComposer(
       )
         return "The selected code belongs to an earlier revision. Refresh the diff.";
       if (workflow.draft.conflict)
-        return "This pending review was changed elsewhere. Resolve the conflict in the review workflow before adding inline feedback.";
+        return "This pending review was changed elsewhere. Resolve the conflict in Your review before adding inline feedback.";
       if (workflow.draft.remote && !canCaptureDraftInline(workflow))
         return boundElsewhereRefusal(workflow);
       return null;
@@ -750,14 +954,18 @@ export function useInlineReviewComposer(
     async (anchor: InlineAnchorSelection): Promise<ReviewWorkflowState> => {
       const current = held.current;
       if (current.draft.remote) return current;
-      const result = await bridge.listReviewDrafts({
-        review,
-        states: ACTIVE_DRAFT_STATES,
-        max_items: 100,
-      }).result;
+      // Shares whatever active-draft read is already in flight, so a first
+      // press during mount adoption asks the sidecar one question, not two.
+      const shared = readActiveDrafts(bridge, review);
+      let result: DraftListResult;
+      try {
+        result = await shared.result;
+      } finally {
+        releaseActiveDrafts(bridge, review, shared);
+      }
       if (result.drafts.length > 1)
         throw new ComposerRefusal(
-          "Several pending reviews were recovered. Resume one in the review workflow before commenting.",
+          "Several pending reviews were recovered. Resume one in Your review before commenting.",
         );
       const recovered = result.drafts[0];
       const draft =
@@ -780,7 +988,7 @@ export function useInlineReviewComposer(
     const pending = current.draft.pendingSave;
     if (!remote || !pending)
       throw new ComposerRefusal(
-        "The pending review is not ready to save. Settle it in the review workflow before adding inline feedback.",
+        "The pending review is not ready to save. Settle it in Your review before adding inline feedback.",
       );
     try {
       const saved = await bridge.saveReviewDraft({
@@ -846,7 +1054,7 @@ export function useInlineReviewComposer(
     if (workflow.draft.remote === null)
       return "No pending review holds this comment.";
     if (workflow.draft.conflict)
-      return "This pending review was changed elsewhere. Resolve the conflict in the review workflow before changing pending comments.";
+      return "This pending review was changed elsewhere. Resolve the conflict in Your review before changing pending comments.";
     if (!canCaptureDraftInline(workflow))
       return boundElsewhereEntryRefusal(workflow);
     return null;
@@ -904,6 +1112,12 @@ export function useInlineReviewComposer(
       const bound = held.current;
       const restored = bound.draft.local;
       const wasDirty = bound.draft.dirty;
+      // A save running on another surface can confirm between the local edit
+      // below and the rollback that undoes it. `finishDraftSave` then sees
+      // content that differs from what it sent and keeps this change as
+      // unsaved dirty content rather than dropping it, which is the safe half
+      // of the race: nothing is written twice and nothing is lost, and the
+      // next save carries it deliberately.
       try {
         apply((current) =>
           editDraft(current, {
@@ -1192,6 +1406,7 @@ export function useInlineReviewComposer(
   return {
     review,
     forge,
+    shared,
     pendingReview: workflow.draft.remote !== null,
     pendingCount: pending.length,
     pending,
@@ -1248,7 +1463,7 @@ function refused(message: string): ThreadMutationResult {
 
 /** Said when a rollback itself is refused, appended to the failure that caused it. */
 const ENTRY_ROLLBACK_REFUSAL =
-  "The pending review stopped accepting edits, so the unsaved change is still listed here. Settle it in the review workflow before retrying.";
+  "The pending review stopped accepting edits, so the unsaved change is still listed here. Settle it in Your review before retrying.";
 
 const ENTRY_GONE_REFUSAL =
   "That pending comment is no longer part of this review. Refresh the review workflow.";
@@ -1274,7 +1489,7 @@ function boundElsewhereSentence(
 ): string {
   const remote = state.draft.remote;
   if (remote && remote.state !== "editable")
-    return `The pending review is locked by its submission attempt. Settle it in the review workflow before ${action}.`;
+    return `The pending review is locked by its submission attempt. Settle it in Your review before ${action}.`;
   if (
     remote &&
     !sameComposerRevision(
@@ -1282,8 +1497,8 @@ function boundElsewhereSentence(
       state.displayed.latestObservedRevision,
     )
   )
-    return `The pending review is bound to an earlier revision. Migrate it in the review workflow before ${action}.`;
-  return `The pending review is bound to a durable submission attempt. Settle it in the review workflow before ${action}.`;
+    return `The pending review is bound to an earlier revision. Migrate it in Your review before ${action}.`;
+  return `The pending review is bound to a durable submission attempt. Settle it in Your review before ${action}.`;
 }
 
 /**
@@ -1511,7 +1726,10 @@ export function InlineComposer({
   );
 }
 
-function cancelQuietly(bridge: InlineComposerBridge, token: string | null): void {
+function cancelQuietly(
+  bridge: Pick<InlineComposerBridge, "cancelRead">,
+  token: string | null,
+): void {
   if (token === null) return;
   try {
     void bridge.cancelRead(token).catch(() => undefined);

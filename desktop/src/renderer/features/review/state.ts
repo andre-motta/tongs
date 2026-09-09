@@ -100,6 +100,20 @@ export interface DraftAnchorSelection {
   readonly contextComplete: boolean;
 }
 
+/**
+ * A change this state deliberately refuses, carrying the sentence written for
+ * the reader. Only refusals are raised this way. An invariant that should not
+ * be reachable stays a plain `Error` and keeps reaching the reader as the
+ * generic failure sentence, so a bug in this module can never publish its own
+ * internal wording as advice.
+ */
+export class ReviewWorkflowRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReviewWorkflowRefusal";
+  }
+}
+
 const EMPTY_CONTENT: DraftContentInputDto = Object.freeze({
   body: "",
   verdict: null,
@@ -148,7 +162,7 @@ export function adoptDisplayedRevision(
   state: ReviewWorkflowState,
 ): ReviewWorkflowState {
   if (state.draft.dirty || state.draft.pendingSave)
-    throw new Error("Save or resolve local draft edits before changing revision");
+    throw new ReviewWorkflowRefusal("Save or resolve local draft edits before changing revision");
   return replace(state, {
     displayed: Object.freeze({
       ...state.displayed,
@@ -163,7 +177,7 @@ export function beginQuickIntent<T extends object>(
   command: T,
 ): ReviewWorkflowState {
   if (state.quick?.status === "sending" || state.quick?.status === "unknown")
-    throw new Error("Resolve the previous uncertain action before starting another");
+    throw new ReviewWorkflowRefusal("Resolve the previous uncertain action before starting another");
   return replace(state, {
     quick: Object.freeze({
       operationId,
@@ -285,9 +299,9 @@ export function editDraft(
   content: DraftContentInputDto,
 ): ReviewWorkflowState {
   if (state.draft.remote && state.draft.remote.state !== "editable")
-    throw new Error("This draft is not editable");
+    throw new ReviewWorkflowRefusal("This draft is not editable");
   if (state.submission.progress && state.submission.progress.outcome !== "editable")
-    throw new Error("This draft is locked by its durable submission attempt");
+    throw new ReviewWorkflowRefusal("This draft is locked by its durable submission attempt");
   return replace(state, {
     draft: Object.freeze({
       ...state.draft,
@@ -308,7 +322,7 @@ export function adoptDraft(
     state.draft.remote !== null &&
     remote.id !== state.draft.remote.id
   ) {
-    throw new Error("Resolve local edits before choosing another draft");
+    throw new ReviewWorkflowRefusal("Resolve local edits before choosing another draft");
   }
   if (
     state.draft.dirty &&
@@ -352,9 +366,9 @@ export function forkDraftToCurrentRevision(
 ): ReviewWorkflowState {
   const stale = state.draft.remote;
   if (!stale || !draftNeedsRevisionRecovery(state))
-    throw new Error("No stale draft is available to preserve");
+    throw new ReviewWorkflowRefusal("No stale draft is available to preserve");
   if (state.draft.dirty || state.draft.pendingSave || state.draft.conflict)
-    throw new Error("Save or resolve the stale draft before creating a current draft");
+    throw new ReviewWorkflowRefusal("Save or resolve the stale draft before creating a current draft");
   if (
     fresh.id === stale.id ||
     fresh.review !== state.displayed.review ||
@@ -401,11 +415,11 @@ export function portableDraftContent(
 export function beginDraftSave(state: ReviewWorkflowState): ReviewWorkflowState {
   const remote = state.draft.remote;
   if (!remote || !state.draft.dirty || state.draft.conflict)
-    throw new Error("Draft is not ready to save");
-  if (state.draft.pendingSave) throw new Error("A draft save is already pending");
-  if (remote.state !== "editable") throw new Error("This draft is not editable");
+    throw new ReviewWorkflowRefusal("Draft is not ready to save");
+  if (state.draft.pendingSave) throw new ReviewWorkflowRefusal("A draft save is already pending");
+  if (remote.state !== "editable") throw new ReviewWorkflowRefusal("This draft is not editable");
   if (hasEmptyDraftComment(state.draft.local))
-    throw new Error("Edit or remove empty draft comments before saving");
+    throw new ReviewWorkflowRefusal("Edit or remove empty draft comments before saving");
   return replace(state, {
     draft: Object.freeze({
       ...state.draft,
@@ -484,7 +498,7 @@ export function failDraftSave(state: ReviewWorkflowState): ReviewWorkflowState {
 
 export function chooseRemoteDraft(state: ReviewWorkflowState): ReviewWorkflowState {
   const remote = state.draft.conflict;
-  if (!remote) throw new Error("No conflicting draft exists");
+  if (!remote) throw new ReviewWorkflowRefusal("No conflicting draft exists");
   const adopted = contentOf(remote);
   const displaced = state.draft.local;
   return replace(state, {
@@ -517,7 +531,7 @@ export function dismissSupersededDraft(
     (item) => item.displacedByVersion !== displacedByVersion,
   );
   if (remaining.length === state.draft.supersededLocalDrafts.length)
-    throw new Error("No superseded local draft text is retained for that version");
+    throw new ReviewWorkflowRefusal("No superseded local draft text is retained for that version");
   return replace(state, {
     draft: Object.freeze({
       ...state.draft,
@@ -528,9 +542,9 @@ export function dismissSupersededDraft(
 
 export function keepLocalDraft(state: ReviewWorkflowState): ReviewWorkflowState {
   const remote = state.draft.conflict;
-  if (!remote) throw new Error("No conflicting draft exists");
+  if (!remote) throw new ReviewWorkflowRefusal("No conflicting draft exists");
   if (remote.state !== "editable")
-    throw new Error("The conflicting draft is no longer editable");
+    throw new ReviewWorkflowRefusal("The conflicting draft is no longer editable");
   return replace(state, {
     draft: Object.freeze({
       ...state.draft,
@@ -562,17 +576,63 @@ export function keepLocalDraftRefusal(state: ReviewWorkflowState): string | null
   return null;
 }
 
+/**
+ * Why the pending review cannot be discarded now, or null when it can. A
+ * discard destroys stored content, so it is refused while anything else holds
+ * the draft rather than racing it: an in-flight save would resurrect what was
+ * discarded under its own expected version, and a submission attempt owns the
+ * draft until it is reconciled.
+ */
+export function discardDraftRefusal(state: ReviewWorkflowState): string | null {
+  const remote = state.draft.remote;
+  if (!remote) return "No pending review is open to discard.";
+  if (state.draft.pendingSave)
+    return "A draft save is in flight. Let it settle before discarding the review.";
+  if (state.submission.pending)
+    return "A submission step is in flight. Let it settle before discarding the review.";
+  if (state.submission.progress && state.submission.progress.outcome !== "editable")
+    return "This review is held by its submission attempt. Reconcile the attempt before discarding it.";
+  if (remote.state !== "editable")
+    return "This draft is held by a submission attempt, so it cannot be discarded yet.";
+  return null;
+}
+
+/**
+ * Drops the discarded draft and returns the review to its no-draft state. The
+ * retained texts are kept deliberately: `supersededLocalDrafts` is text the
+ * reader was promised would stay until dismissed on its own, and
+ * `preservedStaleDrafts` records old drafts this session did not delete, so
+ * neither is this action's to throw away.
+ */
+export function discardDraft(state: ReviewWorkflowState): ReviewWorkflowState {
+  const refusal = discardDraftRefusal(state);
+  if (refusal !== null) throw new ReviewWorkflowRefusal(refusal);
+  return replace(state, {
+    draft: Object.freeze({
+      remote: null,
+      local: EMPTY_CONTENT,
+      dirty: false,
+      conflict: null,
+      conflictHeldVersion: null,
+      supersededLocalDrafts: state.draft.supersededLocalDrafts,
+      preservedStaleDrafts: state.draft.preservedStaleDrafts,
+      pendingSave: null,
+    }),
+    submission: Object.freeze({ progress: null, pending: null, message: null }),
+  });
+}
+
 export function beginSubmission(
   state: ReviewWorkflowState,
   kind: PendingSubmission["kind"],
 ): ReviewWorkflowState {
-  if (state.submission.pending) throw new Error("Submission operation is already pending");
+  if (state.submission.pending) throw new ReviewWorkflowRefusal("Submission operation is already pending");
   if (kind === "start" && !canStartSubmission(state))
-    throw new Error("Save the editable draft before submitting it");
+    throw new ReviewWorkflowRefusal("Save the editable draft before submitting it");
   if (kind === "resume" && state.submission.progress?.outcome !== "paused")
-    throw new Error("Only paused submissions can resume");
+    throw new ReviewWorkflowRefusal("Only paused submissions can resume");
   if (kind === "reconcile" && state.submission.progress?.outcome !== "unknown")
-    throw new Error("Only unknown submissions can be reconciled");
+    throw new ReviewWorkflowRefusal("Only unknown submissions can be reconciled");
   const remote = state.draft.remote;
   const progress = state.submission.progress;
   const pending: PendingSubmission =

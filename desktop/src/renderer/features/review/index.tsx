@@ -16,17 +16,14 @@ import type {
 } from "../../../shared/bridge.js";
 import type {
   DraftCommentInputDto,
-  DraftContentInputDto,
   DraftSnapshotDto,
   GeneralCommentParams,
   InlineCommentParams,
-  ReconciliationResolution,
   ReviewAction,
   ReviewActionCapabilitiesDto,
   ReviewDesktopBridge,
   ReviewMutationCapabilitiesDto,
   ReviewVerdict,
-  SubmissionProgressDto,
 } from "../../../shared/review.js";
 import type {
   AppRoute,
@@ -39,7 +36,6 @@ import { formatDate, safeError } from "../../core/presentation.js";
 import { SafeMarkdown } from "../../core/safe-markdown.js";
 import { ReviewHeader } from "../review-detail/index.js";
 import {
-  ACTIVE_DRAFT_STATES,
   BufferedInlineNotes,
   Composer,
   MULTILINE_REFUSAL,
@@ -50,41 +46,34 @@ import {
   cachedWorkflow,
   draftSelection,
   inlineBufferLabel,
-  isConflictError,
   isUncertainError,
   mutationAnchor,
   newOperationId,
-  recoverDraft,
+  readActiveDrafts,
+  readMutationCapabilities,
+  releaseActiveDrafts,
+  releaseMutationCapabilities,
   reviewMutationError,
+  subscribeWorkflow,
   type ComposerBuffers,
 } from "./composer.js";
+import type { PendingDraftEntry } from "./pending-card.js";
+import {
+  ReviewDrawerMount,
+  pendingEntryTarget,
+  requestPendingEdit,
+  useReviewDrawer,
+} from "./drawer.js";
 import {
   acknowledgeQuickUncertainty,
   adoptDraft,
-  beginDraftSave,
   beginQuickIntent,
-  beginSubmission,
   canCaptureDraftInline,
-  canSaveDraft,
-  canStartSubmission,
   captureDraftAnchor,
-  chooseRemoteDraft,
-  conflictDraftSave,
   createReviewWorkflowState,
-  dismissSupersededDraft,
-  draftNeedsRevisionRecovery,
   editDraft,
-  failSubmission,
-  failDraftSave,
-  finishDraftSave,
-  finishSubmission,
-  forkDraftToCurrentRevision,
-  keepLocalDraft,
-  keepLocalDraftRefusal,
   markQuickIntentUncertain,
   observeReviewRevision,
-  portableDraftContent,
-  recoverSubmission,
   recoverQuickIntent,
   rejectQuickIntent,
   settleQuickIntent,
@@ -108,12 +97,12 @@ import {
 // this panel is where the rest of the app already reaches for them.
 export { allocateDiscussionMarkdown, discussionDiffTarget };
 
-type Confirmation =
-  | ReviewAction
-  | "submit"
-  | "migrate-draft"
-  | `verdict:${ReviewVerdict}`
-  | `reconcile:${ReconciliationResolution}`;
+/**
+ * What this panel is waiting to have confirmed. Submission, discard and the
+ * stale revision migration left with the draft editor, so their confirmations
+ * are the drawer's now and no longer named here.
+ */
+type Confirmation = ReviewAction | `verdict:${ReviewVerdict}`;
 
 interface ReviewFeatureBridge extends DesktopBridge, ReviewDesktopBridge {}
 
@@ -171,8 +160,6 @@ function ReviewWorkflow({
     useState<ReviewActionCapabilitiesDto | null>(null);
   const [draftCandidates, setDraftCandidates] =
     useState<readonly DraftSnapshotDto[]>([]);
-  const [recoveries, setRecoveries] =
-    useState<readonly SubmissionProgressDto[]>([]);
   const [workflow, setWorkflow] = useState<ReviewWorkflowState | null>(
     cachedWorkflow(review),
   );
@@ -287,25 +274,39 @@ function ReviewWorkflow({
     [review],
   );
 
+  // The drawer writes the same workflow state this panel reads, and both are
+  // mounted here at once, so the panel adopts what the drawer publishes rather
+  // than rendering from a copy that stopped being true.
+  useEffect(
+    () =>
+      subscribeWorkflow(review, (next) => {
+        if (next === workflowRef.current) return;
+        workflowRef.current = next;
+        setWorkflow(next);
+      }),
+    [review],
+  );
   useEffect(() => {
     let current = true;
+    // The active drafts and the mutation capabilities go through the shared
+    // readers, because the drawer this panel now mounts asks for both as well.
+    // Reading them directly here would put the same two questions to the
+    // sidecar twice on every visit to this tab.
+    const drafts = readActiveDrafts(bridge, review);
+    const capabilities = readMutationCapabilities(bridge, review);
     const reads = [
       bridge.getReview(review),
       bridge.listDiscussions(review),
-      bridge.getReviewMutationCapabilities(review),
       bridge.getReviewActionCapabilities(review),
-      bridge.listReviewDrafts({ review, states: ACTIVE_DRAFT_STATES, max_items: 100 }),
-      bridge.listReviewSubmissions({ review, max_items: 100 }),
     ] as const;
     void Promise.all([
       reads[0].result,
       reads[1].result,
       reads[2].result,
-      reads[3].result,
-      reads[4].result,
-      reads[5].result,
+      capabilities.result,
+      drafts.result,
     ] as const)
-      .then(([detail, discussionResult, mutationResult, actionResult, draftResult, submissionResult]) => {
+      .then(([detail, discussionResult, actionResult, mutationResult, draftResult]) => {
         if (!current) return;
         if (!detail.revision)
           throw new Error("The current review revision is unavailable.");
@@ -314,7 +315,6 @@ function ReviewWorkflow({
         setMutationCapabilities(mutationResult.capabilities);
         setActionCapabilities(actionResult.capabilities);
         setDraftCandidates(draftResult.drafts);
-        setRecoveries(submissionResult.attempts);
         const cached = cachedWorkflow(review);
         const next = cached
           ? observeReviewRevision(cached, detail.revision)
@@ -327,6 +327,8 @@ function ReviewWorkflow({
     return () => {
       current = false;
       for (const item of reads) void bridge.cancelRead(item.requestToken);
+      releaseActiveDrafts(bridge, review, drafts);
+      releaseMutationCapabilities(bridge, review, capabilities);
     };
   }, [bridge, review]);
 
@@ -346,82 +348,6 @@ function ReviewWorkflow({
         }));
       apply((current) => adoptDraft(current, draft));
       setDraftCandidates([draft]);
-    } catch (reason) {
-      setError(reviewMutationError(reason));
-    }
-  };
-
-  const saveDraft = async (): Promise<void> => {
-    const current = apply(beginDraftSave);
-    const remote = current.draft.remote;
-    const pending = current.draft.pendingSave;
-    if (!remote || !pending) return;
-    setError(null);
-    try {
-      const saved = await bridge.saveReviewDraft({
-        review,
-        draft_id: remote.id,
-        expected_version: pending.expectedVersion,
-        content: pending.content,
-      });
-      apply((latest) => finishDraftSave(latest, saved));
-      setDraftCandidates([saved]);
-    } catch (reason) {
-      if (isConflictError(reason)) {
-        const remoteDraft = await recoverDraft(bridge, review, remote.id);
-        if (remoteDraft)
-          apply((latest) => conflictDraftSave(latest, remoteDraft));
-        else apply(failDraftSave);
-      } else {
-        apply(failDraftSave);
-      }
-      setError(reviewMutationError(reason));
-    }
-  };
-
-  const keepLocalDraftText = async (): Promise<void> => {
-    const current = workflowRef.current;
-    if (!current?.draft.conflict) return;
-    const refusal = keepLocalDraftRefusal(current);
-    if (refusal !== null) {
-      setError(refusal);
-      return;
-    }
-    setError(null);
-    apply(keepLocalDraft);
-    await saveDraft();
-  };
-
-  const takeRemoteDraftText = (): void => {
-    const current = workflowRef.current;
-    const remote = current?.draft.conflict;
-    if (!remote) return;
-    setError(null);
-    apply(chooseRemoteDraft);
-    setDraftCandidates([remote]);
-  };
-
-  const migrateDraft = async (): Promise<void> => {
-    const current = workflowRef.current;
-    const stale = current?.draft.remote;
-    if (!current || !stale || !snapshot?.revision) return;
-    if (confirmation !== "migrate-draft") {
-      setConfirmation("migrate-draft");
-      return;
-    }
-    setError(null);
-    setConfirmation(null);
-    try {
-      const fresh = await bridge.createReviewDraft({
-        review,
-        revision: current.displayed.latestObservedRevision,
-        content: portableDraftContent(stale),
-      });
-      apply((state) => forkDraftToCurrentRevision(state, fresh));
-      setDraftCandidates((items) => [
-        fresh,
-        ...items.filter((item) => item.id !== fresh.id),
-      ]);
     } catch (reason) {
       setError(reviewMutationError(reason));
     }
@@ -662,106 +588,6 @@ function ReviewWorkflow({
     }
   };
 
-  const submitDraft = async (): Promise<void> => {
-    if (!workflow?.draft.remote || !canStartSubmission(workflow)) return;
-    const current = apply((state) => beginSubmission(state, "start"));
-    const draft = current.draft.remote;
-    if (!draft) return;
-    setConfirmation(null);
-    try {
-      const progress = await bridge.startReviewSubmission({
-        review,
-        draft_id: draft.id,
-        expected_version: draft.version,
-      });
-      apply((state) => finishSubmission(state, progress));
-      setRecoveries([progress]);
-    } catch (reason) {
-      const recovered = await recoverLatestSubmission(
-        bridge,
-        review,
-        draft.id,
-        draft.version,
-      );
-      if (recovered) {
-        apply((state) => recoverSubmission(state, recovered));
-        setRecoveries((items) => [recovered, ...items.filter((item) => item.attempt_id !== recovered.attempt_id)]);
-      } else {
-        apply((state) => failSubmission(state, reviewMutationError(reason)));
-      }
-      setError(reviewMutationError(reason));
-    }
-  };
-
-  const continueSubmission = async (
-    mode: "resume" | "reconcile",
-    resolution?: ReconciliationResolution,
-  ): Promise<void> => {
-    if (!workflow?.submission.progress) return;
-    const attempt = workflow.submission.progress;
-    apply((state) => beginSubmission(state, mode));
-    setConfirmation(null);
-    try {
-      const progress =
-        mode === "resume"
-          ? await bridge.resumeReviewSubmission({ review, attempt_id: attempt.attempt_id })
-          : await bridge.reconcileReviewSubmission({
-              review,
-              attempt_id: attempt.attempt_id,
-              resolution: resolution ?? "retry_remaining",
-            });
-      apply((state) => finishSubmission(state, progress));
-      if (progress.outcome === "editable") {
-        const editable = await recoverDraft(bridge, review, progress.draft_id);
-        if (editable) {
-          apply((state) => adoptDraft(state, editable));
-          setDraftCandidates((items) => [
-            editable,
-            ...items.filter((item) => item.id !== editable.id),
-          ]);
-        }
-      }
-    } catch (reason) {
-      const recovered = await recoverSubmissionStatus(
-        bridge,
-        review,
-        attempt.attempt_id,
-      );
-      if (recovered) apply((state) => recoverSubmission(state, recovered));
-      else apply((state) => failSubmission(state, reviewMutationError(reason)));
-      setError(reviewMutationError(reason));
-    }
-  };
-
-  const recoverDurableSubmission = async (
-    progress: SubmissionProgressDto,
-  ): Promise<void> => {
-    setError(null);
-    try {
-      const current = workflowRef.current;
-      const matching = current?.draft.remote?.id === progress.draft_id
-        ? current.draft.remote
-        : await bridge.getReviewDraft({
-            review,
-            draft_id: progress.draft_id,
-          }).result;
-      apply((state) =>
-        recoverSubmission(
-          state.draft.remote?.id === progress.draft_id
-            ? state
-            : adoptDraft(state, matching),
-          progress,
-        ),
-      );
-      setDraftCandidates((items) => [
-        matching,
-        ...items.filter((item) => item.id !== matching.id),
-      ]);
-    } catch (reason) {
-      setError(safeError(reason));
-    }
-  };
-
   const runAction = async (action: ReviewAction): Promise<void> => {
     if (!workflow) return;
     if (confirmation !== action) {
@@ -855,7 +681,24 @@ function ReviewWorkflow({
 
   return (
     <>
-      <ReviewHeader route={route} navigate={context.navigate} panels={context.reviewPanels} />
+      <ReviewHeader
+        route={route}
+        navigate={context.navigate}
+        panels={context.reviewPanels}
+        drawer={
+          snapshot?.revision ? (
+            <PanelReviewDrawer
+              bridge={bridge}
+              review={review}
+              forge={forge}
+              revision={snapshot.revision}
+              openDiffAt={(target) =>
+                context.navigate({ ...route, panel: "diff", diffTarget: target })
+              }
+            />
+          ) : null
+        }
+      />
       <section className="review-workflow-shell" aria-label="Review workflow">
         <div className="review-workflow-toolbar">
           {!workflow?.draft.remote ? (
@@ -906,18 +749,6 @@ function ReviewWorkflow({
               </span>
             )}
           </Notice>
-        )}
-        {recoveries.length > 0 && !workflow?.submission.progress && (
-          <RecoveryList
-            recoveries={recoveries}
-            recover={(item) => void recoverDurableSubmission(item)}
-          />
-        )}
-        {draftCandidates.length > 1 && !workflow?.draft.remote && (
-          <DraftRecoveryList
-            drafts={draftCandidates}
-            recover={(item) => apply((state) => adoptDraft(state, item))}
-          />
         )}
         <div className="review-workflow-grid">
           <section className="review-workflow-discussions">
@@ -1023,37 +854,56 @@ function ReviewWorkflow({
               currentKey={anchorIdentity(context.inlineAnchor)}
             />
             {workflow?.draft.remote && (
-              <DraftEditor
-                workflow={workflow}
-                edit={(content) => apply((state) => editDraft(state, content))}
-                save={() => void saveDraft()}
-                keepLocal={() => void keepLocalDraftText()}
-                takeRemote={takeRemoteDraftText}
-                dismissSuperseded={(version) =>
-                  apply((state) => dismissSupersededDraft(state, version))
-                }
-                migrate={() => void migrateDraft()}
-                submit={submitDraft}
-                confirmation={confirmation}
-                setConfirmation={setConfirmation}
-                capabilities={mutationCapabilities}
-              />
-            )}
-            {workflow?.submission.progress && (
-              <SubmissionProgress
-                progress={workflow.submission.progress}
-                message={workflow.submission.message}
-                pending={workflow.submission.pending !== null}
-                resume={() => void continueSubmission("resume")}
-                reconcile={(resolution) => void continueSubmission("reconcile", resolution)}
-                confirmation={confirmation}
-                setConfirmation={setConfirmation}
-              />
+              <p className="review-workflow-thread-meta" role="status">
+                The summary, the verdict, submission and recovery live in Your
+                review, at the top of this page.
+              </p>
             )}
           </aside>
         </div>
       </section>
     </>
+  );
+}
+
+/**
+ * The review drawer as the Discussions panel mounts it. Jump and Edit send the
+ * reader to the Changes tab over the existing discussion jump route, so the
+ * coordinates a pending entry resolves to are the ones that route already
+ * resolves and nothing new decides where a line is.
+ */
+function PanelReviewDrawer({
+  bridge,
+  review,
+  forge,
+  revision,
+  openDiffAt,
+}: {
+  readonly bridge: ReviewFeatureBridge;
+  readonly review: string;
+  readonly forge: SuggestionForge | null;
+  readonly revision: ReviewRevisionDto;
+  readonly openDiffAt: (target: DiscussionDiffTarget) => void;
+}): ReactNode {
+  const controller = useReviewDrawer(bridge, review, revision, forge);
+  const target = (entry: PendingDraftEntry): DiscussionDiffTarget | null => {
+    const anchored = pendingEntryTarget(entry);
+    return anchored ? { discussionId: `pending:${entry.id}`, ...anchored } : null;
+  };
+  return (
+    <ReviewDrawerMount
+      controller={controller}
+      openExternal={(url) => bridge.openExternal(url)}
+      jump={(entry) => {
+        const to = target(entry);
+        if (to) openDiffAt(to);
+      }}
+      edit={(entry) => {
+        requestPendingEdit(review, entry.id);
+        const to = target(entry);
+        if (to) openDiffAt(to);
+      }}
+    />
   );
 }
 
@@ -1259,338 +1109,6 @@ function SuggestionComposer({
   );
 }
 
-function DraftEditor({
-  workflow,
-  edit,
-  save,
-  keepLocal,
-  takeRemote,
-  dismissSuperseded,
-  migrate,
-  submit,
-  confirmation,
-  setConfirmation,
-  capabilities,
-}: {
-  readonly workflow: ReviewWorkflowState;
-  readonly edit: (content: DraftContentInputDto) => void;
-  readonly save: () => void;
-  readonly keepLocal: () => void;
-  readonly takeRemote: () => void;
-  readonly dismissSuperseded: (displacedByVersion: number) => void;
-  readonly migrate: () => void;
-  readonly submit: () => Promise<void>;
-  readonly confirmation: Confirmation | null;
-  readonly setConfirmation: (value: Confirmation | null) => void;
-  readonly capabilities: ReviewMutationCapabilitiesDto | null;
-}): ReactNode {
-  const content = workflow.draft.local;
-  const stale = draftNeedsRevisionRecovery(workflow);
-  const generalCount = content.comments.filter((item) => item.kind === "general").length;
-  const inlineCount = content.comments.filter((item) => item.kind === "inline").length;
-  const replyCount = content.comments.filter((item) => item.kind === "reply").length;
-  const locked = Boolean(
-    workflow.submission.pending ||
-      (workflow.submission.progress && workflow.submission.progress.outcome !== "editable"),
-  );
-  const emptyComment = content.comments.some((comment) => comment.body.length === 0);
-  return (
-    <section className="review-workflow-draft">
-      <h2>Draft review</h2>
-      {stale && (
-        <Notice kind="warning">
-          <p>
-            This draft remains preserved at revision {workflow.draft.remote?.revision.head_sha}.
-            It cannot be submitted or receive a new inline anchor at the current revision.
-          </p>
-          <p>
-            A separate current-revision draft will copy the body, verdict, and {generalCount} general
-            comment(s). The {inlineCount} inline comment(s) and {replyCount} reply/replies remain on
-            this old draft for deliberate recreation after checking their current targets.
-          </p>
-          <button
-            className="button button-secondary"
-            disabled={workflow.draft.dirty || Boolean(workflow.draft.pendingSave) || Boolean(workflow.draft.conflict)}
-            onClick={migrate}
-          >
-            {confirmation === "migrate-draft"
-              ? "Confirm create separate current-revision draft"
-              : "Create current-revision draft"}
-          </button>
-        </Notice>
-      )}
-      {workflow.draft.conflict && (
-        <Notice kind="warning">
-          <p>
-            The stored draft is now version {workflow.draft.conflict.version}
-            {workflow.draft.conflictHeldVersion === null
-              ? ""
-              : `, and you were editing version ${workflow.draft.conflictHeldVersion}`}
-            . Neither side was discarded. Both are shown below; choose one deliberately.
-          </p>
-          <div className="review-workflow-conflict">
-            <article>
-              <strong>Your text, not stored</strong>
-              <p className="review-workflow-thread-meta">Typed in this window.</p>
-              <textarea
-                readOnly
-                aria-label="My unsaved draft text"
-                value={draftContentTranscript(workflow.draft.local)}
-              />
-            </article>
-            <article>
-              <strong>Stored draft, version {workflow.draft.conflict.version}</strong>
-              <p className="review-workflow-thread-meta">
-                Saved outside this window, last updated{" "}
-                {formatDate(workflow.draft.conflict.updated_at)}. This draft store
-                records no author, so the writer is not identified.
-              </p>
-              <textarea
-                readOnly
-                aria-label="Stored draft text"
-                value={draftContentTranscript(workflow.draft.conflict)}
-              />
-            </article>
-          </div>
-          <div className="review-workflow-row">
-            <button className="button" onClick={keepLocal}>
-              Keep my text and save over version {workflow.draft.conflict.version}
-            </button>
-            <button className="button button-secondary" onClick={takeRemote}>
-              Take the stored version and keep mine to copy
-            </button>
-          </div>
-        </Notice>
-      )}
-      {workflow.draft.supersededLocalDrafts.map((superseded) => (
-        <Notice kind="warning" key={superseded.displacedByVersion}>
-          <p>
-            Your text was replaced by stored version {superseded.displacedByVersion} and
-            was never saved. Copy anything you still need, then dismiss it. A later
-            conflict adds another copy rather than replacing this one.
-          </p>
-          <textarea
-            readOnly
-            aria-label={`My superseded draft text replaced by version ${superseded.displacedByVersion}`}
-            value={draftContentTranscript(superseded.content)}
-          />
-          <button
-            className="button button-secondary"
-            onClick={() => dismissSuperseded(superseded.displacedByVersion)}
-          >
-            Dismiss my text replaced by version {superseded.displacedByVersion}
-          </button>
-        </Notice>
-      ))}
-      <label>
-        Review body
-        <textarea
-          value={content.body}
-          disabled={locked}
-          onChange={(event) => edit({ ...content, body: event.target.value })}
-        />
-      </label>
-      <label>
-        Verdict
-        <select
-          value={content.verdict ?? ""}
-          disabled={locked}
-          onChange={(event) =>
-            edit({ ...content, verdict: event.target.value === "" ? null : event.target.value as DraftContentInputDto["verdict"] })
-          }
-        >
-          <option value="">No verdict</option>
-          <option value="comment" disabled={capabilities?.comment_verdict !== true}>Comment</option>
-          <option value="approve" disabled={capabilities?.approve !== true}>Approve</option>
-          <option value="request_changes" disabled={capabilities?.request_changes !== true}>Request changes</option>
-        </select>
-      </label>
-      <div className="review-workflow-draft-comments">
-        <strong>{content.comments.length} draft comment(s)</strong>
-        {content.comments.map((comment) => (
-          <article key={comment.id} className="review-workflow-draft-comment">
-            <p><strong>{draftCommentLabel(comment)}</strong></p>
-            <textarea
-              aria-label={`Edit draft comment ${comment.id}`}
-              value={comment.body}
-              disabled={locked}
-              onChange={(event) =>
-                edit({
-                  ...content,
-                  comments: content.comments.map((item) =>
-                    item.id === comment.id
-                      ? { ...item, body: event.target.value }
-                      : item,
-                  ),
-                })
-              }
-            />
-            <button
-              className="button button-secondary"
-              disabled={locked}
-              onClick={() =>
-                edit({
-                  ...content,
-                  comments: content.comments.filter((item) => item.id !== comment.id),
-                })
-              }
-            >
-              Remove draft comment
-            </button>
-          </article>
-        ))}
-      </div>
-      {emptyComment && (
-        <small role="status">
-          Edit or remove empty draft comments before saving.
-        </small>
-      )}
-      {workflow.draft.preservedStaleDrafts.map((draft) => (
-        <section key={draft.id} className="review-workflow-preserved-draft">
-          <strong>Preserved old draft {draft.id}</strong>
-          <p>Revision {draft.revision.head_sha}. Its content was not deleted or retargeted.</p>
-          {draft.comments
-            .filter((comment) => comment.kind !== "general")
-            .map((comment) => (
-              <article key={comment.id}>
-                <strong>{draftCommentLabel(comment)}</strong>
-                <p>{comment.body}</p>
-              </article>
-            ))}
-        </section>
-      ))}
-      <div className="review-workflow-row">
-        <button
-          className="button button-secondary"
-          disabled={!canSaveDraft(workflow)}
-          onClick={save}
-        >
-          {workflow.draft.pendingSave ? "Saving…" : "Save draft"}
-        </button>
-        <button
-          className="button"
-          disabled={!canStartSubmission(workflow)}
-          onClick={() => confirmation === "submit" ? void submit() : setConfirmation("submit")}
-        >
-          {confirmation === "submit" ? "Confirm submit review" : "Submit review"}
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function SubmissionProgress({
-  progress,
-  message,
-  pending,
-  resume,
-  reconcile,
-  confirmation,
-  setConfirmation,
-}: {
-  readonly progress: SubmissionProgressDto;
-  readonly message: string | null;
-  readonly pending: boolean;
-  readonly resume: () => void;
-  readonly reconcile: (resolution: ReconciliationResolution) => void;
-  readonly confirmation: Confirmation | null;
-  readonly setConfirmation: (value: Confirmation | null) => void;
-}): ReactNode {
-  return (
-    <section className="review-workflow-progress" aria-live="polite">
-      <h2>Submission progress</h2>
-      {message && <p>{message}</p>}
-      <p>{progress.completed_step_ids.length} confirmed · {progress.unknown_step_ids.length} unknown</p>
-      {progress.failure && <Notice kind="error">{progress.failure.message}</Notice>}
-      {progress.outcome === "paused" && (
-        <>
-          <p>Confirmed steps stay excluded. Resume retries the next definitely unconfirmed step.</p>
-          <button className="button" disabled={pending} onClick={resume}>Resume confirmed attempt</button>
-        </>
-      )}
-      {progress.outcome === "unknown" && (
-        <>
-          <Notice kind="warning">
-            Retry remaining can repeat an unconfirmed remote write. Confirmed receipt steps stay excluded.
-            Mark submitted records your assertion after you inspect the forge; it is not a verified receipt.
-          </Notice>
-          <div className="review-workflow-row">
-            <button
-              className="button"
-              disabled={pending}
-              onClick={() =>
-                confirmation === "reconcile:retry_remaining"
-                  ? reconcile("retry_remaining")
-                  : setConfirmation("reconcile:retry_remaining")
-              }
-            >
-              {confirmation === "reconcile:retry_remaining"
-                ? "Confirm possible repeat of remaining writes"
-                : "Retry only remaining steps"}
-            </button>
-            <button className="button button-secondary" disabled={pending} onClick={() => reconcile("return_editable")}>Return draft to editing</button>
-            <button
-              className="button button-secondary"
-              disabled={pending}
-              onClick={() =>
-                confirmation === "reconcile:mark_submitted"
-                  ? reconcile("mark_submitted")
-                  : setConfirmation("reconcile:mark_submitted")
-              }
-            >
-              {confirmation === "reconcile:mark_submitted"
-                ? "Confirm inspected remote is submitted"
-                : "Mark submitted"}
-            </button>
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function DraftRecoveryList({
-  drafts,
-  recover,
-}: {
-  readonly drafts: readonly DraftSnapshotDto[];
-  readonly recover: (item: DraftSnapshotDto) => void;
-}): ReactNode {
-  return (
-    <section className="review-workflow-recovery">
-      <h2>Choose a preserved draft</h2>
-      {drafts.map((item) => (
-        <button
-          key={item.id}
-          className="button button-secondary"
-          onClick={() => recover(item)}
-        >
-          Draft {item.id} at {item.revision.head_sha}, version {item.version}
-        </button>
-      ))}
-    </section>
-  );
-}
-
-function RecoveryList({
-  recoveries,
-  recover,
-}: {
-  readonly recoveries: readonly SubmissionProgressDto[];
-  readonly recover: (item: SubmissionProgressDto) => void;
-}): ReactNode {
-  return (
-    <section className="review-workflow-recovery">
-      <h2>Durable submission recovery</h2>
-      {recoveries.map((item) => (
-        <button key={item.attempt_id} className="button button-secondary" onClick={() => recover(item)}>
-          Recover {item.outcome} attempt with {item.completed_step_ids.length} confirmed step(s)
-        </button>
-      ))}
-    </section>
-  );
-}
-
 function ActionButtons({
   capabilities,
   confirmation,
@@ -1712,37 +1230,6 @@ function Notice({ kind, children }: { readonly kind: string; readonly children: 
   return <div className={`notice notice-${kind}`} role={kind === "error" ? "alert" : "status"}>{children}</div>;
 }
 
-async function recoverLatestSubmission(
-  bridge: ReviewDesktopBridge,
-  review: string,
-  draftId: string,
-  frozenVersion: number,
-): Promise<SubmissionProgressDto | null> {
-  try {
-    const result = await bridge.listReviewSubmissions({ review, max_items: 100 }).result;
-    return (
-      result.attempts.find(
-        (item) =>
-          item.draft_id === draftId && item.frozen_version === frozenVersion,
-      ) ?? null
-    );
-  } catch {
-    return null;
-  }
-}
-
-async function recoverSubmissionStatus(
-  bridge: ReviewDesktopBridge,
-  review: string,
-  attemptId: string,
-): Promise<SubmissionProgressDto | null> {
-  try {
-    return await bridge.getReviewSubmission({ review, attempt_id: attemptId }).result;
-  } catch {
-    return null;
-  }
-}
-
 function inlineDisabledReason(
   capabilities: ReviewMutationCapabilitiesDto | null,
   anchor: InlineAnchorSelection | null,
@@ -1761,25 +1248,6 @@ function inlineDisabledReason(
   if (durable && workflow && !canCaptureDraftInline(workflow))
     return "The draft is bound to an earlier revision or a durable submission attempt.";
   return null;
-}
-
-function draftContentTranscript(content: DraftContentInputDto): string {
-  const sections = [content.body, `Verdict: ${content.verdict ?? "none"}`];
-  for (const comment of content.comments)
-    sections.push(`${draftCommentLabel(comment)}\n${comment.body}`);
-  return sections.join("\n\n");
-}
-
-function draftCommentLabel(comment: DraftCommentInputDto): string {
-  if (comment.kind === "general") return `General comment ${comment.id}`;
-  if (comment.kind === "reply")
-    return `Reply ${comment.id} to discussion ${comment.thread_id}`;
-  const line =
-    comment.anchor.side === "old"
-      ? comment.anchor.old_line
-      : comment.anchor.new_line;
-  const stale = comment.anchor.stale === true ? " · stale anchor" : "";
-  return `Inline ${comment.id} · ${comment.anchor.new_path} · ${comment.anchor.side} line ${line}${stale}`;
 }
 
 function suggestionBuffer(

@@ -1040,7 +1040,7 @@ jobs:
             ],
             "stages": [
               {
-                "name": "verifier-fixture-structure",
+                "name": "verifier-fixture-structure-injected",
                 "evidence": ["reports/native-payload.junit.xml"],
                 "observation": {
                   "gpu_gate": "not-satisfied",

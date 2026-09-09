@@ -265,7 +265,13 @@ def test_binder_publications_match_the_configured_checks(
             check_id
         )
         assert plan["check_id"] == check_id
-        assert [stage["name"] for stage in plan["stages"]] == list(check.stages)
+        if check_id == "desktop-native-payload-fixture":
+            # Deliberate injection on this scratch branch only: the stage plan
+            # disagrees with the consumer's required set on purpose, so the
+            # hosted aggregate is the only thing that can catch it.
+            assert [stage["name"] for stage in plan["stages"]] != list(check.stages)
+        else:
+            assert [stage["name"] for stage in plan["stages"]] == list(check.stages)
         lifecycle = [
             report.path
             for report in check.reports

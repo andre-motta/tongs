@@ -62,6 +62,14 @@ an existing list refreshes, the control is labelled **Refreshing…**. An
 individual repository page uses the same controls but reads only that
 repository.
 
+Each list keeps its scope, state, and sort for the life of the session, held
+separately for **All reviews** and for each repository page. Opening a review
+and choosing **← Reviews** returns to the same list with the same controls, and
+the review you opened is selected and scrolled into view with focus on its
+card. Changing a control afterwards leaves focus on the control you used. A
+fresh launch still starts on **All reviews** with **Open** selected, and
+nothing about the list is written to disk.
+
 Each review card shows its CI state, number, title, author, source and target
 branches, and last update time. Select a card to open its detail view. When
 **All reviews** spans several repositories, a failed repository read is shown

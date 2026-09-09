@@ -466,6 +466,10 @@ button {
   outline: none;
   background: var(--panel-2);
 }
+.review-card-selected {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
 .review-title {
   font-size: 15px;
 }

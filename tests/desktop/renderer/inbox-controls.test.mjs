@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test, { afterEach } from "node:test";
+import {
+  Navigator,
+  resetInboxReturnRoute,
+} from "../../../desktop/dist/src/renderer/core/navigation.js";
 import { QueryCoordinator } from "../../../desktop/dist/src/renderer/core/query.js";
 import {
   createInboxFeature,
   listDiscoveredReviews,
+  resetInboxListSelections,
   sortReviewItems,
 } from "../../../desktop/dist/src/renderer/features/inbox/index.js";
+import { ReviewHeader } from "../../../desktop/dist/src/renderer/features/review-detail/index.js";
 import {
   filterAndSortRepositories,
   RepositoryNavigation,
@@ -29,7 +35,11 @@ const { cleanup, fireEvent, render, waitFor } = desktopRequire(
   "@testing-library/react",
 );
 const React = desktopRequire("react");
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetInboxListSelections();
+  resetInboxReturnRoute();
+});
 
 test("review controls keep All Open as the default and send exact scope and state", async () => {
   const calls = [];
@@ -329,6 +339,166 @@ test("mounted repository controls retain filters and keyboard focus across disco
   );
 });
 
+test("review list filter and selection survive opening a review and returning", async () => {
+  const calls = [];
+  const items = [
+    reviewItem("Alpha", "open", {
+      handle: "review-alpha",
+      updated_at: "2026-09-08T10:00:00Z",
+    }),
+    reviewItem("Zulu", "open", {
+      handle: "review-zulu",
+      updated_at: "2026-09-08T12:00:00Z",
+    }),
+  ];
+  const bridge = baseBridge({
+    listReviews: (params) => {
+      calls.push(params);
+      return read({ items, failures: [] });
+    },
+  });
+  const routes = new Navigator();
+  routes.navigate({ kind: "inbox", repository: repository("repo", "Repository") });
+  const view = render(
+    React.createElement(RouteHarness, {
+      bridge,
+      feature: createInboxFeature(),
+      routes,
+    }),
+  );
+  await view.findByText("Alpha");
+
+  fireEvent.click(view.getByRole("button", { name: "My Reviews" }));
+  await view.findByText("Alpha");
+  fireEvent.change(view.getByLabelText("Sort reviews"), {
+    target: { value: "title" },
+  });
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelector(".review-card .review-title")?.textContent,
+      "Alpha",
+    ),
+  );
+  assert.deepEqual(calls.at(-1), {
+    scope: "my_reviews",
+    state: "open",
+    repository: "repo",
+  });
+
+  fireEvent.click(view.getByText("Zulu").closest("button"));
+  await view.findByRole("button", { name: "← Reviews" });
+  assert.equal(Boolean(view.queryByLabelText("Review list controls")), false);
+
+  fireEvent.click(view.getByRole("button", { name: "← Reviews" }));
+  await view.findByText("Zulu");
+  assert.equal(
+    view.container.querySelector(".view-title")?.textContent,
+    "Repository",
+  );
+  assert.equal(
+    view.getByRole("button", { name: "My Reviews" }).getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    view.getByRole("button", { name: "All Open" }).getAttribute("aria-pressed"),
+    "false",
+  );
+  assert.equal(view.getByLabelText("Sort reviews").value, "title");
+  assert.deepEqual(calls.at(-1), {
+    scope: "my_reviews",
+    state: "open",
+    repository: "repo",
+  });
+  const restored = view.getByText("Zulu").closest("button");
+  assert.equal(restored.getAttribute("aria-current"), "true");
+  assert.equal(restored.dataset.reviewHandle, "review-zulu");
+  assert.equal(document.activeElement?.dataset.reviewHandle, "review-zulu");
+  assert.equal(
+    view.getByText("Alpha").closest("button").getAttribute("aria-current"),
+    null,
+  );
+
+  const allOpen = view.getByRole("button", { name: "All Open" });
+  allOpen.focus();
+  fireEvent.click(allOpen);
+  await view.findByText("Zulu");
+  assert.equal(
+    document.activeElement?.dataset.reviewScope,
+    "all_open",
+    "changing the scope must leave focus on the control that was used",
+  );
+  assert.equal(document.activeElement?.dataset.reviewHandle, undefined);
+  assert.equal(
+    view.getByText("Zulu").closest("button").getAttribute("aria-current"),
+    "true",
+  );
+  const closed = view.getByRole("button", { name: "Closed & merged" });
+  closed.focus();
+  fireEvent.click(closed);
+  await view.findByText("Zulu");
+  assert.equal(document.activeElement?.dataset.reviewState, "closed");
+  assert.equal(document.activeElement?.dataset.reviewHandle, undefined);
+});
+
+test("each repository scope keeps its own list selection for the session", async () => {
+  const bridge = baseBridge({
+    listReviews: (params) =>
+      read({
+        items: [reviewItem(`${params.repository}-${params.scope}`, "open")],
+        failures: [],
+      }),
+  });
+  const feature = createInboxFeature();
+  const first = render(
+    feature.render(featureContext(bridge), {
+      kind: "inbox",
+      repository: repository("repo", "Repository"),
+    }),
+  );
+  await first.findByText("repo-all_open");
+  fireEvent.click(first.getByRole("button", { name: "My MRs" }));
+  await first.findByText("repo-my_mrs");
+  cleanup();
+
+  const other = render(
+    feature.render(featureContext(bridge), {
+      kind: "inbox",
+      repository: repository("other", "Other"),
+    }),
+  );
+  await other.findByText("other-all_open");
+  assert.equal(
+    other.getByRole("button", { name: "All Open" }).getAttribute("aria-pressed"),
+    "true",
+  );
+  cleanup();
+
+  const again = render(
+    feature.render(featureContext(bridge), {
+      kind: "inbox",
+      repository: repository("repo", "Repository"),
+    }),
+  );
+  await again.findByText("repo-my_mrs");
+  assert.equal(
+    again.getByRole("button", { name: "My MRs" }).getAttribute("aria-pressed"),
+    "true",
+  );
+});
+
+function RouteHarness({ bridge, feature, routes }) {
+  const [route, setRoute] = React.useState(routes.route);
+  React.useEffect(() => routes.subscribe(setRoute), []);
+  const navigate = React.useCallback((next) => routes.navigate(next), []);
+  const context = React.useMemo(
+    () => featureContext(bridge, navigate),
+    [navigate],
+  );
+  return route.kind === "inbox"
+    ? feature.render(context, route)
+    : React.createElement(ReviewHeader, { route, navigate, panels: [] });
+}
+
 function repository(handle, displayName, forge = "github", hostname) {
   return {
     handle,
@@ -367,7 +537,7 @@ function reviewItem(title, state, overrides = {}) {
   };
 }
 
-function featureContext(bridge) {
+function featureContext(bridge, navigate = () => {}) {
   return {
     bridge,
     queries: new QueryCoordinator(bridge),
@@ -377,7 +547,7 @@ function featureContext(bridge) {
     reviewPanels: [],
     inlineAnchor: null,
     selectInlineAnchor: () => {},
-    navigate: () => {},
+    navigate,
   };
 }
 

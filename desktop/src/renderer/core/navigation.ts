@@ -72,6 +72,30 @@ export interface DiscussionDiffTarget {
   readonly line: number;
 }
 
+const DEFAULT_INBOX_ROUTE: Extract<AppRoute, { kind: "inbox" }> = Object.freeze({
+  kind: "inbox",
+  repository: null,
+});
+
+let rememberedInboxRoute = DEFAULT_INBOX_ROUTE;
+
+/**
+ * Session memory of the review list the user last looked at. Returning from a
+ * review has to land on that list again, because dropping back to every
+ * repository discards the repository scope the user chose.
+ */
+export function rememberInboxRoute(route: AppRoute): void {
+  if (route.kind === "inbox") rememberedInboxRoute = Object.freeze({ ...route });
+}
+
+export function inboxReturnRoute(): Extract<AppRoute, { kind: "inbox" }> {
+  return rememberedInboxRoute;
+}
+
+export function resetInboxReturnRoute(): void {
+  rememberedInboxRoute = DEFAULT_INBOX_ROUTE;
+}
+
 export interface DiscoveryRouteReconciliation {
   readonly route: AppRoute;
   readonly removed: boolean;
@@ -194,12 +218,15 @@ export class Navigator {
   private listeners = new Set<(route: AppRoute) => void>();
   constructor(
     private routeValue: AppRoute = { kind: "inbox", repository: null },
-  ) {}
+  ) {
+    rememberInboxRoute(this.routeValue);
+  }
   get route(): AppRoute {
     return this.routeValue;
   }
   navigate(route: AppRoute): void {
     this.routeValue = route;
+    rememberInboxRoute(route);
     for (const listener of this.listeners) listener(route);
   }
   subscribe(listener: (route: AppRoute) => void): () => void {

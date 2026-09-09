@@ -3,10 +3,11 @@ import type {
   DesktopBridge,
   ReviewSnapshotDto,
 } from "../../../shared/bridge.js";
-import type {
-  AppRoute,
-  FeatureContribution,
-  ReviewPanelContribution,
+import {
+  inboxReturnRoute,
+  type AppRoute,
+  type FeatureContribution,
+  type ReviewPanelContribution,
 } from "../../core/navigation.js";
 import { formatDate, safeError } from "../../core/presentation.js";
 import type { QueryCoordinator } from "../../core/query.js";
@@ -27,7 +28,7 @@ export function ReviewHeader({
       <header className="review-header">
         <button
           className="button button-quiet"
-          onClick={() => navigate({ kind: "inbox", repository: null })}
+          onClick={() => navigate(inboxReturnRoute())}
         >
           ← Reviews
         </button>

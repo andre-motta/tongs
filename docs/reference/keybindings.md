@@ -32,8 +32,9 @@ These bindings work everywhere in the application.
 | ++slash++ | Filter repos by name |
 | ++f++ | Cycle forge filter (All / GH / GL) |
 | ++s++ | Cycle sort order (name / forge / host) |
-| ++enter++ | Open scoped inbox for selected repo |
-| ++escape++ | Go back |
+| ++enter++ (in filter) | Keep the filter and move to the list |
+| ++enter++ (on list) | Open scoped inbox for selected repo |
+| ++escape++ | Close the filter and restore the full list, or go back |
 | ++ctrl+r++ | Refresh repo list |
 
 ## MR detail
@@ -126,9 +127,10 @@ additional bindings reconcile it (each requires a second press to confirm):
 |-----|--------|
 | ++j++ / ++k++ | Move between pipeline / job cards |
 | ++enter++ | Drill into jobs (from pipeline) or log (from job) |
-| ++escape++ | Drill out one level |
+| ++escape++ | Close the log search, or drill out one level |
 | ++c+shift++ | Cancel pipeline or job (double-press) |
 | ++r+shift++ | Retry pipeline or job (double-press) |
 | ++o++ | Open pipeline / job in browser |
 | ++f2++ | Open job log in external editor |
-| ++slash++ | Search job log text |
+| ++slash++ | Search job log text (live, with match count) |
+| ++n++ / ++n+shift++ | Jump to next / previous match (wraps around) |

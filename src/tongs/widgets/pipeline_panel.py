@@ -16,6 +16,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.css.query import NoMatches
+from textual.markup import escape
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -23,6 +24,9 @@ from textual.widgets import Input, RichLog, Static
 
 from tongs.forges.models import CIStatus, Pipeline, PipelineJob
 from tongs.helpers import ci_icon_markup, ci_icon_text, format_duration, relative_time
+
+LOG_MAX_LINES = 50000
+"""Job log lines kept in the widget; older lines are dropped past this."""
 
 
 class CancelPipelineRequested(Message):
@@ -179,6 +183,13 @@ class PipelinePanel(Widget, can_focus=True):
         display: none;
         height: 1;
     }
+    PipelinePanel #log-search-status {
+        dock: bottom;
+        display: none;
+        height: 1;
+        padding: 0 1;
+        background: $accent-darken-2;
+    }
     """
 
     BINDINGS: ClassVar[list] = [
@@ -193,6 +204,8 @@ class PipelinePanel(Widget, can_focus=True):
         Binding("o", "open_browser", "Browser", show=True, key_display="o"),
         Binding("f2", "open_in_editor", "Editor", show=False),
         Binding("slash", "search_log", "Search", show=False, key_display="/"),
+        Binding("n", "next_match", "Next match", show=False),
+        Binding("N", "prev_match", "Previous match", show=False, key_display="N"),
     ]
 
     _focused_index: reactive[int] = reactive(0)
@@ -209,6 +222,12 @@ class PipelinePanel(Widget, can_focus=True):
         self._pending_retry: int | None = None
         self._search_matches: list[int] = []
         self._search_index: int = 0
+        self._search_active: bool = False
+        self._search_query: str = ""
+        self._search_saved_scroll: int | None = None
+        self._log_row_offset: int = 0
+        self._log_plain_lines: list[str] = []
+        self._log_search_lines: list[str] = []
         self._render_gen: int = 0
         self._saved_pipeline_idx: int = 0
         self._saved_job_idx: int = 0
@@ -219,8 +238,9 @@ class PipelinePanel(Widget, can_focus=True):
         yield VerticalScroll(id="job-list-scroll")
         with Vertical(id="job-log-container"):
             yield Static("", id="job-log-header")
-            yield RichLog(id="job-log-content", max_lines=50000, wrap=False)
+            yield RichLog(id="job-log-content", max_lines=LOG_MAX_LINES, wrap=False)
             yield Input(id="log-search-input", placeholder="Search log...")
+            yield Static("", id="log-search-status")
 
     def on_mount(self) -> None:
         self.query_one("#job-list-scroll").display = False
@@ -286,7 +306,7 @@ class PipelinePanel(Widget, can_focus=True):
         card_idx = 0
         self._job_card_map: dict[int, int] = {}
         for stage_name, stage_jobs in stages.items():
-            scroll.mount(Static(f"\n  [bold]{stage_name}[/]"))
+            scroll.mount(Static(f"\n  [bold]{escape(stage_name)}[/]"))
             for job_idx, job in stage_jobs:
                 card = JobCard(job)
                 card.id = f"job-card-{g}-{card_idx}"
@@ -297,6 +317,7 @@ class PipelinePanel(Widget, can_focus=True):
                 card_idx += 1
 
     def set_job_log(self, log_text: str, job: PipelineJob, pipeline: Pipeline) -> None:
+        self._reset_search()
         self._current_job = job
         self._current_pipeline = pipeline
         self._job_log_text = log_text
@@ -313,23 +334,47 @@ class PipelinePanel(Widget, can_focus=True):
         job = self._current_job
         if job:
             header = self.query_one("#job-log-header", Static)
-            header.update(
-                f"Job: {job.name}  {ci_icon_markup(job.status)} {job.status.value}  "
-                f"{format_duration(job.duration_seconds)}  "
-                f"Stage: {job.stage}  "
-                f"[dim]F2 open in editor  / search[/]"
+            icon_char, icon_style = ci_icon_text(job.status)
+            # Built as Text, not markup: the job name and stage come from the
+            # forge and brackets in them would otherwise be parsed as tags.
+            header_text = Text()
+            header_text.append("Job: ")
+            header_text.append(job.name)
+            header_text.append("  ")
+            header_text.append(icon_char, icon_style)
+            header_text.append(f" {job.status.value}  ")
+            duration = format_duration(job.duration_seconds)
+            if duration:
+                header_text.append(f"{duration}  ")
+            header_text.append("Stage: ")
+            header_text.append(job.stage or "")
+            header_text.append(
+                "  F2 open in editor  / search  n/N next-previous match",
+                Style(dim=True),
             )
+            header.update(header_text)
 
         log_widget = self.query_one("#job-log-content", RichLog)
         log_widget.clear()
 
         lines = self._job_log_text.split("\n")
+        # The widget keeps only the last LOG_MAX_LINES rows, so a log line's
+        # rendered row is its index minus the number of dropped lines. Each
+        # line renders as exactly one row because the RichLog does not wrap.
+        self._log_row_offset = max(0, len(lines) - LOG_MAX_LINES)
+        self._log_plain_lines = []
+        self._log_search_lines = []
         for i, line in enumerate(lines):
             line_num = Text(f"{i + 1:>6} ", style=Style(dim=True))
             content = Text.from_ansi(line)
+            plain = content.plain
+            self._log_plain_lines.append(plain)
+            self._log_search_lines.append(plain.lower())
             rendered = Text()
             rendered.append_text(line_num)
             rendered.append_text(content)
+            # The gutter keeps every write non-empty, so each log line renders
+            # as exactly one row and the row mapping above stays exact.
             log_widget.write(rendered)
 
     def _get_focused_pipeline(self) -> Pipeline | None:
@@ -396,16 +441,20 @@ class PipelinePanel(Widget, can_focus=True):
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action == "drill_out":
-            return self._view_level > 0
+            return self._view_level > 0 or self._search_active
+        if action in ("next_match", "prev_match"):
+            return bool(self._search_matches)
         return True
 
     def action_drill_out(self) -> None:
+        if self._search_active:
+            self._close_search(restore_scroll=True)
+            return
         if self._view_level == 2:
             self._view_level = 1
             self._focused_index = self._saved_job_idx
+            self._reset_search()
             self._render_job_list()
-            search_input = self.query_one("#log-search-input", Input)
-            search_input.display = False
             self.focus()
         elif self._view_level == 1:
             self._view_level = 0
@@ -436,7 +485,7 @@ class PipelinePanel(Widget, can_focus=True):
                 self.post_message(CancelJobRequested(self._current_pipeline.id, j.id))
             else:
                 self._pending_cancel = j.id
-                self.app.notify(f"Cancel job {j.name}? Press C again.")
+                self.app.notify(f"Cancel job {escape(j.name)}? Press C again.")
 
     def action_retry(self) -> None:
         if self._view_level == 0:
@@ -461,7 +510,7 @@ class PipelinePanel(Widget, can_focus=True):
                 self.post_message(RetryJobRequested(self._current_pipeline.id, j.id))
             else:
                 self._pending_retry = j.id
-                self.app.notify(f"Retry job {j.name}? Press R again.")
+                self.app.notify(f"Retry job {escape(j.name)}? Press R again.")
 
     def action_open_browser(self) -> None:
         if self._view_level == 0:
@@ -501,7 +550,7 @@ class PipelinePanel(Widget, can_focus=True):
             with self.app.suspend():
                 subprocess.run([*shlex.split(editor_cmd), tmp_path], check=False)
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            self.app.notify(f"Editor failed: {exc}")
+            self.app.notify(f"Editor failed: {escape(str(exc))}")
         finally:
             if tmp_path:
                 with suppress(OSError):
@@ -509,36 +558,130 @@ class PipelinePanel(Widget, can_focus=True):
 
     def action_search_log(self) -> None:
         if self._view_level != 2:
+            self.app.notify("Open a job log first, then press / to search it")
             return
         search_input = self.query_one("#log-search-input", Input)
+        if not self._search_active:
+            log_widget = self.query_one("#job-log-content", RichLog)
+            self._search_saved_scroll = int(log_widget.scroll_offset.y)
+        self._search_active = True
+        self._search_query = ""
+        self._search_matches = []
+        self._search_index = 0
         search_input.display = True
-        search_input.value = ""
+        with search_input.prevent(Input.Changed):
+            search_input.value = ""
+        self._set_search_status(self._search_hint())
         search_input.focus()
 
+    def action_next_match(self) -> None:
+        self._step_match(1)
+
+    def action_prev_match(self) -> None:
+        self._step_match(-1)
+
+    def _step_match(self, delta: int) -> None:
+        if not self._search_matches:
+            return
+        self._search_index = (self._search_index + delta) % len(self._search_matches)
+        self._jump_to_match()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "log-search-input":
+            return
+        event.stop()
+        self._do_search(event.value.strip())
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "log-search-input":
-            query = event.value.strip()
-            event.input.display = False
-            if not query:
-                return
+        if event.input.id != "log-search-input":
+            return
+        event.stop()
+        query = event.value.strip()
+        if not query:
+            self._close_search(restore_scroll=True)
+            return
+        event.input.display = False
+        if query != self._search_query:
             self._do_search(query)
+        elif self._search_matches:
+            self._jump_to_match()
+        self.focus()
+
+    def _reset_search(self) -> None:
+        self._search_active = False
+        self._search_query = ""
+        self._search_matches = []
+        self._search_index = 0
+        self._search_saved_scroll = None
+        search_input = self.query_one("#log-search-input", Input)
+        search_input.display = False
+        with search_input.prevent(Input.Changed):
+            search_input.value = ""
+        self.query_one("#job-log-content", RichLog).auto_scroll = True
+        self._set_search_status(Text())
+
+    def _close_search(self, *, restore_scroll: bool) -> None:
+        saved = self._search_saved_scroll
+        self._reset_search()
+        if restore_scroll and saved is not None:
+            log_widget = self.query_one("#job-log-content", RichLog)
+            log_widget.scroll_to(y=saved, animate=False)
+        self.focus()
+
+    @staticmethod
+    def _search_hint() -> Text:
+        return Text(
+            "Search log: type a term, enter to keep, escape to close",
+            style=Style(dim=True),
+        )
+
+    def _set_search_status(self, content: Text) -> None:
+        """Render the status as Text so log content is never parsed as markup."""
+        status = self.query_one("#log-search-status", Static)
+        status.update(content)
+        status.display = bool(content.plain)
 
     def _do_search(self, query: str) -> None:
-        lines = self._job_log_text.split("\n")
+        self._search_query = query
         self._search_matches = []
-        plain_query = query.lower()
-        for i, line in enumerate(lines):
-            plain = Text.from_ansi(line).plain.lower()
-            if plain_query in plain:
-                self._search_matches.append(i)
-
-        if not self._search_matches:
-            self.app.notify(f"No matches for '{query}'")
+        self._search_index = 0
+        if not query:
+            self._set_search_status(self._search_hint())
             return
 
-        self._search_index = 0
+        plain_query = query.lower()
+        self._search_matches = [
+            i for i, line in enumerate(self._log_search_lines) if plain_query in line
+        ]
+
+        if not self._search_matches:
+            status = Text()
+            status.append("No matches for ", Style(dim=True))
+            status.append(query, Style(bold=True))
+            self._set_search_status(status)
+            return
+
+        self._jump_to_match()
+
+    def _jump_to_match(self) -> None:
+        if not self._search_matches:
+            return
+        target = self._search_matches[self._search_index]
         log_widget = self.query_one("#job-log-content", RichLog)
-        target = self._search_matches[0]
-        log_widget.scroll_to(y=target, animate=False)
+        log_widget.auto_scroll = False
+        log_widget.scroll_to(y=self._rendered_row(target), animate=False)
         total = len(self._search_matches)
-        self.app.notify(f"Match 1/{total}: line {target + 1}")
+        status = Text()
+        status.append(f"Match {self._search_index + 1}/{total}", Style(bold=True))
+        status.append(f"  line {target + 1}  ", Style(dim=True))
+        status.append(self._match_preview(target))
+        self._set_search_status(status)
+
+    def _rendered_row(self, line_index: int) -> int:
+        """Rendered row of a log line, offset by any lines the widget dropped."""
+        return max(0, line_index - self._log_row_offset)
+
+    def _match_preview(self, line_index: int) -> str:
+        if not 0 <= line_index < len(self._log_plain_lines):
+            return ""
+        return self._log_plain_lines[line_index].strip()[:60]

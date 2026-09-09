@@ -142,17 +142,52 @@ jobs:
         run: |
           npm ci --prefix desktop
           npm run build --prefix desktop
-      - name: Prepare the bounded report directory
-        run: mkdir -p "$RUNNER_TEMP/reports"
+      - name: Prepare the bounded report directory and interpreter path
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/reports"
+          # The production sidecar transport rejects a relative interpreter, so
+          # this must be the absolute path rather than the bare name, matching
+          # the desktop fixture job in ci.yml.
+          interpreter=$(command -v python)
+          case "$interpreter" in
+            /*) ;;
+            *) echo "python is not an absolute path: $interpreter" >&2; exit 1 ;;
+          esac
+          printf 'TONGS_TEST_PYTHON=%s\n' "$interpreter" >> "$GITHUB_ENV"
       - name: Run the production shell and renderer tests as TAP
         working-directory: desktop
-        env:
-          TONGS_TEST_PYTHON: python
         run: >-
           node --test --test-concurrency=1 --test-reporter=tap
           --test-reporter-destination="$RUNNER_TEMP/reports/desktop-shell.tap"
           ../tests/desktop/electron/*.test.mjs
           ../tests/desktop/renderer/*.test.mjs
+      - name: Show the failing cases when the TAP run fails
+        if: ${{ failure() }}
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/reports/desktop-shell.tap"
+          if [ ! -f "$report" ]; then
+            echo "no TAP report was produced"
+            exit 0
+          fi
+          echo "### failing cases"
+          grep -n -E "^ *not ok " "$report" || echo "no failing case line matched"
+          echo "### diagnostics"
+          grep -n -A 12 -E "^ *not ok " "$report" | head -200 || true
+          echo "### summary"
+          tail -12 "$report"
+      - name: Upload the raw production reports for diagnosis
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            desktop-production-tap-reports-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reports
+          if-no-files-found: warn
+          retention-days: 14
       - name: Run the plugin example and desktop plugin contract tests
         run: >-
           pytest examples/desktop-plugin/tests tests/plugins -v

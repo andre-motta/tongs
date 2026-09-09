@@ -3,7 +3,8 @@
 Issue #168: the repository list advertises "/ Filter" in its footer and shared
 the job log view's defects. The filter box held focus on mount, so "/" was typed
 into it as a literal character, and Escape left the screen instead of closing
-the filter.
+the filter. The box now stays hidden until "/" reveals it, so its placeholder no
+longer invites typing that the table bindings would swallow.
 """
 
 from __future__ import annotations
@@ -52,9 +53,11 @@ async def test_slash_opens_the_repo_filter_without_typing_a_slash(
         table = screen.query_one("#repo-table", DataTable)
         assert app.focused is table
         assert table.row_count == 2
+        assert search.display is False
 
         await pilot.press("slash")
         await settle(app)
+        assert search.display is True
         assert app.focused is search
         assert search.value == ""
 
@@ -90,9 +93,36 @@ async def test_escape_closes_the_repo_filter_before_leaving_the_screen(
         await settle(app)
         assert app.screen is screen
         assert search.value == ""
+        assert search.display is False
         assert table.row_count == 2
         assert app.focused is table
 
         await pilot.press("escape")
         await settle(app)
         assert isinstance(app.screen, InboxScreen)
+
+
+@pytest.mark.asyncio
+async def test_table_bindings_stay_live_while_the_filter_is_hidden(
+    tmp_path: Path,
+) -> None:
+    """The hidden filter box no longer invites keystrokes the table consumes."""
+    app = await _open_repo_list(tmp_path)
+
+    async with app.run_test(size=(120, 34)) as pilot:
+        await settle(app)
+        await pilot.press("r")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, RepoListScreen)
+        assert screen.query_one("#repo-search", Input).display is False
+
+        await pilot.press("s")
+        await settle(app)
+        assert app.screen is screen
+        assert screen._sort_key == "forge"
+
+        await pilot.press("f")
+        await settle(app)
+        assert app.screen is screen
+        assert screen.forge_filter is ForgeType.GITHUB

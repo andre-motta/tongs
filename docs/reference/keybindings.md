@@ -32,7 +32,8 @@ These bindings work everywhere in the application.
 | ++slash++ | Filter repos by name |
 | ++f++ | Cycle forge filter (All / GH / GL) |
 | ++s++ | Cycle sort order (name / forge / host) |
-| ++enter++ | Keep the filter and move to the list |
+| ++enter++ (in filter) | Keep the filter and move to the list |
+| ++enter++ (on list) | Open scoped inbox for selected repo |
 | ++escape++ | Close the filter and restore the full list, or go back |
 | ++ctrl+r++ | Refresh repo list |
 

@@ -7,10 +7,12 @@ forge that returns a multi-line job log.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
+from rich.text import Text
 from textual.widgets import Input, RichLog, Static
 
 from tests.test_tui_mr_services import _app, _settle
@@ -181,3 +183,96 @@ def test_rendered_row_accounts_for_dropped_log_lines() -> None:
     panel._log_row_offset = 10
     assert panel._rendered_row(12) == 2
     assert panel._rendered_row(3) == 0
+
+
+@pytest.mark.asyncio
+async def test_bracketed_log_text_and_query_do_not_crash_the_app(
+    tmp_path: Path,
+) -> None:
+    """Log content and the query reach the status line as text, not markup."""
+    app, forge = _app(tmp_path)
+    linker_log = (
+        "[INFO] build starting\n"
+        "[/usr/bin/ld] error: undefined reference to `foo'\n"
+        "[INFO] build failed"
+    )
+
+    async def get_job_log(repo_path: str, job_id: int) -> str:
+        forge.calls.append(("get_job_log", repo_path, job_id))
+        return linker_log
+
+    forge.get_job_log = get_job_log
+
+    async with app.run_test(size=(120, 34), notifications=True) as pilot:
+        _screen, panel = await _open_job_log(app, pilot)
+
+        await pilot.press("slash")
+        for key in "error":
+            await pilot.press(key)
+        await _settle(app)
+        assert app.is_running
+        assert panel._search_matches == [1]
+        status = _status_text(panel)
+        assert "Match 1/1" in status
+        assert "[/usr/bin/ld] error" in status
+
+        search = panel.query_one("#log-search-input", Input)
+        search.value = "[/"
+        await _settle(app)
+        assert app.is_running
+        assert panel._search_matches == [1]
+        assert "[/usr/bin/ld] error" in _status_text(panel)
+
+        search.value = "[/nothing-matches"
+        await _settle(app)
+        assert app.is_running
+        assert panel._search_matches == []
+        assert "[/nothing-matches" in _status_text(panel)
+
+
+@pytest.mark.asyncio
+async def test_bracketed_job_name_renders_in_the_log_header(tmp_path: Path) -> None:
+    app, forge = _app(tmp_path)
+    _with_log(app, forge)
+    forge.job = replace(forge.job, name="build [/all] stage")
+
+    async with app.run_test(size=(120, 34), notifications=True) as pilot:
+        _screen, panel = await _open_job_log(app, pilot)
+        assert app.is_running
+        header = panel.query_one("#job-log-header", Static).render().plain
+        assert "build [/all] stage" in header
+
+
+@pytest.mark.asyncio
+async def test_live_search_does_not_re_decode_the_log_per_keystroke(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, forge = _app(tmp_path)
+    _with_log(app, forge)
+
+    async with app.run_test(size=(120, 34), notifications=True) as pilot:
+        _screen, panel = await _open_job_log(app, pilot)
+        assert len(panel._log_search_lines) == len(JOB_LOG.split("\n"))
+
+        decoded: list[str] = []
+        original = Text.from_ansi
+
+        def counting_from_ansi(
+            _cls, text: str, *args: object, **kwargs: object
+        ) -> Text:
+            decoded.append(text)
+            return original(text, *args, **kwargs)
+
+        monkeypatch.setattr(Text, "from_ansi", classmethod(counting_from_ansi))
+
+        await pilot.press("slash")
+        for key in "error":
+            await pilot.press(key)
+        await pilot.press("enter")
+        await pilot.press("n")
+        await pilot.press("N")
+        await _settle(app)
+
+        assert panel._search_matches == MATCH_LINES
+        assert panel._search_index == 0
+        assert decoded == []

@@ -25,6 +25,12 @@ def _forge_label(forge_type: ForgeType | None) -> str:
 class RepoListScreen(Screen):
     """Searchable, filterable repo list with DataTable."""
 
+    DEFAULT_CSS = """
+    RepoListScreen #repo-search {
+        display: none;
+    }
+    """
+
     BINDINGS: ClassVar[list] = [
         Binding("escape", "go_back", "Back", show=True),
         Binding("q", "go_back", "Back", show=False),
@@ -62,8 +68,8 @@ class RepoListScreen(Screen):
         self._repo_data: dict[str, Repo] = {}
         self._sort_key: str = "name"
         self._apply_filters()
-        # Keep the table focused so the advertised "/" binding reaches the
-        # screen instead of being typed into the filter box.
+        # The filter box stays hidden until "/" reveals it, so the table keeps
+        # the focus and the advertised bindings reach the screen.
         table.focus()
 
     def action_go_back(self) -> None:
@@ -71,12 +77,14 @@ class RepoListScreen(Screen):
         if self.focused is search:
             # Escape closes the filter and restores the unfiltered list.
             search.value = ""
+            search.display = False
             self.query_one("#repo-table", DataTable).focus()
             return
         self.app.pop_screen()
 
     def action_start_search(self) -> None:
         search = self.query_one("#repo-search", Input)
+        search.display = True
         search.focus()
 
     def action_cycle_forge(self) -> None:

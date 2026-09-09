@@ -44,6 +44,7 @@ from tests.integration.desktop.native_payload_acceptance import (
     capture_expected_outputs,
     capture_payload_snapshot,
     chromium_argv_title,
+    compacted_title_tokens,
     parse_bound_manifests,
     title_derived_role,
     validate_policy,
@@ -588,6 +589,7 @@ def _validate_process_refresh(
                 role=previous.role,
                 argv=previous.argv,
                 title_derived=False,
+                compact_title=False,
             )
     parent = observations.get(previous.ppid)
     inherited_parent_image = (
@@ -862,10 +864,15 @@ def _observe_process(pid: int, root_pid: int) -> ProcessObservation | None:
         cwd = None
     role = _process_role(pid, root_pid, argv)
     title_derived = False
-    if role == "helper":
+    compact_title = False
+    if role == "helper" and compacted_title_tokens(executable, argv) is not None:
         # Canonical classification takes precedence. A zygote forked child never
         # has a canonical argv of its own, so its role can only come from the
         # compacted title. See ``.worktrees/desktop-125-attempt10-analysis.md``.
+        # A title whose ``--type`` value is outside the audited map stays a
+        # helper and gains no role; only the argv shape is recorded, which is
+        # the failed native attempt 11 case (``--type=broker``).
+        compact_title = True
         derived = title_derived_role(executable, argv)
         if derived is not None:
             role = derived
@@ -886,6 +893,7 @@ def _observe_process(pid: int, root_pid: int) -> ProcessObservation | None:
         ),
         raw_argv=argv,
         title_derived=title_derived,
+        compact_title=compact_title,
     )
 
 

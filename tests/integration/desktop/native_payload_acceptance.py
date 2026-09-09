@@ -283,6 +283,10 @@ class ProcessObservation:
     # ``argv`` is the single raw title field and must never be treated as a
     # canonical argument vector.
     title_derived: bool = False
+    # True when ``argv`` is exactly one compacted Chromium process title field
+    # beginning with the resolved executable. ``title_derived`` implies this and
+    # additionally means an audited ``--type`` value was found in the title.
+    compact_title: bool = False
 
     def __post_init__(self) -> None:
         if self.raw_argv is None:
@@ -1690,6 +1694,20 @@ def accepted_compact_titles(
     return (plain,) if permuted == plain else (plain, permuted)
 
 
+def _process_detail(process: ProcessObservation) -> str:
+    """Bounded identity of one observation, for a failure message."""
+
+    argv = process.argv
+    return (
+        f"pid={process.pid},ppid={process.ppid},role={process.role!r},"
+        f"executable={process.executable!r},"
+        f"title_derived={process.title_derived},"
+        f"compact_title={process.compact_title},"
+        f"argv_fields={len(argv)},"
+        f"argv0={_bounded_evidence_value(argv[0] if argv else '')}"
+    )
+
+
 def _process_evidence_summary(pid: int, processes: Sequence[ProcessObservation]) -> str:
     """Bounded evidence about one PID and the observed roster, for diagnostics.
 
@@ -1741,10 +1759,27 @@ def _verify_raw_process_argv(process: ProcessObservation) -> None:
         # only returns the four audited child roles.
         if (
             raw != process.argv
+            or not process.compact_title
             or title_derived_role(process.executable, process.argv) != process.role
         ):
             raise NativeAcceptanceError(
                 "title-derived process role is not reproducible"
+            )
+        return
+    if process.compact_title:
+        # A compacted title whose ``--type`` value is outside the audited map
+        # keeps role ``helper`` and gains nothing: no audited role and no metric
+        # mapping. Re-deriving the shape here also refuses a process that could
+        # have been classified, so an audited child cannot be downgraded to an
+        # unclassified helper to dodge the role requirements.
+        if (
+            raw != process.argv
+            or process.role != "helper"
+            or compacted_title_tokens(process.executable, process.argv) is None
+            or title_derived_role(process.executable, process.argv) is not None
+        ):
+            raise NativeAcceptanceError(
+                "compacted title process claim is not reproducible"
             )
         return
     process_type = COMPACTED_PROCESS_ROLE_TYPES.get(process.role)
@@ -1855,7 +1890,10 @@ def _verify_process_observations(
         if len(process.argv) > MAX_ARGUMENTS or any(
             len(item.encode("utf-8")) > MAX_ARGUMENT_BYTES for item in process.argv
         ):
-            raise NativeAcceptanceError("owned process arguments exceed bounded limits")
+            raise NativeAcceptanceError(
+                f"owned process arguments exceed bounded limits: "
+                f"{_process_detail(process)}"
+            )
         # A compacted title is checked through its space delimited tokens, which
         # can over-detect but never hide a switch, so these safety checks now
         # reach a process that has no canonical argv at all.
@@ -1863,16 +1901,21 @@ def _verify_process_observations(
         tokens = process.argv if title_tokens is None else title_tokens
         if any("node_modules" in PurePosixPath(item).parts for item in tokens):
             raise NativeAcceptanceError(
-                "owned process arguments reference node_modules"
+                "owned process arguments reference node_modules: "
+                f"{_process_detail(process)}"
             )
         switches = {item.split("=", 1)[0] for item in tokens if item.startswith("--")}
         if switches & FORBIDDEN_SWITCHES:
             raise NativeAcceptanceError(
-                "owned process uses a forbidden security/GPU switch"
+                "owned process uses a forbidden security/GPU switch: "
+                f"{_process_detail(process)}"
             )
-        if process.title_derived and process.executable != main[0].executable:
+        if (process.title_derived or process.compact_title) and (
+            process.executable != main[0].executable
+        ):
             raise NativeAcceptanceError(
-                "title-derived process does not share the browser executable"
+                "title-derived process does not share the browser executable: "
+                f"{_process_detail(process)}"
             )
         if process.role == "python-sidecar":
             expected_prefix = (
@@ -1884,15 +1927,18 @@ def _verify_process_observations(
             )
             if process.argv[:5] != expected_prefix:
                 raise NativeAcceptanceError(
-                    "sidecar launch arguments do not bind installed core"
+                    "sidecar launch arguments do not bind installed core: "
+                    f"{_process_detail(process)}"
                 )
             if process.executable != policy.core.proc_executable:
                 raise NativeAcceptanceError(
-                    "sidecar process executable differs from core binding"
+                    "sidecar process executable differs from core binding: "
+                    f"{_process_detail(process)}"
                 )
             if process.cwd != str(Path(policy.safe_cwd).resolve(strict=True)):
                 raise NativeAcceptanceError(
-                    "sidecar working directory differs from launch policy"
+                    "sidecar working directory differs from launch policy: "
+                    f"{_process_detail(process)}"
                 )
         else:
             # The literal ``/proc/self/exe`` is admitted only for the four
@@ -1911,15 +1957,17 @@ def _verify_process_observations(
                 if process.role in COMPACTED_PROCESS_ROLE_TYPES
                 else (process.executable,)
             )
-            if not process.title_derived and (
+            if not (process.title_derived or process.compact_title) and (
                 not process.argv or process.argv[0] not in allowed_argv0
             ):
                 raise NativeAcceptanceError(
-                    "Electron canonical argv does not name its executable"
+                    "Electron canonical argv does not name its executable: "
+                    f"{_process_detail(process)}"
                 )
             if process.executable not in allowed_executables:
                 raise NativeAcceptanceError(
-                    "owned Electron process executable is undeclared"
+                    "owned Electron process executable is undeclared: "
+                    f"{_process_detail(process)}"
                 )
     metrics = report["metrics"]
     assert isinstance(metrics, list)

@@ -2690,6 +2690,7 @@ def _as_title_derived(
         argv=title,
         raw_argv=title,
         title_derived=derived is not None if role is None else True,
+        compact_title=True,
     )
 
 
@@ -2805,6 +2806,163 @@ def test_title_derived_role_requires_exactly_one_field(tmp_path: Path) -> None:
     )
 
 
+def test_final_verifier_accepts_a_compacted_helper_outside_the_role_map(
+    tmp_path: Path,
+) -> None:
+    """Attempt 11: a compacted ``--type=broker`` child stays an unrole helper."""
+
+    fixture = _fixture(tmp_path)
+    observations = []
+    for observation in fixture["observations"]:
+        zygote = observation.processes[1]
+        title = (f"{zygote.executable} --type=broker --enable-crash-reporter=id",)
+        broker = replace(
+            zygote,
+            pid=105,
+            ppid=zygote.pid,
+            start_time_ticks=1050,
+            role="helper",
+            argv=title,
+            raw_argv=title,
+            compact_title=True,
+        )
+        observations.append(
+            replace(observation, processes=(*observation.processes, broker))
+        )
+    fixture["observations"] = tuple(observations)
+
+    result = _verify(fixture)
+
+    assert result.validation == "controlled-fixture-structural-only"
+
+
+def test_final_verifier_rejects_a_compacted_helper_that_could_be_classified(
+    tmp_path: Path,
+) -> None:
+    """An audited child must not be downgraded to an unrole helper."""
+
+    fixture = _fixture(tmp_path)
+    _with_process(
+        fixture,
+        104,
+        lambda process: replace(
+            process,
+            role="helper",
+            argv=(f"{process.executable} --type=renderer",),
+            raw_argv=(f"{process.executable} --type=renderer",),
+            compact_title=True,
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError, match="compacted title process claim is not reproducible"
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_compacted_helper_with_a_forbidden_switch(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    title = "--type=broker --no-sandbox"
+    _with_process(
+        fixture,
+        104,
+        lambda process: replace(
+            process,
+            role="helper",
+            argv=(f"{process.executable} {title}",),
+            raw_argv=(f"{process.executable} {title}",),
+            compact_title=True,
+        ),
+    )
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        _verify(fixture)
+
+    message = str(raised.value)
+    assert "owned process uses a forbidden security/GPU switch" in message
+    assert "pid=104,ppid=101,role='helper'" in message
+    assert "compact_title=True" in message
+
+
+def test_final_verifier_rejects_a_compacted_helper_with_a_foreign_prefix(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    forged = ("/usr/bin/false --type=broker",)
+    _with_process(
+        fixture,
+        104,
+        lambda process: replace(
+            process,
+            role="helper",
+            argv=forged,
+            raw_argv=forged,
+            compact_title=True,
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError, match="compacted title process claim is not reproducible"
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_rejects_a_compacted_helper_with_a_foreign_executable(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    foreign = ("/usr/bin/false --type=broker",)
+    _with_process(
+        fixture,
+        104,
+        lambda process: replace(
+            process,
+            role="helper",
+            executable="/usr/bin/false",
+            argv=foreign,
+            raw_argv=foreign,
+            compact_title=True,
+        ),
+    )
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match="title-derived process does not share the browser executable",
+    ):
+        _verify(fixture)
+
+
+def test_final_verifier_reports_per_process_detail_for_an_unmarked_compact_argv(
+    tmp_path: Path,
+) -> None:
+    """The attempt 11 message now names the offending observation."""
+
+    fixture = _fixture(tmp_path)
+    unmarked = ("{exe} --type=broker",)
+    _with_process(
+        fixture,
+        104,
+        lambda process: replace(
+            process,
+            role="helper",
+            argv=(unmarked[0].format(exe=process.executable),),
+            raw_argv=(unmarked[0].format(exe=process.executable),),
+        ),
+    )
+
+    with pytest.raises(NativeAcceptanceError) as raised:
+        _verify(fixture)
+
+    message = str(raised.value)
+    assert "Electron canonical argv does not name its executable" in message
+    assert "pid=104,ppid=101,role='helper'" in message
+    assert "title_derived=False,compact_title=False" in message
+    assert "argv_fields=1" in message
+    assert "--type=broker" in message
+
+
 @pytest.mark.parametrize(
     ("tail", "role"),
     [
@@ -2838,7 +2996,11 @@ def test_final_verifier_rejects_a_title_derived_claim_over_a_foreign_prefix(
         fixture,
         103,
         lambda process: replace(
-            process, argv=forged, raw_argv=forged, title_derived=True
+            process,
+            argv=forged,
+            raw_argv=forged,
+            title_derived=True,
+            compact_title=True,
         ),
     )
 
@@ -2880,6 +3042,7 @@ def test_final_verifier_rejects_a_title_derived_process_with_a_foreign_executabl
             argv=foreign,
             raw_argv=foreign,
             title_derived=True,
+            compact_title=True,
         ),
     )
 
@@ -2924,6 +3087,7 @@ def test_final_verifier_rejects_a_title_derived_browser(tmp_path: Path) -> None:
             argv=(" ".join(process.argv),),
             raw_argv=(" ".join(process.argv),),
             title_derived=True,
+            compact_title=True,
         ),
     )
 
@@ -2958,6 +3122,7 @@ def test_process_refresh_carries_a_canonical_role_over_a_title_derived_observati
         argv=compacted,
         raw_argv=compacted,
         title_derived=True,
+        compact_title=True,
     )
 
     normalized = launcher_module._validate_process_refresh(previous, current, {})
@@ -2986,6 +3151,7 @@ def test_process_refresh_still_rejects_a_changed_role_over_a_title(
                 argv=compacted,
                 raw_argv=compacted,
                 title_derived=True,
+                compact_title=True,
             ),
             {},
         )

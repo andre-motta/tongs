@@ -53,6 +53,7 @@ import {
   focusedReviewRow,
   pendingRowKey,
   pressComposerPrimary,
+  reviewDrawerIsOpen,
   stepReviewRow,
   threadRowDiscussion,
   threadRowKey,
@@ -681,7 +682,9 @@ function DiffWorkspace({
   const [rowsNode, setRowsNode] = useState<HTMLElement | null>(null);
   const rowCursor = useRef<string | null>(null);
   const stepFile = (direction: 1 | -1): boolean => {
-    if (files.length === 0) return false;
+    // A review with one file has no next file, so the key stays unclaimed
+    // rather than scrolling the one file back to its top.
+    if (files.length < 2) return false;
     const at = files.findIndex((file) => file.file_index === selected);
     const from = at < 0 ? 0 : at;
     const next = files[(from + direction + files.length) % files.length];
@@ -759,9 +762,11 @@ function DiffWorkspace({
     ],
     // The review drawer is a dialog over the diff. It is not `aria-modal`,
     // because the diff behind it stays readable, but it does own the keyboard
-    // while it is open: `v` is its key, and a `n` typed in it must not move
-    // the diff underneath.
-    (owner) => owner.querySelector(".review-drawer") !== null,
+    // while it is open: `v` and `Esc` are its keys, and a `n` typed with the
+    // focus in the diff behind it must not move the diff underneath. The
+    // drawer's own map claims on this same predicate, so everything this one
+    // stands down for is offered there.
+    { standDown: reviewDrawerIsOpen },
   );
   const moveFocus = (event: KeyboardEvent<HTMLElement>): void => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;

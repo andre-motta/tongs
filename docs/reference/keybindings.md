@@ -172,7 +172,15 @@ deliberate:
 - `Ctrl+Enter` (or `Cmd+Enter` on macOS) runs whatever the composer's primary
   button would run, so it carries the same refusals: an empty comment or a
   draft held by a save is refused exactly as pressing the button is.
-- `n`, `p`, `]` and `[` wrap at both ends.
+- `n`, `p`, `]` and `[` wrap at both ends. `]` and `[` stay unclaimed on a
+  review with one changed file. `n` and `p` walk the rows in the order the page
+  lays them out, which in the desktop's **Split** layout means the old pane's
+  threads and pending comments before the new pane's, not top-to-bottom screen
+  order.
+- While **Your review** is open it owns the keyboard wherever the focus is
+  sitting, including on the diff behind it, and the diff's own keys stand down.
+  `Esc` there cancels an armed confirmation first and otherwise closes the
+  drawer, returning the focus to the button that opened it.
 - `Esc` closes the in-diff composer and keeps the typed text, which returns to
   the same review and the same anchor. Inside the composer it answers the
   nearest question first: an armed **Discard review** confirmation, then the

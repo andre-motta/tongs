@@ -8,6 +8,7 @@ import { createDiffFeature } from "../../../desktop/dist/src/renderer/features/d
 import { clearPendingEdit } from "../../../desktop/dist/src/renderer/features/review/drawer.js";
 import {
   REVIEW_KEY_PARITY,
+  isTextEntry,
   reviewKeyMatches,
   reviewKeyParityTable,
 } from "../../../desktop/dist/src/renderer/features/review/keys.js";
@@ -458,6 +459,205 @@ test("v cycles the verdict in the drawer, among the verdicts this review allows"
   await waitFor(() => assert.equal(checkedVerdict(view), "comment"));
 });
 
+/** A review with a draft and one pending entry, so the drawer has content. */
+function drawerBridge(review, changes = {}) {
+  return diffBridge(review, {
+    listReviewDrafts: () =>
+      read({
+        cursor: 0,
+        next_cursor: null,
+        drafts: [draft(review, 4, [inlineEntry("entry-a", "Float division", 11)])],
+      }),
+    ...changes,
+  });
+}
+
+async function openDrawer(view) {
+  await view.findByRole("button", { name: /Your review/ });
+  fireEvent.keyDown(document.body, { key: "C", shiftKey: true });
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 1),
+  );
+}
+
+test("the open drawer owns the keyboard from the diff behind it", async () => {
+  const review = "keys-drawer-owns";
+  const view = renderDiff(drawerBridge(review), review);
+  await openDrawer(view);
+
+  // The drawer is a dialog without aria-modal, so the diff behind it stays
+  // clickable and the focus can leave the panel. Its keys have to follow.
+  lineAnchor(view, "Select new line 11").focus();
+  assert.equal(
+    document.activeElement.getAttribute("aria-label"),
+    "Select new line 11",
+  );
+  fireEvent.keyDown(document.body, { key: "v" });
+  await waitFor(() => assert.equal(checkedVerdict(view), "comment"));
+
+  // The diff's own keys stand down for as long as the drawer is open.
+  assert.equal(shownFile(view), "src/calc.py");
+  fireEvent.keyDown(document.body, { key: "]" });
+  assert.equal(shownFile(view), "src/calc.py");
+
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
+  );
+  assert.equal(
+    document.activeElement.className,
+    "button button-secondary review-drawer-toggle",
+  );
+  // And the diff has its keys back.
+  fireEvent.keyDown(document.body, { key: "]" });
+  await waitFor(() => assert.equal(shownFile(view), "docs/guide.md"));
+});
+
+test("the open drawer answers v and Escape from the document body", async () => {
+  const review = "keys-drawer-body";
+  const view = renderDiff(drawerBridge(review), review);
+  await openDrawer(view);
+  document.body.focus();
+
+  fireEvent.keyDown(document.body, { key: "v" });
+  await waitFor(() => assert.equal(checkedVerdict(view), "comment"));
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
+  );
+  assert.equal(
+    document.activeElement.className,
+    "button button-secondary review-drawer-toggle",
+  );
+});
+
+test("Escape in the drawer disarms a confirmation before it closes anything", async () => {
+  const review = "keys-drawer-confirm";
+  const view = renderDiff(drawerBridge(review), review);
+  await openDrawer(view);
+  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
+  assert.equal(
+    view.getAllByRole("button", { name: /Confirm discard of/ }).length,
+    1,
+  );
+
+  // The first press answers the nearest question and the drawer stays open,
+  // whether the focus is inside the panel or out on the diff behind it.
+  lineAnchor(view, "Select new line 11").focus();
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  assert.equal(
+    view.queryAllByRole("button", { name: /Confirm discard of/ }).length,
+    0,
+  );
+  assert.equal(view.container.querySelectorAll(".review-drawer").length, 1);
+
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
+  );
+});
+
+test("the drawer keys keep their guards while the drawer owns the keyboard", async () => {
+  const review = "keys-drawer-guards";
+  const view = renderDiff(drawerBridge(review), review);
+  await openDrawer(view);
+
+  // The Summary field is a text entry, so v types rather than cycling.
+  const summary = view.container.querySelector(".review-drawer-summary textarea");
+  summary.focus();
+  fireEvent.keyDown(document.body, { key: "v" });
+  assert.equal(checkedVerdict(view), null);
+  assert.equal(view.container.querySelectorAll(".review-drawer").length, 1);
+
+  // A modal dialog owns the keyboard even over this one.
+  summary.blur();
+  assert.equal(document.activeElement.tagName, "BODY");
+  const modal = document.createElement("div");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("role", "alertdialog");
+  document.body.append(modal);
+  try {
+    fireEvent.keyDown(document.body, { key: "v" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    assert.equal(checkedVerdict(view), null);
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 1);
+  } finally {
+    modal.remove();
+  }
+  fireEvent.keyDown(document.body, { key: "v" });
+  await waitFor(() => assert.equal(checkedVerdict(view), "comment"));
+});
+
+test("] and [ stay unclaimed on a review with one changed file", async () => {
+  const review = "keys-one-file";
+  const view = renderDiff(
+    diffBridge(review, { openDiff: () => read(onePageDiff(review)) }),
+    review,
+  );
+  await waitFor(() => assert.equal(shownFile(view), "src/calc.py"));
+  assert.equal(view.container.querySelectorAll(".file-list .file-item").length, 2);
+  for (const key of ["]", "["]) {
+    const event = new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false);
+  }
+  assert.equal(shownFile(view), "src/calc.py");
+});
+
+test("n and p walk the split panes in the order the documentation states", async () => {
+  const review = "keys-split-order";
+  const view = renderDiff(
+    diffBridge(review, {
+      listDiscussions: () =>
+        read({
+          discussions: [
+            thread("d-new", { line: 11, side: "new" }),
+            thread("d-old", { line: 12, side: "old" }),
+          ],
+        }),
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: "Split" }));
+  await waitFor(() =>
+    assert.equal(view.container.querySelectorAll("[data-review-row]").length, 2),
+  );
+  // The panes are independent columns, so the old pane's rows come first. The
+  // documentation states exactly this rather than claiming screen order.
+  assert.deepEqual(
+    [...view.container.querySelectorAll("[data-review-row]")].map((row) =>
+      row.getAttribute("data-review-row"),
+    ),
+    ["thread:d-old", "thread:d-new"],
+  );
+  fireEvent.keyDown(document.body, { key: "n" });
+  assert.equal(focusedRow(), "thread:d-old");
+  fireEvent.keyDown(document.body, { key: "n" });
+  assert.equal(focusedRow(), "thread:d-new");
+});
+
+test("isTextEntry names every control the map stands down for", () => {
+  const make = (html) => {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    return host.firstElementChild;
+  };
+  assert.equal(isTextEntry(null), false);
+  assert.equal(isTextEntry(make("<input />")), true);
+  assert.equal(isTextEntry(make("<textarea></textarea>")), true);
+  assert.equal(isTextEntry(make("<select></select>")), true);
+  assert.equal(isTextEntry(make('<div contenteditable="true"></div>')), true);
+  assert.equal(isTextEntry(make('<div contenteditable=""></div>')), true);
+  // A focused descendant of an editable host is still inside the text entry.
+  assert.equal(
+    isTextEntry(make('<div contenteditable="true"><span>x</span></div>').firstElementChild),
+    true,
+  );
+  assert.equal(isTextEntry(make("<div></div>")), false);
+  assert.equal(isTextEntry(make('<div contenteditable="false"></div>')), false);
+  assert.equal(isTextEntry(make("<button></button>")), false);
+});
+
 test("the review keys stand down while a text field holds the keyboard", async () => {
   const review = "keys-text-entry";
   const view = renderDiff(diffBridge(review), review);
@@ -476,6 +676,25 @@ test("the review keys stand down while a text field holds the keyboard", async (
   assert.equal(view.container.querySelectorAll(".review-drawer").length, 0);
   assert.equal(view.container.querySelectorAll(".inline-composer").length, 1);
   assert.equal(document.activeElement.tagName, "TEXTAREA");
+
+  // The same for the other three shapes of text entry, focused inside the
+  // region the map listens over.
+  for (const html of [
+    '<input type="text" />',
+    "<select><option>a</option></select>",
+    '<div contenteditable="true" tabindex="0"></div>',
+  ]) {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    const control = host.firstElementChild;
+    view.container.append(control);
+    control.focus();
+    fireEvent.keyDown(document.body, { key: "]" });
+    fireEvent.keyDown(document.body, { key: "C", shiftKey: true });
+    assert.equal(shownFile(view), "src/calc.py");
+    assert.equal(view.container.querySelectorAll(".review-drawer").length, 0);
+    control.remove();
+  }
 });
 
 test("the review keys stand down while an aria-modal dialog is on screen", async () => {
@@ -487,10 +706,14 @@ test("the review keys stand down while an aria-modal dialog is on screen", async
   modal.setAttribute("role", "alertdialog");
   document.body.append(modal);
   try {
-    fireEvent.keyDown(document.body, { key: "]" });
+    for (const key of ["c", "]", "[", "n", "p", "r", "v", "Escape"])
+      fireEvent.keyDown(document.body, { key });
     fireEvent.keyDown(document.body, { key: "C", shiftKey: true });
+    fireEvent.keyDown(document.body, { key: "Enter", ctrlKey: true });
     assert.equal(shownFile(view), "src/calc.py");
     assert.equal(view.container.querySelectorAll(".review-drawer").length, 0);
+    assert.equal(view.container.querySelectorAll(".inline-composer").length, 0);
+    assert.equal(document.activeElement.tagName, "BODY");
   } finally {
     modal.remove();
   }
@@ -791,6 +1014,15 @@ function reviewItem(handle) {
       additions: 1,
       deletions: 1,
     },
+  };
+}
+
+/** The same fixture with the second file removed, for the one-file case. */
+function onePageDiff(review) {
+  const page = diffPage(review, "unified");
+  return {
+    ...page,
+    entries: page.entries.filter((entry) => entry.file_index === 0),
   };
 }
 

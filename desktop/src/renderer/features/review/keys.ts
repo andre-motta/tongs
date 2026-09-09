@@ -17,12 +17,31 @@ import { useEffect, useRef } from "react";
 export function isTextEntry(element: Element | null): boolean {
   if (element === null) return false;
   const tag = element.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  // `isContentEditable` is the property Chromium answers with; the attribute
+  // is what an editable host actually carries, and reading it as well covers a
+  // focused descendant of one. It is also the half a jsdom test can see, since
+  // jsdom implements the attribute but not the property.
   return (
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    (element as HTMLElement).isContentEditable === true
+    (element as HTMLElement).isContentEditable === true ||
+    element.closest('[contenteditable=""], [contenteditable="true"]') !== null
   );
+}
+
+/**
+ * The review drawer, while one is on screen.
+ *
+ * The drawer is a `role="dialog"` without `aria-modal`, deliberately: the diff
+ * behind it stays readable and clickable. It still owns the keyboard while it
+ * is open. That single fact is both the diff map's reason to stand down and
+ * the drawer map's reason to claim a keystroke that landed outside its own
+ * panel, so it is written once here and the two maps share it rather than
+ * expressing it separately and disagreeing about the gap between them.
+ */
+export const REVIEW_DRAWER_SELECTOR = ".review-drawer";
+
+export function reviewDrawerIsOpen(owner: Document): boolean {
+  return owner.querySelector(REVIEW_DRAWER_SELECTOR) !== null;
 }
 
 export interface ReviewKeyBinding {
@@ -65,26 +84,44 @@ export function reviewKeyMatches(
     : !event.ctrlKey && !event.metaKey;
 }
 
+export interface ReviewKeyMapOptions {
+  /**
+   * Hands the keyboard to another surface while this answers true. The diff
+   * uses it for the open drawer, which is a dialog over it.
+   */
+  readonly standDown?: (owner: Document) => boolean;
+  /**
+   * Claims a keystroke that landed outside `region` while this answers true.
+   * A surface that owns the keyboard beyond its own subtree needs it: the
+   * drawer is not `aria-modal`, so the focus can be sitting in the diff behind
+   * it, and without this the keystroke would be offered to nobody. It must be
+   * the same predicate the surface it displaces stands down on, so that the
+   * two together cover every target exactly once.
+   */
+  readonly claimOutside?: (owner: Document) => boolean;
+}
+
 /**
  * Registers `bindings` on the document that owns `region`.
  *
- * A key is claimed only when the keystroke landed on the document body or
- * inside `region`, no `aria-modal` dialog is on screen, the focused element is
- * not a text entry, the event has not already been answered by a React handler
- * closer to the target, and `standDown` does not hand the keyboard elsewhere.
- * The bindings are read through a ref, so a surface can rebuild them on every
+ * A key is claimed only when the keystroke landed on the document body, inside
+ * `region`, or anywhere at all while `claimOutside` answers true; and only
+ * when no `aria-modal` dialog is on screen, the focused element is not a text
+ * entry, the event has not already been answered by a React handler closer to
+ * the target, and `standDown` does not hand the keyboard elsewhere. The
+ * bindings are read through a ref, so a surface can rebuild them on every
  * render without the listener being torn down and re-added each time.
  */
 export function useReviewKeyMap(
   region: Element | null,
   bindings: readonly ReviewKeyBinding[],
-  standDown?: (owner: Document) => boolean,
+  options: ReviewKeyMapOptions = {},
 ): void {
   const latest = useRef<readonly ReviewKeyBinding[]>(bindings);
-  const held = useRef<((owner: Document) => boolean) | undefined>(standDown);
+  const held = useRef<ReviewKeyMapOptions>(options);
   useEffect(() => {
     latest.current = bindings;
-    held.current = standDown;
+    held.current = options;
   });
   useEffect(() => {
     const owner = region?.ownerDocument;
@@ -95,13 +132,14 @@ export function useReviewKeyMap(
       if (event.defaultPrevented) return;
       const target = event.target as Node | null;
       if (target === null) return;
-      if (target !== owner.body && !region.contains(target)) return;
+      const contained = target === owner.body || region.contains(target);
+      if (!contained && held.current.claimOutside?.(owner) !== true) return;
       // A modal dialog owns the keyboard even for a keystroke that landed on
       // the document body, so never act from behind one.
       if (owner.querySelector('[aria-modal="true"]') !== null) return;
       const element = target.nodeType === 1 ? (target as Element) : null;
       if (isTextEntry(owner.activeElement) || isTextEntry(element)) return;
-      if (held.current?.(owner) === true) return;
+      if (held.current.standDown?.(owner) === true) return;
       for (const binding of latest.current) {
         if (!reviewKeyMatches(event, binding)) continue;
         if (!binding.run()) continue;

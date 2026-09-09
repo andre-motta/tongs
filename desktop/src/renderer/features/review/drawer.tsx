@@ -31,7 +31,7 @@ import {
   type InlineComposerBridge,
   type InlineComposerController,
 } from "./composer.js";
-import { useReviewKeyMap } from "./keys.js";
+import { reviewDrawerIsOpen, useReviewKeyMap } from "./keys.js";
 import {
   pendingEntryLabel,
   staleRibbonText,
@@ -911,20 +911,45 @@ function ReviewDrawer({
   // told when that node arrives.
   const [panelNode, setPanelNode] = useState<HTMLDivElement | null>(null);
   const verdicts = allowedVerdicts(capabilities);
-  useReviewKeyMap(panelNode, [
-    {
-      key: "v",
-      run: (): boolean => {
-        // `v` records a verdict, so it stands down for the same reasons the
-        // tiles are disabled: nothing to choose from, or a submission holding
-        // the draft.
-        const next = locked ? null : nextVerdict(verdicts, content.verdict);
-        if (next === null) return false;
-        controller.setVerdict(next);
-        return true;
+  // What Escape does, written once. The panel's own handler answers it while
+  // the focus is inside the drawer, including from the Summary field, which
+  // the map's text-entry guard would otherwise hold; the map answers it from
+  // everywhere else, which is where the focus sits after a click on the diff
+  // behind this non-modal dialog. Both call this, so they cannot disagree
+  // about the stages.
+  const answerEscape = (): boolean => {
+    // An armed confirmation is the nearest thing Escape can answer. It is
+    // cancelled without closing, so backing out of a destructive question does
+    // not also take away the drawer the reader was working in, and a second
+    // Escape then closes as it always did.
+    if (confirmation !== null) {
+      setConfirmation(null);
+      return true;
+    }
+    close();
+    return true;
+  };
+  useReviewKeyMap(
+    panelNode,
+    [
+      {
+        key: "v",
+        run: (): boolean => {
+          // `v` records a verdict, so it stands down for the same reasons the
+          // tiles are disabled: nothing to choose from, or a submission
+          // holding the draft.
+          const next = locked ? null : nextVerdict(verdicts, content.verdict);
+          if (next === null) return false;
+          controller.setVerdict(next);
+          return true;
+        },
       },
-    },
-  ]);
+      { key: "Escape", run: answerEscape },
+    ],
+    // The diff behind this drawer stands down on exactly this predicate, so a
+    // keystroke that landed there is claimed here rather than reaching nobody.
+    { claimOutside: reviewDrawerIsOpen },
+  );
   return (
     <div
       ref={(node) => {
@@ -938,15 +963,7 @@ function ReviewDrawer({
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
-        // An armed confirmation is the nearest thing Escape can answer. It is
-        // cancelled without closing, so backing out of a destructive question
-        // does not also take away the drawer the reader was working in, and a
-        // second Escape then closes as it always did.
-        if (confirmation !== null) {
-          setConfirmation(null);
-          return;
-        }
-        close();
+        answerEscape();
       }}
     >
       <header className="review-drawer-header">

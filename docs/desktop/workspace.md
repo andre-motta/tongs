@@ -225,10 +225,14 @@ name is held.
 | `Esc` | Close the composer and keep the text | `Esc` (comment editor, cancel) |
 | `v` | Cycle the verdict in **Your review** | `v` (review draft) |
 
-`]`, `[`, `n` and `p` wrap at both ends. `n` and `p` walk the threads and
-pending comments of the file on screen in the order they are laid out; `r`
-replies to the thread they last landed on, and is refused for the same reasons
-the thread's own **Reply** button is. `c` composes on the row that holds the
+`]`, `[`, `n` and `p` wrap at both ends. `]` and `[` stay unclaimed on a review
+with one changed file, because there is no other file to move to. `n` and `p`
+walk the threads and pending comments of the file on screen. In **Unified**
+layout that is the order they appear down the page. In **Split** layout the two
+panes are independent columns, so the walk covers the old pane's rows and then
+the new pane's, which is not top-to-bottom screen order. `r` replies to the
+thread they last landed on, and is refused for the same reasons the thread's own
+**Reply** button is. `c` composes on the row that holds the
 focus, or on the selection when nothing does, and a multi-line selection
 composes on the whole range. `Ctrl+Enter` (`Cmd+Enter` on macOS) runs the
 composer's primary action and carries its refusals, so an empty comment is
@@ -236,8 +240,12 @@ refused exactly as pressing the button is. `Esc` closes the composer and keeps
 the typed text for the same review and the same anchor; typed inside the
 composer it answers the nearest question first, cancelling an armed **Discard
 review** confirmation, then the **More review actions** overflow, and only then
-closing. While **Your review** is open it owns the keyboard: `v` cycles its
-verdict tiles through the verdicts this review can record, and `Esc` closes it.
+closing. While **Your review** is open it owns the keyboard, wherever the focus
+is sitting, including on the diff behind it: `v` cycles its verdict tiles
+through the verdicts this review can record, and `Esc` cancels an armed
+confirmation first and otherwise closes the drawer, returning the focus to the
+**Your review** button. The diff's own keys stand down for as long as it is
+open.
 
 The terminal interface's own bindings are listed in the
 [keybinding reference](../reference/keybindings.md), which carries the same

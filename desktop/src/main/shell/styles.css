@@ -133,6 +133,10 @@
   font-size: 0.85rem;
 }
 
+.review-workflow-thread-summary {
+  font-size: 0.9rem;
+}
+
 .review-workflow-reply,
 .review-workflow-composer label,
 .review-workflow-draft label {
@@ -1700,4 +1704,20 @@ button {
   font-size: 0.78rem;
   font-family: var(--mono, monospace);
   opacity: 0.85;
+}
+
+/* The Overview general composer wears the in-diff composer's own shape, so the
+   two writes read the same on both surfaces, and it keeps the panel frame the
+   rest of Overview uses. */
+.general-composer,
+.review-level-discussions {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  margin-top: 18px;
+  padding: 1rem;
+}
+
+.review-level-discussions .review-workflow-thread {
+  background: var(--panel-2);
 }

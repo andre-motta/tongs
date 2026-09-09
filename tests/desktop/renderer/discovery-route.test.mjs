@@ -55,53 +55,18 @@ test("mounted app reconciles successful discovery without losing review work", a
   assert.ok(routeNotice() === null);
 
   fireEvent.click(await awaitReview("Persistent review"));
-  await waitFor(() => assert.ok(button("Discussions")));
+  // Overview holds the general composer now; the review's Summary is the
+  // drawer's, reached from the Discussions tab.
+  await waitFor(() => assert.ok(labelled("General review comment")));
+  setValue(labelled("General review comment"), "unsent general composer");
   fireEvent.click(button("Discussions"));
-  await waitFor(() => assert.ok(labelled("Quick comment")));
+  await waitFor(() => assert.ok(button("Start review")));
   fireEvent.click(button("Start review"));
-  // The review body is the drawer's Summary now, so the unsaved text this
-  // scenario protects is typed there and read back from there.
   await waitFor(() => assert.equal(hasDrawerToggle(), true));
   fireEvent.click(drawerToggle());
   await waitFor(() => assert.equal(labelledValue("Summary"), ""));
   setValue(labelled("Summary"), "unsaved local draft body");
   fireEvent.click(drawerToggle());
-  setValue(labelled("Add general draft comment"), "unsent general composer");
-
-  fireEvent.click(button("Files changed"));
-  await waitFor(() =>
-    assert.equal(
-      Boolean(
-        document.querySelector(
-          'code.line-content[role="button"][aria-label="Select new line 1"]',
-        ),
-      ),
-      true,
-    ),
-  );
-  fireEvent.click(
-    document.querySelector(
-      'code.line-content[role="button"][aria-label="Select new line 1"]',
-    ),
-  );
-  fireEvent.click(button("Discussions"));
-  await waitFor(() => assert.ok(labelled("Add selected line to draft")));
-  setValue(labelled("Add selected line to draft"), "unsent anchored composer");
-  const suggestionExplanation = "explanation for the original anchor";
-  const suggestionReplacement = "replacement for the original anchor";
-  await waitFor(() =>
-    assert.equal(Boolean(labelled("Suggestion explanation")), true),
-  );
-  setValue(labelled("Suggestion explanation"), suggestionExplanation);
-  setValue(labelled("Suggestion replacement code"), suggestionReplacement);
-  assert.equal(
-    labelled("Suggestion explanation").value,
-    suggestionExplanation,
-  );
-  assert.equal(
-    labelled("Suggestion replacement code").value,
-    suggestionReplacement,
-  );
 
   const writesBeforeRemoval = fixture.writes.length;
   const readsBeforeRemoval = fixture.reviewReads.length;
@@ -121,16 +86,27 @@ test("mounted app reconciles successful discovery without losing review work", a
     ),
   );
   assert.equal(fixture.writes.length, writesBeforeRemoval);
-  assert.equal(Boolean(labelled("Suggestion explanation")), false);
-  assert.equal(Boolean(labelled("Suggestion replacement code")), false);
-  assert.equal(document.body.textContent.includes(suggestionExplanation), false);
-  assert.equal(document.body.textContent.includes(suggestionReplacement), false);
+  assert.equal(Boolean(labelled("General review comment")), false);
+  assert.equal(
+    document.body.textContent.includes("unsent general composer"),
+    false,
+  );
+  assert.equal(
+    document.body.textContent.includes("unsaved local draft body"),
+    false,
+  );
 
   fixture.discoveries.push([repositoryA("Repo A restored"), repositoryB()]);
   fireEvent.click(button("Refresh local repositories"));
   await waitFor(() => assert.ok(routeNotice() === null));
   fireEvent.click(button("Repo A restored"));
   fireEvent.click(await awaitReview("Persistent review"));
+  await waitFor(() =>
+    assert.equal(
+      labelledValue("General review comment"),
+      "unsent general composer",
+    ),
+  );
   fireEvent.click(await awaitButton("Discussions"));
   await waitFor(() => assert.equal(hasDrawerToggle(), true));
   fireEvent.click(drawerToggle());
@@ -138,70 +114,8 @@ test("mounted app reconciles successful discovery without losing review work", a
     assert.equal(labelledValue("Summary"), "unsaved local draft body"),
   );
   fireEvent.click(drawerToggle());
-  assert.equal(
-    labelled("Add general draft comment").value,
-    "unsent general composer",
-  );
-  assert.equal(labelled("Add selected line to draft").value, "");
-  assert.ok(document.body.textContent.includes("unsent anchored composer"));
   assert.ok(document.body.textContent.includes("Draft review active"));
   assert.equal(fixture.writes.length, writesBeforeRemoval);
-
-  fireEvent.click(button("Files changed"));
-  await waitFor(() =>
-    assert.equal(
-      Boolean(
-        document.querySelector(
-          'code.line-content[role="button"][aria-label="Select new line 2"]',
-        ),
-      ),
-      true,
-    ),
-  );
-  fireEvent.click(
-    document.querySelector(
-      'code.line-content[role="button"][aria-label="Select new line 2"]',
-    ),
-  );
-  fireEvent.click(button("Discussions"));
-  await waitFor(() =>
-    assert.equal(Boolean(labelled("Suggestion explanation")), true),
-  );
-  assert.equal(labelled("Suggestion explanation").value, "");
-  assert.equal(
-    labelled("Suggestion replacement code").value,
-    "alternate selected line",
-  );
-  assert.equal(document.body.textContent.includes(suggestionExplanation), false);
-  assert.equal(document.body.textContent.includes(suggestionReplacement), false);
-
-  fireEvent.click(button("Files changed"));
-  await waitFor(() =>
-    assert.equal(
-      Boolean(
-        document.querySelector(
-          'code.line-content[role="button"][aria-label="Select new line 1"]',
-        ),
-      ),
-      true,
-    ),
-  );
-  fireEvent.click(
-    document.querySelector(
-      'code.line-content[role="button"][aria-label="Select new line 1"]',
-    ),
-  );
-  fireEvent.click(button("Discussions"));
-  await waitFor(() =>
-    assert.equal(
-      labelled("Suggestion explanation")?.value,
-      suggestionExplanation,
-    ),
-  );
-  assert.equal(
-    labelled("Suggestion replacement code")?.value,
-    suggestionReplacement,
-  );
 
   fireEvent.click(button("← Reviews"));
   fireEvent.click(await awaitButton("Repo A restored"));

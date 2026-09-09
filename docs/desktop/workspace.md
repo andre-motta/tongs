@@ -106,12 +106,20 @@ again.
 
 ## Comment, suggest, and submit
 
-The **Discussions** panel has two paths. **Quick comment** and **Quick inline
-comment** act immediately against the selected review. Choose **Start review**
-to create a durable draft, or **Resume review** to reopen one saved draft.
-While a durable draft is active, the controls add general comments, selected
-lines, and suggestions to that draft. The draft remains bound to the review
-revision it was created from.
+The **Discussions** panel is a write-free jump list: every published thread
+that resolves to a diff position, unresolved ones first, each with **Show in
+diff** to open it where it was written. Writing happens in the composers
+instead: the in-diff composer, opened from the gutter's `+` button or the
+`c` key, and the general composer on **Overview** for a review-level comment.
+Both offer the same two writes, **Add comment now** to act immediately
+against the selected review, and **Start a review** (or **Add to review**
+once one is pending) to add the entry to a durable draft. A single saved
+draft is adopted automatically when the review opens; when more than one is
+found, the **Your review** drawer offers **Choose a preserved draft** to pick
+among them. While a durable draft is active, the composers add general
+comments, selected lines, and suggestions to it, and the drawer tracks,
+submits, or discards it. The draft remains bound to the review revision it
+was created from.
 
 A pending review can be discarded from either surface: **Discard review** in
 **Your review**, or the **More review actions** overflow in the in-diff
@@ -154,14 +162,23 @@ its existing durable attempt; an unknown submission offers explicit choices to
 retry remaining steps, return the draft to editing, or mark it submitted after
 you inspect the forge.
 
-Suggestions are available from a valid selection in the current complete diff.
-Select contiguous new-side lines in either **Unified** or **Split** layout,
-then choose **Suggest replacement**. Deletions, old-side selections, partial
-diffs, unavailable files, and selections from an earlier revision cannot
-produce a suggestion. Edit both the optional explanation and replacement
-code before choosing **Post quick suggestion** or **Add suggestion to draft**;
-**Cancel and keep text** leaves the entered text available. GitHub suggestions
-use its `suggestion` block, while GitLab uses its `suggestion:-0+N` form.
+Suggestions come from the in-diff composer, not the Discussions panel. Select
+one or more contiguous new-side lines in either **Unified** or **Split**
+layout by dragging over the line numbers, Shift-clicking a second line, or
+focusing a line number and pressing ++shift+enter++ to extend the range
+within the same hunk. Opening the composer on that selection offers **Insert
+suggestion**, which pre-fills a suggestion block built from the selected
+source: GitHub gets a `suggestion` fence over the whole range, GitLab gets a
+`suggestion:-0+N` fence anchored on the first line, where N is one less than
+the number of selected source lines. Old-side selections, non-contiguous
+lines, deletion rows, and a partial diff all refuse **Insert suggestion** in
+their own words; refresh the diff to complete a partial selection. A
+selection that changed underneath the press, for example because the diff
+moved to a later revision, is refused too: the composer reports it and asks
+you to reselect the lines. Edit the block or add an explanation above it, use
+**Preview** to check the rendered Markdown, then choose **Add comment now**
+for an immediate comment or **Start a review** / **Add to review** to add it
+to a durable draft.
 
 ## Work with a diff
 
@@ -200,11 +217,6 @@ the latest diff. If paging reaches a safety bound, it keeps a bounded partial
 view and explains that the diff is incomplete. Invalid or inconsistent page
 data is reported as an error rather than being silently combined with another
 revision.
-
-The diff toolbar also provides **Suggest replacement** when the selected
-context meets the rules above. Suggestions are limited to the current
-revision and contiguous new-side source lines. The layout changes how the
-selection is displayed, not which side can be suggested.
 
 ## Review keyboard map
 

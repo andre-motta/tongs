@@ -431,7 +431,7 @@ figures that only exist in those records are quoted, never recomputed.
 | Scope | Commit | Tree |
 | --- | --- | --- |
 | Every group except S40 | `810bf806b335000ae3fef7726fc61ff63ef9e441` | `f1e34ef839c09a4ac8bbe2d448c0d58c7b3b1663` |
-| S40 only, after the #225 fix | `55f4c0d44be76d8bfeb819b877bfa231432f3826` | recorded in the session record |
+| S40 only, after the #225 fix | `55f4c0d44be76d8bfeb819b877bfa231432f3826` | not recorded; the session record describes the row as the #225 drawer fix over `810bf80` |
 
 The difference between the two heads is `styles.css` plus one renderer contract
 test; the renderer is otherwise identical and the #125 verifier and launcher are
@@ -447,18 +447,20 @@ downloaded with a server-digest match. The core version built at `810bf80` was
 ### What ran, with the CTO at the keyboard
 
 The rerun on 2026-09-09 and 2026-09-10 was driven by the CTO on his own host.
-Groups B, E, F and the merged G+H ran; S40 was re-observed at `55f4c0d`.
+Groups B, C, E, F and the merged G+H ran; S40 was re-observed at `55f4c0d`.
 
 | Group | Scenarios exercised | Outcome |
 | --- | --- | --- |
 | B, terminal | S08, S09, S10, S11, S12 | all pass; S10 and S12 had failed at `41e78b6` and confirm #167 and #168 fixed |
 | C, install lifecycle | S15, S16 | both pass; S16 had failed at `41e78b6` and confirms #169 and #171 fixed |
-| E, desktop views | S31 to S42 | all pass except S40, which failed at `810bf80` and passes at `55f4c0d` |
+| E, desktop views | S31 to S42 | all pass except S40, which failed at `810bf80` and passes at `55f4c0d`; S38 passes on its bound and carries finding #177 |
 | F, review mode and drafts | S43, S44, S45, S46 | all pass; S46 had failed at `41e78b6` and is resolved by the #181 comparison banner |
 | G and H, merged and run live | S47 to S58 | S47, S49, S50, S52 pass; S48 fails; S51 partial; S53 to S56 covered by S47 and S49; S57 and S58 not exercised |
 
-Recorded totals for the rerun: 28 pass, 1 fail, 1 partial, 4 covered by another
-scenario, 2 not exercised, 48 not run.
+Recorded totals for the rerun, one row per scenario at its latest disposition,
+so S40 counts once as a pass at `55f4c0d` while its failure at `810bf80` stays
+in the row: **27 pass**, 1 fail, 1 partial, 4 covered by another scenario, 2 not
+exercised, **49 not run**, summing to the 84 planned scenarios.
 
 Fixes confirmed by observation during the session: #167, #168, #169, #171 and
 #176, plus the #181 review redesign and, at `55f4c0d`, #225.
@@ -503,9 +505,9 @@ there was nothing left to re-run; that is fixture decay, not a defect. S58 needs
 the terminal client, which was not started in that session.
 
 Defects raised or reopened during the session are listed for users in
-[Known limitations](../desktop/known-limitations.md). Their issue numbers there
-are taken from the tracker rather than from the session record, whose defect
-table numbers some rows differently.
+[Known limitations](../desktop/known-limitations.md). The session record's defect
+table was renumbered against the tracker on 2026-09-10 and now agrees with it, so
+the two can be read against each other directly.
 
 ### What was not run
 
@@ -567,32 +569,39 @@ These are planning IDs pending reviewed design integration and native GitHub iss
 Each issue will include exact files, accepted interfaces, base SHA, checks and Git
 authority before dispatch. Reuse #3/#16 rather than duplicating their outcomes.
 
+The Role column names the role contract, not a person or a model. The models
+selected for those roles on this initiative are Claude Fable 5.1 as orchestrator,
+Claude Opus 5 at high effort for senior implementation and for the separate
+independent review, and Claude Sonnet 5 at xhigh effort for bounded work under
+that review. Earlier revisions of this table used retired persona names for the
+same three roles.
+
 | ID | Scope and ownership | Dependencies | Role |
 | --- | --- | --- | --- |
-| S0 | Release manifest/archive layout schema, shared validation and deterministic reference artifact | approved design | Sol high |
-| S1 | Shared session, resource/revision models and read services; `services/`, necessary forge metadata | approved design | Sol high |
-| S2 | Pure diff conversion/alignment and position edge cases; `diff/` | approved design | Luna xhigh, Sol review |
-| S3 | Durable draft store, revisions and migrations; `state/drafts*` | S1 | Sol high |
-| S4 | Companion desktop entry-point declarations/context/lifecycle; `plugins/desktop*` | approved design | Sol high |
-| S5a | Revision-bound forge mutations, receipts, ranges, thread identity and cache invalidation | S1 | Sol high |
-| S5b | Durable safe draft submission/reconciliation | S3, S5a | Sol high |
-| S5c | CI mutation services: typed pipeline/job identity, capabilities, receipts/unknown outcomes, invalidation and events; services/tests only | S1 | Sol high |
-| S6 | Production sidecar RPC, events/cancellation and validated asset service | S1, S2, S4 | Sol high |
-| S7 | TUI service migration preserving existing workflows | S1, S2, S5a, S5c | Sol high |
-| S8 | TUI split diffs, #3 | S2, S7 | Sol high |
-| S9 | TUI persistent draft/review workflow, #16 | S3, S5b, S8 | Sol high |
-| S10 | Production Electron shell/preload/lifecycle and protocol security | S6 | Sol high |
-| S11 | Real-data React workspace, repository/inbox/detail/diff reads | S1, S2, S6 | Sol high |
-| S12 | Desktop discussions, comments, drafts and review mutations | S5b, S10, S11 | Sol high |
-| S13 | Desktop pipeline/job/log actions | S5c, S10, S11 | Sol high |
-| S14 | Production plugin UI/help/commands, example and compatibility harness | S4, S10, S11 | Sol high + bounded Luna work |
-| S15a | GitHub/Sigstore provenance, platform/compatibility and verified download/extraction | S0 | Sol high |
-| S15b | Atomic activation, same-interpreter launcher/menu/status/ownership | S15a, S6, S10 | Sol high |
-| S16 | Release archive build, licenses and prepared sources | S0, S10, S11, S14, S15b | Sol high |
-| S17 | Fedora RPM build and hosted install/upgrade/recovery checks | S16 | Sol high |
-| S18 | Production CI and adversarial integration acceptance | S9, S12, S13, S14, S15b, S17 | Sol high |
-| S19 | User/plugin documentation and migration guide | stable implemented interfaces, final S18 | Luna xhigh, Sol review |
-| S20 | Final native/GPU/TUI acceptance and evidence-backed main PR | all required slices | Astra + independent Sol |
+| S0 | Release manifest/archive layout schema, shared validation and deterministic reference artifact | approved design | senior contributor |
+| S1 | Shared session, resource/revision models and read services; `services/`, necessary forge metadata | approved design | senior contributor |
+| S2 | Pure diff conversion/alignment and position edge cases; `diff/` | approved design | bounded contributor, senior review |
+| S3 | Durable draft store, revisions and migrations; `state/drafts*` | S1 | senior contributor |
+| S4 | Companion desktop entry-point declarations/context/lifecycle; `plugins/desktop*` | approved design | senior contributor |
+| S5a | Revision-bound forge mutations, receipts, ranges, thread identity and cache invalidation | S1 | senior contributor |
+| S5b | Durable safe draft submission/reconciliation | S3, S5a | senior contributor |
+| S5c | CI mutation services: typed pipeline/job identity, capabilities, receipts/unknown outcomes, invalidation and events; services/tests only | S1 | senior contributor |
+| S6 | Production sidecar RPC, events/cancellation and validated asset service | S1, S2, S4 | senior contributor |
+| S7 | TUI service migration preserving existing workflows | S1, S2, S5a, S5c | senior contributor |
+| S8 | TUI split diffs, #3 | S2, S7 | senior contributor |
+| S9 | TUI persistent draft/review workflow, #16 | S3, S5b, S8 | senior contributor |
+| S10 | Production Electron shell/preload/lifecycle and protocol security | S6 | senior contributor |
+| S11 | Real-data React workspace, repository/inbox/detail/diff reads | S1, S2, S6 | senior contributor |
+| S12 | Desktop discussions, comments, drafts and review mutations | S5b, S10, S11 | senior contributor |
+| S13 | Desktop pipeline/job/log actions | S5c, S10, S11 | senior contributor |
+| S14 | Production plugin UI/help/commands, example and compatibility harness | S4, S10, S11 | senior contributor, plus bounded work |
+| S15a | GitHub/Sigstore provenance, platform/compatibility and verified download/extraction | S0 | senior contributor |
+| S15b | Atomic activation, same-interpreter launcher/menu/status/ownership | S15a, S6, S10 | senior contributor |
+| S16 | Release archive build, licenses and prepared sources | S0, S10, S11, S14, S15b | senior contributor |
+| S17 | Fedora RPM build and hosted install/upgrade/recovery checks | S16 | senior contributor |
+| S18 | Production CI and adversarial integration acceptance | S9, S12, S13, S14, S15b, S17 | senior contributor |
+| S19 | User/plugin documentation and migration guide | stable implemented interfaces, final S18 | bounded contributor, senior review |
+| S20 | Final native/GPU/TUI acceptance and evidence-backed main PR | all required slices | orchestrator, plus independent senior review |
 
 S1/S2/S4 can start independently; S0 queues within available capacity and then
 unblocks S15a. Reserve

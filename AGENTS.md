@@ -30,7 +30,7 @@ issue-tracked with explicit dependencies. Only the final feature PR goes to `mai
 for CTO review. Hardware GPU acceleration is a mandatory production and release
 gate; see the profile for evidence requirements.
 
-This file is the shared repository guide for coding agents. Codex and Claude Code both read `AGENTS.md` when working in this repository. Read `README.md` for product context and the relevant subsystem guides below before changing code. The `.agents/*/README.md` files are reference documentation to read explicitly.
+This file is the shared repository guide for coding agents; every agent that works in this repository reads it. Read `README.md` for product context and the relevant subsystem guides below before changing code. The `.agents/*/README.md` files are reference documentation to read explicitly.
 
 - Run commands from the current checkout or worktree root. Use its local `.venv`, including when a subsystem guide shows a machine-specific path.
 - Inspect `git status` before editing and preserve unrelated user changes.
@@ -179,7 +179,7 @@ One more also triggers on that base:
 
 | Workflow | Trigger |
 |---|---|
-| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter, and pushes to `feat/desktop-app` |
+| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter, and pushes to either of its two named branches, `feat/desktop-app` and `feat/desktop-120-candidate-attestation` |
 
 `desktop-rpm.yml` (Desktop Fedora RPM), `desktop-python-rpms.yml` (Desktop Python
 companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are manual

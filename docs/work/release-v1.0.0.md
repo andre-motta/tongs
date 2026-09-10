@@ -72,9 +72,21 @@ together:
 | `packaging/desktop/archive/run_hosted.sh:30` | `release_version=0.5.0` |
 | `.github/workflows/release-desktop.yml:331` | attested subject `tongs-desktop-0.5.0-fedora44-x86_64.tar.gz` |
 | `packaging/rpm/desktop/manifest.json:20,35` | accepted archive filename and `release_version` |
+| `packaging/rpm/desktop/manifest.json:21-22,24-32` | the accepted archive's byte count and SHA-256, and eight evidence digests |
 | `packaging/rpm/desktop/install_and_verify.sh:581` | asserts the RPM `%{VERSION}` equals `0.5.0` |
 | `tests/ci/desktop_production_expectations.py:70` | `DESKTOP_RELEASE_VERSION = "0.5.0"`, the caller-owned gate constant |
 | `packaging/desktop/archive/README.md:6,43,45` | prose and examples, already labelled unpublished |
+| `packaging/rpm/desktop/README.md:51` | prose describing the lifecycle as a `0.4.9` to `0.5.0` upgrade |
+
+**The RPM manifest digests cannot be hand-edited.** Changing `release_version`
+renames and rebuilds the archive, so its byte count, its SHA-256 and every one of
+the eight evidence digests change with it, and
+`packaging/rpm/desktop/package_contract.py:188-193` verifies each of them against
+the real files: `_verify_file` on the archive, then a SHA-256 comparison per
+evidence entry, raising `accepted evidence mismatch` on the first difference.
+Those values have to be regenerated from a fresh hosted archive run in the same
+change. A reader who edits only the two version strings gets a digest mismatch,
+which is a far harder failure to read than a version mismatch.
 
 Mirrored test constants also move: `tests/ci/test_desktop_production_expectations.py`,
 `tests/integration/desktop/candidate_attestation.py`,
@@ -138,7 +150,7 @@ The declared values today are `core_minimum = 0.4.2-dev.183` and
 `Version("1.0.0") < Version("0.5.0")` is false, so a 1.0.0 core falls outside
 the interval. Concretely, with `v1.0.0` tagged:
 
-1. `packaging/rpm/desktop/package_contract.py:169` raises
+1. `packaging/rpm/desktop/package_contract.py:169-170` raises
    `RuntimeError("core version is outside the desktop compatibility interval")`,
    failing the `desktop-rpm-lifecycle` job in `desktop-production.yml` and
    therefore the `Desktop pre-merge aggregate` in `ci.yml`. This fires on the
@@ -149,9 +161,50 @@ the interval. Concretely, with `v1.0.0` tagged:
 3. `metadata.py:627-637` refuses installation with "This desktop release is
    incompatible with the installed core."
 
-`core_minimum` stays valid, because `1.0.0` is above `0.4.2.dev183`. Only the
-upper bound has to move, and it has to move in the three source locations above
+`core_minimum` stays valid at its current value, because `1.0.0` is above
+`0.4.2.dev183`. The upper bound has to move, in the three source locations above
 plus the mirrored test constants, in one change.
+
+### The lower bound has the mirror-image problem, before the tag exists
+
+The RPM binding does not read the core version from installed metadata. It
+derives it from the checkout: `packaging/rpm/desktop/package_contract.py:55-70`
+runs `git describe --tags --long --match 'v[0-9]*'` and, at any distance above
+zero, produces `<major>.<minor>.<patch+1>.dev<distance>+g<sha>`. The job checks
+out with `fetch-depth: 0` (`desktop-production.yml:690,709`), so the derivation
+is live on every branch push. In this worktree the description is
+`v0.4.1-516-gf899063`, giving `0.4.2.dev516+gf899063cb`.
+
+That means **raising `core_minimum` to `1.0.0` while the newest tag is still
+`v0.4.1` fails the same check from below.** `Version("0.4.2.dev516")` is less
+than `Version("1.0.0")`, so `minimum <= core_version` is false and
+`package_contract.py:169-170` raises on every push and pull request into
+`feat/desktop-app` from the moment the change lands until `v1.0.0` is pushed. The
+final PR into `main` cannot be green in that window. The same rule that makes the
+upper bound wrong after the tag makes an eagerly raised lower bound wrong before
+it.
+
+Two sequences avoid the window. Whichever the release-preparation change adopts,
+this document should name it and drop the other:
+
+- **Option A, a lower bound that admits the pre-tag development version.** Move
+  only `core_maximum_exclusive` now and leave `core_minimum` where it is, or set
+  it to another value the pre-tag `0.4.2.devN` still satisfies. The manifest's
+  `-dev.` spelling is understood: `package_contract.py:166` rewrites it to
+  `.devN` before comparing, which is why `0.4.2-dev.183` admits `0.4.2.dev516`
+  today. The gate stays green throughout and no tag-time edit is needed, at the
+  cost of a payload that formally accepts a development core it was never tested
+  against.
+- **Option B, the lower bound moves in the tag-time commit.** Move
+  `core_maximum_exclusive` now, and raise `core_minimum` to `1.0.0` only in the
+  commit that `v1.0.0` will be created on. The aggregate cannot be green on that
+  exact commit before the tag exists, so the green run that authorises the tag
+  has to be the `main` run at the same tree with the old lower bound, and the
+  bound change has to be the last thing in. That is a tighter compatibility
+  statement bought with a deliberate, documented gap in gate coverage.
+
+The trigger that settles it is the release-preparation change itself. Read the
+values it lands and rewrite this subsection to describe only that sequence.
 
 Emptiness of the interval is already enforced at build time
 (`src/tongs/desktop/artifact_contract/manifests.py:280-286`), and the API majors
@@ -204,9 +257,11 @@ a tagging step.
 SBOM and one carrying provenance over `desktop-manifest-v1.json` and the
 hardcoded `tongs-desktop-0.5.0-fedora44-x86_64.tar.gz`. Signing is
 GitHub-managed Sigstore; there is no cosign and no GPG anywhere. The privileged
-job is gated at `release-desktop.yml:198-212` on the exact repository, owner and
-repository IDs, a `push` event, and one of two named branches, with
-`id-token: write` and `attestations: write` and no `environment:`. `publish.yml`
+job is gated at `release-desktop.yml:198-206` on the exact repository, owner and
+repository IDs, a `push` event, and one of the two named branches
+`feat/desktop-app` and `feat/desktop-120-candidate-attestation`; its permission
+block at `release-desktop.yml:209-212` grants `contents: read`,
+`id-token: write` and `attestations: write`, with no `environment:`. `publish.yml`
 performs no SBOM generation and no artifact attestation at all.
 
 ## 4. Order of operations
@@ -221,7 +276,13 @@ through 5 are implementation work that does not exist yet.
    commits on `feat/desktop-app` before the final merge, or as a follow-up PR
    after it. At minimum this is the core compatibility range; realistically it
    is also the archive `release_version`, the classifier and support policy, and
-   the production desktop tag path.
+   the production desktop tag path. **Watch the compatibility interval's lower
+   bound here.** Raising `core_minimum` to `1.0.0` on a branch where the newest
+   tag is still `v0.4.1` makes `package_contract.py:169-170` raise from below on
+   every push, so the aggregate is red until the tag exists. Follow section 2.3:
+   either keep a lower bound the pre-tag `0.4.2.devN` satisfies, or move the
+   lower bound only in the commit `v1.0.0` will be created on and accept that the
+   gate cannot be green on that exact commit.
 3. **Wait for a green `main` CI run at the exact release commit.** Record every
    required job and the aggregate. Nothing runs on the tag, so this is the only
    gate the tag will ever have.
@@ -285,24 +346,42 @@ and is described in
 Each of these blocks a v1.0.0 tag or changes what the release means. The
 recommendation is mine; none of them is decided by this document.
 
-**1. The core compatibility range for the desktop payload.**
+**1. The core compatibility range for the desktop payload, and when each bound
+moves.**
 Today `core_minimum = 0.4.2-dev.183` and `core_maximum_exclusive = 0.5.0`. The
 upper bound excludes 1.0.0 and will break the RPM contract job, the installer,
-and every launch. *Recommendation: set `core_maximum_exclusive` to `2.0.0` and
-`core_minimum` to `1.0.0`, so desktop 1.0.0 supports the whole core 1.x series
-and refuses the development cores it was never tested against. Change it in one
-commit across `run_hosted.sh:88`, `build_in_container.sh:35`,
-`manifest.json:38` and the mirrored test constants, and prove the boundaries by
-installing at the lower bound, just below it, just below the upper bound, and at
-the excluded upper bound.* This is a compatibility policy decision, which is why
-this documentation patch does not make it.
+and every launch once the tag exists. The lower bound has the mirror-image
+problem before the tag exists, because the RPM binding derives the core version
+from `git describe` on the checkout rather than from installed metadata, so it
+sees `0.4.2.devN` until `v1.0.0` is pushed; section 2.3 works this through.
+
+*Recommendation: set `core_maximum_exclusive` to `2.0.0` now, so desktop 1.0.0
+supports the whole core 1.x series, across `run_hosted.sh:88`,
+`build_in_container.sh:35`, `manifest.json:38` and the mirrored test constants in
+one commit. Do not raise `core_minimum` to `1.0.0` in the same commit unless the
+tag is being created on it: doing so turns `Desktop pre-merge aggregate` red on
+every push until the tag exists, and the final PR into `main` cannot be green in
+that window. Choose option A or option B from section 2.3 and record which. Prove
+the boundaries either way by installing at the lower bound, just below it, just
+below the upper bound, and at the excluded upper bound.* This is a compatibility
+policy decision, which is why this documentation patch does not make it.
 
 **2. The desktop archive `release_version`.**
 Today `0.5.0`, explicitly labelled an unpublished candidate. *Recommendation:
 `1.0.0`, so the archive, the RPM version, the manifest and the attested subject
 filename all agree with the core release. Doing this also requires updating the
-hardcoded subject at `release-desktop.yml:331` and the assertion at
-`install_and_verify.sh:581`.*
+hardcoded subject at `release-desktop.yml:331`, the assertion at
+`install_and_verify.sh:581`, and the prose at
+`packaging/rpm/desktop/README.md:51`, which describes the lifecycle as a `0.4.9`
+to `0.5.0` upgrade.*
+
+*This is not a string edit.* `packaging/rpm/desktop/manifest.json:21-22,24-32`
+pins the accepted archive's byte count, its SHA-256 and eight evidence digests,
+and `packaging/rpm/desktop/package_contract.py:188-193` verifies every one of
+them against the real files. Renaming the archive changes all of them, so they
+must be regenerated from a fresh hosted archive run in the same change. Editing
+only the version strings produces an `accepted evidence mismatch`, which reads
+like a corrupted artifact rather than a version bump.
 
 **3. Whether a desktop production release path is built before v1.0.0, or the
 desktop ships later.**

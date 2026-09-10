@@ -19,6 +19,13 @@
   --addition: #123626;
   --deletion: #3e1d25;
   /*
+   * The only monospace stack a token, rather than a literal font-family list,
+   * ever names (the review drawer's file names and footer). Declared here so
+   * that a var() referencing it resolves to something instead of silently
+   * falling back the way --surface did (#225).
+   */
+  --mono: monospace;
+  /*
    * The composer row, the pending card row and the spacers that keep the split
    * panes aligned share these heights. They live here rather than on
    * .diff-workspace because the rows that consume them are not all inside it,
@@ -1562,7 +1569,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  background: var(--surface, #fff);
+  background: var(--panel);
   border-left: 1px solid var(--border, #d0d7de);
   box-shadow: -0.5rem 0 1.5rem rgba(0, 0, 0, 0.12);
 }
@@ -1615,6 +1622,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  background: var(--panel-2);
 }
 
 .review-drawer-entry-stale {
@@ -1637,6 +1645,8 @@ button {
 .review-drawer-entry-ribbon {
   margin: 0;
   font-size: 0.8rem;
+  background: var(--deletion);
+  color: var(--text);
 }
 
 .review-drawer-entry-editor textarea,
@@ -1671,6 +1681,7 @@ button {
   border-radius: 0.4rem;
   padding: 0.4rem 0.6rem;
   cursor: pointer;
+  background: var(--panel-2);
 }
 
 .review-drawer-actions {

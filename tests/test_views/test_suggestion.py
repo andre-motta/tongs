@@ -1,5 +1,6 @@
 """Tests for suggestion comment helpers."""
 
+from __future__ import annotations
 
 from tongs.diff.models import DiffLine, LineType
 from tongs.scanner.repo import ForgeType

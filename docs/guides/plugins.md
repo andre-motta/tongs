@@ -2,7 +2,8 @@
 
 tongs has a plugin system that lets you extend the TUI with new commands,
 screens, and lifecycle hooks. Plugins are discovered automatically through
-Python entry points, so they can be distributed as standalone packages.
+Python entry points, so they can be distributed as standalone packages. To add
+an opt-in desktop surface, see [Desktop plugin providers](../plugins/provider.md).
 
 ## What plugins can do
 
@@ -13,9 +14,10 @@ A plugin can contribute any combination of:
 - **Lifecycle hooks** -- async callbacks that run when the app starts up
   (`on_app_ready`) or shuts down (`on_app_shutdown`)
 
-Plugins receive a `PluginContext` security facade at lifecycle time, giving them
-controlled access to forge clients, configuration, the cache layer, and
-notifications without exposing internal app state.
+Plugins receive a `PluginContext` supported interface at lifecycle time, giving
+them access to forge clients, configuration, the cache layer, and notifications.
+Terminal plugins are trusted installed Python code. `PluginContext` narrows the
+supported API, but it is not a sandbox for a hostile extension.
 
 ## Writing a plugin
 
@@ -26,6 +28,7 @@ minimum.
 
 ```python
 from tongs.plugins.base import TongsPlugin
+from tongs.plugins.context import PluginContext
 
 
 class TongsPlugin:
@@ -62,9 +65,13 @@ A plugin that adds a single command to the palette:
 
 ```python
 from tongs.plugins.base import TongsPlugin
+from tongs.plugins.context import PluginContext
 
 
 class HelloPlugin(TongsPlugin):
+    def __init__(self) -> None:
+        self._ctx: PluginContext | None = None
+
     @property
     def name(self) -> str:
         return "hello"
@@ -73,15 +80,21 @@ class HelloPlugin(TongsPlugin):
     def version(self) -> str:
         return "0.1.0"
 
+    async def on_app_ready(self, ctx: PluginContext) -> None:
+        self._ctx = ctx
+
+    async def on_app_shutdown(self, ctx: PluginContext) -> None:
+        del ctx
+        self._ctx = None
+
     def get_commands(self) -> list[tuple[str, str, object]]:
         return [
             ("Say Hello", "Print a greeting notification", self._greet),
         ]
 
     def _greet(self) -> None:
-        # 'app' is available through Textual's global app reference
-        from textual.app import get_app
-        get_app().notify("Hello from the plugin!")
+        if self._ctx is not None:
+            self._ctx.notify("Hello from the plugin!")
 ```
 
 ## Registering via entry points
@@ -97,16 +110,17 @@ hello = "my_tongs_hello.plugin:HelloPlugin"
 The key (`hello`) is the plugin name used for configuration lookup. The value
 is the dotted import path to the class.
 
-After installing the package (`pip install .` or `pip install -e .` for
-development), tongs picks it up on the next launch -- no extra import or
-registration step needed.
+After installing the package (`python -m pip install .` or
+`python -m pip install -e .` for development) in the same environment as tongs,
+tongs picks it up on the next launch. No extra import or registration step is
+needed.
 
 !!! tip
     During development, install in editable mode so changes take effect
     without reinstalling:
 
     ```bash
-    pip install -e .
+    python -m pip install -e .
     ```
 
 ## Configuration
@@ -137,7 +151,7 @@ default settings.
 ## What the PluginContext provides
 
 Both `on_app_ready` and `on_app_shutdown` receive a `PluginContext` instance.
-This is a security facade that exposes a controlled subset of the application:
+This is the supported interface to a subset of the application:
 
 | Attribute / Method | Type | Description |
 |-----------|------|-------------|
@@ -165,9 +179,12 @@ tongs ships with one built-in plugin registered via entry points.
 
 ### MCP server (`mcp`)
 
-The MCP plugin adds a **Start MCP Server** command to the palette. When
-triggered, it launches the `tongs-mcp` stdio server in a subprocess, allowing AI
-agents (Claude Code, Cursor, etc.) to query MR data programmatically.
+The MCP plugin adds a **Start MCP Server** command to the palette only when
+the optional MCP dependency is importable. Install it with
+`pip install "tongs[mcp]"`; without that extra, the plugin registers no
+commands. When triggered, it spawns `python -m tongs.mcp.server` in a
+subprocess, allowing AI agents (Claude Code, Cursor, etc.) to query MR data
+programmatically.
 
 Entry point registration in tongs' own `pyproject.toml`:
 
@@ -246,7 +263,7 @@ build-backend = "hatchling.build"
 [project]
 name = "tongs-stats-plugin"
 version = "1.0.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = ["tongs"]
 
 [project.entry-points."tongs.plugins"]
@@ -260,7 +277,7 @@ packages = ["src/tongs_stats"]
 
 ```bash
 cd tongs-stats-plugin
-pip install -e .
+python -m pip install -e .
 tongs
 ```
 

@@ -1,0 +1,1 @@
+"""Desktop artifact contract tests."""

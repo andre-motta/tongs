@@ -1,0 +1,17 @@
+{
+  "name": "tongs-electron-prototype",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Disposable Electron shell for the Tongs desktop comparison",
+  "main": "src/main.mjs",
+  "type": "module",
+  "scripts": {
+    "build:distribution": "node scripts/build-distribution.mjs",
+    "build:wheel": "node scripts/build-wheel.mjs",
+    "smoke": "node scripts/native-smoke.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.2.0"
+  }
+}

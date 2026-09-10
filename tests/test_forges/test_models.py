@@ -1,7 +1,9 @@
 """Tests for forge data models."""
 
-from dataclasses import FrozenInstanceError
-from datetime import datetime, timezone
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError, fields
+from datetime import UTC, datetime
 
 import pytest
 
@@ -18,6 +20,11 @@ from tongs.forges.models import (
     User,
 )
 from tongs.scanner.repo import ForgeType
+
+
+def test_mr_detail_revision_fields_are_appended_for_positional_compatibility():
+    names = [field.name for field in fields(MRDetail)]
+    assert names[-3:] == ["head_sha", "base_sha", "start_sha"]
 
 
 class TestForgeModels:
@@ -41,8 +48,8 @@ class TestForgeModels:
             source_branch="fix-bug",
             target_branch="main",
             ci_status=CIStatus.SUCCESS,
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 1, 2, tzinfo=UTC),
             web_url="https://gitlab.com/org/repo/-/merge_requests/42",
         )
 
@@ -88,7 +95,7 @@ class TestForgeModels:
             id="1",
             author=User(username="reviewer"),
             body="Fix this",
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
             file_path="src/main.py",
             new_line=42,
         )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from rich.style import Style
@@ -17,7 +17,6 @@ from tongs.widgets.pipeline_panel import (
     RetryJobRequested,
     RetryPipelineRequested,
 )
-
 
 # ===================================================================
 # format_duration
@@ -68,7 +67,7 @@ class TestRelativeTime:
 
     def _fixed_now(self, **kwargs):
         """Return a patcher that freezes datetime.now to a fixed offset from the reference dt."""
-        ref = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        ref = datetime(2026, 1, 1, tzinfo=UTC)
         frozen = ref + timedelta(**kwargs)
 
         original_now = datetime.now
@@ -81,7 +80,7 @@ class TestRelativeTime:
         return patch(
             "tongs.helpers.datetime",
             wraps=datetime,
-            **{"now": fake_now},
+            now=fake_now,
         )
 
     def test_none_returns_empty(self):
@@ -89,53 +88,47 @@ class TestRelativeTime:
 
     def test_just_now_zero_seconds(self):
         with self._fixed_now(seconds=0):
-            assert (
-                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
-            )
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "just now"
 
     def test_just_now_under_60_seconds(self):
         with self._fixed_now(seconds=59):
-            assert (
-                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "just now"
-            )
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "just now"
 
     def test_boundary_exactly_60_seconds(self):
         with self._fixed_now(seconds=60):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1m ago"
 
     def test_minutes_plural(self):
         with self._fixed_now(minutes=30):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "30m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "30m ago"
 
     def test_boundary_exactly_59_minutes(self):
         with self._fixed_now(minutes=59):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "59m ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "59m ago"
 
     def test_boundary_exactly_60_minutes(self):
         with self._fixed_now(minutes=60):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1h ago"
 
     def test_hours_plural(self):
         with self._fixed_now(hours=5):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "5h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "5h ago"
 
     def test_boundary_exactly_23_hours(self):
         with self._fixed_now(hours=23):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "23h ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "23h ago"
 
     def test_boundary_exactly_24_hours(self):
         with self._fixed_now(hours=24):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "1d ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1d ago"
 
     def test_days_plural(self):
         with self._fixed_now(days=7):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "7d ago"
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "7d ago"
 
     def test_large_day_count(self):
         with self._fixed_now(days=365):
-            assert (
-                relative_time(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "365d ago"
-            )
+            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "365d ago"
 
 
 # ===================================================================
@@ -229,11 +222,13 @@ class TestMessages:
         assert msg.pipeline_id == 99
 
     def test_cancel_job_requested(self):
-        msg = CancelJobRequested(job_id=101)
+        msg = CancelJobRequested(pipeline_id=55, job_id=101)
+        assert msg.pipeline_id == 55
         assert msg.job_id == 101
 
     def test_retry_job_requested(self):
-        msg = RetryJobRequested(job_id=202)
+        msg = RetryJobRequested(pipeline_id=56, job_id=202)
+        assert msg.pipeline_id == 56
         assert msg.job_id == 202
 
     def test_load_jobs_requested(self):

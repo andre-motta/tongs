@@ -1,220 +1,246 @@
 # Testing
 
-## Setup
+## Checkout-local setup
+
+Run tests from the checkout or worktree root. Create `.venv` there so source,
+dependencies, and reports remain bound to the revision under test:
 
 ```bash
-source /home/alustosa/git/tongs/.venv/bin/activate
-pip install -e ".[dev]"
-
-# Run all tests
-pytest
-
-# Verbose
-pytest -v
-
-# Specific module
-pytest tests/test_forges/test_gitlab.py
-
-# Specific test class
-pytest tests/test_forges/test_gitlab.py::TestGitLabClientAsync
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev,mcp]" ruff
 ```
 
-Tests run without network access. All forge interactions are mocked. The full suite (618 tests) runs in under 1 second.
+Use `.venv/bin/python`, `.venv/bin/pytest`, and `.venv/bin/ruff` directly when a
+shell does not keep activation. Do not borrow another worktree's environment.
+Most unit and integration tests mock forge network access. Dependency installs
+and deliberately hosted evidence workflows are separate network boundaries.
 
-## Directory Layout
+## Python checks
 
-```
-tests/
-  conftest.py               # Shared fixtures (if any)
-  test_commands.py           # TongsCommandProvider, plugin command integration
-  test_config.py             # Config loading, defaults, TOML parsing
-  test_errors.py             # Error hierarchy, credential redaction patterns
-  test_state.py              # MRFilter, ReviewDraft
-  test_scanner/
-    test_remote.py           # Remote URL parsing, forge detection
-    test_discovery.py        # Filesystem discovery with tmp_path repos
-  test_forges/
-    test_models.py           # Data model construction and properties
-    test_auth.py             # Token resolution cascade
-    test_http.py             # HTTP transport, error mapping
-    test_gitlab.py           # GitLab client parsing and async methods
-    test_github.py           # GitHub client: inline comment, multi-line params, CI check-runs, approvals
-    test_registry.py         # ForgeRegistry hostname mapping
-  test_diff/
-    test_parser.py           # Diff parser with inline strings + fixture files
-    test_position.py         # DiffPosition creation and forge converters
-  test_cache/
-    test_store.py            # CacheStore: open, get/put, TTL, LRU eviction, JSON, invalidation
-  test_plugins/
-    test_plugin_system.py    # TongsPlugin ABC, PluginRegistry discovery, config filtering, lifecycle
-  test_mcp/
-    test_server.py           # MCP server tools: list_mrs, get_mr, get_mr_diff, post_comment, approve_mr, list_pipelines
-  test_views/
-    test_helpers.py          # View helper functions (CI icons, relative time)
-    test_suggestion.py       # Suggestion helpers: template, fence, format, position (25 tests)
-  test_widgets/
-    test_diff_panel.py       # DiffOptionList, DiffContent, DiffRenderer, selection, comments, discussion threading, comment navigation
-    test_discussion_list.py  # DiscussionPanel, DiscussionCard, render_diff_snippet, card sorting/filtering
-    test_pipeline_panel.py   # PipelinePanel pure functions (_format_duration, _relative_time, _ci_icon_text/markup) and message classes
-  fixtures/
-    builder_mr_3113.diff     # Real MR diff from builder project
-    fromager_pr_1258.diff    # Real PR diff from fromager project
+During development, run the smallest test module that exercises the changed
+contract. Before handing off a code change, run the full core and MCP split plus
+Ruff unless the work item's approved profile says otherwise:
+
+```bash
+.venv/bin/pytest tests/ --ignore=tests/test_mcp -v
+.venv/bin/pytest tests/test_mcp -v \
+  --junitxml="/tmp/tongs-mcp-$$.junit.xml"
+.venv/bin/python tests/ci/verify_desktop_ci.py mcp-report \
+  --path "/tmp/tongs-mcp-$$.junit.xml"
+.venv/bin/ruff check src/ tests/
+.venv/bin/ruff format --check src/ tests/
 ```
 
-## Mock Patterns
+The explicit MCP report check proves the optional tests ran and did not pass by
+import-error skip. Keep generated reports outside the checkout unless a fixture
+specifically requires a repository path. Use a process-scoped filename such as
+the shell's `$$` rather than a fixed name, since a fixed report path collides
+between concurrent worktrees; `ci.yml` writes to
+`"$RUNNER_TEMP/mcp-<python-version>.junit.xml"` for the same reason.
 
-### httpx.MockTransport for Forge Tests
+Python test areas include:
 
-The primary mock pattern for forge client tests. Create a handler function that receives an `httpx.Request` and returns an `httpx.Response`:
+- `tests/services/`: `ApplicationSession`, service identities, reads, events,
+  mutations, review submissions, and workspace utilities
+- `tests/state/drafts/`: durable draft transitions, ownership, corruption, and
+  recovery
+- `tests/test_forges/`: GitHub/GitLab parsing and requests through
+  `httpx.MockTransport`
+- `tests/test_views/` and `tests/test_widgets/`: Textual workers, messages,
+  bindings, and rendering behavior
+- `tests/desktop/protocol/`: framing, handles, paging, cancellation, review/CI,
+  and utility operations
+- `tests/desktop/installer/` and `tests/desktop/artifact_contract/`: safe
+  extraction, signatures, manifests, activation, status, and lifecycle
+- `tests/plugins/`: desktop provider declarations, discovery, resources, and
+  lifecycle bounds
+- `tests/integration/desktop/`: production reports, installed-core composition,
+  candidate attestation, and process acceptance
+
+## Forge and service test patterns
+
+Use `httpx.MockTransport` to test HTTP requests without network access:
 
 ```python
-from tongs.forges.models import ForgeHost
-from tongs.forges.gitlab import GitLabClient
-from tongs.scanner.repo import ForgeType
+async def handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.path == "/api/v4/projects/acme%2Fapp/merge_requests"
+    return httpx.Response(200, json=[])
 
-_TEST_HOST = ForgeHost(
-    hostname="gitlab.example.com",
-    forge_type=ForgeType.GITLAB,
-    api_base="https://gitlab.example.com/api/v4",
+transport = httpx.MockTransport(handler)
+client = httpx.AsyncClient(
+    base_url="https://gitlab.example.com/api/v4",
+    transport=transport,
 )
-
-def _make_gitlab_client(handler) -> tuple[GitLabClient, httpx.AsyncClient]:
-    transport = httpx.MockTransport(handler)
-    http = httpx.AsyncClient(transport=transport, base_url=_TEST_HOST.api_base)
-    return GitLabClient(_TEST_HOST, http), http
 ```
 
-Usage in async tests:
+Prefer real immutable dataclasses and small protocol fakes over broad mocks.
+Inject `ApplicationSession` resources at their declared protocols, call
+`start()` before reads, and always close the session. Assert `ServiceErrorCode`
+or protocol error codes and safe public messages, not private exception text.
+
+For mutations, cover the service-issued identity and revision checks as well as
+the forge call. Test stale revisions, wrong parent handles, duplicate operation
+IDs, partial submission progress, retry/reconciliation, and cleanup failures
+when those branches are part of the changed behavior.
+
+## Textual tests
+
+Use Textual's `app.run_test()` and `Pilot`. Wait for workers or a specific
+observable state rather than sleeping:
 
 ```python
-@pytest.mark.asyncio
-async def test_list_mrs_returns_summaries(self):
-    def handler(req: httpx.Request) -> httpx.Response:
-        assert "/projects/acme%2Fwidgets/merge_requests" in str(req.url)
-        return httpx.Response(200, json=[...])
-
-    client, http = _make_gitlab_client(handler)
-    async with http:
-        summaries = await client.list_mrs("acme/widgets")
-    assert len(summaries) == 2
+async with app.run_test() as pilot:
+    await pilot.pause()
+    await app.workers.wait_for_complete()
+    assert app.screen.query_one("#inbox").display
 ```
 
-The handler can validate request URLs, methods, params, and body. Always use `async with http:` to properly close the client.
+Patch or inject `TUIServiceAdapter` methods at the service boundary. A view test
+should not create a concrete forge client unless the integration under test is
+the adapter itself. Exercise messages and public actions instead of directly
+mutating widget internals where possible.
 
-### Subprocess Mock for Auth Tests
+## Production desktop checks
 
-Auth tests mock `subprocess.run` since the real CLI tools may not be installed:
+The production package is top-level `desktop/`; `spikes/desktop/` contains
+historical comparison fixtures. Install and run the production suite with the
+checkout's Python interpreter:
 
-```python
-from unittest.mock import patch
-
-def test_cli_returns_token_on_success(self):
-    result = subprocess.CompletedProcess(
-        args=["glab", "auth", "token", "--hostname", "gitlab.com"],
-        returncode=0,
-        stdout="glpat-abc123\n",
-        stderr="",
-    )
-    with patch("tongs.forges.auth.subprocess.run", return_value=result):
-        token = _token_from_cli("gitlab.com", ForgeType.GITLAB)
-    assert token == "glpat-abc123"
+```bash
+npm ci --prefix desktop
+npm run build --prefix desktop
+TONGS_TEST_PYTHON="$(command -v python)" npm test --prefix desktop
 ```
 
-Also test error cases: `FileNotFoundError` (CLI not installed), `TimeoutExpired`, non-zero exit code, empty stdout.
+The build script prepares assets, runs TypeScript checking, and creates build
+output. The test script repeats that build before Electron main and React
+renderer tests. Focused Node tests can run against built output with
+Node's test runner, for example:
 
-### tmp_path Git Repos for Scanner Tests
-
-Scanner tests create temporary git repos using pytest's `tmp_path` fixture:
-
-```python
-def test_discovery(tmp_path):
-    repo_dir = tmp_path / "org" / "myrepo"
-    repo_dir.mkdir(parents=True)
-    (repo_dir / ".git").mkdir()
-    # Write git config or mock git remote -v output
-    repos = discover_repos(tmp_path)
-    assert len(repos) == 1
+```bash
+node --test --test-concurrency=1 tests/desktop/renderer/diff.test.mjs
 ```
 
-Scanner discovery tests also mock `subprocess.run` for `git remote -v` output since the tmp repos don't have real git configs.
+Rebuild first whenever TypeScript source changed. Do not use a stale `dist/`
+from another revision as source evidence.
 
-### .netrc Tests
+The reference desktop provider is an independently installable package. Install
+it into the same Python environment as Tongs, then run its Python and prebuilt
+ESM tests as documented in `examples/desktop-plugin/README.md`.
 
-Auth `.netrc` tests use `tmp_path` to create temporary `.netrc` files and patch `Path.home()`:
+## Bounded local Node procedure
 
-```python
-def test_reads_valid_netrc(self, tmp_path):
-    netrc_file = tmp_path / ".netrc"
-    netrc_file.write_text("machine gitlab.com\n  login __token__\n  password glpat-test123\n")
-    netrc_file.chmod(0o600)
-    with patch("tongs.forges.auth.Path.home", return_value=tmp_path):
-        token = _token_from_netrc("gitlab.com")
-    assert token == "glpat-test123"
+Node and jsdom can allocate outside the V8 heap. Bound the complete process tree
+with an operating-system cgroup or equivalent runner. The standard local limits
+for this repository are:
+
+- memory maximum: 1 GiB
+- swap maximum: 0
+- task maximum: 64
+- V8 old-space limit: `NODE_OPTIONS=--max-old-space-size=512`
+- Node test concurrency: `--test-concurrency=1`
+- an external deadline appropriate to the focused or full command
+
+Before starting Node, fail closed unless the running process is inside the
+intended guard and its effective memory, swap, and task limits match. Preserve
+the command's exit status, timeout/OOM result, and peak resident memory when the
+work item requires evidence. Do not treat a wrapper exit of zero as success if
+the authoritative test or proof report is absent or failed.
+
+On a Linux host with a user systemd manager and cgroup v2, this checkout-relative
+example creates a unique service, checks the effective limits from inside it, and
+returns the guarded command's status:
+
+```bash
+unit="tongs-node-${PPID}-${RANDOM}-$(date +%s)"
+set +e
+systemd-run --user --unit="$unit" --wait --collect \
+  --property=MemoryMax=1073741824 \
+  --property=MemorySwapMax=0 \
+  --property=TasksMax=64 \
+  --property=StandardOutput=journal \
+  --property=StandardError=journal \
+  --setenv=NODE_OPTIONS=--max-old-space-size=512 \
+  --working-directory="$(pwd)" \
+  /usr/bin/timeout --signal=TERM --kill-after=15s 20m \
+  /bin/sh -eu -c '
+    cgroup=$(awk -F: '"'"'$1 == "0" { print $3 }'"'"' /proc/self/cgroup)
+    root="/sys/fs/cgroup${cgroup}"
+    test "$(cat "$root/memory.max")" = 1073741824
+    test "$(cat "$root/memory.swap.max")" = 0
+    test "$(cat "$root/pids.max")" = 64
+    test "$NODE_OPTIONS" = --max-old-space-size=512
+    npm run build --prefix desktop
+    exec node --test --test-concurrency=1 \
+      tests/desktop/renderer/diff.test.mjs
+  '
+status=$?
+journalctl --user -u "$unit.service" --no-pager --output=cat
+set -e
+exit "$status"
 ```
 
-POSIX permission tests use `@pytest.mark.skipif(sys.platform == "win32", ...)`.
+Change only the deadline and test file list for the intended check. A stricter
+parent cgroup can make an effective value lower; in that case, adapt the
+fail-closed assertions to prove the effective limit is no greater than the
+stated maximum. If a user systemd manager is unavailable, use an equivalent
+container or cgroup-v2 wrapper that performs the same in-guard assertions and
+preserves the child exit status.
 
-## Widget Tests (DiffPanel)
+DOM failure formatting can recursively inspect large jsdom objects and exhaust
+memory outside V8. Assert primitive values such as text, attributes, counts,
+serialized payloads, and numeric rectangle coordinates. For layout proofs,
+compare each visible control rectangle with its viewport and owning panel and
+assert sibling panels do not overlap. Avoid passing complete DOM nodes or cyclic
+objects to deep-equality assertions.
 
-`tests/test_widgets/test_diff_panel.py` tests the DiffOptionList, DiffContent, DiffRenderer, and related classes directly without running the Textual app. The tests construct model objects (DiffFile, DiffHunk, DiffLine) and call methods on the widgets.
+## Native Electron evidence
 
-Key patterns:
+Native tests under `tests/desktop/native/` launch real Electron and therefore
+need an exclusive, coordinated display/GPU window. Do not run them concurrently
+with another native proof and do not change host display, power, sandbox, SELinux,
+or GPU settings to make them pass.
 
-**Direct model construction for test data:**
+Electron filters unsupported `NODE_OPTIONS`, including the V8 old-space option
+used by the Node test runner. For native packaged Electron, the 1 GiB complete-
+process cgroup, zero swap, task limit, and external deadline are authoritative;
+do not claim a 512 MiB renderer/main-process heap limit. See Electron's
+[`NODE_OPTIONS` environment-variable contract](https://www.electronjs.org/docs/latest/api/environment-variables#node_options).
 
-```python
-def _make_line(lt: LineType, content: str = "x", old: int | None = 1, new: int | None = 1) -> DiffLine:
-    return DiffLine(old_lineno=old, new_lineno=new, content=content, line_type=lt)
-```
+A valid native result binds all of the following:
 
-**Testing render_line() behavior:**
-Tests verify that `DiffOptionList.render_line()` injects the correct VisualStyle (addition/deletion/selection backgrounds) by checking the style applied before `_get_option_render()`.
+- exact source commit and tree, plus the source paths actually imported or built
+- the guarded launcher exit and the authoritative JSON report result
+- expected sidecar, Electron, and fixture process cleanup
+- screenshots or geometry records required by the acceptance flow
+- observed hardware acceleration/GPU evidence when the gate calls for it
 
-**Selection range testing:**
-Tests verify `_in_selection_range()` and `_get_selection_lines()` by setting `_selection_anchor` and `highlighted` directly, then asserting the expected lines are included.
+Synthetic sidecars and fixture data prove deterministic UI behavior. They do
+not prove live forge access or a production installer. Headless Electron and
+Podman prove different contracts from native Fedora/KDE/GPU execution.
 
-**CommentRequested message assertions:**
-Tests verify that `action_comment()` and `action_suggest()` post `CommentRequested` with the correct `CommentMode`, `context_lines`, and blocking behavior (e.g., suggest on deletion lines is blocked).
+## Hosted pre-merge checks
 
-## Suggestion Helper Tests
+`.github/workflows/ci.yml` currently runs:
 
-`tests/test_views/test_suggestion.py` tests pure functions from `src/tongs/views/suggestion.py`. No Textual dependencies, no mocking required.
+1. Ruff lint and format
+2. core and MCP tests on Python 3.12 and 3.13
+3. desktop fixture checks and the production Electron/renderer suite
+4. the Fedora 44 Podman probe
+5. the always-run `Desktop pre-merge aggregate`
 
-Covers: template building/parsing, backtick fence computation (including edge cases with inner triple-backtick code blocks), forge-specific suggestion block formatting (GitLab fence syntax vs GitHub plain fence), new-side line extraction, and position resolution for single-line and multi-line suggestions on both forges.
+The aggregate fails when any required dependency is failed, cancelled, skipped,
+or missing. Bind review evidence to the actual checkout commit and tree for the
+current PR run. The final production desktop release assembly is a separate
+workflow and evidence boundary; do not infer native GPU, installer, signing,
+RPM, or release acceptance from the pre-merge aggregate alone.
 
-## GitHub Client Tests
+## Test quality
 
-`tests/test_forges/test_github.py` tests `GitHubClient.create_inline_comment()` via `httpx.MockTransport`. Covers single-line comments (no `start_line`/`start_side` in payload) and multi-line comments (`start_line`/`start_side` included in REST payload).
-
-## Diff Parser Tests
-
-Test files in `tests/test_diff/test_parser.py` use two approaches:
-
-1. **Inline diff strings** for targeted edge cases (empty hunks, binary files, renames, no-newline markers)
-2. **Fixture files** (`tests/fixtures/*.diff`) for real-world validation with complex multi-file diffs
-
-Fixture files are real diffs captured from actual MRs and PRs.
-
-## pytest Conventions
-
-- Use `pytest.mark.asyncio` for all async test methods
-- Use `pytest.raises(ErrorType, match=...)` for exception testing
-- Group related tests in classes (`TestParseDatetime`, `TestTokenFromCli`, etc.)
-- Helper functions for creating test data (`_mr_api_json(overrides)`, `_make_gitlab_client(handler)`)
-- No global state; all fixtures are function-scoped or use `tmp_path`
-- Tests must run without any network access
-
-## Gate Review Process
-
-Every feature module goes through four review areas:
-
-1. **Architecture** -- does the code fit existing abstractions?
-2. **Security** -- no credential leaks, proper error redaction?
-3. **UX** -- keybinding consistency, ASCII mode, responsive UI?
-4. **QE** -- test coverage, edge cases, no network dependencies?
-
-Verdicts:
-- **APPROVED WITH NOTES** -- address notes in subsequent work, no re-review needed
-- **NEEDS CHANGES** -- fix issues, then re-submit for review
-
-Run `ruff check src/ tests/` and `ruff format --check src/ tests/` before every commit. Fix issues before pushing.
+Test observable contracts and meaningful failure modes. Avoid tests that merely
+repeat a constant, duplicate implementation logic, or assert private call order
+without a user-visible or security reason. For file authorities, include
+symlink, non-regular-file, replacement/race, size, hash, and cleanup behavior as
+relevant. For async lifecycles, exercise cancellation, timeout, early completion,
+late completion, and exactly-once cleanup where the contract depends on them.

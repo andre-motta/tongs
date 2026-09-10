@@ -1,0 +1,124 @@
+{
+  "tested_commit": "02ad69685f8511bcd7945a26650f3e2de2e6c908",
+  "environment": {
+    "os": "Fedora 44",
+    "desktop": "KDE",
+    "arch": "x86_64",
+    "display": "native Wayland",
+    "python": "3.14.7",
+    "selinux": "Enforcing (verified on host)"
+  },
+  "provenance": "Automated DOM interactions in actual native applications, synthetic review data, separately installed Python reference plugin. No live forge calls.",
+  "frontend_sha256": "37950bf915b82387c55e95dc884ded7404b83795bac852f427ff70c0b53dbd98",
+  "backend_sha256": "5d63570de7fc556ec82f1817cd26e0cf10fe115ac53ab2d03a46262161e2a45a",
+  "electron": {
+    "packaged": true,
+    "electron": "44.2.0",
+    "chromium": "152.0.7977.76",
+    "embedded_node": "24.20.0",
+    "ozone_platform": "wayland",
+    "disable_gpu": true,
+    "startup_ms": 860.8,
+    "web_preferences": {
+      "contextIsolation": true,
+      "nodeIntegration": false,
+      "sandbox": true,
+      "webviewTag": false
+    },
+    "ui_probe": {
+      "elapsed_ms": 289.2,
+      "result": {
+        "ok": true,
+        "provenance": "Automated DOM interactions inside actual native renderer; synthetic Python backend and independently installed sample plugin",
+        "bridge": "native",
+        "large_render_ms": 42.2,
+        "large_lines": 20000,
+        "rendered_rows_at_end": 27,
+        "canvas_height": 540000,
+        "reached_last_row": true,
+        "normal_scroll_reset": true,
+        "split_diff": true,
+        "keyboard_focusable": true,
+        "light_and_dark": true,
+        "plugin_mounted": true,
+        "plugin_unmounted_and_remounted": true,
+        "plugin_response": {
+          "message": "Python plugin received: Native common UI probe",
+          "calls": 3
+        },
+        "bundled_help_visible": true,
+        "viewport": {
+          "width": 1400,
+          "height": 872
+        }
+      }
+    },
+    "memory": {
+      "exit_code": 0,
+      "elapsed_seconds": 1.918,
+      "peak_processes": 10,
+      "peak_rss_kib": 943736,
+      "peak_pss_kib": 455585,
+      "samples": 6
+    },
+    "observed_pids_exited": true
+  },
+  "webview": {
+    "ready": {
+      "ok": true,
+      "renderer": "qtwebengine",
+      "qt_platform": "wayland",
+      "startup_ms": 1280.6,
+      "ui_probe": {
+        "bridge": "native",
+        "bundled_help_visible": true,
+        "canvas_height": 540000,
+        "keyboard_focusable": true,
+        "large_lines": 20000,
+        "large_render_ms": 39.4,
+        "light_and_dark": true,
+        "normal_scroll_reset": true,
+        "ok": true,
+        "plugin_mounted": true,
+        "plugin_response": {
+          "calls": 3,
+          "message": "Python plugin received: Native common UI probe"
+        },
+        "plugin_unmounted_and_remounted": true,
+        "provenance": "Automated DOM interactions inside actual native renderer; synthetic Python backend and independently installed sample plugin",
+        "reached_last_row": true,
+        "rendered_rows_at_end": 28,
+        "split_diff": true,
+        "viewport": {
+          "height": 900,
+          "width": 1440
+        }
+      }
+    },
+    "assets_stopped": true,
+    "exit_code": 0,
+    "steady_rss_kib": 895228,
+    "process_count": 5,
+    "wall_ms": 3913.4,
+    "captured_pids_exited": true
+  },
+  "artifacts": {
+    "tongs-0.4.2.dev12+g02ad69685-py3-none-any.whl": {
+      "bytes": 83500,
+      "sha256": "28a44bf399011292314705bf60dbfe3f50bc1acb3fcfd02a8c15b88cb92b3cbf"
+    },
+    "tongs_desktop_sample-0.0.1-py3-none-any.whl": {
+      "bytes": 3310,
+      "sha256": "4697f943e294c0cc926ae16b62cf2504e17bce1cea23bfd95f8f5087d8caf6e5"
+    },
+    "tongs_desktop_webview_prototype-0.0.1-py3-none-any.whl": {
+      "bytes": 3755466,
+      "sha256": "3da1e35e183d64b70b7e918f2f3a8d669a495e81a72dcab2121749945b7ca1c9"
+    },
+    "tongs_electron_prototype-0.0.1-py3-none-linux_x86_64.whl": {
+      "bytes": 131991833,
+      "sha256": "08690bad7ce87f7a03e7a09877fc79cdd03107c863f10c98a0aeb42956c07711"
+    }
+  },
+  "installed_assets_match_reviewed_sources": true
+}

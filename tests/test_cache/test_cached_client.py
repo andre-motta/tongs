@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 
-from tongs.cache.store import CacheStore
+import tongs.cache.cached_client as cached_client_module
 from tongs.cache.cached_client import CachedForgeClient
+from tongs.cache.store import CacheStore
 from tongs.forges.models import (
     CIStatus,
     ForgeHost,
+    ForgeMergeResult,
+    ForgeMutationResult,
     MRState,
     MRSummary,
     User,
@@ -38,8 +42,8 @@ def _make_mr(number: int = 1, title: str = "Fix bug") -> MRSummary:
         source_branch="feature",
         target_branch="main",
         ci_status=CIStatus.SUCCESS,
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 2, tzinfo=UTC),
         web_url="https://gitlab.example.com/org/repo/-/merge_requests/1",
     )
 
@@ -58,9 +62,12 @@ def inner():
     mock = AsyncMock()
     mock.list_mrs = AsyncMock(return_value=[_make_mr()])
     mock.get_mr_diff = AsyncMock(return_value=[{"old_path": "a.py", "diff": "@@"}])
-    mock.approve_mr = AsyncMock()
-    mock.merge_mr = AsyncMock()
-    mock.close_mr = AsyncMock()
+    mock.approve_mr = AsyncMock(return_value=ForgeMutationResult("approval-1"))
+    mock.add_comment = AsyncMock(return_value=ForgeMutationResult("note-1", "note-1"))
+    mock.merge_mr = AsyncMock(return_value=ForgeMergeResult("merge-1", "sha-1"))
+    mock.close_mr = AsyncMock(return_value=ForgeMutationResult("review-1"))
+    mock.reopen_mr = AsyncMock(return_value=ForgeMutationResult("review-1"))
+    mock.unapprove_mr = AsyncMock(return_value=ForgeMutationResult("review-1"))
     mock.close = AsyncMock()
     # For __getattr__ fallback: add an attribute that is not overridden
     mock.some_uncached_method = AsyncMock(return_value="delegated")
@@ -151,6 +158,70 @@ class TestApproveInvalidation:
         await client.list_mrs("org/repo")
         assert inner.list_mrs.await_count == 2
 
+    async def test_review_mutation_invalidates_list_and_diff(self, client, inner):
+        inner.add_comment.return_value = ForgeMutationResult("note-1", "note-1")
+        await client.list_mrs("org/repo")
+        await client.get_mr_diff("org/repo", 1)
+
+        result = await client.add_comment("org/repo", 1, "body")
+        await client.list_mrs("org/repo")
+        await client.get_mr_diff("org/repo", 1)
+
+        assert result.comment_id == "note-1"
+        assert inner.list_mrs.await_count == 2
+        assert inner.get_mr_diff.await_count == 2
+
+    async def test_confirmed_receipt_survives_invalidation_failure(
+        self, client, inner, cache, monkeypatch
+    ):
+        inner.add_comment.return_value = ForgeMutationResult("note-1", "note-1")
+        await client.list_mrs("org/repo")
+        monkeypatch.setattr(
+            cache,
+            "invalidate_prefix",
+            AsyncMock(side_effect=RuntimeError("disk failure")),
+        )
+
+        result = await client.add_comment("org/repo", 1, "body")
+        await asyncio.sleep(0)
+        await client.list_mrs("org/repo")
+
+        assert result.remote_id == "note-1"
+        assert result.cache_invalidated is False
+        assert inner.list_mrs.await_count == 2
+
+    async def test_close_cancels_owned_blocked_invalidation(
+        self, client, inner, cache, monkeypatch
+    ):
+        entered = asyncio.Event()
+        exited = asyncio.Event()
+        calls = 0
+
+        async def blocked(_prefix: str) -> None:
+            nonlocal calls
+            calls += 1
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                exited.set()
+
+        monkeypatch.setattr(cache, "invalidate_prefix", blocked)
+        await client.add_comment("org/repo", 1, "body")
+        await entered.wait()
+        await client.add_comment("org/repo", 1, "second")
+
+        assert len(client._invalidation_tasks) == 1
+
+        await client.close()
+
+        await exited.wait()
+        calls_after_close = calls
+        await asyncio.sleep(0)
+        inner.close.assert_awaited_once()
+        assert not client._invalidation_tasks
+        assert calls == calls_after_close
+
 
 @pytest.mark.asyncio
 class TestMergeInvalidation:
@@ -169,6 +240,125 @@ class TestMergeInvalidation:
         await client.get_mr_diff("org/repo", 1)
         assert inner.list_mrs.await_count == 2
         assert inner.get_mr_diff.await_count == 2
+
+    async def test_confirmed_merge_returns_before_blocked_invalidation(
+        self, client, inner, cache, monkeypatch
+    ):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked(_prefix: str) -> None:
+            entered.set()
+            await release.wait()
+
+        monkeypatch.setattr(cache, "invalidate_prefix", blocked)
+
+        result = await client.merge_mr(
+            "org/repo",
+            1,
+            head_sha="captured-head",
+            expected_source_repository="org/repo",
+            expected_source_branch="feature",
+            expected_target_branch="main",
+        )
+        await entered.wait()
+
+        assert result.merge_sha == "sha-1"
+        assert result.cache_invalidated is False
+        inner.merge_mr.assert_awaited_once_with(
+            "org/repo",
+            1,
+            False,
+            True,
+            head_sha="captured-head",
+            expected_source_repository="org/repo",
+            expected_source_branch="feature",
+            expected_target_branch="main",
+        )
+        release.set()
+        await client.close()
+
+    async def test_repo_dirty_marker_bypasses_all_cached_review_reads(
+        self, client, inner, cache, monkeypatch
+    ):
+        await client.list_mrs("org/repo")
+        await client.get_mr_diff("org/repo", 1)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked(_prefix: str) -> None:
+            entered.set()
+            await release.wait()
+
+        monkeypatch.setattr(cache, "invalidate_prefix", blocked)
+        await client.merge_mr("org/repo", 1)
+        await entered.wait()
+
+        await client.list_mrs("org/repo")
+        await client.get_mr_diff("org/repo", 1)
+
+        assert inner.list_mrs.await_count == 2
+        assert inner.get_mr_diff.await_count == 2
+        release.set()
+        await client.close()
+
+    async def test_close_retries_cancellation_before_closing_inner(
+        self, client, inner, cache, monkeypatch
+    ):
+        entered = asyncio.Event()
+        cancellations = 0
+
+        async def resistant(_prefix: str) -> None:
+            nonlocal cancellations
+            entered.set()
+            while True:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancellations += 1
+                    if cancellations >= 2:
+                        raise
+
+        monkeypatch.setattr(cache, "invalidate_prefix", resistant)
+        await client.merge_mr("org/repo", 1)
+        await entered.wait()
+
+        await client.close()
+
+        assert cancellations == 2
+        inner.close.assert_awaited_once()
+        assert not client._invalidation_tasks
+
+    async def test_close_failure_keeps_resistant_invalidation_and_inner_open(
+        self, client, inner, cache, monkeypatch
+    ):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def resistant(_prefix: str) -> None:
+            entered.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    continue
+
+        monkeypatch.setattr(cache, "invalidate_prefix", resistant)
+        monkeypatch.setattr(cached_client_module, "_BACKGROUND_CLOSE_TIMEOUT", 0.001)
+        await client.merge_mr("org/repo", 1)
+        await entered.wait()
+
+        with pytest.raises(RuntimeError, match="did not stop"):
+            await asyncio.wait_for(client.close(), timeout=0.1)
+
+        assert client._invalidation_tasks
+        inner.close.assert_not_awaited()
+        release.set()
+        await asyncio.gather(
+            *client._invalidation_tasks.values(), return_exceptions=True
+        )
+        await client.close()
+        inner.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

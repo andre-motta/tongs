@@ -2,43 +2,351 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/desktop-app]
   pull_request:
-    branches: [main]
+    branches: [main, feat/desktop-app]
+
+permissions:
+  contents: read
+
+env:
+  # Every receipt-bearing job checks out and binds this exact revision.  For a
+  # pull request that is GitHub's synthetic merge commit, because pre-merge
+  # combination testing is how this initiative gates integration.  The pull
+  # request head and base travel beside it as clearly named metadata, so
+  # synthetic output is never labelled as a contributor-head result.
+  TONGS_CHECKED_OUT_SHA: ${{ github.sha }}
+  PULL_REQUEST_HEAD: >-
+    ${{ github.event.pull_request.head.sha || 'not-a-pull-request' }}
+  PULL_REQUEST_BASE: >-
+    ${{ github.event.pull_request.base.sha || 'not-a-pull-request' }}
+  PRODUCTION_ENVIRONMENT: github-hosted-ubuntu-24.04
+  PRODUCTION_PROVENANCE: hosted
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
+  lint-and-format:
+    name: Lint and format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Check out the exact revision without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+          ref: ${{ env.TONGS_CHECKED_OUT_SHA }}
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
+      - name: Install Ruff
+        run: python -m pip install ruff
+      - name: Lint source and tests
+        run: ruff check src/ tests/ packaging/
+      - name: Check source and test formatting
+        run: ruff format --check src/ tests/ packaging/
 
-      - name: Install ruff
-        run: pip install ruff
+  core:
+    name: Core and MCP (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      CHECK_ID: core-python-${{ matrix.python-version }}
+    steps:
+      - name: Check out the exact revision without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.TONGS_CHECKED_OUT_SHA }}
+          persist-credentials: false
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Bind the checked-out tree for this matrix leg
+        id: identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TONGS_CHECKED_OUT_SHA"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            test "$PULL_REQUEST_HEAD" != "$TONGS_CHECKED_OUT_SHA"
+          fi
+          printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+      - name: Install core, development, and MCP dependencies
+        run: python -m pip install -e ".[dev,mcp]"
+      - name: Run core tests with a machine-readable report
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/reports"
+          pytest tests/ --ignore=tests/test_mcp -v \
+            --junitxml="$RUNNER_TEMP/reports/core.junit.xml"
+      - name: Run MCP tests with a machine-readable report
+        run: >-
+          pytest tests/test_mcp -v
+          --junitxml="$RUNNER_TEMP/reports/mcp.junit.xml"
+      - name: Verify MCP tests ran without skips
+        run: >-
+          python tests/ci/verify_desktop_ci.py mcp-report
+          --path "$RUNNER_TEMP/reports/mcp.junit.xml"
+      - name: Describe the staged evidence for this matrix leg
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/stage-plan.json" <<PLAN
+          {
+            "check_id": "$CHECK_ID",
+            "report_path": "reports/core-evidence.json",
+            "source_context": {
+              "event": "${{ github.event_name }}",
+              "pull_request_head": "${{ env.PULL_REQUEST_HEAD }}",
+              "pull_request_base": "${{ env.PULL_REQUEST_BASE }}"
+            },
+            "scope": {
+              "covered": "core-and-mcp-suites-on-one-interpreter",
+              "excluded": [
+                "desktop-electron-shell",
+                "hardware-gpu-function",
+                "packaged-artifact-bytes"
+              ]
+            },
+            "files": [
+              {
+                "kind": "report",
+                "path": "reports/core.junit.xml",
+                "source": "$RUNNER_TEMP/reports/core.junit.xml",
+                "format": "pytest-junit"
+              },
+              {
+                "kind": "report",
+                "path": "reports/mcp.junit.xml",
+                "source": "$RUNNER_TEMP/reports/mcp.junit.xml",
+                "format": "pytest-junit"
+              }
+            ],
+            "stages": [
+              {
+                "name": "core-suite",
+                "evidence": ["reports/core.junit.xml"],
+                "observation": {"python": "${{ matrix.python-version }}"}
+              },
+              {
+                "name": "mcp-suite",
+                "evidence": ["reports/mcp.junit.xml"],
+                "observation": {"python": "${{ matrix.python-version }}"}
+              }
+            ],
+            "equalities": [],
+            "large_artifacts": []
+          }
+          PLAN
+      - name: Publish this matrix leg's receipt
+        run: >-
+          python tests/ci/desktop_stage_receipt.py publish
+          --source-root "$GITHUB_WORKSPACE"
+          --plan "$RUNNER_TEMP/stage-plan.json"
+          --output-root "$RUNNER_TEMP/gate/$CHECK_ID"
+          --receipt-name core-receipt.json
+          --commit "$TONGS_CHECKED_OUT_SHA"
+          --tree "${{ steps.identity.outputs.tree }}"
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+          --environment "$PRODUCTION_ENVIRONMENT"
+          --provenance "$PRODUCTION_PROVENANCE"
+          --check-id "$CHECK_ID"
+          --format artifact-lifecycle-v1
+          --format pytest-junit
+      - name: Upload this matrix leg's gate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            gate-core-python-${{ matrix.python-version }}-${{ env.TONGS_CHECKED_OUT_SHA
+            }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate/core-python-${{ matrix.python-version }}
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Lint
-        run: ruff check src/
+  desktop-fixtures:
+    name: Desktop fixture checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the exact revision without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.TONGS_CHECKED_OUT_SHA }}
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Set up Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Install core and desktop fixture dependencies
+        run: |
+          python -m pip install -e ".[dev,mcp]"
+          python -m pip install ./spikes/desktop/reference-plugin
+      - name: Run backend fixture tests
+        env:
+          PYTHONPATH: spikes/desktop
+        run: pytest spikes/desktop/tests/test_backend.py -v
+      - name: Install and test frontend dependencies
+        run: |
+          npm ci --prefix spikes/desktop/frontend
+          npm test --prefix spikes/desktop/frontend
+          npm run build --prefix spikes/desktop/frontend
+      - name: Run Python launcher fixture tests
+        run: pytest spikes/desktop/electron/test/test_launcher.py -v
+      - name: Install and test Electron fixture dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          npm ci --prefix spikes/desktop/electron
+          TONGS_DESKTOP_PYTHON="$(command -v python)" \
+            npm test --prefix spikes/desktop/electron
+      - name: Install production Electron shell dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci --prefix desktop
+      - name: Build and test production Electron shell
+        run: >-
+          TONGS_TEST_PYTHON="$(command -v python)"
+          npm test --prefix desktop
 
-      - name: Format check
-        run: ruff format --check src/
+  fedora-podman:
+    name: Fedora 44 Podman
+    uses: ./.github/workflows/desktop-podman-probe.yml
+    with:
+      head_sha: ${{ github.sha }}
+
+  desktop-production:
+    name: Desktop production evidence
+    uses: ./.github/workflows/desktop-production.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      checked_out_sha: ${{ github.sha }}
+
+  desktop-pr-gate:
+    name: Desktop pre-merge aggregate
+    if: ${{ always() }}
+    needs:
+      - lint-and-format
+      - core
+      - desktop-fixtures
+      - fedora-podman
+      - desktop-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      DESKTOP_GATE_RESULTS: ${{ toJSON(needs) }}
+      DESKTOP_PRODUCTION_RESULTS: >-
+        ${{ needs.desktop-production.outputs.job-results }}
+    steps:
+      - name: Check out the exact revision without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.TONGS_CHECKED_OUT_SHA }}
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Record the checked-out revision and its pull request metadata
+        id: identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TONGS_CHECKED_OUT_SHA"
+          tree=$(git rev-parse 'HEAD^{tree}')
+          printf 'tree=%s\n' "$tree" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            test "$PULL_REQUEST_HEAD" != "$TONGS_CHECKED_OUT_SHA"
+          fi
+          {
+            printf 'Event: %s\n\n' "$GITHUB_EVENT_NAME"
+            printf 'Checked out commit: %s\n\n' "$TONGS_CHECKED_OUT_SHA"
+            printf 'Checked out tree: %s\n\n' "$tree"
+            printf 'Pull request head: %s\n\n' "$PULL_REQUEST_HEAD"
+            printf 'Pull request base: %s\n\n' "$PULL_REQUEST_BASE"
+            printf 'Reconstruct with: git checkout %s\n' "$TONGS_CHECKED_OUT_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Require every desktop pre-merge job to succeed
+        run: python3 tests/ci/verify_desktop_ci.py aggregate
+      - name: Download the Python 3.12 gate evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-core-python-3.12-${{ env.TONGS_CHECKED_OUT_SHA }}-${{ github.run_id
+            }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence/core-python-3.12
+      - name: Download the Python 3.13 gate evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-core-python-3.13-${{ env.TONGS_CHECKED_OUT_SHA }}-${{ github.run_id
+            }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence/core-python-3.13
+      - name: Download the production desktop TAP gate evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-desktop-production-tap-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence/desktop-production-tap
+      - name: Download the archive lifecycle gate evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-desktop-archive-lifecycle-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence/desktop-archive-lifecycle
+      - name: Download the installed core gate evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-desktop-installed-core-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence/desktop-installed-core
+      - name: Download the archive SBOM gate evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-desktop-archive-sbom-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence/desktop-archive-sbom
+      - name: Download the RPM lifecycle gate evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-desktop-rpm-lifecycle-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence/desktop-rpm-lifecycle
+      - name: Download the native payload fixture gate evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-desktop-native-payload-fixture-${{ env.TONGS_CHECKED_OUT_SHA }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate-evidence/desktop-native-payload-fixture
+      - name: Require the complete production check set and every receipt
+        run: >-
+          python3 tests/ci/verify_desktop_production_gate.py
+          --evidence-root "$RUNNER_TEMP/gate-evidence"
+          --commit "$TONGS_CHECKED_OUT_SHA"
+          --tree "${{ steps.identity.outputs.tree }}"
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+          --environment "$PRODUCTION_ENVIRONMENT"
+          --provenance "$PRODUCTION_PROVENANCE"
+          --event "$GITHUB_EVENT_NAME"
+          --pull-request-head "$PULL_REQUEST_HEAD"
+          --pull-request-base "$PULL_REQUEST_BASE"

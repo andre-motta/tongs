@@ -13,13 +13,10 @@ scan_root = "~/git"
 scan_depth = 5
 
 [editor]
-command = "nvim"
+command = "code --wait"
 external_editor_enabled = true
 
 [ui]
-theme = "monokai"
-diff_style = "unified"
-show_draft_mrs = true
 ascii_mode = false
 
 [cache]
@@ -47,19 +44,62 @@ forge_type = "gitlab"
 
 ## `[editor]`
 
+Both keys are read only by the desktop workspace
+(`src/tongs/services/workspace_utilities.py:205` and `:219`). The terminal
+interface does not read them. Its ++f2++ handlers read `$VISUAL`, then
+`$EDITOR`, and otherwise use the first of `nvim`, `vim`, `vi` or `nano` found on
+`PATH` (`src/tongs/widgets/comment_editor.py:348-356`); the pipeline log viewer
+uses the same order and also accepts `less`
+(`src/tongs/widgets/pipeline_panel.py:480-489`). Setting `command` therefore
+does not change which editor ++f2++ opens in the terminal.
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `command` | string | `""` (uses `$EDITOR`) | Editor command for external editing. Falls back to `$EDITOR` / `$VISUAL` if empty. |
-| `external_editor_enabled` | boolean | `true` | Whether ++f2++ opens an external editor from the comment editor. |
+| `command` | string | `""` | Editor command the desktop workspace starts for external editing. When empty, the desktop workspace falls back to `$VISUAL`, then `$EDITOR`. |
+| `external_editor_enabled` | boolean | `true` | Whether the desktop workspace offers external editing. When `false`, the desktop workspace reports external editor access as disabled. |
+
+!!! warning "Unreleased feature"
+
+    The rest of this section describes the desktop workspace, which is part of
+    the unreleased desktop initiative. There is no public desktop artifact,
+    production tag, or release install to download yet. See
+    [Desktop installation](../desktop/installation.md).
+
+Tongs Desktop appends a private, bounded log export path to the configured editor
+command and starts it without a shell. Configure a wait-capable graphical editor,
+for example `code --wait` or `kate --block`. Known terminal-only editor commands are
+reported as unsupported because they cannot attach to the desktop window. Wrapper
+commands must themselves start a suitable graphical editor and wait for it. If the
+editor process starts, Tongs reports that start separately from confirmation that
+the editor read the file.
+
+While the editor process runs, Tongs keeps the private export descriptor open so
+live cleanup can remove only that exact file. After 23 hours, the desktop process
+closes its descriptor and leaves the export and reservation in place. A later
+editor export attempt can reclaim the exact private tokenized export once its
+24-hour stale lease has elapsed. This scheduling assumes the desktop event loop
+resumes normally after system sleep. Closing Tongs never terminates the editor.
 
 ## `[ui]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `theme` | string | `"monokai"` | Pygments theme for syntax highlighting. Any valid Pygments style name works. |
-| `diff_style` | string | `"unified"` | Diff display style. |
-| `show_draft_mrs` | boolean | `true` | Whether draft/WIP merge requests appear in the inbox. |
 | `ascii_mode` | boolean | `false` | Use ASCII-only characters for borders and indicators. Enable this for minimal terminals that do not render Unicode box-drawing characters. |
+
+### Keys accepted but not used
+
+`theme`, `diff_style` and `show_draft_mrs` are still parsed and stored on the
+loaded configuration (`src/tongs/config.py:38-40`, read from the file at
+`:100-102`), so a `config.toml` that sets them keeps loading without error.
+No code reads the stored values, so setting these keys currently has no effect.
+They are listed here rather than dropped from the reference so that an existing
+configuration file that sets them is not mistaken for a broken one.
+
+| Key | Type | Default | What it does today |
+|-----|------|---------|--------------------|
+| `theme` | string | `"monokai"` | Nothing. Diff syntax highlighting always uses the `monokai` Pygments style, which is written directly into the diff panel (`src/tongs/widgets/diff_panel.py:1112` and `:1274`). |
+| `diff_style` | string | `"unified"` | Nothing. Unified and split rendering is chosen at runtime with the `v` key in the diff view (`src/tongs/widgets/diff_panel.py:1374`), and the choice is not persisted. |
+| `show_draft_mrs` | boolean | `true` | Nothing. No code filters the inbox by draft state, so draft merge requests are always listed. They are marked `D` in the inbox table (`src/tongs/widgets/mr_table.py:67`) and `DRAFT` in the MR detail header (`src/tongs/views/mr_detail.py:165`). |
 
 ## `[cache]`
 

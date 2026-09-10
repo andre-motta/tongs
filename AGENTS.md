@@ -1,34 +1,103 @@
 # tongs
 
-Terminal-native multi-forge MR/CI management TUI. Scans local git repos, detects GitHub/GitLab forges from remotes, and provides a unified interface for merge request review, inline commenting, and CI/CD pipeline management. Python 3.12+, Textual framework, async httpx transport.
+Terminal-first multi-forge MR/CI management with a Textual UI and an optional
+production Electron desktop UI. Both frontends use the same Python application
+services, forge clients, repository discovery, cache, and durable review drafts.
+Python 3.12+ is required for the core; building the desktop shell requires
+Node.js 22.12+.
+
+## Agent Workflow
+
+For substantial initiatives, use the installed `agent-sdlc` skill and read the
+[project SDLC profile](docs/SDLC.md), a repository-only document that is excluded
+from the published site. Roles are named by function, not by any vendor's
+model codename: an **orchestrator** owns architecture, scheduling, and
+integration; a **senior contributor** and a separate **senior reviewer** handle
+senior implementation and independent review; a **bounded contributor** handles
+well-specified assignments under senior review. Select actual runtime models and
+record the model and effort setting actually used. Keep small fixes proportional.
+
+The models selected for the desktop initiative are Claude Fable 5.1 as
+orchestrator, Claude Opus 5 at high effort for senior implementation and for the
+separate independent review, and Claude Sonnet 5 at xhigh effort for bounded
+work under that review. The role names are the contract; the model assignment is
+a current choice.
+
+For the desktop initiative, the orchestrator owns `feat/desktop-app`. Agents use
+isolated `feat/desktop-<issue>-<slug>` branches and PRs into that branch, with
+independent senior review and orchestrator integration. Every change is
+issue-tracked with explicit dependencies. Only the final feature PR goes to `main`
+for CTO review. Hardware GPU acceleration is a mandatory production and release
+gate; see the profile for evidence requirements.
+
+This file is the shared repository guide for coding agents; every agent that works in this repository reads it. Read `README.md` for product context and the relevant subsystem guides below before changing code. The `.agents/*/README.md` files are reference documentation to read explicitly.
+
+- Run commands from the current checkout or worktree root. Use its local `.venv`, including when a subsystem guide shows a machine-specific path.
+- Inspect `git status` before editing and preserve unrelated user changes.
+- When asked to work on another branch and then return, use a git worktree to keep the current checkout undisturbed.
+- Shell activation does not persist between tool calls. Activate the environment in each shell invocation that runs Python tools, or use `.venv/bin/python`, `.venv/bin/pytest`, and `.venv/bin/ruff` directly.
+- For code changes, run the relevant tests during development and the full suite plus lint and format checks before handing off. For documentation-only changes, check the diff, links, and command examples. Report checks that could not run and why.
 
 ## Tech Stack
 
-- **Framework:** Textual (TUI), Rich (syntax highlighting)
+- **Frontends:** Textual and Rich (terminal), Electron and React (desktop)
+- **Services:** shared `ApplicationSession`, typed read and mutation services, and durable review drafts
 - **HTTP:** httpx (async), no CLI subprocess per operation
 - **Config:** TOML via tomllib, platformdirs for cross-platform paths
 - **Build:** hatchling + hatch-vcs, `pip install -e ".[dev]"` for development
-- **Distribution:** `pipx install tongs` or `uvx tongs`
-- **Entry points:** `tongs` (TUI), `tongs-mcp` (MCP server)
-- **Plugins:** entry point group `tongs.plugins`, config via `[plugins.*]` TOML sections
-- **Docs:** MkDocs Material site at [tongs.tools](https://tongs.tools)
+- **Distribution:** `pipx install tongs`, `uvx tongs`, `uv tool install tongs`, or the unreleased Fedora RPMs `python3-tongs`, `python3-tongs+mcp` and `tongs-desktop`
+- **Entry points:** `tongs` (TUI), `tongs-mcp` (MCP server), `tongs desktop` and the `tongs --install-desktop` alias (per-user desktop lifecycle), and the RPM-owned `/usr/libexec/tongs-desktop` launcher
+- **Plugins:** independent `tongs.plugins` and `tongs.desktop_plugins` entry-point groups
+- **Docs:** MkDocs Material site at [www.tongs.tools](https://www.tongs.tools). `docs/SDLC.md`, `docs/site-plan.md` and `docs/work/` are excluded from the build and stay repository-only; everything else under `docs/` is published.
 
 ## Critical Rules
 
 ```bash
-# Always activate venv first
-source /home/alustosa/git/tongs/.venv/bin/activate
+# First-time setup from the checkout root, using Python 3.12+
+# Create the environment only if .venv is missing
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]" ruff
 
-# Run tests (no network access needed, all mocked)
+# For MCP development, also install the optional server dependency
+python -m pip install -e ".[dev,mcp]"
+
+# In later shell invocations, activate the existing environment first
+source .venv/bin/activate
+
+# Run tests (no network access needed; forge interactions are mocked)
 pytest
 
-# Lint before committing
+# Lint and check formatting
 ruff check src/ tests/
-ruff format src/ tests/
+ruff format --check src/ tests/
 
-# Install editable with dev deps
-pip install -e ".[dev]"
+# Apply formatting to changed Python files when needed
+# ruff format path/to/changed_file.py
+
+# Production desktop dependency install, build/type check, and tests
+npm ci --prefix desktop
+npm run build --prefix desktop
+TONGS_TEST_PYTHON="$(command -v python)" npm test --prefix desktop
 ```
+
+If using `uv`, create the environment with `uv venv --python 3.12`, activate it, and use `uv pip install` in place of `python -m pip install`. Dependency installation may need network access; the mocked tests do not. Ruff is installed explicitly because it is not currently included in the `dev` extra. The `mcp` extra is needed to run MCP tests instead of skipping them.
+
+The desktop test command builds and type-checks the production shell before
+running its Electron and renderer tests. Node checks need whole-process memory,
+swap, task, and time limits; native Electron needs the same OS-level guard but
+does not honor every Node heap option. Run them inside a `systemd-run --user`
+unit with a 1 GiB memory maximum, zero swap, a 64-task limit,
+`NODE_OPTIONS=--max-old-space-size=512`, `node --test --test-concurrency=1`, and
+an external deadline, asserting those effective limits from inside the guard
+before Node starts. Use the exact procedure in the
+[testing guide](.agents/testing/README.md). Never assert on a DOM node, because
+failure formatting walks jsdom recursively and allocates outside V8; assert
+text, attributes, counts, serialized payloads, and numeric rectangles instead.
+Never build a scratch worktree with the fix reverted to prove a test would have
+caught a bug: reason from the diff, because those runs are unbounded and are the
+usual cause of an out-of-memory kill. A successful headless test run is separate
+from native Fedora, GPU, installer, and release evidence.
 
 - `from __future__ import annotations` at the top of every module
 - Module-level imports unless function-level is necessary to avoid circular deps
@@ -37,62 +106,50 @@ pip install -e ".[dev]"
 - No em-dashes in text or commits
 - Use `-s` flag on `git commit` for sign-off (DCO)
 
+## Git Commits
+
+- For approved SDLC initiatives, contributors may create coherent signed-off local commits in their assigned worktrees without per-commit approval. For desktop work, assigned contributor branch pushes and PRs into `feat/desktop-app` are authorized; the orchestrator alone integrates. The final PR into `main` requires CTO acceptance before merge. Other initiatives retain their existing upstream gates. For other work, preserve the existing requirement to approve the full commit message before committing.
+- Include a one-line description body after the title, separated by a blank line, before any trailers.
+- Use `git commit -s` to add the sign-off automatically; do not write `Signed-off-by` manually.
+- When a model produced the commit, add a co-author trailer naming the vendor that actually produced it. Every agent working on this project runs on an Anthropic model, so the trailer is `Co-Authored-By: Claude <model> <noreply@anthropic.com>`, with the actual model name and no context-window annotation. Do not claim co-authorship by a vendor that did not produce the commit.
+
 ## Module Map
 
 ```
 src/tongs/
-  app.py              # TongsApp (Textual App), reactive state, discovery
-  commands.py          # TongsCommandProvider (command palette, context-aware discover/search, Clear Cache)
-  config.py            # TOML config loader, Config dataclass, platformdirs paths
-  errors.py            # ForgeError hierarchy + credential redaction
+  __main__.py              # CLI entry, argument routing, and desktop subcommand dispatch
+  app.py, tui_services.py  # Textual app and adapter over shared services
+  commands.py              # Textual command palette provider
+  config.py, errors.py, helpers.py  # TOML config, error/redaction types, shared helpers
+  services/                # Session-owned reads, mutations, drafts, CI, and utilities
+  scanner/                 # Local repository discovery and remote parsing
+  forges/                  # ForgeClient ABC, GitHub/GitLab clients, auth, and HTTP
+  cache/                   # SQLite response cache and CachedForgeClient
+  diff/, state/            # Diff models/conversion and terminal state/drafts
+  views/, widgets/         # Textual screens and reusable widgets
+  desktop/                 # Sidecar, bounded protocol, installer, artifacts, and assets
+  plugins/                 # Terminal registry and independent desktop provider SDK
+  mcp/                     # Separate FastMCP stdio server and first-party plugin
 
-  scanner/             # Repo discovery from filesystem
-    repo.py            # Repo, Remote, ForgeType dataclasses
-    remote.py          # Remote URL parsing (SSH/SCP/HTTPS), forge detection
-    discovery.py       # Filesystem walk, git remote reading, primary remote selection
+desktop/src/
+  main/                    # Electron lifecycle, sidecar, IPC, security, and utilities
+  preload/                 # Allowlisted context-isolated renderer bridge
+  renderer/                # React application, features, navigation, and presentation
+  shared/                  # Typed bridge, review, CI, and utility contracts
 
-  forges/              # Forge abstraction layer
-    base.py            # ForgeClient ABC (MR, comment, review, pipeline, commit ops; list_mr_pipelines, retry_pipeline, cancel_job, supports_job_cancel)
-    models.py          # Shared dataclasses (MRSummary, MRDetail, Pipeline, PipelineJob, Commit, etc.)
-    auth.py            # Token resolution cascade: CLI -> .netrc -> keyring -> error
-    http.py            # httpx transport: create_client, request, paginate, error mapping, rate limit auto-retry
-    gitlab.py          # GitLabClient implementation (API v4, /approvals endpoint for MR approvers)
-    github.py          # GitHubClient implementation (REST API, check-runs CI status, reviews API approvals)
-    registry.py        # ForgeRegistry: hostname -> authenticated ForgeClient, wraps in CachedForgeClient
+tests/
+  desktop/                 # Python protocol/installer plus Electron, renderer, and native fixtures
+  integration/desktop/     # Packaging, CI, artifact, and evidence integration checks
+  plugins/                 # Desktop provider contract, lifecycle, discovery, and resources
+  packaging/desktop/, packaging/rpm/  # Archive producer and Fedora RPM source checks
+  containers/, ci/         # Fedora 44 harness interface and CI evidence verifiers
+  fixtures/                # Shared recorded payloads used across suites
 
-  diff/                # Diff parsing engine (Phase 2)
-    models.py          # DiffFile, DiffHunk, DiffLine, LineType, FileStatus
-    parser.py          # Unified diff parser (plain + git format)
-    position.py        # DiffPosition, forge-specific position converters
-
-  state/               # App state management
-    app_state.py       # MRFilter, ReviewDraft dataclasses
-
-  widgets/             # Reusable Textual widgets
-    comment_editor.py  # CommentEditor (bottom-docked, general + inline + reply + reply_general modes, focus save/restore)
-    diff_panel.py      # DiffPanel (split-pane: DiffFileTree + DiffContent(DiffOptionList + Markdown)), discussion threading, jump_to_discussion()
-    discussion_list.py # DiscussionPanel (card-based discussion tab), DiscussionCard, render_diff_snippet(), JumpToDiffDiscussion/DiscussionReplyRequested messages
-    mr_table.py        # MRTable (DataTable subclass, setup_columns(show_repo) toggle, sort cycling via s key)
-    pipeline_panel.py  # PipelinePanel (three-level drill-down: pipelines -> jobs -> log), PipelineCard, JobCard, RichLog-based log viewer
-
-  cache/               # API response caching
-    store.py           # CacheStore: async SQLite (aiosqlite), TTL, LRU eviction, WAL mode, 0o600 perms
-    cached_client.py   # CachedForgeClient: wraps ForgeClient with SQLite cache on reads, invalidation on mutations
-
-  plugins/             # Plugin system (Phase 6)
-    base.py            # TongsPlugin ABC (name, version, get_commands, get_screens, lifecycle hooks via PluginContext)
-    context.py         # PluginContext: security facade exposing forge_registry, cache, config, repos, notify
-    registry.py        # PluginRegistry: entry point discovery, config filtering, graceful failure
-
-  mcp/                 # MCP server for AI agent integration
-    server.py          # FastMCP server, 6 tools (list_mrs, get_mr, get_mr_diff, post_comment, approve_mr, list_pipelines)
-    plugin.py          # MCPPlugin: first-party TongsPlugin, registers "Start MCP Server" command
-
-  views/               # Textual Screens
-    inbox.py           # InboxScreen: MR inbox with tabs (My Reviews/My MRs/All Open), supports scoped mode
-    repo_list.py       # RepoListScreen: searchable DataTable with live filter, forge cycling, sort cycling (s key)
-    mr_detail.py       # MRDetailScreen: tabbed MR detail (Overview/Diff/Discussion/Pipeline)
-    suggestion.py      # Pure helpers for suggestion comments (template, fence, forge-specific blocks)
+packaging/
+  desktop/archive/         # Reproducible per-user archive producer and contract
+  rpm/desktop/             # python-tongs and tongs-desktop SRPM sources and harness
+  rpm/python-dependencies/ # Companion Python RPM specs and manifest
+scripts/                   # Repository maintenance and evidence helpers
 ```
 
 ## Subsystem Guides
@@ -110,7 +167,41 @@ src/tongs/
 
 ## Development Status
 
-Phase 1 complete (scanner, forge layer, TUI shell, GitLab client). Phase 2 complete (diff parser, position mapping, MR detail/list screens, diff viewer widget). Phase 3 complete (GitHub REST API client, Commit model, commits tab in MR detail, scrollable overview with Markdown description, SSRF prevention, cross-fork safety). Phase 4 complete (inline discussion threads with expand/collapse/reply/resolve, command palette, comment navigation, parallel diff+discussions fetch, file tree with comment counts, footer cleanup with context-aware bindings, card-based Discussion tab with diff snippets and Rich Markdown threads, cross-tab jump-to-diff navigation, diff caching between tabs, GitLab system note filtering, CommentEditor focus restoration). Phase 5 complete (Pipeline/CI management with three-level drill-down: pipelines, jobs, log viewer; cancel/retry pipelines and jobs; RichLog-based ANSI log rendering; F2 open in editor; / search in log; list_mr_pipelines, retry_pipeline, cancel_job backend methods; supports_job_cancel capability property). Phase 6 complete (plugin system with TongsPlugin ABC, PluginRegistry with entry point discovery and config filtering, MCPPlugin as first-party plugin, plugin commands merged into command palette, `tongs.plugins` entry point group in pyproject.toml, PluginContext security facade). Phase 7 complete (CacheStore with aiosqlite/TTL/LRU/WAL/0o600 perms, CachedForgeClient wrapping forge clients with SQLite cache, GitHub GraphQL _graphql helper with resolve_discussion via mutations and supports_thread_resolution, MCP server with 6 read/comment/approve tools and tongs-mcp entry point, MkDocs Material site at tongs.tools). Phase 8 complete (GitHub CI status from check-runs API with concurrent fetch, GitHub approvals from reviews API, GitLab approvals from /approvals endpoint, rate limit auto-retry in http.py, keyring auth support as optional fallback, bulk Pygments highlighting via _build_highlight_map, batch add_options for diff rendering, truncated diff handling with placeholder DiffFile entries, sort cycling on MRTable and RepoListScreen via s key, Clear Cache command in palette, 618 tests).
+The terminal application, shared services, GitHub and GitLab backends, cache,
+durable review drafts, MCP server, production Electron shell, bounded sidecar
+protocol, desktop provider host, installer, and artifact contracts are
+implemented in this tree. `.github/workflows/ci.yml` currently requires Ruff,
+Python 3.12 and 3.13 core/MCP tests, desktop fixture and production shell tests,
+and the Fedora 44 Podman probe through `Desktop pre-merge aggregate`.
+
+`ci.yml` is not the only workflow that runs on a `feat/desktop-app` pull request.
+One more also triggers on that base:
+
+| Workflow | Trigger |
+|---|---|
+| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter, and pushes to either of its two named branches, `feat/desktop-app` and `feat/desktop-120-candidate-attestation` |
+
+`desktop-rpm.yml` (Desktop Fedora RPM), `desktop-python-rpms.yml` (Desktop Python
+companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are manual
+only (`workflow_dispatch`); the production gate's `rpm-lifecycle` and `archive` jobs
+prove the same source rebuild, companion closure, lifecycle and byte-identical
+rebuild against the receipt-bound fresh archive on every pull request.
+
+`docs.yml` deploys the site and runs `mkdocs build --strict`, but only on a push
+to `main` or a manual `workflow_dispatch`. No pull-request check builds the
+documentation, so run the strict build locally before submitting a `docs/` or
+`mkdocs.yml` change.
+
+`publish.yml` is the only workflow that runs on a tag: it matches `v*` and
+publishes to PyPI. Nothing listens for `desktop-v*`, and no workflow creates a
+GitHub Release. Tags match no `branches:` filter, so a tag push runs neither
+`ci.yml` nor `docs.yml`.
+
+That pre-merge aggregate is not the final production desktop release gate.
+Native Fedora/GPU proof, packaging and installer proof, candidate attestation,
+and final release assembly remain separate evidence and authority boundaries.
+Use issue dependencies and the current [SDLC profile](docs/SDLC.md), rather
+than phase labels or fixed test counts, to assess readiness.
 
 ## Gate Process
 

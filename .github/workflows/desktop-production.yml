@@ -1,0 +1,1111 @@
+name: Desktop production evidence
+
+# Reusable production stages for the desktop pre-merge gate.
+#
+# Ordinary CI calls this workflow so the archive, installed core, SBOM and RPM
+# lifecycle checks are mandatory instead of separately path filtered.  Every job
+# checks out one exact revision, verifies HEAD and its tree, and publishes one
+# issue #110 receipt whose identity the caller-owned aggregate validates
+# independently.
+#
+# For a pull request that revision is GitHub's synthetic merge commit, because
+# pre-merge combination testing is what gates integration.  The pull request
+# head and base are recorded beside it as clearly named metadata; nothing here
+# labels synthetic output as a contributor-head result.
+#
+# Nothing here signs anything: candidate signing stays in the trusted push
+# workflow, and no headless job may satisfy the physical GPU gate owned by
+# issue #55.
+
+on:
+  workflow_call:
+    inputs:
+      checked_out_sha:
+        description: Exact revision every job must check out and bind
+        required: true
+        type: string
+    outputs:
+      job-results:
+        description: Result of every production job, for the caller aggregate
+        value: ${{ jobs.production-results.outputs.job-results }}
+      source-tree:
+        description: Tree of the exact checked-out source
+        value: ${{ jobs.source-identity.outputs.tree }}
+  workflow_dispatch:
+    inputs:
+      checked_out_sha:
+        description: Exact revision every job must check out and bind
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+  PRODUCTION_ENVIRONMENT: github-hosted-ubuntu-24.04
+  PRODUCTION_PROVENANCE: hosted
+  NODE_OPTIONS: --max-old-space-size=512
+
+jobs:
+  source-identity:
+    name: Exact production source identity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      checked-out-commit: ${{ steps.identity.outputs.checked_out_commit }}
+      tree: ${{ steps.identity.outputs.tree }}
+      epoch: ${{ steps.identity.outputs.epoch }}
+      source-archive-sha256: ${{ steps.identity.outputs.source_archive_sha256 }}
+      event: ${{ steps.identity.outputs.event }}
+      pull-request-head: ${{ steps.identity.outputs.pull_request_head }}
+      pull-request-base: ${{ steps.identity.outputs.pull_request_base }}
+    steps:
+      - name: Check out the exact revision without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.checked_out_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Bind the checked-out commit and record its pull request metadata
+        id: identity
+        env:
+          PULL_REQUEST_HEAD: >-
+            ${{ github.event.pull_request.head.sha || 'not-a-pull-request' }}
+          PULL_REQUEST_BASE: >-
+            ${{ github.event.pull_request.base.sha || 'not-a-pull-request' }}
+        run: |
+          set -euo pipefail
+          checked_out_commit=$(git rev-parse HEAD)
+          test "$checked_out_commit" = "${{ inputs.checked_out_sha }}"
+          git diff --quiet
+          git diff --cached --quiet
+          tree=$(git rev-parse 'HEAD^{tree}')
+          epoch=$(git show -s --format=%ct "$checked_out_commit")
+          git archive --format=tar --output="$RUNNER_TEMP/source.tar" \
+            "$checked_out_commit"
+          digest=$(sha256sum "$RUNNER_TEMP/source.tar" | cut -d' ' -f1)
+          # A pull request checks out the synthetic merge commit on purpose, so
+          # the head must never be what was checked out.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            test "$PULL_REQUEST_HEAD" != "$checked_out_commit"
+          fi
+          {
+            printf 'checked_out_commit=%s\n' "$checked_out_commit"
+            printf 'tree=%s\n' "$tree"
+            printf 'epoch=%s\n' "$epoch"
+            printf 'source_archive_sha256=%s\n' "$digest"
+            printf 'event=%s\n' "$GITHUB_EVENT_NAME"
+            printf 'pull_request_head=%s\n' "$PULL_REQUEST_HEAD"
+            printf 'pull_request_base=%s\n' "$PULL_REQUEST_BASE"
+          } >> "$GITHUB_OUTPUT"
+          {
+            printf 'Checked out commit: %s\n\n' "$checked_out_commit"
+            printf 'Checked out tree: %s\n\n' "$tree"
+            printf 'Event: %s\n\n' "$GITHUB_EVENT_NAME"
+            printf 'Pull request head: %s\n\n' "$PULL_REQUEST_HEAD"
+            printf 'Pull request base: %s\n' "$PULL_REQUEST_BASE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  desktop-tap:
+    name: Production desktop TAP, plugin and draft process reports
+    needs: [source-identity]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CHECK_ID: desktop-production-tap
+      EVIDENCE_DIRECTORY: desktop-production-tap
+    steps:
+      - name: Check out the exact head without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.source-identity.outputs.checked-out-commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install the core, development, MCP and plugin example packages
+        run: |
+          python -m pip install -e ".[dev,mcp]"
+          python -m pip install ./examples/desktop-plugin
+      - name: Install and build the production Electron shell from the exact lock
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          npm ci --prefix desktop
+          npm run build --prefix desktop
+      - name: Prepare the bounded report directory and interpreter path
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/reports"
+          # The production sidecar transport rejects a relative interpreter, so
+          # this must be the absolute path rather than the bare name, matching
+          # the desktop fixture job in ci.yml.
+          interpreter=$(command -v python)
+          case "$interpreter" in
+            /*) ;;
+            *) echo "python is not an absolute path: $interpreter" >&2; exit 1 ;;
+          esac
+          printf 'TONGS_TEST_PYTHON=%s\n' "$interpreter" >> "$GITHUB_ENV"
+      - name: Run the production shell and renderer tests as TAP
+        working-directory: desktop
+        run: >-
+          node --test --test-concurrency=1 --test-reporter=tap
+          --test-reporter-destination="$RUNNER_TEMP/reports/desktop-shell.tap"
+          ../tests/desktop/electron/*.test.mjs
+          ../tests/desktop/renderer/*.test.mjs
+      - name: Show the failing cases when the TAP run fails
+        if: ${{ failure() }}
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/reports/desktop-shell.tap"
+          if [ ! -f "$report" ]; then
+            echo "no TAP report was produced"
+            exit 0
+          fi
+          echo "### failing cases"
+          grep -n -E "^ *not ok " "$report" || echo "no failing case line matched"
+          echo "### diagnostics"
+          grep -n -A 12 -E "^ *not ok " "$report" | head -200 || true
+          echo "### summary"
+          tail -12 "$report"
+      - name: Upload the raw production reports for diagnosis
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            desktop-production-tap-reports-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reports
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Run the plugin example and desktop plugin contract tests
+        run: >-
+          pytest examples/desktop-plugin/tests tests/plugins -v
+          --junitxml="$RUNNER_TEMP/reports/plugin-example.junit.xml"
+      - name: Run the draft and process acceptance tests
+        run: >-
+          pytest tests/integration/desktop/test_draft_process_acceptance.py -v
+          --junitxml="$RUNNER_TEMP/reports/draft-process.junit.xml"
+      - name: Describe the staged evidence for this check
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/stage-plan.json" <<PLAN
+          {
+            "check_id": "$CHECK_ID",
+            "report_path": "reports/desktop-tap-evidence.json",
+            "source_context": {
+              "event": "${{ needs.source-identity.outputs.event }}",
+              "pull_request_head": "${{ needs.source-identity.outputs.pull-request-head }}",
+              "pull_request_base": "${{ needs.source-identity.outputs.pull-request-base }}"
+            },
+            "scope": {
+              "covered": "production-electron-renderer-plugin-and-draft-process-reports",
+              "excluded": [
+                "hardware-gpu-function",
+                "installed-payload-bytes",
+                "rpm-package-set",
+                "signature-verification"
+              ]
+            },
+            "files": [
+              {
+                "kind": "report",
+                "path": "reports/desktop-shell.tap",
+                "source": "$RUNNER_TEMP/reports/desktop-shell.tap",
+                "format": "node-tap"
+              },
+              {
+                "kind": "report",
+                "path": "reports/plugin-example.junit.xml",
+                "source": "$RUNNER_TEMP/reports/plugin-example.junit.xml",
+                "format": "pytest-junit"
+              },
+              {
+                "kind": "report",
+                "path": "reports/draft-process.junit.xml",
+                "source": "$RUNNER_TEMP/reports/draft-process.junit.xml",
+                "format": "pytest-junit"
+              },
+              {
+                "kind": "input",
+                "path": "inputs/package-lock.json",
+                "source": "$GITHUB_WORKSPACE/desktop/package-lock.json"
+              }
+            ],
+            "stages": [
+              {
+                "name": "exact-lock-shell-build",
+                "evidence": ["inputs/package-lock.json"],
+                "observation": {"node": "${{ env.NODE_VERSION }}"}
+              },
+              {
+                "name": "production-shell-and-renderer-tap",
+                "evidence": ["reports/desktop-shell.tap"],
+                "observation": {"concurrency": "1"}
+              },
+              {
+                "name": "plugin-example-compatibility",
+                "evidence": ["reports/plugin-example.junit.xml"],
+                "observation": {}
+              },
+              {
+                "name": "draft-and-process-acceptance",
+                "evidence": ["reports/draft-process.junit.xml"],
+                "observation": {}
+              }
+            ],
+            "equalities": [],
+            "large_artifacts": []
+          }
+          PLAN
+      - name: Publish the desktop TAP receipt
+        run: >-
+          python tests/ci/desktop_stage_receipt.py publish
+          --source-root "$GITHUB_WORKSPACE"
+          --plan "$RUNNER_TEMP/stage-plan.json"
+          --output-root "$RUNNER_TEMP/gate/$EVIDENCE_DIRECTORY"
+          --receipt-name desktop-tap-receipt.json
+          --commit "${{ needs.source-identity.outputs.checked-out-commit }}"
+          --tree "${{ needs.source-identity.outputs.tree }}"
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+          --environment "$PRODUCTION_ENVIRONMENT"
+          --provenance "$PRODUCTION_PROVENANCE"
+          --check-id "$CHECK_ID"
+          --format artifact-lifecycle-v1
+          --format node-tap
+          --format pytest-junit
+      - name: Upload the desktop TAP gate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            gate-desktop-production-tap-${{ needs.source-identity.outputs.checked-out-commit
+            }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate/desktop-production-tap
+          if-no-files-found: error
+          retention-days: 14
+
+  archive:
+    name: Reproducible archive and unsigned transfer
+    needs: [source-identity]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact-name: ${{ steps.names.outputs.transfer_artifact }}
+      archive-sha256: ${{ steps.observe.outputs.archive_sha256 }}
+      release-manifest-sha256: ${{ steps.observe.outputs.release_manifest_sha256 }}
+      install-manifest-sha256: ${{ steps.observe.outputs.install_manifest_sha256 }}
+      license-inventory-sha256: ${{ steps.observe.outputs.license_inventory_sha256 }}
+    steps:
+      - name: Check out the exact head without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.source-identity.outputs.checked-out-commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Record the hosted producer environment
+        run: |
+          uname -a
+          podman version
+      - name: Name this run's retry-safe transfer artifact
+        id: names
+        run: >-
+          printf 'transfer_artifact=desktop-archive-transfer-%s-%s-%s\n'
+          "${{ needs.source-identity.outputs.checked-out-commit }}"
+          "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Build the archive twice in the pinned Fedora environment
+        env:
+          TONGS_HEAD_SHA: ${{ needs.source-identity.outputs.checked-out-commit }}
+        run: >-
+          packaging/desktop/archive/run_hosted.sh
+          --source-root "$GITHUB_WORKSPACE"
+          --output-dir "$RUNNER_TEMP/tongs-desktop-archive"
+      - name: Initialize an isolated transfer validation environment
+        run: |
+          set -euo pipefail
+          "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/transfer-venv"
+          printf 'TRANSFER_PYTHON=%s/transfer-venv/bin/python\n' "$RUNNER_TEMP" \
+            >> "$GITHUB_ENV"
+          printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
+      - name: Install the source-built transfer validator
+        run: >-
+          "$TRANSFER_PYTHON" -I -m pip install --isolated
+          --disable-pip-version-check -e .
+      - name: Freeze the complete source-bound producer output
+        run: |
+          set -euo pipefail
+          git archive --format=tar \
+            --output="$RUNNER_TEMP/candidate-source.tar" \
+            "${{ needs.source-identity.outputs.checked-out-commit }}"
+          "$TRANSFER_PYTHON" -I \
+            tests/integration/desktop/candidate_attestation.py prepare-transfer \
+            --root "$RUNNER_TEMP/tongs-desktop-archive" \
+            --source-archive "$RUNNER_TEMP/candidate-source.tar" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID" \
+            --ref "$GITHUB_REF" \
+            --source-commit "${{ needs.source-identity.outputs.checked-out-commit }}" \
+            --source-tree "${{ needs.source-identity.outputs.tree }}" \
+            --event "$GITHUB_EVENT_NAME" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Declare the producer output identities for downstream consumers
+        id: observe
+        run: |
+          set -euo pipefail
+          archive_dir="$RUNNER_TEMP/tongs-desktop-archive/archive"
+          name=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifacts"][0]["name"])' \
+            "$archive_dir/desktop-manifest-v1.json")
+          {
+            printf 'archive_sha256=%s\n' \
+              "$(sha256sum "$archive_dir/$name" | cut -d' ' -f1)"
+            printf 'release_manifest_sha256=%s\n' \
+              "$(sha256sum "$archive_dir/desktop-manifest-v1.json" | cut -d' ' -f1)"
+            printf 'install_manifest_sha256=%s\n' \
+              "$(sha256sum "$archive_dir/desktop-install.json" | cut -d' ' -f1)"
+            printf 'license_inventory_sha256=%s\n' \
+              "$(sha256sum "$archive_dir/license-inventory.json" | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Upload the immutable transfer root for this run and attempt
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.transfer_artifact }}
+          path: ${{ runner.temp }}/tongs-desktop-archive
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record the server artifact identity for the evidence index
+        run: |
+          set -euo pipefail
+          {
+            printf 'Transfer artifact: %s\n\n' \
+              "${{ steps.names.outputs.transfer_artifact }}"
+            printf 'Server artifact ID: %s\n\n' \
+              "${{ steps.upload.outputs.artifact-id }}"
+            printf 'Server artifact digest: %s\n\n' \
+              "${{ steps.upload.outputs.artifact-digest }}"
+            printf 'Desktop archive sha256: %s\n' \
+              "${{ steps.observe.outputs.archive_sha256 }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  archive-evidence:
+    name: Archive lifecycle receipt
+    needs: [source-identity, archive]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CHECK_ID: desktop-archive-lifecycle
+    steps:
+      - name: Require the producer job to have succeeded
+        run: test "${{ needs.archive.result }}" = "success"
+      - name: Check out the exact head without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.source-identity.outputs.checked-out-commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the source-built artifact contract package
+        run: python -m pip install -e .
+      - name: Download only this run's transfer artifact by its exact name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.archive.outputs.artifact-name }}
+          path: ${{ runner.temp }}/transfer
+      - name: Bind the downloaded archive into a lifecycle receipt
+        run: >-
+          python tests/ci/desktop_production_expectations.py archive-evidence
+          --mode produce
+          --source-root "$GITHUB_WORKSPACE"
+          --transfer-root "$RUNNER_TEMP/transfer"
+          --output-root "$RUNNER_TEMP/gate/$CHECK_ID"
+          --commit "${{ needs.source-identity.outputs.checked-out-commit }}"
+          --tree "${{ needs.source-identity.outputs.tree }}"
+          --source-archive-sha256
+          "${{ needs.source-identity.outputs.source-archive-sha256 }}"
+          --source-date-epoch "${{ needs.source-identity.outputs.epoch }}"
+          --archive-sha256 "${{ needs.archive.outputs.archive-sha256 }}"
+          --release-manifest-sha256
+          "${{ needs.archive.outputs.release-manifest-sha256 }}"
+          --install-manifest-sha256
+          "${{ needs.archive.outputs.install-manifest-sha256 }}"
+          --license-inventory-sha256
+          "${{ needs.archive.outputs.license-inventory-sha256 }}"
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+          --environment "$PRODUCTION_ENVIRONMENT"
+          --provenance "$PRODUCTION_PROVENANCE"
+          --check-id "$CHECK_ID"
+      - name: Upload the archive lifecycle gate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            gate-desktop-archive-lifecycle-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}-${{
+            github.run_attempt }}
+          path: ${{ runner.temp }}/gate/desktop-archive-lifecycle
+          if-no-files-found: error
+          retention-days: 14
+
+  installed-core:
+    name: Same-source noneditable installed core
+    needs: [source-identity]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CHECK_ID: desktop-installed-core
+    steps:
+      - name: Check out the exact head without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.source-identity.outputs.checked-out-commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build one ordinary wheel from the exact same source
+        id: wheel
+        run: |
+          set -euo pipefail
+          python -m pip install build
+          python -m build --wheel --outdir "$RUNNER_TEMP/wheel"
+          wheel=$(find "$RUNNER_TEMP/wheel" -maxdepth 1 -name '*.whl' -print)
+          test "$(printf '%s\n' "$wheel" | wc -l)" -eq 1
+          version=$(basename "$wheel" | cut -d- -f2)
+          {
+            printf 'path=%s\n' "$wheel"
+            printf 'sha256=%s\n' "$(sha256sum "$wheel" | cut -d' ' -f1)"
+            printf 'version=%s\n' "$version"
+          } >> "$GITHUB_OUTPUT"
+      - name: Install the wheel and audit the ordinary terminal startup
+        run: >-
+          python tests/integration/desktop/installed_core_composition.py
+          --core-wheel "${{ steps.wheel.outputs.path }}"
+          --expected-wheel-sha256 "${{ steps.wheel.outputs.sha256 }}"
+          --expected-core-version "${{ steps.wheel.outputs.version }}"
+          --expected-source-commit "${{ needs.source-identity.outputs.checked-out-commit }}"
+          --environment-root "$RUNNER_TEMP/installed-core-env"
+          --evidence-root "$RUNNER_TEMP/installed-core-evidence"
+          --source-root "$GITHUB_WORKSPACE"
+      - name: Describe the staged evidence for this check
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/installed-core-evidence"
+          cat > "$RUNNER_TEMP/stage-plan.json" <<PLAN
+          {
+            "check_id": "$CHECK_ID",
+            "report_path": "reports/installed-core-evidence.json",
+            "source_context": {
+              "event": "${{ needs.source-identity.outputs.event }}",
+              "pull_request_head": "${{ needs.source-identity.outputs.pull-request-head }}",
+              "pull_request_base": "${{ needs.source-identity.outputs.pull-request-base }}"
+            },
+            "scope": {
+              "covered": "fresh-noneditable-same-source-core-and-offline-terminal-startup",
+              "excluded": [
+                "hardware-gpu-function",
+                "native-desktop-startup",
+                "optional-mcp-package",
+                "rpm-installation",
+                "sidecar-restart-composition"
+              ]
+            },
+            "files": [
+              {
+                "kind": "input",
+                "path": "inputs/installed-core-terminal.json",
+                "source": "$evidence/installed-core-terminal.json"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/core.whl",
+                "source": "${{ steps.wheel.outputs.path }}",
+                "role": "installed-core-wheel"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/installed-core-terminal.txt",
+                "source": "$evidence/installed-core-terminal.txt",
+                "role": "installed-core-terminal-text"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/installed-core-audit.jsonl",
+                "source": "$evidence/installed-core-audit.jsonl",
+                "role": "installed-core-startup-audit"
+              }
+            ],
+            "stages": [
+              {
+                "name": "source-admission",
+                "evidence": ["inputs/installed-core-terminal.json"],
+                "observation": {
+                  "core_version": "${{ steps.wheel.outputs.version }}"
+                }
+              },
+              {
+                "name": "wheel-record-install-identity",
+                "evidence": ["artifacts/core.whl"],
+                "observation": {
+                  "wheel_sha256": "${{ steps.wheel.outputs.sha256 }}"
+                }
+              },
+              {
+                "name": "offline-startup-audit",
+                "evidence": ["artifacts/installed-core-audit.jsonl"],
+                "observation": {}
+              },
+              {
+                "name": "terminal-evidence",
+                "evidence": ["artifacts/installed-core-terminal.txt"],
+                "observation": {}
+              }
+            ],
+            "equalities": [],
+            "large_artifacts": []
+          }
+          PLAN
+      - name: Publish the installed core receipt
+        run: >-
+          python tests/ci/desktop_stage_receipt.py publish
+          --source-root "$GITHUB_WORKSPACE"
+          --plan "$RUNNER_TEMP/stage-plan.json"
+          --output-root "$RUNNER_TEMP/gate/$CHECK_ID"
+          --receipt-name installed-core-receipt.json
+          --commit "${{ needs.source-identity.outputs.checked-out-commit }}"
+          --tree "${{ needs.source-identity.outputs.tree }}"
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+          --environment "$PRODUCTION_ENVIRONMENT"
+          --provenance "$PRODUCTION_PROVENANCE"
+          --check-id "$CHECK_ID"
+          --format artifact-lifecycle-v1
+      - name: Upload the installed core gate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            gate-desktop-installed-core-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}-${{
+            github.run_attempt }}
+          path: ${{ runner.temp }}/gate/desktop-installed-core
+          if-no-files-found: error
+          retention-days: 14
+
+  archive-sbom:
+    name: Archive SBOM receipt
+    needs: [source-identity, archive, archive-evidence]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CHECK_ID: desktop-archive-sbom
+    steps:
+      - name: Require the producer and archive evidence jobs to have succeeded
+        run: |
+          test "${{ needs.archive.result }}" = "success"
+          test "${{ needs.archive-evidence.result }}" = "success"
+      - name: Check out the exact head without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.source-identity.outputs.checked-out-commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the source-built SPDX generator dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Download only this run's transfer artifact by its exact name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.archive.outputs.artifact-name }}
+          path: ${{ runner.temp }}/transfer
+      - name: Download only this run's archive lifecycle receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: >-
+            gate-desktop-archive-lifecycle-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}-${{
+            github.run_attempt }}
+          path: ${{ runner.temp }}/archive-gate
+      - name: Generate, reproduce and receipt the archive SBOM
+        run: >-
+          python tests/ci/desktop_production_expectations.py archive-sbom
+          --mode produce
+          --source-root "$GITHUB_WORKSPACE"
+          --transfer-root "$RUNNER_TEMP/transfer"
+          --archive-receipt "$RUNNER_TEMP/archive-gate/archive-receipt.json"
+          --output-root "$RUNNER_TEMP/gate/$CHECK_ID"
+          --commit "${{ needs.source-identity.outputs.checked-out-commit }}"
+          --tree "${{ needs.source-identity.outputs.tree }}"
+          --source-archive-sha256
+          "${{ needs.source-identity.outputs.source-archive-sha256 }}"
+          --source-date-epoch "${{ needs.source-identity.outputs.epoch }}"
+          --archive-sha256 "${{ needs.archive.outputs.archive-sha256 }}"
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+          --environment "$PRODUCTION_ENVIRONMENT"
+          --provenance "$PRODUCTION_PROVENANCE"
+          --check-id "$CHECK_ID"
+      - name: Upload the archive SBOM gate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            gate-desktop-archive-sbom-${{ needs.source-identity.outputs.checked-out-commit
+            }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate/desktop-archive-sbom
+          if-no-files-found: error
+          retention-days: 14
+
+  rpm-lifecycle:
+    name: Fresh archive to RPM payload contract and full lifecycle
+    needs: [source-identity, archive, archive-evidence]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CHECK_ID: desktop-rpm-lifecycle
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require the producer and archive evidence jobs to have succeeded
+        run: |
+          test "${{ needs.archive.result }}" = "success"
+          test "${{ needs.archive-evidence.result }}" = "success"
+      - name: Check out the exact head without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.source-identity.outputs.checked-out-commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the source-built payload contract dependencies
+        # rpm_payload_contract.py loads packaging/rpm/desktop/package_contract.py,
+        # which needs packaging.version.  Nothing else in this job installs it.
+        run: python -m pip install -e .
+      - name: Record the hosted runner, Podman and gh versions
+        run: |
+          uname -a
+          podman version
+          gh version
+      - name: Download only this run's transfer artifact by its exact name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.archive.outputs.artifact-name }}
+          path: ${{ runner.temp }}/transfer
+      - name: Materialize the exact-mode payload contract from this archive
+        run: >-
+          python tests/integration/desktop/rpm_payload_contract.py
+          --archive-dir "$RUNNER_TEMP/transfer/archive"
+          --output "$RUNNER_TEMP/payload-input-contract.json"
+          --source-commit "${{ needs.source-identity.outputs.checked-out-commit }}"
+          --artifact-id "${{ needs.archive.outputs.artifact-id }}"
+          --artifact-name "${{ needs.archive.outputs.artifact-name }}"
+          --run-id "$GITHUB_RUN_ID"
+      - name: Rebuild the source RPMs and run the full package lifecycle
+        env:
+          TONGS_HEAD_SHA: ${{ needs.source-identity.outputs.checked-out-commit }}
+        run: >-
+          packaging/rpm/desktop/run_hosted.sh
+          --output-dir "$RUNNER_TEMP/tongs-desktop-rpm"
+          --accepted-dir "$RUNNER_TEMP/transfer/archive"
+          --payload-manifest "$RUNNER_TEMP/payload-input-contract.json"
+      - name: Describe the staged evidence for this check
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/tongs-desktop-rpm"
+          install="$output/install"
+          cat > "$RUNNER_TEMP/stage-plan.json" <<PLAN
+          {
+            "check_id": "$CHECK_ID",
+            "report_path": "reports/rpm-lifecycle-evidence.json",
+            "source_context": {
+              "event": "${{ needs.source-identity.outputs.event }}",
+              "pull_request_head": "${{ needs.source-identity.outputs.pull-request-head }}",
+              "pull_request_base": "${{ needs.source-identity.outputs.pull-request-base }}"
+            },
+            "scope": {
+              "covered": "hosted-fedora-44-source-rebuild-and-package-lifecycle",
+              "excluded": [
+                "hardware-gpu-function",
+                "native-host-rpm-installation",
+                "per-user-archive-payload",
+                "signature-verification"
+              ]
+            },
+            "files": [
+              {
+                "kind": "input",
+                "path": "inputs/payload-input-contract.json",
+                "source": "$output/payload-input-contract.json"
+              },
+              {
+                "kind": "input",
+                "path": "inputs/prepared-inputs.json",
+                "source": "$output/prepared/prepared-inputs.json"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/ALL-SHA256SUMS",
+                "source": "$output/ALL-SHA256SUMS",
+                "role": "rpm-complete-evidence-inventory"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/companion-rpm-selection.json",
+                "source": "$output/companion-rpm-selection.json",
+                "role": "rpm-companion-selection"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/clean-final.json",
+                "source": "$install/clean-final.json",
+                "role": "rpm-clean-final-state"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/upgraded-final.json",
+                "source": "$install/upgraded-final.json",
+                "role": "rpm-upgraded-final-state"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/before-mcp.json",
+                "source": "$install/before-mcp.json",
+                "role": "rpm-state-before-mcp"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/after-mcp-removal.json",
+                "source": "$install/after-mcp-removal.json",
+                "role": "rpm-state-after-mcp-removal"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/before-reinstall.json",
+                "source": "$install/before-reinstall.json",
+                "role": "rpm-state-before-reinstall"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/after-reinstall.json",
+                "source": "$install/after-reinstall.json",
+                "role": "rpm-state-after-reinstall"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/installed-previous.json",
+                "source": "$install/installed-previous.json",
+                "role": "rpm-previous-installed-state"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/after-corrupt-failure.json",
+                "source": "$install/after-corrupt-failure.json",
+                "role": "rpm-state-after-corrupt-rejection"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/after-dependency-failure.json",
+                "source": "$install/after-dependency-failure.json",
+                "role": "rpm-state-after-dependency-rejection"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/installed-payload.json",
+                "source": "$install/installed-payload.json",
+                "role": "rpm-installed-payload"
+              },
+              {
+                "kind": "artifact",
+                "path": "artifacts/final-uninstall-absence.json",
+                "source": "$install/final-uninstall-absence.json",
+                "role": "rpm-final-uninstall-absence"
+              }
+            ],
+            "stages": [
+              {
+                "name": "exact-payload-pairing",
+                "evidence": [
+                  "inputs/payload-input-contract.json",
+                  "inputs/prepared-inputs.json"
+                ],
+                "observation": {"pairing_mode": "exact"}
+              },
+              {
+                "name": "companion-closure-and-source-rebuild",
+                "evidence": ["artifacts/companion-rpm-selection.json"],
+                "observation": {}
+              },
+              {
+                "name": "clean-install-and-installed-payload",
+                "evidence": [
+                  "artifacts/clean-final.json",
+                  "artifacts/installed-payload.json"
+                ],
+                "observation": {}
+              },
+              {
+                "name": "optional-mcp-install-and-removal",
+                "evidence": [
+                  "artifacts/before-mcp.json",
+                  "artifacts/after-mcp-removal.json"
+                ],
+                "observation": {}
+              },
+              {
+                "name": "reinstall-stability",
+                "evidence": [
+                  "artifacts/before-reinstall.json",
+                  "artifacts/after-reinstall.json"
+                ],
+                "observation": {}
+              },
+              {
+                "name": "corrupt-and-dependency-rejection",
+                "evidence": [
+                  "artifacts/installed-previous.json",
+                  "artifacts/after-corrupt-failure.json",
+                  "artifacts/after-dependency-failure.json"
+                ],
+                "observation": {}
+              },
+              {
+                "name": "upgrade-byte-parity",
+                "evidence": ["artifacts/upgraded-final.json"],
+                "observation": {}
+              },
+              {
+                "name": "complete-uninstall",
+                "evidence": [
+                  "artifacts/final-uninstall-absence.json",
+                  "artifacts/ALL-SHA256SUMS"
+                ],
+                "observation": {}
+              }
+            ],
+            "equalities": [
+              {
+                "left": "artifacts/clean-final.json",
+                "right": "artifacts/upgraded-final.json",
+                "reason": "a clean final install must equal the upgraded final install"
+              },
+              {
+                "left": "artifacts/before-mcp.json",
+                "right": "artifacts/after-mcp-removal.json",
+                "reason": "removing optional MCP must restore the base package state"
+              },
+              {
+                "left": "artifacts/before-reinstall.json",
+                "right": "artifacts/after-reinstall.json",
+                "reason": "reinstalling must leave the package and sentinel bytes stable"
+              },
+              {
+                "left": "artifacts/installed-previous.json",
+                "right": "artifacts/after-corrupt-failure.json",
+                "reason": "a rejected corrupt package must not change the installed state"
+              },
+              {
+                "left": "artifacts/installed-previous.json",
+                "right": "artifacts/after-dependency-failure.json",
+                "reason": "a rejected dependency upgrade must not change the installed state"
+              }
+            ],
+            "large_artifacts": []
+          }
+          PLAN
+      - name: Publish the RPM lifecycle receipt
+        run: >-
+          python tests/ci/desktop_stage_receipt.py publish
+          --source-root "$GITHUB_WORKSPACE"
+          --plan "$RUNNER_TEMP/stage-plan.json"
+          --output-root "$RUNNER_TEMP/gate/$CHECK_ID"
+          --receipt-name rpm-lifecycle-receipt.json
+          --commit "${{ needs.source-identity.outputs.checked-out-commit }}"
+          --tree "${{ needs.source-identity.outputs.tree }}"
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+          --environment "$PRODUCTION_ENVIRONMENT"
+          --provenance "$PRODUCTION_PROVENANCE"
+          --check-id "$CHECK_ID"
+          --format artifact-lifecycle-v1
+      - name: Upload the RPM lifecycle gate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            gate-desktop-rpm-lifecycle-${{ needs.source-identity.outputs.checked-out-commit
+            }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gate/desktop-rpm-lifecycle
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the complete RPM producer output for diagnosis
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            fedora-44-tongs-rpms-${{ needs.source-identity.outputs.checked-out-commit }}-${{
+            github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tongs-desktop-rpm
+          if-no-files-found: error
+          retention-days: 14
+
+  native-payload:
+    name: Native payload verifier fixture checks
+    needs: [source-identity]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CHECK_ID: desktop-native-payload-fixture
+    steps:
+      - name: Check out the exact head without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.source-identity.outputs.checked-out-commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the core and development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run the native payload verifier fixture checks
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/reports"
+          pytest tests/integration/desktop/test_native_payload_acceptance.py -v \
+            --junitxml="$RUNNER_TEMP/reports/native-payload.junit.xml"
+      - name: Describe the staged evidence for this check
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/stage-plan.json" <<PLAN
+          {
+            "check_id": "$CHECK_ID",
+            "report_path": "reports/native-payload-evidence.json",
+            "source_context": {
+              "event": "${{ needs.source-identity.outputs.event }}",
+              "pull_request_head": "${{ needs.source-identity.outputs.pull-request-head }}",
+              "pull_request_base": "${{ needs.source-identity.outputs.pull-request-base }}"
+            },
+            "scope": {
+              "covered": "native-payload-verifier-structure-on-controlled-fixtures",
+              "excluded": [
+                "hardware-gpu-function",
+                "installed-payload-observation",
+                "physical-host-execution",
+                "rpm-payload-layout"
+              ]
+            },
+            "files": [
+              {
+                "kind": "report",
+                "path": "reports/native-payload.junit.xml",
+                "source": "$RUNNER_TEMP/reports/native-payload.junit.xml",
+                "format": "pytest-junit"
+              }
+            ],
+            "stages": [
+              {
+                "name": "verifier-fixture-structure",
+                "evidence": ["reports/native-payload.junit.xml"],
+                "observation": {
+                  "gpu_gate": "not-satisfied",
+                  "gpu_gate_owner": "issue-55",
+                  "runner": "headless-hosted"
+                }
+              }
+            ],
+            "equalities": [],
+            "large_artifacts": []
+          }
+          PLAN
+      - name: Publish the native payload fixture receipt
+        run: >-
+          python tests/ci/desktop_stage_receipt.py publish
+          --source-root "$GITHUB_WORKSPACE"
+          --plan "$RUNNER_TEMP/stage-plan.json"
+          --output-root "$RUNNER_TEMP/gate/$CHECK_ID"
+          --receipt-name native-payload-receipt.json
+          --commit "${{ needs.source-identity.outputs.checked-out-commit }}"
+          --tree "${{ needs.source-identity.outputs.tree }}"
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+          --environment "$PRODUCTION_ENVIRONMENT"
+          --provenance "$PRODUCTION_PROVENANCE"
+          --check-id "$CHECK_ID"
+          --format artifact-lifecycle-v1
+          --format pytest-junit
+      - name: Upload the native payload gate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            gate-desktop-native-payload-fixture-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}-${{
+            github.run_attempt }}
+          path: ${{ runner.temp }}/gate/desktop-native-payload-fixture
+          if-no-files-found: error
+          retention-days: 14
+
+  production-results:
+    name: Publish production job results
+    if: ${{ always() }}
+    needs:
+      - source-identity
+      - desktop-tap
+      - archive
+      - archive-evidence
+      - installed-core
+      - archive-sbom
+      - rpm-lifecycle
+      - native-payload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      job-results: ${{ steps.results.outputs.results }}
+    env:
+      PRODUCTION_JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Forward the inner job results to the caller aggregate
+        id: results
+        run: |
+          set -euo pipefail
+          {
+            printf 'results<<PRODUCTION_RESULTS_EOF\n'
+            printf '%s\n' "$PRODUCTION_JOB_RESULTS"
+            printf 'PRODUCTION_RESULTS_EOF\n'
+          } >> "$GITHUB_OUTPUT"

@@ -1,0 +1,55 @@
+{
+  "captured_on": "2026-09-08",
+  "capture_base_commit": "7414a4b10b47eb01a38bcad5d6280229640c26fa",
+  "pytest": {
+    "python_version": "3.12.14",
+    "pytest_version": "9.1.1",
+    "commands": [
+      ".venv/bin/python -m pytest -q tests/integration/desktop/fixtures/desktop_test_reports_pytest_sample.py --junitxml=tests/integration/desktop/fixtures/desktop_test_reports_pytest_pass.xml",
+      ".venv/bin/python -m pytest -q tests/integration/desktop/fixtures/desktop_test_reports_pytest_failure_sample.py --junitxml=tests/integration/desktop/fixtures/desktop_test_reports_pytest_nonpassing.xml"
+    ],
+    "expected_exit_codes": [0, 1],
+    "files": {
+      "desktop_test_reports_pytest_sample.py": "49577ef6679c3067ae0bb399fd243bf5b5e9c6fcc2121a0ab37a5fd8a5626149",
+      "desktop_test_reports_pytest_pass.xml": "b1830b480c051e3331d498fa6ae18ac85483d4e92c046cca751a9a226626802f",
+      "desktop_test_reports_pytest_failure_sample.py": "3f00edd62c57a8ef2e38f5f4592129816a0410689ec73d0d22e0a96d78ef2f46",
+      "desktop_test_reports_pytest_nonpassing.xml": "1d6766368dcbafe84a6cfe81e3b304f6e7bc9251338dc61f942acd121dd22b1f"
+    }
+  },
+  "node": {
+    "version": "v22.23.1",
+    "commands": [
+      "node --test --test-concurrency=1 tests/integration/desktop/fixtures/desktop_test_reports_node_sample.mjs > tests/integration/desktop/fixtures/desktop_test_reports_node_pass.tap",
+      "node --test --test-concurrency=1 tests/integration/desktop/fixtures/desktop_test_reports_node_nonpassing_sample.mjs > tests/integration/desktop/fixtures/desktop_test_reports_node_nonpassing.tap"
+    ],
+    "expected_exit_codes": [0, 1],
+    "guard": {
+      "external_deadline_seconds": 30,
+      "memory_max_bytes": 1073741824,
+      "memory_swap_max_bytes": 0,
+      "tasks_max": 64,
+      "node_options": "--max-old-space-size=512",
+      "test_concurrency": 1,
+      "units": [
+        {
+          "name": "tongs-115-emit-fixtures-7414.service",
+          "outputs": ["desktop_test_reports_node_pass.tap"],
+          "result": "success",
+          "memory_peak": "31.2M"
+        },
+        {
+          "name": "tongs-115-emit-nonpassing-7414.service",
+          "outputs": ["desktop_test_reports_node_nonpassing.tap"],
+          "result": "success",
+          "memory_peak": "30.9M"
+        }
+      ]
+    },
+    "files": {
+      "desktop_test_reports_node_sample.mjs": "9db69a6acd2962d8d75a5992e642b1efd5dea0276262046eb652fe67d7374f73",
+      "desktop_test_reports_node_pass.tap": "6c9d01416cf0945ffb76e8ac6a9e46c5d34cbfbc44f1bb191e0bfff5711bf884",
+      "desktop_test_reports_node_nonpassing_sample.mjs": "66be71db070e10f3c73cf0774c76bac27b1b2e8fdff4a6323913101715b3d444",
+      "desktop_test_reports_node_nonpassing.tap": "6f3510c55ff1463722a1ef2c2f4bb4203621c073dbe3d95be9f230e3cf206a8f"
+    }
+  }
+}

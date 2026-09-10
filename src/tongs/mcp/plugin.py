@@ -4,8 +4,17 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from importlib.util import find_spec
 
 from tongs.plugins.base import TongsPlugin
+
+
+def _mcp_available() -> bool:
+    """Return whether the optional MCP server dependency can be imported."""
+    try:
+        return find_spec("mcp.server.fastmcp") is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
 
 
 class MCPPlugin(TongsPlugin):
@@ -20,6 +29,8 @@ class MCPPlugin(TongsPlugin):
         return "0.2.0"
 
     def get_commands(self) -> list[tuple[str, str, object]]:
+        if not _mcp_available():
+            return []
         return [
             (
                 "Start MCP Server",
@@ -29,6 +40,8 @@ class MCPPlugin(TongsPlugin):
         ]
 
     def _start_server(self) -> None:
+        if not _mcp_available():
+            raise RuntimeError("the optional MCP dependency is not installed")
         subprocess.Popen(
             [sys.executable, "-m", "tongs.mcp.server"],
             stdout=subprocess.DEVNULL,

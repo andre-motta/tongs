@@ -1,8 +1,17 @@
 site_name: tongs
 site_description: Terminal-native code review across GitHub and GitLab
-site_url: https://tongs.tools
+site_url: https://www.tongs.tools/
 repo_url: https://github.com/andre-motta/tongs
 repo_name: andre-motta/tongs
+
+# Everything under docs/ is published by .github/workflows/docs.yml on push to
+# main. These records are internal project material and stay in the repository
+# without being built, indexed, or listed in sitemap.xml. Nothing published may
+# link into them.
+exclude_docs: |
+  SDLC.md
+  site-plan.md
+  work/
 
 extra_css:
   - stylesheets/extra.css
@@ -58,6 +67,14 @@ nav:
       - Discussions: guides/discussions.md
       - Pipelines: guides/pipelines.md
       - Plugins: guides/plugins.md
+  - Desktop:
+      - Installation: desktop/installation.md
+      - Workspace: desktop/workspace.md
+      - Plugin providers: plugins/provider.md
+      - Troubleshooting: desktop/troubleshooting.md
+      - Known limitations: desktop/known-limitations.md
   - Reference:
       - Keybindings: reference/keybindings.md
       - Configuration: reference/configuration.md
+      - Security and signing: reference/security.md
+  - Contributing: contributing.md

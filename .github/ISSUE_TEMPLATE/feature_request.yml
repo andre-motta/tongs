@@ -40,21 +40,36 @@ body:
       required: false
 
   - type: dropdown
-    id: roadmap-phase
+    id: interface
     attributes:
-      label: Related roadmap phase
-      description: Which phase from the README roadmap does this relate to?
+      label: Interface
+      description: Which interface would this feature live in?
       options:
-        - "Phase 1: Scanner, forge abstraction, TUI shell"
-        - "Phase 2: Diff viewer, inline comments"
-        - "Phase 3: MR actions (approve, merge, close)"
-        - "Phase 4: Pipeline/CI management"
-        - "Phase 5: GitHub client"
-        - "Phase 6: Plugins, MCP server"
-        - "Phase 7: Neovim integration, advanced features"
-        - "Not phase-specific / new idea"
+        - Terminal interface (TUI)
+        - MCP server plugin
+        - Desktop workspace (unreleased, built from source)
+        - Not interface-specific
     validations:
       required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the codebase would this most likely touch?
+      options:
+        - scanner
+        - forges
+        - tui
+        - diff
+        - cache
+        - plugins
+        - mcp
+        - services
+        - desktop
+        - Not sure
+    validations:
+      required: false
 
   - type: textarea
     id: extra

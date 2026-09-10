@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tongs.tools/schemas/desktop-release-manifest-v1.schema.json",
+  "title": "Tongs desktop release manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_version",
+    "source_commit",
+    "compatibility",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "release_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "compatibility": {
+      "$ref": "#/$defs/compatibility"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operating_system",
+        "architecture",
+        "distribution",
+        "distribution_version",
+        "abi"
+      ],
+      "properties": {
+        "operating_system": {
+          "enum": [
+            "linux",
+            "macos",
+            "windows"
+          ]
+        },
+        "architecture": {
+          "enum": [
+            "x86_64",
+            "aarch64"
+          ]
+        },
+        "distribution": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        },
+        "distribution_version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        },
+        "abi": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core_minimum",
+        "core_maximum_exclusive",
+        "rpc_api_major",
+        "plugin_api_major"
+      ],
+      "properties": {
+        "core_minimum": {
+          "$ref": "#/$defs/semver"
+        },
+        "core_maximum_exclusive": {
+          "$ref": "#/$defs/semver"
+        },
+        "rpc_api_major": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
+        },
+        "plugin_api_major": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_entries",
+        "max_total_bytes",
+        "max_file_bytes",
+        "max_path_bytes"
+      ],
+      "properties": {
+        "max_entries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "max_total_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8589934592
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483648
+        },
+        "max_path_bytes": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 1024
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "name",
+        "package_kind",
+        "ownership",
+        "platform",
+        "byte_count",
+        "sha256",
+        "extraction_limits"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^(?!\\.\\.?$)[^/\\\\\\u0000-\\u001f]+$"
+        },
+        "package_kind": {
+          "enum": [
+            "user-archive",
+            "rpm"
+          ]
+        },
+        "ownership": {
+          "enum": [
+            "per-user",
+            "system"
+          ]
+        },
+        "platform": {
+          "$ref": "#/$defs/platform"
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8589934592
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "extraction_limits": {
+          "$ref": "#/$defs/limits"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "package_kind": {
+                "const": "user-archive"
+              }
+            },
+            "required": [
+              "package_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ownership": {
+                "const": "per-user"
+              },
+              "name": {
+                "pattern": "\\.tar\\.gz$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "package_kind": {
+                "const": "rpm"
+              }
+            },
+            "required": [
+              "package_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ownership": {
+                "const": "system"
+              },
+              "name": {
+                "pattern": "\\.rpm$"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

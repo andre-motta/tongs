@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["tui", "git", "gitlab", "github", "merge-request", "pull-request", "code-review"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -32,21 +32,30 @@ dependencies = [
     "platformdirs>=4.0",
     "pyperclip>=1.8",
     "aiosqlite>=0.20",
+    "packaging>=24.0",
+    "sigstore>=4.5,<5",
 ]
 
 [project.optional-dependencies]
 keyring = ["keyring>=25.0"]
-mcp = ["mcp[cli]>=1.0"]
+mcp = ["mcp[cli]>=1.0,<2"]
 fleet = ["claude-fleet-monitor>=0.1"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    "mkdocs-material>=9.0",
+    "jsonschema>=4.18,<5",
+    "mkdocs-material==9.7.7",
+    "mkdocs==1.6.1",
+    # Required by tests/ci/test_production_workflow_contract.py, which parses
+    # the workflows to catch drift between them and the gate's constants.  It
+    # must be a declared dependency rather than a transitive one, because a
+    # skipped test would itself fail the gate's no-skip rule.
+    "pyyaml>=6.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/andre-motta/tongs"
-Documentation = "https://tongs.tools"
+Documentation = "https://www.tongs.tools"
 Repository = "https://github.com/andre-motta/tongs"
 Issues = "https://github.com/andre-motta/tongs/issues"
 
@@ -62,3 +71,6 @@ source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tongs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

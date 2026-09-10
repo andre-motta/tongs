@@ -1,5 +1,19 @@
 # Diff
 
+## Frontend boundaries
+
+Forge clients return change dictionaries. `ApplicationSession.get_raw_diff()`
+binds those changes to a `ReviewRevision` without selecting a UI format. The
+terminal calls `TUIServiceAdapter.get_diff()`, which converts them through
+`src/tongs/diff/conversion.py` to the models below. The desktop protocol projects
+the same admitted snapshot through
+`src/tongs/desktop/protocol/diff_projection.py` into bounded unified or split
+rows and serves them from expiring connection-local paging snapshots.
+
+Inline mutations must retain the revision and service-issued review identity
+that produced the displayed lines. Neither frontend should reconstruct a forge
+mutation target from a path or line number alone.
+
 ## Parser Design
 
 `src/tongs/diff/parser.py` parses unified diff text into structured objects. It is forge-agnostic; both GitHub and GitLab produce standard unified diff format.
@@ -63,7 +77,7 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 
 ## Models
 
-`src/tongs/diff/models.py` defines three frozen dataclasses:
+`src/tongs/diff/models.py` defines four frozen dataclasses:
 
 **DiffLine:**
 - `old_lineno: int | None` -- line number in old file (None for additions)
@@ -84,14 +98,34 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 - `additions`, `deletions` -- computed counts
 - `is_binary: bool`
 - `language: str` -- detected from file extension
+- `is_truncated`, `is_empty`, `is_mode_only`, `is_rename_only`,
+  `is_unavailable` -- explicit reasons a forge-described file has incomplete or
+  absent content hunks. The states derived from a payload are mutually
+  exclusive; a state the forge reports explicitly is passed through as reported,
+  so an explicit `is_empty`, `too_large` or mode signal can still set two of
+  these at once. No real GitHub or GitLab payload does, and the desktop badge
+  map would render both rather than fail.
+- `is_metadata_only` -- derived property for binary, empty, mode-only,
+  rename-only, or unavailable files
+
+**SplitDiffRow:**
+- `old: DiffLine | None`, `new: DiffLine | None` -- independent references to
+  the original `DiffLine` objects; a missing cell is `None`
+- `old_anchor`, `new_anchor` -- properties returning the respective `DiffLine`
+  only when it is a comment-anchorable context/deletion or context/addition
+  line with a line number, otherwise `None`
 
 ## Language Detection
 
-`_detect_language(path)` maps file extensions to language names via `LANGUAGE_MAP` dict. Also handles extensionless special files: `Dockerfile`, `Makefile`, `Jenkinsfile`.
+`_detect_language(path)` calls Pygments `get_lexer_for_filename(path)` and
+returns `lexer.aliases[0]` (falling back to `lexer.name.lower()` if the lexer
+has no aliases). It returns `""` for `/dev/null` or when Pygments raises for
+an unrecognized path. There is no `LANGUAGE_MAP` dict and no project-defined
+special-case branch for extensionless files; the supported language set is
+whatever Pygments' own filename pattern matching recognizes, which changes
+with the installed Pygments version rather than a fixed list maintained here.
 
-Supported: python, javascript, typescript, rust, go, ruby, java, c, cpp, csharp, bash, yaml, json, toml, markdown, html, css, sql, xml, dockerfile, hcl, groovy, makefile.
-
-Used for syntax highlighting scoping (planned: viewport-scoped via `rich.syntax.Syntax`).
+Used by the terminal renderer to select Rich syntax highlighting.
 
 ## Known Edge Cases
 
@@ -99,7 +133,7 @@ Used for syntax highlighting scoping (planned: viewport-scoped via `rich.syntax.
 2. **SQL comments (`-- ...`):** only treated as file boundary if next line starts with `+++ `. Inside a hunk, `--` is a deletion line.
 3. **No-newline marker:** `\ No newline at end of file` is preserved as `LineType.NO_NEWLINE` with both linenos as None.
 4. **Binary files:** detected via `Binary files` line. DiffFile has `is_binary=True` and empty hunks.
-5. **Renamed files without content change:** detected via `rename from`/`rename to` lines. DiffFile has `status=RENAMED` and may have empty hunks.
+5. **Renamed files without content change:** detected via `rename from`/`rename to` lines. DiffFile has `status=RENAMED` and may have empty hunks. From a forge change payload the same shape sets `is_rename_only`.
 6. **Files with only metadata changes** (mode change, no content): results in DiffFile with empty hunks.
 7. **Hunk count defaults:** `@@ -1 +1,3 @@` means old_count=1 (omitted comma means count of 1).
 
@@ -163,7 +197,7 @@ The foreground/background split is intentional: `Strip.apply_style()` cannot rel
 
 The `create_inline_comment` ABC accepts optional `start_line`/`start_side` to support this.
 
-## Comment Anchors in Gutter (Phase 4)
+## Comment Anchors in Gutter
 
 The `DiffRenderer._gutter()` method renders a comment marker `*` in the gutter for lines that have discussions:
 - Yellow bold `*` for lines with unresolved discussions
@@ -171,7 +205,7 @@ The `DiffRenderer._gutter()` method renders a comment marker `*` in the gutter f
 
 The gutter lookup uses a `comment_lines: dict[tuple[int | None, int | None], bool]` map (built by `_build_comment_lines()`), where the bool indicates whether all discussions at that position are resolved. The key is `(old_lineno, new_lineno)` matching the DiffLine's line numbers.
 
-## Cross-Tab Navigation (Phase 4)
+## Cross-Tab Navigation
 
 `DiffPanel.jump_to_discussion(file_path, line, discussion_id)` supports cross-tab navigation from the Discussion tab to the Diff tab. When invoked:
 1. Finds the file by matching `new_path` or `old_path` against the file list
@@ -182,18 +216,55 @@ The gutter lookup uses a `comment_lines: dict[tuple[int | None, int | None], boo
 
 This enables the Discussion tab's `Enter` key (via `JumpToDiffDiscussion` message) to jump directly to the code location with the discussion expanded.
 
-## Truncated Diff Handling
+## Incomplete and metadata-only files
 
-When forge APIs truncate large diffs (returning no patch content), `MRDetailScreen._add_truncated_files()` creates placeholder `DiffFile` entries for the missing files. These placeholders have empty `hunks` but retain the file's `old_path`, `new_path`, `additions`, and `deletions` counts from the API metadata. In the diff viewer, files with empty hunks display a "Diff not available. May be too large for the API. Press o to view in browser." message. This ensures truncated files still appear in the file tree with their +/- stats.
+`TUIServiceAdapter.get_diff()` calls `convert_forge_changes()`. Its
+`_convert_change()` keeps forge metadata authoritative for paths, status, and
+aggregate counts, then classifies absent or incomplete patch text on each
+`DiffFile`:
 
-Detection logic: if a change entry has no `diff`/`patch` content, its `new_path` is not already in the parsed files, and it has nonzero additions/deletions or a `too_large` flag, a placeholder DiffFile is appended.
+- `is_truncated` covers explicit truncation flags, incomplete hunks, aggregate
+  count shortfalls, or positive change counts without a body.
+- `is_empty` covers an explicitly empty patch, and an added or deleted file the
+  forge reports with zero changed lines and no patch whose path resolves to a
+  text lexer.
+- `is_mode_only` covers a reported mode change without content hunks.
+- `is_rename_only` covers a rename or copy the forge describes with no content
+  change: an explicitly empty patch, or a withheld patch with zero reported
+  lines and a path that resolves to a text lexer.
+- `is_unavailable` is the conservative fallback when content is absent and the
+  payload does not determine which of the states above applies.
+
+Binary is independent of missing content; an absent patch alone is never binary
+evidence.
+
+GitHub's pull-request files endpoint sends the same payload (no `patch`,
+`additions`/`deletions`/`changes` all zero) for a binary, empty, rename-only or
+mode-only file, and for a binary file whether or not its bytes changed. For such
+a payload the path is the only remaining signal, and it is read locally with no
+extra request: a known binary suffix (`_BINARY_SUFFIXES`) reads as binary and is
+settled first, a path that resolves to a text lexer licenses the rename-only and
+empty readings, and a path that says neither leaves the file unavailable. Never
+let a withheld patch produce a state that asserts there is no content change
+unless the path carries that text signal, and never derive a state that
+contradicts a flag the forge reported explicitly: derivations yield to reported
+flags rather than replacing them. Mode-only is not derivable on
+GitHub at all: no cheap endpoint carries file modes, so those files stay
+unavailable.
+
+The widget renders all of these files in the tree with paths and counts.
+`placeholder_message()` in `src/tongs/widgets/split_diff.py` is the single
+source of the one-line message for a file with no content hunks, shared by
+`SplitDiffView` and `DiffContent` so both layouts say the same thing. It names
+the state (`[Binary file]`, `[Empty file]`, `[File mode changed]`,
+`[Renamed with no content change]`) and, for `is_unavailable`, says the forge
+did not expose the state rather than inventing a size limit or an empty diff.
+The desktop badge map in `desktop/src/renderer/features/diff/index.tsx` mirrors
+these states, so a new state must be added to the model, the projection, the DTO
+validator, the bridge type, the badge map and this widget together.
 
 ## Bulk Pygments Highlighting
 
 `_build_highlight_map(file)` in `src/tongs/widgets/diff_panel.py` performs a single Pygments call per file rather than per-line. It concatenates all diff line contents, highlights the bulk string via `rich.syntax.Syntax`, then splits the highlighted `Text` back into per-line entries keyed by `id(DiffLine)`. The `DiffRenderer` receives this map and uses pre-highlighted text instead of re-highlighting each line individually.
 
 The batch `add_options()` call on `DiffOptionList` replaces the previous per-line `add_option()` loop, reducing Textual widget overhead for large files.
-
-## Planned Features
-
-- **Virtual scrolling:** only materialize visible lines as Rich Text objects

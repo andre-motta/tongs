@@ -1,0 +1,6 @@
+{
+  "name": "tongs-native-review-proof",
+  "private": true,
+  "type": "module",
+  "main": "../review-proof.mjs"
+}

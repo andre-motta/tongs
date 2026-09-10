@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
+from datetime import UTC, datetime
 
 from tongs.forges.models import (
     CIStatus,
@@ -40,24 +39,24 @@ def _make_mr(
         source_branch="feature",
         target_branch="main",
         ci_status=ci_status,
-        created_at=created_at or datetime(2026, 1, 1, tzinfo=timezone.utc),
-        updated_at=updated_at or datetime(2026, 1, 2, tzinfo=timezone.utc),
+        created_at=created_at or datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=updated_at or datetime(2026, 1, 2, tzinfo=UTC),
         web_url="https://gitlab.example.com/org/repo/-/merge_requests/1",
     )
 
 
 class TestSortMrsByUpdated:
     def test_sorts_by_updated_at_descending(self):
-        older = _make_mr(number=1, updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-        newer = _make_mr(number=2, updated_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+        older = _make_mr(number=1, updated_at=datetime(2026, 1, 1, tzinfo=UTC))
+        newer = _make_mr(number=2, updated_at=datetime(2026, 6, 1, tzinfo=UTC))
         result = sort_mrs([older, newer], "updated")
         assert result[0].number == 2
         assert result[1].number == 1
 
     def test_updated_is_default_sort(self):
         """Any unrecognized key falls back to updated sort."""
-        older = _make_mr(number=1, updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-        newer = _make_mr(number=2, updated_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+        older = _make_mr(number=1, updated_at=datetime(2026, 1, 1, tzinfo=UTC))
+        newer = _make_mr(number=2, updated_at=datetime(2026, 6, 1, tzinfo=UTC))
         result = sort_mrs([older, newer], "nonsense")
         assert result[0].number == 2
 
@@ -68,7 +67,11 @@ class TestSortMrsByTitle:
         mr_a = _make_mr(number=2, title="Alpha fix")
         mr_c = _make_mr(number=3, title="Charlie update")
         result = sort_mrs([mr_b, mr_a, mr_c], "title")
-        assert [m.title for m in result] == ["Alpha fix", "Beta feature", "Charlie update"]
+        assert [m.title for m in result] == [
+            "Alpha fix",
+            "Beta feature",
+            "Charlie update",
+        ]
 
     def test_case_insensitive(self):
         mr_upper = _make_mr(number=1, title="Zebra")

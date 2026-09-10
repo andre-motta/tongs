@@ -3,21 +3,27 @@ name: Publish to PyPI
 on:
   push:
     tags:
-      - "v*"
+      # Stable releases only.  A filter pattern must match the whole ref, so
+      # this admits v1.0.0 and refuses v1.0.0rc1, v1.0, and desktop-v1.0.0.
+      # The tag is re-checked as an anchored regular expression below,
+      # because the filter alone is not what gates the upload.
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
+# The workflow-level default is read only.  Trusted publishing needs
+# id-token: write, but only the publish job mints that token, so the build job
+# must never be able to.
 permissions:
-  id-token: write
   contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
@@ -27,8 +33,64 @@ jobs:
       - name: Build package
         run: python -m build
 
+      - name: Assert the built version equals the tag before anything is uploaded
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python - <<'CHECK'
+          import email.parser
+          import os
+          import pathlib
+          import re
+          import zipfile
+
+          tag = os.environ["RELEASE_TAG"]
+          shape = r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+          if re.fullmatch(shape, tag) is None:
+              raise SystemExit(f"refusing to publish from a non-release tag: {tag!r}")
+          expected = tag[1:]
+
+          dist = pathlib.Path("dist")
+          wheels = sorted(dist.glob("*.whl"))
+          sdists = sorted(dist.glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              found = sorted(path.name for path in dist.iterdir())
+              raise SystemExit(f"expected one wheel and one sdist, found {found}")
+
+          wheel = wheels[0]
+          distribution, filename_version = wheel.name.split("-")[:2]
+          if filename_version != expected:
+              raise SystemExit(
+                  f"wheel {wheel.name!r} does not carry tag version {expected!r}"
+              )
+
+          with zipfile.ZipFile(wheel) as archive:
+              names = [
+                  name
+                  for name in archive.namelist()
+                  if re.fullmatch(r"[^/]+\.dist-info/METADATA", name)
+              ]
+              if len(names) != 1:
+                  raise SystemExit("wheel does not carry exactly one METADATA")
+              metadata = email.parser.BytesParser().parsebytes(archive.read(names[0]))
+
+          if metadata["Version"] != expected:
+              raise SystemExit(
+                  f"wheel METADATA version {metadata['Version']!r} "
+                  f"does not equal tag version {expected!r}"
+              )
+
+          if sdists[0].name != f"{distribution}-{expected}.tar.gz":
+              raise SystemExit(
+                  f"sdist {sdists[0].name!r} does not carry tag version {expected!r}"
+              )
+
+          print(f"tag {tag} matches the built version {expected}")
+          CHECK
+
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
@@ -41,10 +103,10 @@ jobs:
       id-token: write
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

@@ -25,7 +25,11 @@ body:
         - forges
         - tui
         - diff
+        - cache
         - plugins
+        - mcp
+        - services
+        - desktop
     validations:
       required: true
 

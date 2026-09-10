@@ -1,6 +1,6 @@
 # Pipelines
 
-The Pipeline tab (++4++ from MR detail) shows CI/CD pipelines associated with the
+The Pipeline tab (++5++ from MR detail) shows CI/CD pipelines associated with the
 current merge request. It provides a three-level drill-down from pipeline to job
 to log.
 
@@ -31,12 +31,21 @@ Press ++enter++ on a job to view its full log output.
 The log view renders ANSI color output natively, preserving the CI system's
 original formatting. Line numbers appear in the left gutter.
 
-Press ++escape++ at any level to drill back out one level.
+Press ++escape++ to drill back out one level. While a log search is open, the
+first ++escape++ closes the search and returns to where you were reading, and
+the next one drills out.
 
 ## Log search
 
 Press ++slash++ in the log view to search for text across the full job output.
 This is useful for locating errors or specific build steps in long logs.
+
+The log is searched as you type. A status line under the log shows the match
+count, the line number and a preview of the current match, or tells you when a
+term has no matches. Press ++n++ and ++n+shift++ to walk to the next and
+previous match, wrapping around at either end. ++enter++ keeps the search and
+returns to the log, and ++escape++ closes it and restores the scroll position
+you started from.
 
 ## Actions
 

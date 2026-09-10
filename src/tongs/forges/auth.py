@@ -62,6 +62,7 @@ def _token_from_cli(hostname: str, forge_type: ForgeType) -> str | None:
     try:
         result = subprocess.run(
             cmd,
+            check=False,
             capture_output=True,
             text=True,
             timeout=5,
@@ -113,7 +114,7 @@ def _token_from_keyring(hostname: str) -> str | None:
 
     try:
         password = keyring.get_password("tongs", hostname)
-    except Exception:
+    except Exception:  # noqa: BLE001 - Optional keyring backends raise backend-specific errors.
         return None
 
     return password if password else None

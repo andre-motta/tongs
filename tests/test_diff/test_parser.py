@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -385,7 +386,7 @@ class TestSyntheticDiffs:
 class TestLanguageDetection:
     """Verify language detection from file extensions."""
 
-    _CASES = [
+    _CASES: ClassVar[list] = [
         (".py", "python"),
         (".js", "javascript"),
         (".ts", "typescript"),
@@ -812,3 +813,67 @@ class TestEdgeCases:
         del_lines = [ln for ln in lines if ln.line_type == LineType.DELETION]
         assert len(del_lines) == 1
         assert del_lines[0].content == "-- This is a SQL comment"
+
+    def test_hunk_source_lines_resembling_file_headers_are_not_boundaries(self) -> None:
+        diff = (
+            "--- a/comments.txt\n"
+            "+++ b/comments.txt\n"
+            "@@ -1 +1 @@\n"
+            "--- comment\n"
+            "+++ comment\n"
+        )
+
+        files = parse_diff(diff)
+
+        assert len(files) == 1
+        lines = files[0].hunks[0].lines
+        assert [line.line_type for line in lines] == [
+            LineType.DELETION,
+            LineType.ADDITION,
+        ]
+        assert [line.content for line in lines] == ["-- comment", "++ comment"]
+
+    def test_incomplete_hunk_stops_before_following_file_headers(self) -> None:
+        diff = (
+            "--- a/first.py\n"
+            "+++ b/first.py\n"
+            "@@ -1,1 +1,5 @@\n"
+            "-old\n"
+            "+new\n"
+            "--- a/second.py\n"
+            "+++ b/second.py\n"
+            "@@ -1 +1 @@\n"
+            "-before\n"
+            "+after\n"
+        )
+
+        files = parse_diff(diff)
+
+        assert [file.new_path for file in files] == ["first.py", "second.py"]
+        assert [line.content for line in files[0].hunks[0].lines] == ["old", "new"]
+        assert [line.content for line in files[1].hunks[0].lines] == [
+            "before",
+            "after",
+        ]
+
+    def test_header_looking_source_pair_completes_hunk_before_next_hunk(self) -> None:
+        diff = (
+            "--- a/comments.txt\n"
+            "+++ b/comments.txt\n"
+            "@@ -1 +1 @@\n"
+            "--- comment\n"
+            "+++ comment\n"
+            "@@ -10 +10 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+
+        files = parse_diff(diff)
+
+        assert len(files) == 1
+        assert len(files[0].hunks) == 2
+        assert [line.content for line in files[0].hunks[0].lines] == [
+            "-- comment",
+            "++ comment",
+        ]
+        assert [line.content for line in files[0].hunks[1].lines] == ["old", "new"]

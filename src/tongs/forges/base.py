@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from tongs.forges.models import (
     Commit,
     Discussion,
-    InlineComment,
+    ForgeMergeResult,
+    ForgeMutationResult,
     MRDetail,
     MRSummary,
     Pipeline,
@@ -41,8 +42,16 @@ class ForgeClient(ABC):
     @abstractmethod
     async def get_mr(self, repo_path: str, number: int) -> MRDetail: ...
 
+    async def get_mr_fresh(self, repo_path: str, number: int) -> MRDetail:
+        """Read MR detail without a response-cache result when supported."""
+        return await self.get_mr(repo_path, number)
+
     @abstractmethod
     async def get_mr_diff(self, repo_path: str, number: int) -> list[dict]: ...
+
+    async def get_mr_diff_fresh(self, repo_path: str, number: int) -> list[dict]:
+        """Read diff changes without a response-cache result when supported."""
+        return await self.get_mr_diff(repo_path, number)
 
     @abstractmethod
     async def list_mr_commits(self, repo_path: str, number: int) -> list[Commit]: ...
@@ -63,7 +72,17 @@ class ForgeClient(ABC):
         body: str,
         start_line: int | None = None,
         start_side: str | None = None,
-    ) -> InlineComment: ...
+        *,
+        old_path: str | None = None,
+        new_path: str | None = None,
+        head_sha: str | None = None,
+        base_sha: str | None = None,
+        start_sha: str | None = None,
+        old_line: int | None = None,
+        new_line: int | None = None,
+        start_old_line: int | None = None,
+        start_new_line: int | None = None,
+    ) -> ForgeMutationResult: ...
 
     @abstractmethod
     async def reply_to_discussion(
@@ -72,7 +91,9 @@ class ForgeClient(ABC):
         number: int,
         discussion_id: str,
         body: str,
-    ) -> InlineComment: ...
+        *,
+        root_comment_id: str | None = None,
+    ) -> ForgeMutationResult: ...
 
     @abstractmethod
     async def resolve_discussion(
@@ -81,7 +102,7 @@ class ForgeClient(ABC):
         number: int,
         discussion_id: str,
         resolved: bool,
-    ) -> None: ...
+    ) -> ForgeMutationResult: ...
 
     @abstractmethod
     async def submit_review(
@@ -91,12 +112,16 @@ class ForgeClient(ABC):
         verdict: ReviewDecision,
         body: str,
         inline_comments: list[dict] | None = None,
-    ) -> None: ...
+        *,
+        head_sha: str | None = None,
+    ) -> ForgeMutationResult: ...
 
     @abstractmethod
-    async def approve_mr(self, repo_path: str, number: int) -> None: ...
+    async def approve_mr(
+        self, repo_path: str, number: int, *, head_sha: str | None = None
+    ) -> ForgeMutationResult: ...
 
-    async def unapprove_mr(self, repo_path: str, number: int) -> None:
+    async def unapprove_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         raise NotImplementedError("This forge does not support unapprove")
 
     @abstractmethod
@@ -106,16 +131,27 @@ class ForgeClient(ABC):
         number: int,
         squash: bool = False,
         delete_branch: bool = True,
-    ) -> None: ...
+        *,
+        head_sha: str | None = None,
+        expected_source_repository: str | None = None,
+        expected_source_branch: str | None = None,
+        expected_target_branch: str | None = None,
+    ) -> ForgeMergeResult: ...
 
     @abstractmethod
-    async def close_mr(self, repo_path: str, number: int) -> None: ...
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult: ...
 
     @abstractmethod
-    async def reopen_mr(self, repo_path: str, number: int) -> None: ...
+    async def reopen_mr(self, repo_path: str, number: int) -> ForgeMutationResult: ...
 
     @abstractmethod
-    async def add_comment(self, repo_path: str, number: int, body: str) -> None: ...
+    async def add_comment(
+        self, repo_path: str, number: int, body: str
+    ) -> ForgeMutationResult: ...
+
+    async def invalidate_review_reads(self, repo_path: str, number: int) -> bool:
+        """Invalidate cached review reads when this client owns a cache."""
+        return True
 
     @abstractmethod
     async def list_pipelines(

@@ -33,6 +33,52 @@ class ReviewDecision(Enum):
     NONE = "none"
 
 
+class SourceCleanupStatus(Enum):
+    """Native evidence for optional source-branch cleanup after a merge."""
+
+    NOT_REQUESTED = "not_requested"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class ForgeMutationResult:
+    """Stable remote identity returned after one confirmed forge write."""
+
+    remote_id: str
+    comment_id: str | None = None
+    discussion_id: str | None = None
+    cache_invalidated: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.remote_id, str) or not self.remote_id:
+            raise ValueError("remote_id is required")
+        if any(
+            value is not None and (not isinstance(value, str) or not value)
+            for value in (self.comment_id, self.discussion_id)
+        ):
+            raise ValueError("remote identities must be non-empty strings")
+
+
+@dataclass(frozen=True, slots=True)
+class ForgeMergeResult:
+    """Confirmed merge identity with an independent source-cleanup outcome."""
+
+    remote_id: str
+    merge_sha: str
+    source_cleanup: SourceCleanupStatus = SourceCleanupStatus.NOT_REQUESTED
+    cache_invalidated: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.remote_id, str) or not self.remote_id:
+            raise ValueError("remote_id is required")
+        if not isinstance(self.merge_sha, str) or not self.merge_sha:
+            raise ValueError("merge_sha is required")
+        if not isinstance(self.source_cleanup, SourceCleanupStatus):
+            raise TypeError("source_cleanup must be a SourceCleanupStatus")
+
+
 @dataclass(frozen=True)
 class ForgeHost:
     """Identifies a forge instance."""
@@ -90,6 +136,10 @@ class MRDetail(MRSummary):
     draft_notes_count: int | None = None
     # GitHub-specific
     status_check_rollup: str | None = None
+    # Revision metadata, appended to preserve positional compatibility.
+    head_sha: str = ""
+    base_sha: str = ""
+    start_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -104,7 +154,7 @@ class InlineComment:
     old_line: int | None = None
     new_line: int | None = None
     is_resolved: bool = False
-    replies: tuple["InlineComment", ...] = ()
+    replies: tuple[InlineComment, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,9 @@
 """Tests for GitLab client parsing logic."""
 
+from __future__ import annotations
+
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -19,6 +21,7 @@ from tongs.forges.models import (
     ForgeHost,
     MRState,
     ReviewDecision,
+    SourceCleanupStatus,
 )
 from tongs.scanner.repo import ForgeType
 
@@ -37,7 +40,7 @@ class TestEncodeProject:
 class TestParseDatetime:
     def test_iso_format_with_z(self):
         dt = _parse_datetime("2026-01-15T10:30:00Z")
-        assert dt == datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        assert dt == datetime(2026, 1, 15, 10, 30, 0, tzinfo=UTC)
 
     def test_iso_format_with_offset(self):
         dt = _parse_datetime("2026-01-15T10:30:00+00:00")
@@ -216,7 +219,7 @@ class TestParseMRSummary:
         assert summary.labels == ("enhancement", "review")
         assert summary.forge_host == _TEST_HOST
         assert summary.repo_path == "acme/widgets"
-        assert summary.created_at == datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+        assert summary.created_at == datetime(2026, 6, 1, 9, 0, 0, tzinfo=UTC)
 
     def test_parse_mr_summary_missing_pipeline(self):
         client = self._client()
@@ -241,6 +244,9 @@ class TestParseMRDetail:
         # Detail-specific fields
         assert detail.description == "Adds the new widget framework.\n\nCloses #123."
         assert detail.merge_status == "can_be_merged"
+        assert detail.head_sha == "ccc333"
+        assert detail.base_sha == "aaa111"
+        assert detail.start_sha == "bbb222"
         assert detail.changes_count == 5
         assert detail.detailed_merge_status == "mergeable"
         assert len(detail.reviewers) == 1
@@ -325,10 +331,8 @@ class TestParsePipeline:
         assert pipeline.sha == "abc123def456"
         assert pipeline.source == "push"
         assert pipeline.duration_seconds == 600
-        assert pipeline.created_at == datetime(2026, 6, 1, 8, 0, 0, tzinfo=timezone.utc)
-        assert pipeline.finished_at == datetime(
-            2026, 6, 1, 8, 10, 0, tzinfo=timezone.utc
-        )
+        assert pipeline.created_at == datetime(2026, 6, 1, 8, 0, 0, tzinfo=UTC)
+        assert pipeline.finished_at == datetime(2026, 6, 1, 8, 10, 0, tzinfo=UTC)
 
 
 class TestParseJob:
@@ -438,7 +442,9 @@ class TestGitLabClientAsync:
 
         def handler(req: httpx.Request) -> httpx.Response:
             requests_made.append(req)
-            return httpx.Response(200, json={})
+            if "/notes" in str(req.url):
+                return httpx.Response(200, json={"id": 91})
+            return httpx.Response(200, json={"id": 42})
 
         client, http = _make_gitlab_client(handler)
         async with http:
@@ -455,7 +461,7 @@ class TestGitLabClientAsync:
 
         def handler(req: httpx.Request) -> httpx.Response:
             requests_made.append(req)
-            return httpx.Response(200, json={})
+            return httpx.Response(200, json={"id": 420, "iid": 42, "state": "closed"})
 
         client, http = _make_gitlab_client(handler)
         async with http:
@@ -471,7 +477,9 @@ class TestGitLabClientAsync:
 
         def handler(req: httpx.Request) -> httpx.Response:
             requests_made.append(req)
-            return httpx.Response(200, json={})
+            return httpx.Response(
+                200, json={"id": 91 if "/notes" in str(req.url) else 42}
+            )
 
         client, http = _make_gitlab_client(handler)
         async with http:
@@ -507,3 +515,244 @@ class TestGitLabClientAsync:
         # Only the approve request, no comment because body is empty
         assert len(requests_made) == 1
         assert "/approve" in str(requests_made[0].url)
+
+    @pytest.mark.asyncio
+    async def test_explicit_revision_and_rename_range_never_refetch_latest(self):
+        requests_made = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests_made.append(req)
+            assert req.method == "POST"
+            return httpx.Response(
+                200,
+                json={"id": "thread-1", "notes": [{"id": 8, "body": "body"}]},
+            )
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            await client.create_inline_comment(
+                "acme/widgets",
+                42,
+                "new.py",
+                11,
+                "RIGHT",
+                "body",
+                10,
+                "RIGHT",
+                old_path="old.py",
+                new_path="new.py",
+                head_sha="head",
+                base_sha="base",
+                start_sha="start",
+                old_line=11,
+                new_line=11,
+                start_old_line=10,
+                start_new_line=10,
+            )
+        assert [request.method for request in requests_made] == ["POST"]
+        position = json.loads(requests_made[0].content)["position"]
+        assert position["old_path"] == "old.py"
+        assert position["new_path"] == "new.py"
+        assert position["head_sha"] == "head"
+        assert position["old_line"] == 11
+        assert position["new_line"] == 11
+        assert position["line_range"]["start"]["type"] == "old"
+        assert position["line_range"]["start"]["old_line"] == 10
+        assert position["line_range"]["start"]["new_line"] == 10
+        assert position["line_range"]["end"]["type"] == "old"
+        assert position["line_range"]["end"]["line_code"].endswith("_11_11")
+
+    @pytest.mark.asyncio
+    async def test_context_position_preserves_both_native_coordinates(self):
+        requests_made = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests_made.append(req)
+            return httpx.Response(
+                200,
+                json={"id": "thread-1", "notes": [{"id": 8, "body": "body"}]},
+            )
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            await client.create_inline_comment(
+                "acme/widgets",
+                42,
+                "new.py",
+                11,
+                "RIGHT",
+                "body",
+                old_path="old.py",
+                new_path="new.py",
+                head_sha="head",
+                base_sha="base",
+                start_sha="start",
+                old_line=10,
+                new_line=11,
+            )
+
+        position = json.loads(requests_made[0].content)["position"]
+        assert position["old_path"] == "old.py"
+        assert position["new_path"] == "new.py"
+        assert position["old_line"] == 10
+        assert position["new_line"] == 11
+        assert "line_range" not in position
+
+    @pytest.mark.asyncio
+    async def test_partial_explicit_revision_is_rejected_without_refetch(self):
+        def handler(_req: httpx.Request) -> httpx.Response:
+            raise AssertionError("explicit revision must never trigger a GET")
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            with pytest.raises(ValueError, match="required together"):
+                await client.create_inline_comment(
+                    "acme/widgets",
+                    42,
+                    "new.py",
+                    11,
+                    "RIGHT",
+                    "body",
+                    head_sha="captured-head",
+                )
+
+    @pytest.mark.asyncio
+    async def test_approval_passes_sha_precondition(self):
+        requests_made = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests_made.append(req)
+            return httpx.Response(200, json={"id": 42})
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            await client.approve_mr("acme/widgets", 42, head_sha="captured-head")
+        assert json.loads(requests_made[0].content) == {"sha": "captured-head"}
+
+
+class TestGitLabLifecycleActions:
+    @pytest.mark.asyncio
+    async def test_merge_binds_head_and_reports_cleanup_as_unknown(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "id": 420,
+                    "iid": 42,
+                    "state": "merged",
+                    "source_branch": "feature",
+                    "target_branch": "main",
+                    "merge_commit_sha": "merge-sha",
+                    "squash_commit_sha": None,
+                    "should_remove_source_branch": True,
+                },
+            )
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            result = await client.merge_mr(
+                "acme/widgets",
+                42,
+                True,
+                True,
+                head_sha="captured-head",
+                expected_source_repository="acme/widgets",
+                expected_source_branch="feature",
+                expected_target_branch="main",
+            )
+
+        assert result.remote_id == "420"
+        assert result.merge_sha == "merge-sha"
+        assert result.source_cleanup is SourceCleanupStatus.UNKNOWN
+        assert json.loads(requests[0].content) == {
+            "squash": True,
+            "should_remove_source_branch": True,
+            "sha": "captured-head",
+        }
+
+    @pytest.mark.asyncio
+    async def test_merge_without_cleanup_uses_squash_commit_identity(self) -> None:
+        client, http = _make_gitlab_client(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "id": 420,
+                    "iid": 42,
+                    "state": "merged",
+                    "source_branch": "feature",
+                    "target_branch": "main",
+                    "merge_commit_sha": None,
+                    "squash_commit_sha": "squash-sha",
+                },
+            )
+        )
+        async with http:
+            result = await client.merge_mr(
+                "acme/widgets",
+                42,
+                delete_branch=False,
+                expected_target_branch="main",
+            )
+
+        assert result.merge_sha == "squash-sha"
+        assert result.source_cleanup is SourceCleanupStatus.NOT_REQUESTED
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("identity", [True, 1.0, 0, -1, "42"])
+    async def test_merge_rejects_malformed_native_identity(
+        self, identity: object
+    ) -> None:
+        client, http = _make_gitlab_client(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "id": 420,
+                    "iid": identity,
+                    "state": "merged",
+                    "source_branch": "feature",
+                    "target_branch": "main",
+                    "merge_commit_sha": "merge-sha",
+                },
+            )
+        )
+        async with http:
+            with pytest.raises(ValueError, match="merge response"):
+                await client.merge_mr("acme/widgets", 42)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("identity", [True, 1.0, 0, -1, "42"])
+    async def test_state_action_rejects_malformed_native_identity(
+        self, identity: object
+    ) -> None:
+        client, http = _make_gitlab_client(
+            lambda _: httpx.Response(
+                200, json={"id": 420, "iid": identity, "state": "closed"}
+            )
+        )
+        async with http:
+            with pytest.raises(ValueError, match="action response"):
+                await client.close_mr("acme/widgets", 42)
+
+    @pytest.mark.asyncio
+    async def test_close_reopen_and_unapprove_validate_native_results(self) -> None:
+        responses = iter(
+            [
+                {"id": 420, "iid": 42, "state": "closed"},
+                {"id": 420, "iid": 42, "state": "opened"},
+                {"id": 420, "iid": 42, "state": "opened"},
+            ]
+        )
+        client, http = _make_gitlab_client(
+            lambda _: httpx.Response(200, json=next(responses))
+        )
+        async with http:
+            closed = await client.close_mr("acme/widgets", 42)
+            reopened = await client.reopen_mr("acme/widgets", 42)
+            unapproved = await client.unapprove_mr("acme/widgets", 42)
+
+        assert closed.remote_id == "420"
+        assert reopened.remote_id == "420"
+        assert unapproved.remote_id == "420"

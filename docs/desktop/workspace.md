@@ -1,0 +1,436 @@
+# Desktop workspace
+
+The desktop workspace brings local repository discovery, review reading, code
+diffs, CI inspection, and installed plugin views into one window. This page
+describes the current unreleased desktop interface. Tongs remains
+terminal-first, and this page does not publish a desktop artifact or change
+how Tongs is installed. See [Desktop
+installation](installation.md) for the per-user lifecycle and [Desktop plugin
+providers](../plugins/provider.md) for provider packaging and configuration.
+
+## Start with local repositories
+
+The sidebar is headed **Repositories**. Tongs scans the configured local scan
+root for Git repositories and admits repositories whose remotes identify a
+supported GitHub or GitLab forge. It skips nested repositories and remotes it
+cannot identify. The default scan root is `~/git`; change it in the Tongs
+configuration when your checkouts live elsewhere:
+
+```toml
+[general]
+scan_root = "~/src"
+scan_depth = 5
+```
+
+The desktop workspace does not provide an online repository picker. Clone a
+repository below the scan root, then choose **Refresh local repositories** in
+the sidebar. The repository name then appears as a sidebar entry. Use the
+sidebar search to filter by display name, the forge filter to choose **All
+forges**, **GitHub**, or **GitLab**, and the sort control to order by **Name**,
+**Forge**, or **Host**. Repositories without a detected host remain visible;
+**Host** sorting places them after entries with a known host and then uses the
+display name as a tie-breaker.
+
+Choose **All reviews** to combine review reads from every discovered
+repository, or choose one repository to scope the inbox to that project. A
+refresh keeps the current repository context, review text, and saved drafts
+when that context is still available. Choosing a different repository starts
+that repository's inbox context and resets the inbox query to its default
+state. If a selected repository disappears during discovery, the workspace
+returns to **All reviews** while preserving unsaved review text and saved
+drafts.
+
+While discovery is running, the sidebar shows **Finding admitted
+repositories…**. If no repository is found, it shows **No local repositories
+were found. Clone a repository under the configured scan root, then refresh.**
+When repositories were found but the current search text or forge filter hides
+all of them, it shows **No local repositories match the current search and
+forge filter.** instead, so an empty list caused by a filter is never mistaken
+for an empty scan root. If discovery fails, use **Retry**.
+
+## Find a review
+
+The workspace opens on **All reviews** with the **All Open** scope and
+**Open** selected. The inbox scopes are **My Reviews**, **My MRs**, and
+**All Open**. **My Reviews** and
+**My MRs** show open items only. **All Open** can switch between **Open** and
+**Closed & merged**. The closed state is unavailable in the two personal
+scopes because closed and merged reviews are provided by **All Open**.
+
+Use the review sort control to choose **Updated**, **Title**, **CI status**, or
+**Author**. Choose **Refresh reviews** to fetch the current list again; while
+an existing list refreshes, the control is labelled **Refreshing…**. An
+individual repository page uses the same controls but reads only that
+repository.
+
+Each list keeps its scope, state, and sort for the life of the session, held
+separately for **All reviews** and for each repository page. Opening a review
+and choosing **← Reviews** returns to the same list with the same controls, and
+the review you opened is selected and scrolled into view with focus on its
+card. Changing a control afterwards leaves focus on the control you used. A
+fresh launch still starts on **All reviews** with **Open** selected, and
+nothing about the list is written to disk.
+
+Each review card shows its CI state, number, title, author, source and target
+branches, and last update time. Select a card to open its detail view. When
+**All reviews** spans several repositories, a failed repository read is shown
+above the cards while reviews from repositories that did respond remain
+available. An empty scope shows **No open reviews match this repository
+scope.** or **No closed or merged reviews match this repository scope.** The
+personal scopes use their own empty messages, such as **No open reviews are
+waiting for you.** and **You have no open merge requests.**
+
+The review header contains **← Reviews**, the review number and title, and an
+**Open on forge** button. That button opens the review's existing forge URL in
+the external browser. On **Files changed** and **Discussions** the header also
+carries the **Your review** button, between the title and **Open on forge**;
+the other tabs hold no review state and show no such button. The desktop
+workspace continues to use the local repositories and review data described
+above.
+
+## Read review details
+
+Review tabs are contributed by the installed workspace features:
+
+- **Overview** shows the review description and a **Review status** panel with
+  state, merge status, CI status, update time, and change counts. A review
+  without a description shows **No description was provided.** Overview also
+  carries the general composer, the review-level notes that resolve to no diff
+  position, and a **Quick verdict** section offering **Submit comment
+  verdict**, **Approve review**, and **Request changes** for the verdicts this
+  forge and this account can record.
+- **Files changed** opens the code diff. Its layout controls are described
+  below.
+- **Commits** lists commit subjects, short SHAs, authors, and timestamps. An
+  empty history shows **This review has no commits.**
+- **Discussions** lists the published threads that resolve to a diff position
+  and carries the review lifecycle actions.
+- **Pipelines** opens the CI view described below.
+
+Every read view except **Discussions** has a refresh control. If a refresh
+fails after data was already loaded, the desktop keeps the previous result
+visible and labels the failure. Use the view's refresh control to try again.
+**Discussions** loads once when the review opens and has no refresh control of
+its own; leave the review and open it again to re-read it. If the current
+revision is not available, revision-bound reads are disabled until the review
+can be loaded again.
+
+## Comment, suggest, and submit
+
+The **Discussions** panel lists every published thread that resolves to a diff
+position, unresolved ones first, each with **Show in diff** to open it where it
+was written. The list itself takes no comment: writing happens in the composers
+instead, the in-diff composer opened from the gutter's `+` button or the `c`
+key, and the general composer on **Overview** for a review-level comment.
+
+The same panel also carries the review lifecycle actions, which are **Merge**,
+**Close**, **Reopen**, and **Remove approval**, with **Squash commits** and
+**Delete source branch after merge** as options on a merge, alongside an
+indicator that names the active draft and its stored version. Those actions
+exist only here; they are not reachable from the other tabs, which is
+[known limitation #228](known-limitations.md).
+Both offer the same two writes, **Add comment now** to act immediately
+against the selected review, and **Start a review** (or **Add to review**
+once one is pending) to add the entry to a durable draft. A single saved
+draft is adopted automatically when the review opens; when more than one is
+found, the **Your review** drawer offers **Choose a preserved draft** to pick
+among them. While a durable draft is active, the composers add general
+comments, selected lines, and suggestions to it, and the drawer tracks,
+submits, or discards it. The draft remains bound to the review revision it
+was created from.
+
+A pending review can be discarded from either surface: **Discard review** in
+**Your review**, or the composer's **More** overflow, labelled **More review
+actions** for assistive technology, which appears in the in-diff composer only
+while a review is pending. Both ask first with the
+same sentence, which names how many pending comments would go and whether the
+summary and the chosen verdict would go with them, and both then make the same
+`drafts.discard` call the terminal interface makes from ++shift+d++. Press
+++escape++ to cancel the confirmation; the drawer and the composer stay open on
+the review, and a further ++escape++ closes them as usual. A discard removes
+only the local durable draft: nothing that was never sent to the forge is sent,
+and nothing already published is changed. Afterwards the diff drops its pending
+cards, the **Your review** count returns to zero, and the composer offers
+**Start a review** again. A discard is refused while a save or a submission
+attempt holds the draft, and the reason is shown on the button.
+
+If another writer changes the stored draft before your save lands, the
+workspace reports a version conflict and shows both versions side by side: your
+unsaved text, and the stored draft with its version number and the time it was
+last updated. Nothing is chosen for you. **Keep my text and save over version
+N** re-saves your text on top of the stored version. **Take the stored version
+and keep mine to copy** loads the stored draft for editing and keeps your
+displaced text on screen, in a read-only box, until you dismiss it; a further
+conflict adds another copy instead of replacing the first. If the stored draft
+was submitted or is held by a submission attempt elsewhere, keeping your text
+is refused with that reason and both versions stay on screen so you can copy
+your text out.
+
+If the review revision changes, old inline anchors stay on the old draft and
+cannot be submitted against the new revision. The workspace can create a
+separate current-revision draft with portable body, verdict, and general
+comments; old inline comments and replies remain for deliberate recreation.
+Submit a draft only after checking its current revision.
+
+Quick actions can be accepted, rejected, or unknown. Durable submissions show
+confirmed progress and can end submitted, paused, or unknown. An unknown
+result requires an explicit receipt check or reconciliation choice. Confirmed
+steps are not replayed automatically, and the workspace never silently
+repeats an uncertain remote write. A partial or paused submission can resume
+its existing durable attempt; an unknown submission offers explicit choices to
+retry remaining steps, return the draft to editing, or mark it submitted after
+you inspect the forge.
+
+Suggestions come from the in-diff composer, not the Discussions panel. Select
+one or more contiguous new-side lines in either **Unified** or **Split**
+layout by dragging over the line numbers, Shift-clicking a second line, or
+focusing a line number and pressing ++shift+enter++ to extend the range
+within the same hunk. Opening the composer on that selection offers **Insert
+suggestion**, which pre-fills a suggestion block built from the selected
+source: GitHub gets a `suggestion` fence over the whole range, GitLab gets a
+`suggestion:-0+N` fence anchored on the first line, where N is one less than
+the number of selected source lines. Old-side selections, non-contiguous
+lines, deletion rows, and a partial diff all refuse **Insert suggestion** in
+their own words; refresh the diff to complete a partial selection. A
+selection that changed underneath the press, for example because the diff
+moved to a later revision, is refused too: the composer reports it and asks
+you to reselect the lines. Edit the block or add an explanation above it, use
+**Preview** to check the rendered Markdown, then choose **Add comment now**
+for an immediate comment or **Start a review** / **Add to review** to add it
+to a durable draft.
+
+## Work with a diff
+
+Open **Files changed** to see the changed-file navigation and the selected
+file's content. The toolbar provides **Unified**, **Split**, and **Refresh**
+controls. The current head revision is shown beside the controls so you can
+recognize which review revision the displayed diff represents.
+
+The changed-file list shows each path, additions and deletions, and any
+available hunk context. A file can carry these visible badges:
+
+- **Binary** when the file has no text diff.
+- **Truncated** when the forge returned only a bounded portion.
+- **Empty** when the file has no changed rows.
+- **Mode only** when the change is a file-mode update.
+- **Rename only** when the file moved and its content did not change.
+- **Not exposed by forge** when the forge sent no content and no reason for it.
+  GitHub's pull-request files endpoint omits the patch for a binary, empty,
+  rename-only or mode-only file alike, so Tongs reads the path to tell those
+  apart where it can and shows this badge where it cannot: a mode change is
+  indistinguishable from binary content there, and a file whose path carries no
+  text signal could be binary rather than empty or unchanged. The badge names
+  that limit instead of implying the file failed to load.
+
+Select a file or hunk to move the content view. Large files are displayed in
+bounded row windows with **Previous rows** and **Next rows** controls. In
+**Unified** layout, rows are shown in one sequence. In **Split** layout, the
+old and new sides are aligned in two panes; an empty cell represents a side
+with no corresponding row. Changed lines and their available line numbers are
+selectable to highlight the chosen line in the current diff. Non-text,
+unavailable, and placeholder rows remain read-only.
+
+The desktop checks the revision and snapshot while it loads pages. If a
+snapshot expires or the review changes during loading, it asks you to reload
+the latest diff. If paging reaches a safety bound, it keeps a bounded partial
+view and explains that the diff is incomplete. Invalid or inconsistent page
+data is reported as an error rather than being silently combined with another
+revision.
+
+## Review keyboard map
+
+Two review surfaces answer a small keyboard map: the **Files changed** diff
+and the **Your review** drawer. Within either, a key acts from anywhere in that
+surface, including with nothing focused at all. The other tabs do not register
+the map, so these keys, **Shift+C** included, do nothing on **Overview**,
+**Commits**, **Discussions**, or **Pipelines**. Every key also stands down
+while a text field, a `contenteditable` region, a select control, or a modal
+dialog holds the keyboard, and whenever a modifier the binding does not name is
+held.
+
+| Key | Desktop | Terminal interface |
+|-----|---------|--------------------|
+| `c` | Comment on the focused row or the current selection | `c` (diff viewer, MR detail) |
+| `Shift+C` | Open **Your review** | `Ctrl+G` (MR detail) |
+| `]` / `[` | Next / previous changed file, wrapping | `n` / `Shift+N` (diff viewer) |
+| `n` / `p` | Next / previous thread or pending comment, wrapping | `]` / `[` (diff viewer, next / previous comment) |
+| `r` | Reply to the focused thread | `r` (diff viewer, discussion tab) |
+| `Ctrl+Enter` / `Cmd+Enter` | Primary composer action | `Ctrl+S` (comment editor) |
+| `Esc` | Close the composer and keep the text | `Esc` (comment editor, cancel) |
+| `v` | Cycle the verdict in **Your review** | `v` (review draft) |
+
+`]`, `[`, `n` and `p` wrap at both ends. `]` and `[` stay unclaimed on a review
+with one changed file, because there is no other file to move to. `n` and `p`
+walk the threads and pending comments of the file on screen. In **Unified**
+layout that is the order they appear down the page. In **Split** layout the two
+panes are independent columns, so the walk covers the old pane's rows and then
+the new pane's, which is not top-to-bottom screen order. `r` replies to the
+thread they last landed on, and is refused for the same reasons the thread's own
+**Reply** button is. `c` composes on the row that holds the
+focus, or on the selection when nothing does, and a multi-line selection
+composes on the whole range. `Ctrl+Enter` (`Cmd+Enter` on macOS) runs the
+composer's primary action and carries its refusals, so an empty comment is
+refused exactly as pressing the button is. `Esc` closes the composer and keeps
+the typed text for the same review and the same anchor; typed inside the
+composer it answers the nearest question first, cancelling an armed **Discard
+review** confirmation, then the **More** overflow, and only then closing. While **Your review** is open it owns the keyboard, wherever the focus
+is sitting, including on the diff behind it: `v` cycles its verdict tiles
+through the verdicts this review can record, and `Esc` cancels an armed
+confirmation first and otherwise closes the drawer, returning the focus to the
+**Your review** button. The diff's own keys stand down for as long as it is
+open.
+
+The terminal interface's own bindings are listed in the
+[keybinding reference](../reference/keybindings.md), which carries the same
+table with the divergences spelled out.
+
+## Read descriptions and discussions
+
+Descriptions and discussions support ordinary Markdown formatting, including
+headings, lists, emphasis, code blocks, and links. Raw HTML stays inert, and
+images are shown as text placeholders. A body that is too large or complex
+for the safe renderer falls back to an explicitly limited plain-text preview;
+additional content is marked as omitted. The combined discussion display also
+has a bounded Markdown budget, so later comments can show an omission notice
+when that budget is exhausted.
+
+HTTPS links open in the external browser only after you explicitly activate
+the link. Displaying a link does not open it.
+
+## Inspect pipelines, jobs, and logs
+
+The **Pipelines** tab starts with **Continuous integration** and a **Refresh
+CI** button. The pipeline list shows status, pipeline number, ref, and a short
+commit SHA. Select a pipeline to see its ref, source, creation time, supported
+actions, and its **Jobs** section.
+
+While the list is loading, the tab shows **Loading pipelines…**. If the review
+has no pipeline records, it shows **No pipelines are available for this
+review.**
+
+Use **Refresh jobs** to reload the selected pipeline's jobs. Each job shows its
+status, name, and stage. A pipeline with no jobs shows **This pipeline has no
+jobs.** Select a job to open **Log · _job name_**. The log view provides
+**Refresh log**, line numbers, bounded windows, and a **Search log** field.
+Enter a search term, or press ++slash++ anywhere in the Pipelines tab while no
+text field holds the keyboard. The log keeps all of its lines: matching lines
+are highlighted in place as you type, the first match is selected, and the row
+window jumps to it. ++enter++ hands the keyboard back to the log, where ++n++ and
+++shift+n++ step to the next and previous match and wrap around; **Previous
+match** and **Next match** do the same with the mouse. The match counter reports
+the selected match and total matches; **No matches** is shown when appropriate.
+++escape++ closes the search, clears the term, and restores the row window and
+the control that held focus when the search opened. **Refresh log** also ends an
+open search: it clears the term and the selected match and restores the row
+window, and it leaves the keyboard focus where it is. The search keys act only
+on this view, so they are ignored while a dialog such as **Clear shared API
+cache?** is open. Empty output shows **This job has no log output.**
+
+The log view also provides **Open log in editor**, which is bound to ++f2++
+while the log is loaded. It starts the configured graphical editor with a
+private, bounded export of the log. While the editor is starting, the control
+reads **Starting editor…**. A started editor process is reported separately
+from any confirmation that the editor read the file, and closing Tongs does not
+terminate it. See the
+[editor configuration reference](../reference/configuration.md) for the
+supported editor commands.
+
+Long logs are loaded and displayed in bounded pages and windows. If a refresh,
+page, or log revision check fails after output was loaded, the previous bounded
+result stays visible with an explanation. A log that exceeds the renderer's
+safe limits is shown as a bounded partial result rather than consuming the
+whole window.
+
+### CI actions and outcomes
+
+When the repository advertises support, the selected pipeline offers **Retry
+pipeline** and **Cancel pipeline**, beside **Open pipeline on forge**. The
+selected job offers **Retry job** and **Cancel job**, beside **Open job on
+forge**. Unsupported actions are disabled with a reason, and an error
+loading action support leaves pipeline and log reads available. Actions are
+also disabled when the reported capability belongs to a different repository.
+
+Selecting an action opens a confirmation naming the exact pipeline or job. The
+confirmation has **Cancel** and **Confirm _action_** controls. After
+confirmation, the workspace shows the action's operation identifier and one of
+these outcomes:
+
+- **CI action accepted** means Tongs received a receipt confirming acceptance.
+- **CI action rejected** means Tongs received a known rejection.
+- **Remote outcome unknown** means the response did not establish the remote
+  result. Refresh status or choose **Check retained receipt**; do not start a
+  second action until the current outcome is reviewed.
+- **CI action needs reconciliation** means the result is uncertain or no
+  retained receipt was available. The workspace provides **Refresh status**,
+  **Check retained receipt** when possible, and **Acknowledge after review**.
+
+An event gap or pipeline status event reloads the current pipeline view. The
+workspace does not silently replay an uncertain action.
+
+## Application bar commands
+
+The top application bar carries three built-in commands in addition to anything
+a plugin contributes.
+
+**Review workflow** appears while a review is open and sorts first. It moves
+the review to its **Discussions** panel, which is where the lifecycle actions
+live.
+
+**Copy URL** appears only while a review is open. It copies that review's URL to
+the clipboard, resolving the URL from the currently open review rather than from
+anything typed into the window. The result is reported as a dismissible notice.
+If the copy fails, the notice reads **The review URL could not be copied. Check
+clipboard access and retry.**
+
+**Clear Cache** is always available. It opens a confirmation titled **Clear
+shared API cache?** that states **Cached forge responses will be removed. Saved
+and in-progress review drafts will be preserved.** The confirmation offers
+**Cancel** and **Clear cache**, and ++escape++ cancels it. While the clear is
+running, the button reads **Clearing…** and the command reports **The shared API
+cache is being cleared.** as its reason for being unavailable. Clearing the cache
+removes shared API response entries only; it does not delete durable review
+drafts or any other user file. If it fails, the notice reads **The shared API
+cache could not be cleared. Retry after reconnecting the local service.**
+
+## Use installed plugins
+
+The sidebar also contains **Plugins**. Use its refresh button to reload the
+installed plugin catalog. The button is labelled **Refresh installed plugins**
+for accessibility. With no installed desktop providers it shows **No desktop
+plugins installed.** A catalog failure is shown as an error while core
+repository and review views remain available.
+
+Started plugins contribute their declared navigation entries below their title.
+Select an entry to open its installed module. The module view identifies the
+plugin and version, shows **Loading plugin module…** while it starts, and
+provides **Reload plugin**. A plugin can also contribute a command button in
+the top application bar, alongside the built-in commands described under
+[Application bar commands](#application-bar-commands) above. The module may
+publish notifications; dismiss a notification with its close control.
+
+The module's declared help appears under **Plugin help**. If the help asset
+cannot be loaded, the workspace shows **Plugin help is unavailable.** A module
+whose resources are missing or changed shows an error instead of loading an
+unverified asset.
+
+The sidebar makes non-started states explicit:
+
+- **Available in the terminal only.** means the distribution has a terminal
+  plugin without a desktop entry point.
+- **Disabled in configuration.** means the plugin is disabled.
+- **Incompatible with this desktop version.** means its declared desktop API
+  is not supported by this application.
+- **Plugin is starting.** means the provider is still being brought up.
+- **Plugin failed to start.** or **Plugin stopped.** means the provider did not
+  remain available. When an error was recorded, the item shows that error text
+  in place of the sentence.
+- **No desktop views declared.** means a started provider has no navigation
+  entry to display.
+
+Desktop providers are trusted installed Python and UI code. Tongs validates
+their manifest, keeps navigation, methods, events, focus targets, and assets
+within the provider's declared scope, and isolates each module's stylesheet in
+its own UI root. These controls prevent accidental cross-plugin routing and
+resource access; they are not a sandbox for a malicious installed extension.
+Install and enable providers only when you trust their publisher. The provider
+guide covers the supported entry points and configuration.

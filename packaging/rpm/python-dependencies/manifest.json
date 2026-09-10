@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "target": {
+    "architecture": "x86_64",
+    "distribution": "fedora",
+    "release": "44",
+    "python_minimum": "3.12"
+  },
+  "repositories": [
+    "fedora",
+    "updates"
+  ],
+  "system_requirements": [
+    {"requirement": "python(abi) >= 3.12", "import": null},
+    {"requirement": "python3dist(aiosqlite) >= 0.20", "import": "aiosqlite"},
+    {"requirement": "python3dist(cryptography) >= 43", "import": "cryptography"},
+    {"requirement": "python3dist(httpx) >= 0.27", "import": "httpx"},
+    {"requirement": "python3dist(id) >= 1.1", "import": "id"},
+    {"requirement": "python3dist(packaging) >= 24", "import": "packaging"},
+    {"requirement": "python3dist(platformdirs) >= 4.2", "import": "platformdirs"},
+    {"requirement": "python3dist(pyasn1) >= 0.6", "import": "pyasn1"},
+    {"requirement": "python3dist(pydantic) >= 2.12", "import": "pydantic"},
+    {"requirement": "python3dist(email-validator) >= 2", "import": "email_validator"},
+    {"requirement": "python3dist(pyjwt) >= 2.1", "import": "jwt"},
+    {"requirement": "python3dist(pyopenssl) >= 23", "import": "OpenSSL"},
+    {"requirement": "python3dist(pyperclip) >= 1.8", "import": "pyperclip"},
+    {"requirement": "python3dist(requests)", "import": "requests"},
+    {"requirement": "python3dist(rich) >= 13", "import": "rich"},
+    {"requirement": "python3dist(textual) >= 1", "import": "textual"},
+    {"requirement": "python3dist(typing-extensions) >= 4.14.1", "import": "typing_extensions"},
+    {"requirement": "python3dist(urllib3) >= 2", "import": "urllib3"}
+  ],
+  "companions": [
+    {
+      "distribution": "sigstore-models",
+      "version": "0.0.6",
+      "rpm_source_name": "python-sigstore-models",
+      "binary_rpm": {
+        "name": "python3-sigstore-models",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
+      "module": "sigstore_models",
+      "license": "MIT",
+      "python_requires": ">=3.10",
+      "build_backend": "hatchling (Fedora compatibility patch from uv_build)",
+      "source": {
+        "filename": "sigstore_models-0.0.6.tar.gz",
+        "url": "https://files.pythonhosted.org/packages/c6/ed/5c0ff809f90b19f4e971e17c1ed11f4df60082c6010b32a82054087e91e0/sigstore_models-0.0.6.tar.gz",
+        "sha256": "c766c09470c2a7e8a4a333c893f07e2001c56a3ff1757b1a246119f53169a849",
+        "bytes": 7037
+      }
+    },
+    {
+      "distribution": "sigstore-rekor-types",
+      "version": "0.0.18",
+      "rpm_source_name": "python-sigstore-rekor-types",
+      "binary_rpm": {
+        "name": "python3-sigstore-rekor-types",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
+      "module": "rekor_types",
+      "license": "Apache-2.0",
+      "python_requires": ">=3.8",
+      "build_backend": "setuptools",
+      "source": {
+        "filename": "sigstore_rekor_types-0.0.18.tar.gz",
+        "url": "https://files.pythonhosted.org/packages/b4/54/102e772445c5e849b826fbdcd44eb9ad7b3d10fda17b08964658ec7027dc/sigstore_rekor_types-0.0.18.tar.gz",
+        "sha256": "19aef25433218ebf9975a1e8b523cc84aaf3cd395ad39a30523b083ea7917ec5",
+        "bytes": 15687
+      }
+    },
+    {
+      "distribution": "rfc8785",
+      "version": "0.1.4",
+      "rpm_source_name": "python-rfc8785",
+      "binary_rpm": {
+        "name": "python3-rfc8785",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
+      "module": "rfc8785",
+      "license": "Apache-2.0",
+      "python_requires": ">=3.8",
+      "build_backend": "flit-core",
+      "source": {
+        "filename": "rfc8785-0.1.4.tar.gz",
+        "url": "https://files.pythonhosted.org/packages/ef/2f/fa1d2e740c490191b572d33dbca5daa180cb423c24396b856f5886371d8b/rfc8785-0.1.4.tar.gz",
+        "sha256": "e545841329fe0eee4f6a3b44e7034343100c12b4ec566dc06ca9735681deb4da",
+        "bytes": 14321
+      }
+    },
+    {
+      "distribution": "securesystemslib",
+      "version": "1.5.1",
+      "rpm_source_name": "python-securesystemslib",
+      "binary_rpm": {
+        "name": "python3-securesystemslib",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
+      "module": "securesystemslib",
+      "license": "MIT AND CC0-1.0",
+      "python_requires": "~=3.10",
+      "build_backend": "hatchling",
+      "source": {
+        "filename": "securesystemslib-1.5.1.tar.gz",
+        "url": "https://files.pythonhosted.org/packages/81/d4/f9323507144693d869f30f13694035438ab6642153b94e3057945cf0584f/securesystemslib-1.5.1.tar.gz",
+        "sha256": "4b8d00abd93707ead10b69eb2b8582376a1364de3b0a71077de534c2ef4985e0",
+        "bytes": 947087
+      }
+    },
+    {
+      "distribution": "tuf",
+      "version": "7.0.1",
+      "rpm_source_name": "python-tuf",
+      "binary_rpm": {
+        "name": "python3-tuf",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
+      "module": "tuf",
+      "license": "Apache-2.0 OR MIT",
+      "python_requires": ">=3.10",
+      "build_backend": "hatchling (Fedora 1.31 compatibility patch)",
+      "source": {
+        "filename": "tuf-7.0.1.tar.gz",
+        "url": "https://files.pythonhosted.org/packages/9c/dd/52e7390cbac308e6b1cfe6be9bc3a96fe26326d5893cc297a52bb72792a9/tuf-7.0.1.tar.gz",
+        "sha256": "5ada1db78da3518fa851e28588f4b2249b8662a28ae528f54afa2a1de541fb31",
+        "bytes": 274148
+      }
+    },
+    {
+      "distribution": "rfc3161-client",
+      "version": "1.0.8",
+      "rpm_source_name": "python-rfc3161-client",
+      "binary_rpm": {
+        "name": "python3-rfc3161-client",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "x86_64"
+      },
+      "module": "rfc3161_client",
+      "license": "Apache-2.0 AND BSD-3-Clause AND MIT AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception)",
+      "python_requires": ">=3.9",
+      "build_backend": "maturin",
+      "source": {
+        "filename": "rfc3161_client-1.0.8.tar.gz",
+        "url": "https://files.pythonhosted.org/packages/18/a6/cf05ce2b73da1e7c876c8992035bcbede938483f16ad04f0bda34c39b299/rfc3161_client-1.0.8.tar.gz",
+        "sha256": "4bda5a2bc6947c16b6f8df90ff0e99cb333d78ab1465517f637d313d75703651",
+        "bytes": 107402
+      },
+      "cargo": {
+        "lock_sha256": "aaf11a5cd3d1624a1294ee03436760fb5678f9b63936c8a89ddcdae491ce665b",
+        "locked_packages": 77,
+        "git_dependency": "https://github.com/pyca/cryptography.git?tag=49.0.0#e300bbe2f1bec75e5ee7e0ab7b196958831b3db6",
+        "license_sources": [
+          {
+            "filename": "cryptography-LICENSE",
+            "url": "https://raw.githubusercontent.com/pyca/cryptography/e300bbe2f1bec75e5ee7e0ab7b196958831b3db6/LICENSE",
+            "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb",
+            "bytes": 197
+          },
+          {
+            "filename": "cryptography-LICENSE.APACHE",
+            "url": "https://raw.githubusercontent.com/pyca/cryptography/e300bbe2f1bec75e5ee7e0ab7b196958831b3db6/LICENSE.APACHE",
+            "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe",
+            "bytes": 11360
+          },
+          {
+            "filename": "cryptography-LICENSE.BSD",
+            "url": "https://raw.githubusercontent.com/pyca/cryptography/e300bbe2f1bec75e5ee7e0ab7b196958831b3db6/LICENSE.BSD",
+            "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb",
+            "bytes": 1532
+          }
+        ],
+        "system_openssl_patch": true
+      }
+    },
+    {
+      "distribution": "sigstore",
+      "version": "4.5.0",
+      "rpm_source_name": "python-sigstore",
+      "binary_rpm": {
+        "name": "python3-sigstore",
+        "epoch": 0,
+        "release": "1.fc44",
+        "architecture": "noarch"
+      },
+      "module": "sigstore",
+      "license": "Apache-2.0",
+      "python_requires": ">=3.10",
+      "build_backend": "flit-core",
+      "source": {
+        "filename": "sigstore-4.5.0.tar.gz",
+        "url": "https://files.pythonhosted.org/packages/18/e0/279419065e2d7102413605b3456122adbbccbc42e010b499c7b882fc01f8/sigstore-4.5.0.tar.gz",
+        "sha256": "020d3e07f622b2916bf453e66ff6ff0711e1fdc5ab69e8bd8902f71d9fcb316f",
+        "bytes": 90969
+      }
+    }
+  ],
+  "build_order": [
+    "sigstore-models",
+    "sigstore-rekor-types",
+    "rfc8785",
+    "securesystemslib",
+    "tuf",
+    "rfc3161-client",
+    "sigstore"
+  ]
+}

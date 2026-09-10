@@ -1,0 +1,39 @@
+name: Reproducible desktop archive
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fedora-44-x86-64:
+    name: Fedora 44 reproducible archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TONGS_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out exact source without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.TONGS_HEAD_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Record hosted runner and Podman versions
+        run: |
+          uname -a
+          podman version
+      - name: Build twice in the pinned Fedora environment
+        run: >-
+          packaging/desktop/archive/run_hosted.sh
+          --source-root "$GITHUB_WORKSPACE"
+          --output-dir "$RUNNER_TEMP/tongs-desktop-archive"
+      - name: Upload archive and reproducibility evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-archive-${{ env.TONGS_HEAD_SHA }}
+          path: ${{ runner.temp }}/tongs-desktop-archive
+          if-no-files-found: error
+          retention-days: 14

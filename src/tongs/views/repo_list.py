@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
@@ -9,6 +11,7 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Input, Static
 
 from tongs.scanner.repo import ForgeType, Repo
+from tongs.services.errors import ServiceError
 
 
 def _forge_label(forge_type: ForgeType | None) -> str:
@@ -22,7 +25,13 @@ def _forge_label(forge_type: ForgeType | None) -> str:
 class RepoListScreen(Screen):
     """Searchable, filterable repo list with DataTable."""
 
-    BINDINGS = [
+    DEFAULT_CSS = """
+    RepoListScreen #repo-search {
+        display: none;
+    }
+    """
+
+    BINDINGS: ClassVar[list] = [
         Binding("escape", "go_back", "Back", show=True),
         Binding("q", "go_back", "Back", show=False),
         Binding("slash", "start_search", "Filter", show=True, key_display="/"),
@@ -59,12 +68,23 @@ class RepoListScreen(Screen):
         self._repo_data: dict[str, Repo] = {}
         self._sort_key: str = "name"
         self._apply_filters()
+        # The filter box stays hidden until "/" reveals it, so the table keeps
+        # the focus and the advertised bindings reach the screen.
+        table.focus()
 
     def action_go_back(self) -> None:
+        search = self.query_one("#repo-search", Input)
+        if self.focused is search:
+            # Escape closes the filter and restores the unfiltered list.
+            search.value = ""
+            search.display = False
+            self.query_one("#repo-table", DataTable).focus()
+            return
         self.app.pop_screen()
 
     def action_start_search(self) -> None:
         search = self.query_one("#repo-search", Input)
+        search.display = True
         search.focus()
 
     def action_cycle_forge(self) -> None:
@@ -159,12 +179,21 @@ class RepoListScreen(Screen):
         self._apply_filters()
 
     def action_refresh(self) -> None:
+        self.app.refresh_repositories()
+
+    def refresh_rows(self) -> None:
+        """Render the latest repository inventory after discovery."""
         self._apply_filters()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         key = str(event.row_key.value)
         repo = self._repo_data.get(key)
         if repo:
+            try:
+                self.app.services.repository_ref(repo)
+            except ServiceError as error:
+                self.notify(error.message, severity="warning")
+                return
             from tongs.views.inbox import InboxScreen
 
             self.app.push_screen(InboxScreen(repo=repo))

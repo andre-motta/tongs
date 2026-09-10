@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import fields
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from urllib.parse import quote as urlquote
 
 import httpx
 
-from tongs.errors import ForgeError, NetworkError, redact_credentials
+from tongs.errors import (
+    ConflictError,
+    ForgeError,
+    NetworkError,
+    redact_credentials,
+)
 from tongs.forges.base import ForgeClient
 from tongs.forges.http import map_http_error, paginate, request
 from tongs.forges.models import (
@@ -15,6 +22,8 @@ from tongs.forges.models import (
     Commit,
     Discussion,
     ForgeHost,
+    ForgeMergeResult,
+    ForgeMutationResult,
     InlineComment,
     MRDetail,
     MRState,
@@ -22,6 +31,7 @@ from tongs.forges.models import (
     Pipeline,
     PipelineJob,
     ReviewDecision,
+    SourceCleanupStatus,
     User,
 )
 
@@ -29,7 +39,7 @@ from tongs.forges.models import (
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.fromisoformat(value)
 
 
 def _parse_ci_status(status: str | None, conclusion: str | None) -> CIStatus:
@@ -88,6 +98,90 @@ def _split_repo_path(repo_path: str) -> tuple[str, str]:
     if len(parts) != 2:
         return repo_path, ""
     return parts[0], parts[1]
+
+
+def _github_cleanup_target(
+    value: dict | list,
+    *,
+    repo_path: str,
+    head_sha: str | None,
+    expected_source_repository: str | None,
+    expected_source_branch: str | None,
+    expected_target_branch: str | None,
+) -> tuple[str | None, str | None, SourceCleanupStatus]:
+    if not isinstance(value, dict):
+        raise TypeError("invalid GitHub pull request response")
+    head = value.get("head")
+    base = value.get("base")
+    if not isinstance(head, dict) or not isinstance(base, dict):
+        raise TypeError("invalid GitHub pull request response")
+    head_repo = head.get("repo")
+    base_repo = base.get("repo")
+    if not isinstance(head_repo, dict) or not isinstance(base_repo, dict):
+        raise TypeError("invalid GitHub pull request response")
+    source_repository = head_repo.get("full_name")
+    source_branch = head.get("ref")
+    source_head = head.get("sha")
+    target_repository = base_repo.get("full_name")
+    target_branch = base.get("ref")
+    default_branch = base_repo.get("default_branch")
+    if not all(
+        isinstance(item, str) and item
+        for item in (
+            source_repository,
+            source_branch,
+            source_head,
+            target_repository,
+            target_branch,
+        )
+    ):
+        raise ValueError("invalid GitHub pull request response")
+    if target_repository.casefold() != repo_path.casefold():
+        raise ConflictError("GitHub pull request target repository changed")
+    if head_sha is not None and source_head != head_sha:
+        raise ConflictError("GitHub pull request head changed")
+    if (
+        expected_source_repository is not None
+        and source_repository.casefold() != expected_source_repository.casefold()
+    ):
+        raise ConflictError("GitHub pull request source repository changed")
+    if expected_source_branch is not None and source_branch != expected_source_branch:
+        raise ConflictError("GitHub pull request source branch changed")
+    if expected_target_branch is not None and target_branch != expected_target_branch:
+        raise ConflictError("GitHub pull request target branch changed")
+    if (
+        source_repository.casefold() != repo_path.casefold()
+        or source_branch == target_branch
+        or not isinstance(default_branch, str)
+        or not default_branch
+        or source_branch == default_branch
+    ):
+        return None, None, SourceCleanupStatus.REJECTED
+    return source_branch, source_head, SourceCleanupStatus.UNKNOWN
+
+
+def _github_ref_sha(value: dict | list) -> str:
+    if not isinstance(value, dict) or not isinstance(value.get("object"), dict):
+        raise TypeError("invalid GitHub reference response")
+    sha = value["object"].get("sha")
+    if not isinstance(sha, str) or not sha:
+        raise ValueError("invalid GitHub reference response")
+    return sha
+
+
+def _github_state_result(
+    value: dict | list, number: int, expected_state: str
+) -> ForgeMutationResult:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("number")) is not int
+        or value.get("number") != number
+        or value.get("state") != expected_state
+        or type(value.get("id")) is not int
+        or value["id"] <= 0
+    ):
+        raise ValueError("invalid GitHub pull request state response")
+    return ForgeMutationResult(str(value["id"]))
 
 
 class GitHubClient(ForgeClient):
@@ -181,8 +275,8 @@ class GitHubClient(ForgeClient):
                     f"/repos/{owner}/{repo}/pulls/{number}",
                 )
                 results.append(self._parse_pr_summary(pr_data, repo_path))
-            except Exception:
-                pass
+            except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
+                continue
         return results
 
     def _repo_path_from_api_url(self, api_url: str) -> str:
@@ -252,13 +346,36 @@ class GitHubClient(ForgeClient):
             self._http,
             f"/repos/{owner}/{repo}/pulls/{number}/comments",
         )
-        discussions = []
+        roots = {
+            comment["id"]: comment
+            for comment in data
+            if not comment.get("in_reply_to_id")
+        }
+        replies: dict[int, list[dict]] = {root_id: [] for root_id in roots}
         for comment in data:
-            root = self._parse_review_comment(comment)
+            root_id = comment.get("in_reply_to_id")
+            if root_id in replies:
+                replies[root_id].append(comment)
+        discussions = []
+        for root_id, comment in roots.items():
+            parsed = self._parse_review_comment(comment)
+            root = InlineComment(
+                id=parsed.id,
+                author=parsed.author,
+                body=parsed.body,
+                created_at=parsed.created_at,
+                file_path=parsed.file_path,
+                old_line=parsed.old_line,
+                new_line=parsed.new_line,
+                is_resolved=parsed.is_resolved,
+                replies=tuple(
+                    self._parse_review_comment(reply) for reply in replies[root_id]
+                ),
+            )
             is_inline = bool(comment.get("path"))
             discussions.append(
                 Discussion(
-                    id=str(comment["id"]),
+                    id=str(root_id),
                     is_inline=is_inline,
                     root_comment=root,
                     is_resolved=False,
@@ -277,18 +394,28 @@ class GitHubClient(ForgeClient):
         body: str,
         start_line: int | None = None,
         start_side: str | None = None,
-    ) -> InlineComment:
+        *,
+        old_path: str | None = None,
+        new_path: str | None = None,
+        head_sha: str | None = None,
+        base_sha: str | None = None,
+        start_sha: str | None = None,
+        old_line: int | None = None,
+        new_line: int | None = None,
+        start_old_line: int | None = None,
+        start_new_line: int | None = None,
+    ) -> ForgeMutationResult:
         owner, repo = _split_repo_path(repo_path)
-        pr_data = await request(
-            self._http,
-            "GET",
-            f"/repos/{owner}/{repo}/pulls/{number}",
-        )
-        commit_id = pr_data.get("head", {}).get("sha", "")
+        commit_id = head_sha
+        if commit_id is None:
+            pr_data = await request(
+                self._http, "GET", f"/repos/{owner}/{repo}/pulls/{number}"
+            )
+            commit_id = pr_data.get("head", {}).get("sha", "")
         payload: dict = {
             "body": body,
             "commit_id": commit_id,
-            "path": file_path,
+            "path": new_path or file_path,
             "line": line,
             "side": side,
         }
@@ -301,7 +428,8 @@ class GitHubClient(ForgeClient):
             f"/repos/{owner}/{repo}/pulls/{number}/comments",
             json=payload,
         )
-        return self._parse_review_comment(data)
+        comment = self._parse_review_comment(data)
+        return ForgeMutationResult(comment.id, comment_id=comment.id)
 
     async def reply_to_discussion(
         self,
@@ -309,15 +437,21 @@ class GitHubClient(ForgeClient):
         number: int,
         discussion_id: str,
         body: str,
-    ) -> InlineComment:
+        *,
+        root_comment_id: str | None = None,
+    ) -> ForgeMutationResult:
         owner, repo = _split_repo_path(repo_path)
         data = await request(
             self._http,
             "POST",
-            f"/repos/{owner}/{repo}/pulls/comments/{discussion_id}/replies",
+            f"/repos/{owner}/{repo}/pulls/{number}/comments/"
+            f"{root_comment_id or discussion_id}/replies",
             json={"body": body},
         )
-        return self._parse_review_comment(data)
+        comment = self._parse_review_comment(data)
+        return ForgeMutationResult(
+            comment.id, comment_id=comment.id, discussion_id=discussion_id
+        )
 
     async def resolve_discussion(
         self,
@@ -325,7 +459,7 @@ class GitHubClient(ForgeClient):
         number: int,
         discussion_id: str,
         resolved: bool,
-    ) -> None:
+    ) -> ForgeMutationResult:
         """Resolve/unresolve a review thread via GraphQL."""
         owner, repo = _split_repo_path(repo_path)
         thread_node_id = await self._find_thread_node_id(
@@ -343,41 +477,84 @@ class GitHubClient(ForgeClient):
                 "mutation($id: ID!) { unresolveReviewThread(input: {threadId: $id}) { reviewThread { isResolved } } }",
                 {"id": thread_node_id},
             )
+        return ForgeMutationResult(thread_node_id, discussion_id=discussion_id)
 
     async def _find_thread_node_id(
         self, owner: str, repo: str, number: int, comment_id: int
     ) -> str | None:
         """Find the GraphQL node ID of the review thread containing a comment."""
         query = """
-        query($owner: String!, $repo: String!, $number: Int!) {
+        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
             repository(owner: $owner, name: $repo) {
                 pullRequest(number: $number) {
-                    reviewThreads(first: 100) {
+                    reviewThreads(first: 100, after: $cursor) {
                         nodes {
                             id
-                            comments(first: 1) {
+                            comments(first: 100) {
                                 nodes { databaseId }
+                                pageInfo { hasNextPage endCursor }
                             }
                         }
+                        pageInfo { hasNextPage endCursor }
                     }
                 }
             }
         }
         """
-        data = await self._graphql(
-            query, {"owner": owner, "repo": repo, "number": number}
-        )
-        threads = (
-            data.get("repository", {})
-            .get("pullRequest", {})
-            .get("reviewThreads", {})
-            .get("nodes", [])
-        )
-        for thread in threads:
-            comments = thread.get("comments", {}).get("nodes", [])
-            if comments and comments[0].get("databaseId") == comment_id:
-                return thread["id"]
+        cursor = None
+        while True:
+            data = await self._graphql(
+                query,
+                {"owner": owner, "repo": repo, "number": number, "cursor": cursor},
+            )
+            connection = (
+                data.get("repository", {})
+                .get("pullRequest", {})
+                .get("reviewThreads", {})
+            )
+            for thread in connection.get("nodes", []):
+                comments = thread.get("comments", {})
+                if any(
+                    c.get("databaseId") == comment_id for c in comments.get("nodes", [])
+                ):
+                    return thread["id"]
+                found = await self._find_comment_in_thread_pages(
+                    thread["id"], comments.get("pageInfo", {}), comment_id
+                )
+                if found:
+                    return thread["id"]
+            page = connection.get("pageInfo", {})
+            if not page.get("hasNextPage"):
+                break
+            cursor = page.get("endCursor")
         return None
+
+    async def _find_comment_in_thread_pages(
+        self, thread_id: str, page: dict, comment_id: int
+    ) -> bool:
+        query = """
+        query($id: ID!, $cursor: String) {
+            node(id: $id) {
+                ... on PullRequestReviewThread {
+                    comments(first: 100, after: $cursor) {
+                        nodes { databaseId }
+                        pageInfo { hasNextPage endCursor }
+                    }
+                }
+            }
+        }
+        """
+        while page.get("hasNextPage"):
+            data = await self._graphql(
+                query, {"id": thread_id, "cursor": page.get("endCursor")}
+            )
+            comments = data.get("node", {}).get("comments", {})
+            if any(
+                c.get("databaseId") == comment_id for c in comments.get("nodes", [])
+            ):
+                return True
+            page = comments.get("pageInfo", {})
+        return False
 
     @property
     def supports_thread_resolution(self) -> bool:
@@ -390,7 +567,9 @@ class GitHubClient(ForgeClient):
         verdict: ReviewDecision,
         body: str,
         inline_comments: list[dict] | None = None,
-    ) -> None:
+        *,
+        head_sha: str | None = None,
+    ) -> ForgeMutationResult:
         owner, repo = _split_repo_path(repo_path)
         event = {
             ReviewDecision.APPROVED: "APPROVE",
@@ -400,16 +579,23 @@ class GitHubClient(ForgeClient):
         payload: dict = {"event": event, "body": body or ""}
         if inline_comments:
             payload["comments"] = inline_comments
-        await request(
+        if head_sha is not None:
+            payload["commit_id"] = head_sha
+        data = await request(
             self._http,
             "POST",
             f"/repos/{owner}/{repo}/pulls/{number}/reviews",
             json=payload,
         )
+        return ForgeMutationResult(str(data["id"]))
 
-    async def approve_mr(self, repo_path: str, number: int) -> None:
+    async def approve_mr(
+        self, repo_path: str, number: int, *, head_sha: str | None = None
+    ) -> ForgeMutationResult:
         try:
-            await self.submit_review(repo_path, number, ReviewDecision.APPROVED, "")
+            return await self.submit_review(
+                repo_path, number, ReviewDecision.APPROVED, "", head_sha=head_sha
+            )
         except ForgeError as exc:
             if "422" in str(exc):
                 raise ForgeError("GitHub does not allow self-approving PRs") from exc
@@ -421,60 +607,107 @@ class GitHubClient(ForgeClient):
         number: int,
         squash: bool = False,
         delete_branch: bool = True,
-    ) -> None:
+        *,
+        head_sha: str | None = None,
+        expected_source_repository: str | None = None,
+        expected_source_branch: str | None = None,
+        expected_target_branch: str | None = None,
+    ) -> ForgeMergeResult:
         owner, repo = _split_repo_path(repo_path)
         merge_method = "squash" if squash else "merge"
-        await request(
+        cleanup = SourceCleanupStatus.NOT_REQUESTED
+        cleanup_branch: str | None = None
+        cleanup_head: str | None = None
+        if delete_branch:
+            pr_data = await request(
+                self._http,
+                "GET",
+                f"/repos/{owner}/{repo}/pulls/{number}",
+            )
+            cleanup_branch, cleanup_head, cleanup = _github_cleanup_target(
+                pr_data,
+                repo_path=repo_path,
+                head_sha=head_sha,
+                expected_source_repository=expected_source_repository,
+                expected_source_branch=expected_source_branch,
+                expected_target_branch=expected_target_branch,
+            )
+        data = await request(
             self._http,
             "PUT",
             f"/repos/{owner}/{repo}/pulls/{number}/merge",
-            json={"merge_method": merge_method},
+            json={
+                "merge_method": merge_method,
+                **({"sha": head_sha} if head_sha is not None else {}),
+            },
         )
-        if delete_branch:
+        if not isinstance(data, dict):
+            raise TypeError("invalid GitHub merge response")
+        if data.get("merged") is not True:
+            if data.get("merged") is False and isinstance(data.get("message"), str):
+                raise ConflictError("GitHub rejected the pull request merge")
+            raise ValueError("invalid GitHub merge response")
+        merge_sha = data.get("sha")
+        if not isinstance(merge_sha, str) or not merge_sha:
+            raise ValueError("invalid GitHub merge response")
+        if cleanup_branch is not None and cleanup_head is not None:
             try:
-                pr_data = await request(
+                ref_data = await request(
                     self._http,
                     "GET",
-                    f"/repos/{owner}/{repo}/pulls/{number}",
+                    f"/repos/{owner}/{repo}/git/ref/heads/"
+                    f"{urlquote(cleanup_branch, safe='/')}",
                 )
-                head = pr_data.get("head", {})
-                head_repo = head.get("repo", {}).get("full_name", "")
-                branch = head.get("ref", "")
-                if branch and head_repo == repo_path:
+                if _github_ref_sha(ref_data) != cleanup_head:
+                    cleanup = SourceCleanupStatus.REJECTED
+                else:
                     await request(
                         self._http,
                         "DELETE",
-                        f"/repos/{owner}/{repo}/git/refs/heads/{branch}",
+                        f"/repos/{owner}/{repo}/git/refs/heads/"
+                        f"{urlquote(cleanup_branch, safe='/')}",
                     )
-            except Exception:
-                pass
+                    cleanup = SourceCleanupStatus.CONFIRMED
+            except (
+                asyncio.CancelledError,
+                ForgeError,
+                ValueError,
+                TypeError,
+            ):
+                cleanup = SourceCleanupStatus.UNKNOWN
+        return ForgeMergeResult(merge_sha, merge_sha, cleanup)
 
-    async def close_mr(self, repo_path: str, number: int) -> None:
+    async def close_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         owner, repo = _split_repo_path(repo_path)
-        await request(
+        data = await request(
             self._http,
             "PATCH",
             f"/repos/{owner}/{repo}/pulls/{number}",
             json={"state": "closed"},
         )
+        return _github_state_result(data, number, "closed")
 
-    async def reopen_mr(self, repo_path: str, number: int) -> None:
+    async def reopen_mr(self, repo_path: str, number: int) -> ForgeMutationResult:
         owner, repo = _split_repo_path(repo_path)
-        await request(
+        data = await request(
             self._http,
             "PATCH",
             f"/repos/{owner}/{repo}/pulls/{number}",
             json={"state": "open"},
         )
+        return _github_state_result(data, number, "open")
 
-    async def add_comment(self, repo_path: str, number: int, body: str) -> None:
+    async def add_comment(
+        self, repo_path: str, number: int, body: str
+    ) -> ForgeMutationResult:
         owner, repo = _split_repo_path(repo_path)
-        await request(
+        data = await request(
             self._http,
             "POST",
             f"/repos/{owner}/{repo}/issues/{number}/comments",
             json={"body": body},
         )
+        return ForgeMutationResult(str(data["id"]), comment_id=str(data["id"]))
 
     async def list_pipelines(
         self,
@@ -494,12 +727,36 @@ class GitHubClient(ForgeClient):
         self, repo_path: str, pipeline_id: int
     ) -> list[PipelineJob]:
         owner, repo = _split_repo_path(repo_path)
-        data = await request(
-            self._http,
-            "GET",
-            f"/repos/{owner}/{repo}/actions/runs/{pipeline_id}/jobs",
-        )
-        return [self._parse_job(j) for j in data.get("jobs", [])]
+        path = f"/repos/{owner}/{repo}/actions/runs/{pipeline_id}/jobs"
+        jobs: list[dict] = []
+        total_count: int | None = None
+        for page in range(1, 101):
+            data = await request(
+                self._http,
+                "GET",
+                path,
+                params={"per_page": 100, "page": page},
+            )
+            if not isinstance(data, dict):
+                raise ForgeError("GitHub returned an invalid pipeline jobs response")
+            page_total = data.get("total_count")
+            page_jobs = data.get("jobs")
+            if (
+                type(page_total) is not int
+                or page_total < 0
+                or page_total > 10_000
+                or not isinstance(page_jobs, list)
+                or len(page_jobs) > 100
+                or (total_count is not None and page_total != total_count)
+            ):
+                raise ForgeError("GitHub returned invalid pipeline jobs metadata")
+            total_count = page_total
+            jobs.extend(page_jobs)
+            if len(jobs) == total_count:
+                return [self._parse_job(job) for job in jobs]
+            if len(jobs) > total_count or not page_jobs:
+                raise ForgeError("GitHub returned incomplete pipeline jobs metadata")
+        raise ForgeError("GitHub pipeline job pagination exceeded its limit")
 
     async def get_job_log(self, repo_path: str, job_id: int) -> str:
         owner, repo = _split_repo_path(repo_path)
@@ -586,10 +843,8 @@ class GitHubClient(ForgeClient):
             source_branch=head.get("ref", ""),
             target_branch=base.get("ref", ""),
             ci_status=ci_status,
-            created_at=_parse_datetime(data.get("created_at"))
-            or datetime.now(timezone.utc),
-            updated_at=_parse_datetime(data.get("updated_at"))
-            or datetime.now(timezone.utc),
+            created_at=_parse_datetime(data.get("created_at")) or datetime.now(UTC),
+            updated_at=_parse_datetime(data.get("updated_at")) or datetime.now(UTC),
             web_url=data.get("html_url", ""),
             comment_count=data.get("comments", 0) + data.get("review_comments", 0),
             has_conflicts=data.get("mergeable_state") == "dirty",
@@ -622,7 +877,7 @@ class GitHubClient(ForgeClient):
             if all(s == CIStatus.SUCCESS for s in statuses):
                 return CIStatus.SUCCESS
             return CIStatus.UNKNOWN
-        except Exception:
+        except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
             return CIStatus.UNKNOWN
 
     async def _fetch_approvals(
@@ -643,7 +898,7 @@ class GitHubClient(ForgeClient):
                 elif state in ("CHANGES_REQUESTED", "DISMISSED"):
                     approvers.pop(user.username, None)
             return tuple(approvers.values())
-        except Exception:
+        except (ForgeError, ValueError, KeyError, TypeError, AttributeError):
             return ()
 
     def _parse_pr_detail(self, data: dict, repo_path: str) -> MRDetail:
@@ -659,6 +914,8 @@ class GitHubClient(ForgeClient):
             reviewers=tuple(requested_reviewers),
             assignees=tuple(assignees),
             changes_count=data.get("changed_files", 0),
+            head_sha=data.get("head", {}).get("sha", ""),
+            base_sha=data.get("base", {}).get("sha", ""),
         )
 
     def _parse_review_comment(self, data: dict) -> InlineComment:
@@ -666,8 +923,7 @@ class GitHubClient(ForgeClient):
             id=str(data.get("id", "")),
             author=_parse_user(data.get("user")),
             body=data.get("body", ""),
-            created_at=_parse_datetime(data.get("created_at"))
-            or datetime.now(timezone.utc),
+            created_at=_parse_datetime(data.get("created_at")) or datetime.now(UTC),
             file_path=data.get("path", ""),
             old_line=data.get("original_line") if data.get("side") == "LEFT" else None,
             new_line=data.get("line"),

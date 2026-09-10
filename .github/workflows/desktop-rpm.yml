@@ -1,0 +1,50 @@
+name: Desktop Fedora RPM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  fedora-44-rpm:
+    name: Fedora 44 source rebuild and lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TONGS_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out exact source without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          ref: ${{ env.TONGS_HEAD_SHA }}
+          persist-credentials: false
+      - name: Set up Python for RPM source checks
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Record hosted runner and Podman versions
+        run: |
+          uname -a
+          podman version
+          gh version
+      - name: Check RPM Python sources
+        run: |
+          python3 -m pip install ruff
+          ruff check packaging/rpm/desktop tests/packaging/rpm/desktop
+          ruff format --check packaging/rpm/desktop tests/packaging/rpm/desktop
+      - name: Build source RPMs and verify the package lifecycle
+        run: >-
+          packaging/rpm/desktop/run_hosted.sh
+          --output-dir "$RUNNER_TEMP/tongs-desktop-rpm"
+      - name: Upload RPMs and immutable evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fedora-44-tongs-rpms-${{ env.TONGS_HEAD_SHA }}
+          path: ${{ runner.temp }}/tongs-desktop-rpm
+          if-no-files-found: error
+          retention-days: 14

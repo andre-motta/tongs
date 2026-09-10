@@ -87,14 +87,12 @@ def _parse_git_diff_file(lines: list[str], start: int) -> tuple[DiffFile | None,
             i += 1
             continue
 
-        if line.startswith("rename from") or line.startswith("rename to"):
+        if line.startswith(("rename from", "rename to")):
             status = FileStatus.RENAMED
             i += 1
             continue
 
-        if line.startswith("similarity index") or line.startswith(
-            "dissimilarity index"
-        ):
+        if line.startswith(("similarity index", "dissimilarity index")):
             i += 1
             continue
 
@@ -251,18 +249,21 @@ def _parse_single_hunk(
     diff_lines: list[DiffLine] = []
     old_line = old_start
     new_line = new_start
+    old_consumed = 0
+    new_consumed = 0
     i = start + 1
 
     while i < len(lines):
         line = lines[i]
 
-        if line.startswith("@@ ") or line.startswith("diff --git "):
+        if line.startswith(("@@ ", "diff --git ")):
             break
 
-        if (
-            line.startswith("--- ")
-            and i + 1 < len(lines)
-            and lines[i + 1].startswith("+++ ")
+        if not line and old_consumed >= old_count and new_consumed >= new_count:
+            break
+
+        if _is_file_header_boundary(
+            lines, i, old_consumed, new_consumed, old_count, new_count
         ):
             break
 
@@ -276,6 +277,7 @@ def _parse_single_hunk(
                 )
             )
             new_line += 1
+            new_consumed += 1
         elif line.startswith("-"):
             diff_lines.append(
                 DiffLine(
@@ -286,6 +288,7 @@ def _parse_single_hunk(
                 )
             )
             old_line += 1
+            old_consumed += 1
         elif line.startswith(" ") or not line:
             diff_lines.append(
                 DiffLine(
@@ -297,6 +300,8 @@ def _parse_single_hunk(
             )
             old_line += 1
             new_line += 1
+            old_consumed += 1
+            new_consumed += 1
         elif line.startswith("\\"):
             diff_lines.append(
                 DiffLine(
@@ -325,10 +330,44 @@ def _parse_single_hunk(
     )
 
 
+def _is_file_header_boundary(
+    lines: list[str],
+    index: int,
+    old_consumed: int,
+    new_consumed: int,
+    old_count: int,
+    new_count: int,
+) -> bool:
+    """Recognize a following file header without swallowing source lines.
+
+    A complete hunk can use the normal count gate. For an incomplete hunk,
+    only a header pair followed immediately by another hunk header is treated
+    as a file boundary. This recovers subsequent files while retaining
+    file-header-like source lines that do not have that structure.
+    """
+
+    if not (
+        index + 1 < len(lines)
+        and lines[index].startswith("--- ")
+        and lines[index + 1].startswith("+++ ")
+    ):
+        return False
+    if old_consumed >= old_count and new_consumed >= new_count:
+        return True
+    # These two lines are also the valid unified-diff encoding of a deletion
+    # whose source starts with ``--`` followed by an addition starting with
+    # ``++``. Preserve them whenever both sides still fit the current hunk.
+    # A truncated plain diff can be ambiguous here; declared hunk counts take
+    # priority over speculative recovery of a following plain file.
+    if old_consumed < old_count and new_consumed < new_count:
+        return False
+    return index + 2 < len(lines) and HUNK_HEADER_RE.match(lines[index + 2]) is not None
+
+
 def _strip_prefix(path: str) -> str:
     """Strip a/ or b/ prefix from diff paths."""
     path = path.strip()
-    if path.startswith("a/") or path.startswith("b/"):
+    if path.startswith(("a/", "b/")):
         return path[2:]
     return path
 
@@ -342,5 +381,5 @@ def _detect_language(path: str) -> str:
 
         lexer = get_lexer_for_filename(path)
         return lexer.aliases[0] if lexer.aliases else lexer.name.lower()
-    except Exception:
+    except Exception:  # noqa: BLE001 - Third-party lexer failures must leave the diff readable.
         return ""

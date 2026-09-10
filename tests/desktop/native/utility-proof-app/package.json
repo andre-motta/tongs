@@ -1,0 +1,6 @@
+{
+  "name": "tongs-native-utility-proof",
+  "private": true,
+  "type": "module",
+  "main": "../utility-proof.mjs"
+}

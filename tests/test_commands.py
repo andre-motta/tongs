@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-
 from tongs.commands import TongsCommandProvider
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_provider(screen_name: str = "UnknownScreen") -> TongsCommandProvider:
     """Instantiate TongsCommandProvider without going through Textual init."""
     provider = TongsCommandProvider.__new__(TongsCommandProvider)
     mock_screen = MagicMock()
     type(mock_screen).__name__ = screen_name
+    mock_screen._review_draft = None
     mock_app = MagicMock()
     # Provider stores screen/app as private mangled attrs internally,
     # but _get_commands accesses self.screen / self.app which are properties
@@ -29,6 +29,7 @@ def _make_provider(screen_name: str = "UnknownScreen") -> TongsCommandProvider:
 # ===================================================================
 # 1. _global_commands returns expected entries
 # ===================================================================
+
 
 class TestGlobalCommands:
     def test_returns_three_entries(self):
@@ -49,6 +50,7 @@ class TestGlobalCommands:
 # 2. _get_commands includes globals for unknown screen
 # ===================================================================
 
+
 class TestGetCommandsUnknown:
     def test_includes_global_for_unknown_screen(self):
         provider = _make_provider("SomeRandomScreen")
@@ -64,6 +66,7 @@ class TestGetCommandsUnknown:
 # ===================================================================
 # 3. _inbox_commands returns expected entries
 # ===================================================================
+
 
 class TestInboxCommands:
     def test_returns_expected_entries(self):
@@ -83,6 +86,7 @@ class TestInboxCommands:
 # 4. _mr_detail_commands returns expected entries
 # ===================================================================
 
+
 class TestMRDetailCommands:
     def test_returns_expected_entries(self):
         provider = _make_provider("MRDetailScreen")
@@ -98,12 +102,15 @@ class TestMRDetailCommands:
         assert "Close" in names
         assert "Copy URL" in names
         assert "Refresh" in names
-        assert len(commands) == 13
+        assert "Submit Review" in names
+        assert "Next Review Draft" in names
+        assert len(commands) == 15
 
 
 # ===================================================================
 # 5. _get_commands dispatches by screen class name
 # ===================================================================
+
 
 class TestGetCommandsDispatch:
     def test_inbox_screen_includes_inbox_commands(self):
@@ -119,11 +126,11 @@ class TestGetCommandsDispatch:
         provider = _make_provider("MRDetailScreen")
         commands = provider._get_commands()
         names = [c[0] for c in commands]
-        # Globals (4) + detail (13) = 16
-        assert len(commands) == 17
+        assert len(commands) == 19
         assert "Approve" in names
         assert "Merge" in names
         assert "Help" in names
+        assert "Start Review" in names
 
     def test_repo_list_screen_includes_repo_commands(self):
         provider = _make_provider("RepoListScreen")

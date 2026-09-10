@@ -1,0 +1,18 @@
+FROM registry.fedoraproject.org/fedora:44
+
+LABEL org.opencontainers.image.title="Tongs desktop RPM source builder"
+LABEL org.opencontainers.image.description="Disposable Fedora 44 source preparation environment for issue 52"
+
+RUN dnf install --assumeyes --setopt=install_weak_deps=False \
+        dnf5-plugins \
+        createrepo_c \
+        git-core \
+        python3 \
+        python3-devel \
+        python3-packaging \
+        python3-pip \
+        'python3dist(hatch-vcs)' \
+        'python3dist(hatchling)' \
+        pyproject-rpm-macros \
+        rpm-build \
+    && dnf clean all

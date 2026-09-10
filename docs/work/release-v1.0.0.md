@@ -727,6 +727,15 @@ are the decision 3 work item and are deliberately not gated on the tag.
    rejected as a duplicate rather than silently succeeding. Verify the wheel and
    sdist filenames, the `METADATA` version, a clean install, both entry points and
    `importlib.metadata.version("tongs")` before going further.
+   The same tag also fires the automated desktop release job (the pull request
+   tracked on issue #54, branch `feat/desktop-release-publish`, opened after this
+   document was written): it builds the desktop archive, signs the manifest,
+   verifies the signature with the installer's own code, and creates the GitHub
+   Release `v1.0.0` with the archive, manifest, Sigstore bundle, SBOM, checksums
+   and RPMs, using the section 6 draft as the release body. Creating the release
+   does not retrigger `publish.yml`, whose only trigger is `push.tags`. Do not
+   create the release by hand; a hand-made release carries no attestation and
+   `src/tongs/desktop/installer/metadata.py` refuses to install from it.
 4. **Raise `core_minimum` to 1.0.0** in a reviewed change after the tag exists,
    across `run_hosted.sh:87`, `build_in_container.sh:34`, `manifest.json:37` and
    `DESKTOP_CORE_MINIMUM`.
@@ -736,13 +745,13 @@ are the decision 3 work item and are deliberately not gated on the tag.
    edit the same manifest.
 
    Section 4 step 5 and section 3 both describe this as work that does not exist.
-   It now does: the automated desktop release job is being built on
-   `feat/desktop-release-publish`, in its own pull request. **Read that pull
-   request rather than creating the release by hand.** Any manual
-   `gh release create` for `desktop-v1.0.0` is superseded by it, and creating one
-   by hand would produce a release with no attestation, no provenance and no
-   immutability guarantee, which is exactly what
-   `src/tongs/desktop/installer/metadata.py` refuses to install.
+   It now does: the automated desktop release job is the pull request tracked
+   on issue #54 (branch `feat/desktop-release-publish`), which supersedes the
+   separate `desktop-v1.0.0` tag: the `v1.0.0` tag carries both the PyPI publish
+   and the desktop release, as step 3 describes. **Read that pull request rather
+   than creating a release by hand.** A hand-made release would carry no
+   attestation, no provenance and no immutability guarantee, which is exactly
+   what `src/tongs/desktop/installer/metadata.py` refuses to install.
 
 Section 4's stop conditions still hold, minus the third: the core version now
 falls inside the payload's declared interval. The remaining ones are the

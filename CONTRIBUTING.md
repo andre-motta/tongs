@@ -38,10 +38,11 @@ npm ci --prefix desktop
 - **Data models:** Use frozen dataclasses for immutable data and regular
   dataclasses for mutable state.
 - **Commits:** Use a title, a blank line, a one-line description body, and
-  `git commit -s`. When adding a co-author trailer, use the address of the
-  vendor that produced the commit:
-  `Co-Authored-By: Codex <model> <noreply@openai.com>` or
-  `Co-Authored-By: Claude <model> <noreply@anthropic.com>`, with the actual
+  `git commit -s`. Do not write `Signed-off-by` by hand; `-s` adds it. When a
+  model produced the commit, add a co-author trailer naming the vendor that
+  actually produced it. Every agent working on this project runs on an
+  Anthropic model, so the trailer is
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` with the actual
   model name and no context-window annotation. Do not claim co-authorship by a
   vendor that did not produce the commit. Do not use em dashes in prose or
   commit messages.
@@ -57,6 +58,13 @@ senior contributor and a separate senior reviewer handle senior implementation
 and independent review; a bounded contributor handles well-specified assignments
 under senior review. Small fixes use the relevant checks without requiring an
 initiative or agent team.
+
+The models actually selected for those roles on the desktop initiative are
+Claude Fable 5.1 as orchestrator, Claude Opus 5 at high effort for senior
+implementation and for the separate independent review, and Claude Sonnet 5 at
+xhigh effort for bounded work under that senior review. Record the model and
+effort setting actually used in the handoff. The role names above are the
+contract; the model assignment is a current choice and can change.
 
 Desktop work uses issue-linked `feat/desktop-<issue>-<slug>` branches in isolated
 worktrees. Open PRs against `feat/desktop-app` with dependencies, exact tested
@@ -153,7 +161,7 @@ One more runs on that base:
 
 | Workflow | Trigger |
 |---|---|
-| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter |
+| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter, and pushes to either of its two named branches, `feat/desktop-app` and `feat/desktop-120-candidate-attestation` |
 
 `desktop-rpm.yml` (Desktop Fedora RPM), `desktop-python-rpms.yml` (Desktop Python
 companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are manual
@@ -161,9 +169,14 @@ only (`workflow_dispatch`); the production gate's `rpm-lifecycle` and `archive` 
 prove the same source rebuild, companion closure, lifecycle and byte-identical
 rebuild against the receipt-bound fresh archive on every pull request.
 
-`docs.yml` runs `mkdocs build --strict` and deploys the site, but only on a push
-to `main`. No pull-request check builds the documentation, which is why the
-strict build belongs in your local run.
+`docs.yml` runs `mkdocs build --strict` and deploys the site to GitHub Pages,
+but only on a push to `main` or a manual `workflow_dispatch`. No pull-request
+check builds the documentation, which is why the strict build belongs in your
+local run.
+
+`publish.yml` is the only workflow that runs on a tag. It matches `v*` and
+publishes to PyPI. No workflow listens for `desktop-v*`, and nothing in
+`.github/workflows` creates a GitHub Release.
 
 Every GitHub Action referenced from a workflow under `.github/workflows` is
 pinned to a full commit SHA with a trailing `# vX.Y.Z` comment, never a mutable
@@ -176,6 +189,28 @@ install step matches it; other tools a workflow installs ad hoc, such as
 these pins will arrive as Dependabot pull requests once #162 (v1.1.0) lands;
 until then, bump them by hand.
 
+### Re-running a hosted check
+
+**Download the evidence you need before you re-run anything.** Every gate
+artifact is named with the run id and the run attempt, and re-running all jobs
+starts a new attempt and drops the artifacts the previous attempt produced.
+Once a re-run has started, the evidence that would have explained the failure
+may already be gone.
+
+**A partial re-run fails closed, by design.** Re-running only the failed jobs
+does not re-run the jobs that passed, so those jobs never upload artifacts under
+the new attempt number, and `Desktop pre-merge aggregate` cannot download the
+complete receipt set it requires. That is intended: the aggregate asserts that
+one attempt produced every receipt for one revision. To get a green aggregate,
+re-run all jobs or push a new commit.
+
+**Never retry a flaky gate blindly.** A test that passes on the second attempt
+is a defect in the test, and this repository fixes it rather than rolling the
+dice: see #210, #215 and #218, each of which was a real ordering bug in an
+assertion that sampled state before it had settled. File the flake, fix the
+test, and say in the pull request which one it was. A re-run used to get past a
+red check without an explanation is not acceptable evidence.
+
 The Fedora harness interface is:
 
 ```bash
@@ -186,12 +221,28 @@ The production desktop release assembly gate is still separate from this
 pre-merge aggregate. Do not describe a fixture, Podman, or headless Node run as
 native Fedora, GPU, installer, signing, RPM, or release acceptance.
 
-For local Node work, bound the whole process tree, not only the V8 heap. Use a
-1 GiB memory limit, zero swap, a 64-task limit, `NODE_OPTIONS=--max-old-space-size=512`,
-one test worker, and an external deadline. Verify the guard before starting
-Node and fail on timeout or out-of-memory termination. See the
-[testing guide](.agents/testing/README.md) for the complete procedure and native
-evidence rules.
+For local Node work, bound the whole process tree, not only the V8 heap. Run
+the command inside a `systemd-run --user` unit with a 1 GiB memory limit, zero
+swap, a 64-task limit, `NODE_OPTIONS=--max-old-space-size=512`,
+`node --test --test-concurrency=1`, and an external deadline. Assert those
+effective limits from inside the guard before starting Node, and fail on a
+timeout or an out-of-memory termination rather than reporting the wrapper's exit
+status. See the [testing guide](.agents/testing/README.md) for the exact
+`systemd-run` invocation and the native evidence rules.
+
+Two rules exist because breaking them has repeatedly exhausted a developer's
+machine:
+
+- **Never assert on a DOM node.** Deep-equality and failure formatting walk
+  jsdom objects recursively and allocate outside V8, so a single failing
+  assertion can pass 1 GiB before the runner reports anything. Assert primitive
+  values: text, attributes, counts, serialized payloads, and numeric rectangle
+  coordinates.
+- **Never run a scratch negative control against reverted source.** Reviewers
+  verifying that a test would have caught a bug must reason from the diff and
+  the test, not rebuild the shell in a throwaway worktree with the fix removed.
+  Those runs are unbounded by construction, they duplicate a suite that already
+  ran in CI, and they are the usual cause of an out-of-memory kill.
 
 ## How to add a plugin
 

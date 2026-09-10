@@ -281,7 +281,10 @@ def test_reviewed_constants_still_match_the_producer_literals() -> None:
     assert f'"{USER_ARCHIVE_ARTIFACT_ID}"' in producer
 
     hosted = (ROOT / "packaging/desktop/archive/run_hosted.sh").read_text()
-    assert f"release_version={DESKTOP_RELEASE_VERSION}\n" in hosted
+    assert (
+        f"release_version=${{TONGS_RELEASE_VERSION:-{DESKTOP_RELEASE_VERSION}}}\n"
+        in hosted
+    )
 
     contract = json.loads((ROOT / "packaging/rpm/desktop/manifest.json").read_text())
     assert contract["accepted_desktop"]["release_version"] == DESKTOP_RELEASE_VERSION

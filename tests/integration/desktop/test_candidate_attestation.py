@@ -25,7 +25,7 @@ SOURCE_TREE = "b" * 40
 REF = "refs/heads/feat/desktop-120-candidate-attestation"
 PR_REF = "refs/pull/138/merge"
 PUSH_TRANSFER_MANIFEST_SHA256 = (
-    "504b4cbfeb93d7769a67de10b8dc0aec809932e8761fd50a52ad948df32e4230"
+    "7bc6b4b14d45486f19086c15322734aff532ec36cf672bff8832b7b4b1620e94"
 )
 
 
@@ -180,7 +180,7 @@ def _write_output(root: Path) -> Path:
         "build-a.sha256": b"identical build\n",
         "build-b.sha256": b"identical build\n",
         "electron-v44.2.0-linux-x64.zip": b"electron fixture",
-        "inputs.env": f"TONGS_HEAD_SHA={SOURCE_COMMIT}\n".encode(),
+        "inputs.env": f"TONGS_HEAD_SHA={SOURCE_COMMIT}\nRELEASE_VERSION=0.5.0\n".encode(),
         "rpm-nevra.txt": b"fixture-1.0-1.x86_64\n",
         "rpm-sha256-check.txt": b"fixture OK\n",
         "rpm-signatures.txt": b"fixture signature\n",
@@ -532,7 +532,7 @@ def test_official_and_verify_cli_reject_pull_request_identity(tmp_path: Path) ->
         (report / "candidate-attestation-results.json").read_text(encoding="utf-8")
     )
     assert failure["result"] == "fail"
-    assert "explicitly allowed branch" in failure["error"]
+    assert "allowed branch or a release tag" in failure["error"]
 
 
 def test_transfer_manifest_binds_exact_paths_source_and_subjects(
@@ -554,7 +554,7 @@ def test_transfer_manifest_binds_exact_paths_source_and_subjects(
         "desktop-manifest-v1.json",
         candidate.CANDIDATE_ARCHIVE_NAME,
     }
-    assert len(validated["files"]) == len(candidate._EXPECTED_TRANSFER_FILES)
+    assert len(validated["files"]) == len(candidate._expected_transfer_files("0.5.0"))
 
 
 @pytest.mark.parametrize("mutation", ["extra", "missing", "bytes", "source"])
@@ -704,23 +704,29 @@ def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
     workflow_env = workflow.split("env:\n", 1)[1].split("\njobs:\n", 1)[0]
 
     assert "pull_request_target" not in workflow
-    assert "workflow_dispatch" not in workflow
+    # The only manual trigger is the dry run, and it publishes nothing.
+    assert workflow.count("workflow_dispatch:") == 1
+    assert "dry_run:" in workflow
     assert "runner.temp" not in workflow_env
     assert "CANDIDATE_ROOT=%s/tongs-desktop-candidate" in workflow
     assert '>> "$GITHUB_ENV"' in workflow
-    assert workflow.count('-I -m venv "$RUNNER_TEMP/tongs-candidate-venv"') == 3
+    # Four isolated interpreters: validation, transfer, signing and publish.
+    assert workflow.count('-I -m venv "$RUNNER_TEMP/tongs-candidate-venv"') == 4
     assert "CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python" in workflow
-    assert workflow.count('"$CANDIDATE_PYTHON" -I -m pip install') == 3
+    assert workflow.count('"$CANDIDATE_PYTHON" -I -m pip install') == 4
     assert '"$CANDIDATE_PYTHON" -I -m pytest' in workflow
-    # prepare-transfer, validate-transfer, verify and verify-sbom.  Every
-    # candidate command must run through the isolated source-built interpreter.
-    assert workflow.count('"$CANDIDATE_PYTHON" -I\n') == 4
+    # prepare-transfer, validate-transfer, verify and verify-sbom, then the
+    # five release publication commands.  Every candidate and release command
+    # must run through the isolated source-built interpreter.
+    assert workflow.count('"$CANDIDATE_PYTHON" -I\n') == 9
     for command in ("prepare-transfer", "validate-transfer", "verify", "verify-sbom"):
         assert f"candidate_attestation.py {command}\n" in workflow
-    assert workflow.count("--isolated") == 3
-    assert workflow.count("PYTHONNOUSERSITE=1") == 3
-    assert workflow.count("site.ENABLE_USER_SITE is False") == 3
-    assert workflow.count("tongs_path.is_relative_to(workspace)") == 3
+    for command in ("assemble", "verify", "require-absent", "verify-published"):
+        assert f"release_publication.py {command}\n" in workflow
+    assert workflow.count("--isolated") == 4
+    assert workflow.count("PYTHONNOUSERSITE=1") == 4
+    assert workflow.count("site.ENABLE_USER_SITE is False") == 4
+    assert workflow.count("tongs_path.is_relative_to(workspace)") == 4
     assert "${{ runner.temp }}/tongs-desktop-candidate" in workflow
     assert "push-to-registry: false" in workflow
     assert "create-storage-record: false" in workflow
@@ -738,7 +744,11 @@ def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
     archive_job = workflow.split("  candidate-archive:", 1)[1].split(
         "  candidate-attestation:", 1
     )[0]
-    signing_job = workflow.split("  candidate-attestation:", 1)[1]
+    signing_job = workflow.split("  candidate-attestation:", 1)[1].split(
+        "  release-rpm:", 1
+    )[0]
+    rpm_job = workflow.split("  release-rpm:", 1)[1].split("  release-publish:", 1)[0]
+    publish_job = workflow.split("  release-publish:", 1)[1]
     assert "id-token: write" not in archive_job
     assert "attestations: write" not in archive_job
     assert "id-token: write" in signing_job
@@ -746,6 +756,13 @@ def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
     assert "packages: write" not in signing_job
     assert "contents: write" not in signing_job
     assert "artifact-metadata: write" not in signing_job
+    # The RPM rebuild and the publisher never hold the signing token, and only
+    # the publisher may write contents.
+    for job in (rpm_job, publish_job):
+        assert "id-token: write" not in job
+        assert "attestations: write" not in job
+    assert "contents: write" not in rpm_job
+    assert publish_job.count("contents: write") == 1
 
 
 def test_verify_cli_retains_a_fail_closed_result(tmp_path: Path) -> None:
@@ -927,3 +944,54 @@ def test_sbom_statement_rejects_subject_and_type_substitutions(
             subject_name="archive.tar.gz",
             subject_sha256="a" * 64,
         )
+
+
+def test_release_tag_refs_derive_their_version_and_archive_name() -> None:
+    from tests.integration.desktop.candidate_attestation import (
+        CANDIDATE_RELEASE_VERSION,
+        archive_name_for,
+        is_release_tag_ref,
+        release_version_for_ref,
+    )
+
+    assert release_version_for_ref("refs/tags/v1.0.0") == "1.0.0"
+    assert release_version_for_ref("refs/tags/v12.3.4") == "12.3.4"
+    assert release_version_for_ref("refs/heads/feat/desktop-app") == (
+        CANDIDATE_RELEASE_VERSION
+    )
+    assert is_release_tag_ref("refs/tags/v1.0.0")
+    assert not is_release_tag_ref("refs/tags/v1.0.0rc1")
+    assert not is_release_tag_ref("refs/tags/v01.0.0")
+    assert not is_release_tag_ref("refs/tags/desktop-v1.0.0")
+    assert archive_name_for("1.0.0") == "tongs-desktop-1.0.0-fedora44-x86_64.tar.gz"
+
+
+def test_official_identity_admits_release_tags_and_dry_runs_only_as_allowed() -> None:
+    from tests.integration.desktop.candidate_attestation import (
+        CandidateAttestationError,
+        CandidateIdentity,
+    )
+
+    def official(ref: str, event: str) -> CandidateIdentity:
+        return CandidateIdentity.official(
+            repository="andre-motta/tongs",
+            repository_id="1305350434",
+            repository_owner_id="30708955",
+            ref=ref,
+            source_commit=SOURCE_COMMIT,
+            source_tree="b" * 40,
+            event=event,
+            run_id="1",
+            run_attempt=1,
+        )
+
+    tagged = official("refs/tags/v1.0.0", "push")
+    assert tagged.builder_id.endswith("@refs/tags/v1.0.0")
+    dry = official("refs/heads/feat/desktop-app", "workflow_dispatch")
+    assert dry.event == "workflow_dispatch"
+    with pytest.raises(CandidateAttestationError):
+        official("refs/tags/v1.0.0", "workflow_dispatch")
+    with pytest.raises(CandidateAttestationError):
+        official("refs/tags/v1.0.0rc1", "push")
+    with pytest.raises(CandidateAttestationError):
+        official("refs/heads/feat/desktop-app", "pull_request")

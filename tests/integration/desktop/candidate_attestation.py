@@ -57,8 +57,10 @@ from tongs.desktop.installer.metadata import (
     OFFICIAL_REPOSITORY_URL,
     OFFICIAL_WORKFLOW_PATH,
     RELEASE_MANIFEST_NAME,
+    RELEASE_TAG_PREFIX,
     _build_identity,
     _validate_statement,
+    _verify_production_attestation,
     production_verification_policy,
 )
 from tongs.desktop.installer.models import (
@@ -75,6 +77,9 @@ INTOTO_STATEMENT_TYPE: Final = "https://in-toto.io/Statement/v1"
 #: ``spdxVersion``.  The predicate params are the SBOM object itself, so the
 #: statement can be compared with the generated file rather than trusted.
 SPDX_PREDICATE_PREFIX: Final = "https://spdx.dev/Document/v"
+#: Release version every branch candidate carries.  A release tag carries its
+#: own version instead, derived from the tag by :func:`release_version_for_ref`.
+CANDIDATE_RELEASE_VERSION: Final = "0.5.0"
 CANDIDATE_ARCHIVE_NAME: Final = "tongs-desktop-0.5.0-fedora44-x86_64.tar.gz"
 TRANSFER_MANIFEST_NAME: Final = "candidate-attestation-transfer-v1.json"
 ALLOWED_REFS: Final = frozenset(
@@ -83,19 +88,51 @@ ALLOWED_REFS: Final = frozenset(
         "refs/heads/feat/desktop-app",
     }
 )
-_ARCHIVE_FILES: Final = frozenset(
-    {
-        "archive/SHA256SUMS",
-        "archive/app-asar-inventory.json",
-        "archive/build-provenance.json",
-        "archive/desktop-install.json",
-        f"archive/{CANDIDATE_ARCHIVE_NAME}",
-        f"archive/{RELEASE_MANIFEST_NAME}",
-        "archive/license-inventory.json",
-        "archive/prepared-source-inventory.json",
-        "archive/runtime-inventory.json",
-    }
+#: Release tags share the core's ``vX.Y.Z`` shape; the installer selects the
+#: release whose tag version equals the running core.
+_RELEASE_TAG_REF_RE: Final = re.compile(
+    r"^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 )
+#: The only non-push event the harness admits, and only for a dry run on an
+#: allowed branch: everything is built, signed and verified against the
+#: dispatch identity, and nothing is published.
+DRY_RUN_EVENT: Final = "workflow_dispatch"
+
+
+def archive_name_for(release_version: str) -> str:
+    """Return the producer's archive file name for one release version."""
+    return f"tongs-desktop-{release_version}-fedora44-x86_64.tar.gz"
+
+
+def release_version_for_ref(ref: str) -> str:
+    """Return the release version a ref must produce: its tag, or the candidate."""
+    match = _RELEASE_TAG_REF_RE.fullmatch(ref)
+    if match is None:
+        return CANDIDATE_RELEASE_VERSION
+    return ".".join(match.groups())
+
+
+def is_release_tag_ref(ref: str) -> bool:
+    """Return whether a ref is a stable release tag the installer can select."""
+    return _RELEASE_TAG_REF_RE.fullmatch(ref) is not None
+
+
+def _archive_files(release_version: str) -> frozenset[str]:
+    return frozenset(
+        {
+            "archive/SHA256SUMS",
+            "archive/app-asar-inventory.json",
+            "archive/build-provenance.json",
+            "archive/desktop-install.json",
+            f"archive/{archive_name_for(release_version)}",
+            f"archive/{RELEASE_MANIFEST_NAME}",
+            "archive/license-inventory.json",
+            "archive/prepared-source-inventory.json",
+            "archive/runtime-inventory.json",
+        }
+    )
+
+
 _EVIDENCE_FILES: Final = frozenset(
     {
         "evidence/builder-image.json",
@@ -110,7 +147,12 @@ _EVIDENCE_FILES: Final = frozenset(
         "evidence/toolchain.txt",
     }
 )
-_EXPECTED_TRANSFER_FILES: Final = _ARCHIVE_FILES | _EVIDENCE_FILES
+
+
+def _expected_transfer_files(release_version: str) -> frozenset[str]:
+    return _archive_files(release_version) | _EVIDENCE_FILES
+
+
 _SHA1_RE: Final = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _DECIMAL_RE: Final = re.compile(r"^[1-9][0-9]*$")
@@ -222,9 +264,12 @@ class CandidateIdentity:
             _fail("candidate repository ID is not the official repository ID")
         if repository_owner_id != OFFICIAL_REPOSITORY_OWNER_ID:
             _fail("candidate owner ID is not the official owner ID")
-        if ref not in ALLOWED_REFS:
-            _fail("candidate ref is not an explicitly allowed branch")
-        if event != "push":
+        if ref not in ALLOWED_REFS and not is_release_tag_ref(ref):
+            _fail("candidate ref is not an allowed branch or a release tag")
+        if event == DRY_RUN_EVENT:
+            if ref not in ALLOWED_REFS:
+                _fail("a dry run must dispatch from an allowed branch")
+        elif event != "push":
             _fail("candidate event must be push")
         if _SHA1_RE.fullmatch(source_commit) is None:
             _fail("candidate source commit is invalid")
@@ -309,8 +354,9 @@ def prepare_transfer_manifest(
     _require_transfer_identity(identity)
     if destination.parent != root or destination.name != TRANSFER_MANIFEST_NAME:
         _fail("transfer manifest must use its fixed name at the transfer root")
-    files = _validate_transfer_files(root, source_archive)
-    archive = _validate_producer_output(root, identity.source_commit)
+    release_version = release_version_for_ref(identity.ref)
+    files = _validate_transfer_files(root, source_archive, release_version)
+    archive = _validate_producer_output(root, identity.source_commit, release_version)
     subjects = _subject_records(root, archive)
     document = {
         "schema_version": 1,
@@ -371,10 +417,11 @@ def validate_transfer_manifest(
         "run_attempt": identity.run_attempt,
     }:
         _fail("transfer manifest execution identity is stale")
-    observed_files = _validate_transfer_files(root, source_archive)
+    release_version = release_version_for_ref(identity.ref)
+    observed_files = _validate_transfer_files(root, source_archive, release_version)
     if document["files"] != observed_files:
         _fail("downloaded transfer files do not match the producer manifest")
-    archive = _validate_producer_output(root, identity.source_commit)
+    archive = _validate_producer_output(root, identity.source_commit, release_version)
     if document["subjects"] != _subject_records(root, archive):
         _fail("transfer manifest subjects do not match the producer output")
     return document
@@ -391,7 +438,8 @@ def verify_candidate(
     """Verify a real bundle, then exercise failure-oriented candidate checks."""
     if importlib.metadata.version("sigstore") != SIGSTORE_VERSION:
         _fail(f"candidate verifier requires sigstore {SIGSTORE_VERSION}")
-    archive = _validate_producer_output(root, identity.source_commit)
+    release_version = release_version_for_ref(identity.ref)
+    archive = _validate_producer_output(root, identity.source_commit, release_version)
     subjects = _subject_digests(root, archive)
     bundle_document = _read_regular_bytes(bundle_path, _MAX_BUNDLE_BYTES)
     try:
@@ -411,7 +459,9 @@ def verify_candidate(
     statement = _decode_json(payload, "verified DSSE payload")
     negatives: list[dict[str, str]] = []
 
-    _verify_production_policy_rejection(verifier, bundle, identity, subjects, negatives)
+    production_policy = _verify_production_policy(
+        verifier, bundle, bundle_document, identity, subjects, negatives
+    )
     _verify_identity_negatives(verifier, bundle, identity, subjects, negatives)
     _verify_subject_negatives(
         verifier, bundle, identity, subjects, statement, negatives
@@ -461,7 +511,7 @@ def verify_candidate(
             "OIDCBuildConfigDigest",
             "OIDCBuildTrigger",
         ],
-        "production_policy": "unchanged release-tag policy; candidate rejected",
+        "production_policy": production_policy,
     }
     (report_root / "candidate-policy.json").write_bytes(_canonical_json(policy))
     subject_lines = [f"{digest}  {name}\n" for name, digest in subjects.items()]
@@ -692,18 +742,42 @@ def _cryptographic_baseline(
     return payload_type, payload
 
 
-def _verify_production_policy_rejection(
+def _verify_production_policy(
     verifier: Verifier,
     bundle: Bundle,
+    bundle_document: bytes,
     identity: CandidateIdentity,
     subjects: dict[str, str],
     negatives: list[dict[str, str]],
-) -> None:
+) -> str:
+    """Apply the installer's release policy: it must accept a tag, reject a branch.
+
+    A release tag run is what ``tongs --install-desktop`` will verify, so the
+    positive check runs the installer's own ``_verify_production_attestation``
+    against the exact identity the installer derives from the tag.  A branch or
+    dry-run candidate must keep failing that policy, which proves the policy is
+    still bound to release tags.
+    """
     _cryptographic_baseline(verifier, bundle, identity, subjects)
-    release_version = "0.5.0"
-    production_identity = _build_identity(
-        f"desktop-v{release_version}", identity.source_commit
-    )
+    release_version = release_version_for_ref(identity.ref)
+    tag = f"{RELEASE_TAG_PREFIX}{release_version}"
+    production_identity = _build_identity(tag, identity.source_commit)
+    if is_release_tag_ref(identity.ref):
+        if identity.ref != production_identity.ref:
+            _fail("release tag identity does not match the installer's derivation")
+        try:
+            _verify_production_attestation(
+                verifier,
+                bundle_document,
+                production_identity,
+                subjects,
+                InstallerLimits(),
+            )
+        except InstallerError as error:
+            raise CandidateAttestationError(
+                f"installer release policy rejected the release bundle: {error}"
+            ) from error
+        return "installer release-tag policy verified the bundle"
     try:
         verifier.verify_dsse(
             bundle, production_verification_policy(production_identity)
@@ -716,7 +790,7 @@ def _verify_production_policy_rejection(
                 "rejected_stage": "certificate_identity_policy",
             }
         )
-        return
+        return "unchanged release-tag policy; candidate rejected"
     _fail("unchanged production release policy accepted a branch candidate")
 
 
@@ -749,7 +823,10 @@ def _verify_identity_negatives(
             ),
         ),
         "wrong_source_sha": replace(identity, source_commit="0" * 40),
-        "wrong_event": replace(identity, event="workflow_dispatch"),
+        "wrong_event": replace(
+            identity,
+            event="pull_request" if identity.event == DRY_RUN_EVENT else DRY_RUN_EVENT,
+        ),
         "wrong_runner_environment": replace(identity, runner_environment="self-hosted"),
     }
     for name, wrong_identity in mutations.items():
@@ -870,9 +947,11 @@ def _validate_candidate_statement(
         _fail("candidate workflow invocation does not match this exact run")
 
 
-def _validate_transfer_files(root: Path, source_archive: Path) -> list[dict[str, Any]]:
+def _validate_transfer_files(
+    root: Path, source_archive: Path, release_version: str
+) -> list[dict[str, Any]]:
     observed = _scan_regular_files(root, exclude={TRANSFER_MANIFEST_NAME})
-    if set(observed) != _EXPECTED_TRANSFER_FILES:
+    if set(observed) != _expected_transfer_files(release_version):
         _fail("candidate transfer path set is incomplete or unexpected")
     transferred_source = root / "evidence/source.tar"
     if _file_identity(transferred_source) != _file_identity(source_archive):
@@ -880,7 +959,9 @@ def _validate_transfer_files(root: Path, source_archive: Path) -> list[dict[str,
     return [{"path": path, **_file_identity(root / path)} for path in sorted(observed)]
 
 
-def _validate_producer_output(root: Path, source_commit: str) -> str:
+def _validate_producer_output(
+    root: Path, source_commit: str, release_version: str
+) -> str:
     archive_root = root / "archive"
     release_document = _read_regular_bytes(
         archive_root / RELEASE_MANIFEST_NAME, _MAX_JSON_BYTES
@@ -891,8 +972,10 @@ def _validate_producer_output(root: Path, source_commit: str) -> str:
         raise CandidateAttestationError("release manifest is invalid") from error
     if release.source_commit != source_commit or len(release.artifacts) != 1:
         _fail("release manifest is not bound to the candidate source and archive")
+    if release.release_version != release_version:
+        _fail("release manifest version does not match the ref's release version")
     artifact = release.artifacts[0]
-    if artifact.name != CANDIDATE_ARCHIVE_NAME:
+    if artifact.name != archive_name_for(release_version):
         _fail("release manifest archive name is unexpected")
     archive_path = archive_root / artifact.name
     archive_bytes = _read_regular_bytes(archive_path, _MAX_ARCHIVE_BYTES)
@@ -907,7 +990,7 @@ def _validate_producer_output(root: Path, source_commit: str) -> str:
         raise CandidateAttestationError(
             "candidate archive contract is invalid"
         ) from error
-    _validate_producer_metadata(root, source_commit, artifact.name)
+    _validate_producer_metadata(root, source_commit, artifact.name, release_version)
     with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as candidate:
         member = candidate.getmember("runtime/LICENSES.json")
         extracted = candidate.extractfile(member)
@@ -922,7 +1005,9 @@ def _validate_producer_output(root: Path, source_commit: str) -> str:
     return artifact.name
 
 
-def _validate_producer_metadata(root: Path, source_commit: str, archive: str) -> None:
+def _validate_producer_metadata(
+    root: Path, source_commit: str, archive: str, release_version: str
+) -> None:
     archive_root = root / "archive"
     _validate_checksums(archive_root)
     if _read_regular_bytes(root / "evidence/build-a.sha256", _MAX_JSON_BYTES) != (
@@ -958,6 +1043,8 @@ def _validate_producer_metadata(root: Path, source_commit: str, archive: str) ->
     inputs = _parse_inputs_env(root / "evidence/inputs.env")
     if inputs.get("TONGS_HEAD_SHA") != source_commit:
         _fail("producer inputs do not identify the candidate source")
+    if inputs.get("RELEASE_VERSION") != release_version:
+        _fail("producer inputs do not carry the ref's release version")
 
 
 def _subject_records(root: Path, archive: str) -> list[dict[str, Any]]:
@@ -1136,8 +1223,12 @@ def _validate_transfer_event_ref(event: object, ref: object) -> None:
             _fail("pull request transfer ref is invalid")
         return
     if event == "push":
-        if not _valid_branch_ref(ref):
+        if not _valid_branch_ref(ref) and not is_release_tag_ref(ref):
             _fail("push transfer ref is invalid")
+        return
+    if event == DRY_RUN_EVENT:
+        if ref not in ALLOWED_REFS:
+            _fail("dry run transfer ref must be an allowed branch")
         return
     _fail("transfer event is unsupported")
 

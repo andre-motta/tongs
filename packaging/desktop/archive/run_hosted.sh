@@ -27,7 +27,11 @@ if ! git -C "$source_root" diff --quiet || \
 fi
 
 source_date_epoch=$(git -C "$source_root" show -s --format=%ct "$actual_head")
-release_version=0.5.0
+release_version=${TONGS_RELEASE_VERSION:-0.5.0}
+if ! [[ "$release_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "TONGS_RELEASE_VERSION must be a stable X.Y.Z version: $release_version" >&2
+  exit 1
+fi
 electron_name=electron-v44.2.0-linux-x64.zip
 electron_sha256=574f7d8cd2a82d77812849729a282b86639b050de120d58b138a126d16b48692
 electron_url=https://github.com/electron/electron/releases/download/v44.2.0/$electron_name

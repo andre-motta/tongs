@@ -16,6 +16,14 @@ itself, and each one is corroborated against the producer's own ``SHA256SUMS``
 before the contract is written, so a contract cannot name a digest that the
 producer's checksum list contradicts.
 
+A release tag run passes ``--release-version``.  The checked-in base manifest
+names the candidate release version, so for a tagged release the accepted
+``release_version`` and the accepted archive file name are derived from the tag
+instead, and the fresh archive's own release manifest and install manifest must
+carry that same version before the contract is written.  Nothing else in the
+reviewed policy changes: the compatibility interval, Electron version and
+runtime requirements are still copied from the base manifest.
+
 The ``reviewed_fixture`` block is removed rather than updated.  Its presence is
 what lets ``package_contract.bind_manifest`` fall back to
 ``reviewed-fixture`` pairing; a contract produced here must only ever bind as
@@ -55,6 +63,10 @@ _SHA1_RE = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _DECIMAL_RE = re.compile(r"[0-9]{1,19}\Z")
 _CHECKSUM_LINE_RE = re.compile(r"([0-9a-f]{64})  ([A-Za-z0-9._-]{1,128})\Z")
+_RELEASE_VERSION_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
+
+RELEASE_MANIFEST_NAME = "desktop-manifest-v1.json"
+INSTALL_MANIFEST_NAME = "desktop-install.json"
 
 #: Keys copied unchanged from the reviewed base manifest.
 PRESERVED_TOP_LEVEL_KEYS = (
@@ -65,8 +77,15 @@ PRESERVED_TOP_LEVEL_KEYS = (
     "desktop_runtime_requirements",
     "companion_binary_count",
 )
-#: Keys of ``accepted_desktop`` copied unchanged from the base manifest.
+#: Keys of ``accepted_desktop`` copied unchanged from the base manifest.  The
+#: release version is copied too unless a release tag overrides it.
 PRESERVED_ACCEPTED_KEYS = ("electron_version", "release_version", "compatibility")
+
+
+def archive_filename_for(release_version: str) -> str:
+    """Return the producer's archive file name for one release version."""
+
+    return f"tongs-desktop-{release_version}-fedora44-x86_64.tar.gz"
 
 
 class PayloadContractError(ValueError):
@@ -212,7 +231,7 @@ def parse_checksums(payload: bytes) -> dict[str, str]:
 
 
 def _observe_archive_payload(
-    archive_dir: Path, base_accepted: Mapping[str, Any]
+    archive_dir: Path, base_accepted: Mapping[str, Any], archive_filename: str
 ) -> tuple[dict[str, Any], dict[str, str], int, str]:
     """Observe the fresh archive's identity and corroborate it with SHA256SUMS."""
 
@@ -225,7 +244,6 @@ def _observe_archive_payload(
     expected_evidence_names = sorted(base_accepted["evidence"])
     if CHECKSUM_FILE_NAME not in expected_evidence_names:
         _fail("the reviewed evidence set is expected to include the checksum list")
-    archive_filename = base_accepted["archive"]["filename"]
     # The producer deliberately omits the checksum list from its own records,
     # so the corroborated set is every other accepted file plus the archive.
     corroborated = {
@@ -274,6 +292,29 @@ def _require_identity(value: str, pattern: re.Pattern[str], label: str) -> str:
     return value
 
 
+def _require_archive_release_version(archive_dir: Path, release_version: str) -> None:
+    """Require the fresh archive's own manifests to carry the accepted version.
+
+    ``package_contract.validate_accepted_payload`` makes the same comparison
+    later, inside the producer container.  Making it here, before the contract
+    exists, is what turns a tag that disagrees with what the producer built
+    into one clear failure instead of a contract that binds and then fails.
+    """
+
+    for name in (RELEASE_MANIFEST_NAME, INSTALL_MANIFEST_NAME):
+        document = _decode_object(
+            _read_regular_bytes(
+                archive_dir / name, MAX_EVIDENCE_BYTES, f"archive evidence {name}"
+            ),
+            f"archive evidence {name}",
+        )
+        if document.get("release_version") != release_version:
+            _fail(
+                f"archive evidence {name!r} does not carry release version "
+                f"{release_version}"
+            )
+
+
 def materialize_payload_contract(
     *,
     base_manifest_path: Path,
@@ -283,10 +324,18 @@ def materialize_payload_contract(
     artifact_id: str,
     artifact_name: str,
     run_id: str,
+    release_version: str | None = None,
 ) -> PayloadContractBinding:
-    """Write one exact-mode payload contract bound to this run's archive."""
+    """Write one exact-mode payload contract bound to this run's archive.
+
+    ``release_version`` is the version a release tag names.  When given, it
+    replaces the base manifest's candidate release version and archive file
+    name; the fresh archive must have been produced for that same version.
+    """
 
     _require_identity(source_commit, _SHA1_RE, "accepted source commit")
+    if release_version is not None:
+        _require_identity(release_version, _RELEASE_VERSION_RE, "release version")
     _require_identity(artifact_id, _DECIMAL_RE, "accepted artifact ID")
     _require_identity(run_id, _DECIMAL_RE, "accepted run ID")
     if not isinstance(artifact_name, str) or not 1 <= len(artifact_name) <= 256:
@@ -312,9 +361,20 @@ def materialize_payload_contract(
             "block that this materializer removes"
         )
 
+    accepted_release_version = base_accepted["release_version"]
+    archive_filename = base_accepted["archive"]["filename"]
+    if release_version is not None:
+        accepted_release_version = release_version
+        archive_filename = archive_filename_for(release_version)
+    if not isinstance(accepted_release_version, str) or (
+        _RELEASE_VERSION_RE.fullmatch(accepted_release_version) is None
+    ):
+        _fail("accepted release version is invalid")
+
     archive, evidence, archive_bytes, archive_sha256 = _observe_archive_payload(
-        Path(archive_dir), base_accepted
+        Path(archive_dir), base_accepted, archive_filename
     )
+    _require_archive_release_version(Path(archive_dir), accepted_release_version)
 
     contract: dict[str, Any] = {
         key: copy.deepcopy(base[key]) for key in PRESERVED_TOP_LEVEL_KEYS
@@ -329,6 +389,7 @@ def materialize_payload_contract(
     }
     for key in PRESERVED_ACCEPTED_KEYS:
         accepted[key] = copy.deepcopy(base_accepted[key])
+    accepted["release_version"] = accepted_release_version
     contract["accepted_desktop"] = accepted
 
     CONTRACT.validate_manifest(contract)
@@ -391,6 +452,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-id", required=True)
     parser.add_argument("--artifact-name", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument(
+        "--release-version",
+        default=None,
+        help=(
+            "stable X.Y.Z version named by a release tag; replaces the base "
+            "manifest's candidate release version and archive file name"
+        ),
+    )
     return parser
 
 
@@ -407,6 +476,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifact_id=arguments.artifact_id,
             artifact_name=arguments.artifact_name,
             run_id=arguments.run_id,
+            release_version=arguments.release_version,
         )
     except (OSError, PayloadContractError, ValueError) as error:
         print(f"payload contract materialization failed: {error}", file=sys.stderr)

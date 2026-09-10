@@ -578,7 +578,12 @@ cmp "$evidence_dir/installed-previous.json" "$evidence_dir/after-dependency-fail
 dnf upgrade "${dnf_transaction_options[@]}" --enablerepo=tongs-final \
     python3-tongs tongs-desktop \
     2>&1 | tee "$evidence_dir/dnf-upgrade.log"
-[[ $(rpm -q tongs-desktop --queryformat '%{VERSION}') == 0.5.0 ]]
+# The desktop package version is whatever the bound payload contract accepted:
+# the candidate version on a branch, the tag's version on a release.
+desktop_version=$(/usr/bin/python3 -E -P -c \
+    'import json, sys; print(json.load(open(sys.argv[1]))["desktop"]["release_version"])' \
+    "$prepared_dir/prepared-inputs.json")
+[[ $(rpm -q tongs-desktop --queryformat '%{VERSION}') == "$desktop_version" ]]
 assert_sentinels successful-upgrade
 assert_final_state upgraded-final no
 snapshot upgraded-final

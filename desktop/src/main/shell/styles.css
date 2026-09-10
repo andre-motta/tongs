@@ -1644,9 +1644,11 @@ button {
 
 .review-drawer-entry-ribbon {
   margin: 0;
-  font-size: 0.8rem;
+  padding: 2px 8px;
+  border-radius: 0.35rem;
   background: var(--deletion);
   color: var(--text);
+  font-size: 0.8rem;
 }
 
 .review-drawer-entry-editor textarea,

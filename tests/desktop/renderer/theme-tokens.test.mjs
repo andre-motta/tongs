@@ -57,7 +57,34 @@ function extractRules(source) {
   return rules;
 }
 
+/**
+ * Splits the stylesheet into the `@media (prefers-color-scheme: light)`
+ * block's own body and everything else. Brace matched rather than regex
+ * matched with a non-greedy body, because the light block itself contains a
+ * `:root { ... }`, whose own closing brace a non-greedy `[^{}]*}` would stop
+ * at instead of the media block's.
+ */
+function splitLightScheme(source) {
+  const marker = /@media\s*\(\s*prefers-color-scheme\s*:\s*light\s*\)\s*\{/;
+  const match = marker.exec(source);
+  if (!match) return { light: "", rest: source };
+  let depth = 1;
+  let index = match.index + match[0].length;
+  const bodyStart = index;
+  while (index < source.length && depth > 0) {
+    if (source[index] === "{") depth += 1;
+    else if (source[index] === "}") depth -= 1;
+    index += 1;
+  }
+  return {
+    light: source.slice(bodyStart, index - 1),
+    rest: source.slice(0, match.index) + source.slice(index),
+  };
+}
+
 const rules = extractRules(css);
+const { rest: baseOnlyCss } = splitLightScheme(css);
+const baseRules = extractRules(baseOnlyCss);
 
 /** Every rule body whose selector list names `selector` exactly. */
 function bodiesFor(selector) {
@@ -112,16 +139,18 @@ for (const selector of THEMED_SURFACE_SELECTORS) {
 
 /**
  * The `--surface` shape: a `var(--name, fallback)` whose `--name` is never
- * declared on `:root` in either colour scheme, so the fallback wins always
- * and the declaration silently stops being theme-aware. `:root` is captured
- * from every top-level `:root { ... }` block, which is both the dark-first
- * base declaration and the `prefers-color-scheme: light` override, so a name
- * only one of the two schemes forgets to redeclare would still be caught by
- * whichever CSS actually reads that property at the time.
+ * declared on `:root` in the default (dark) scheme, so the fallback wins
+ * always and the declaration silently stops being theme-aware. `defined` is
+ * built only from the base `:root { ... }` block, outside the
+ * `prefers-color-scheme: light` media query, and deliberately not from the
+ * light block's own `:root`: the light block only overrides values for names
+ * the base already owns, it never introduces a name of its own, so a token
+ * declared only inside it would still have no value in the default scheme
+ * and must fail this check exactly as `--surface` should have.
  */
-test("every var(--token) referenced in the stylesheet is declared on :root", () => {
+test("every var(--token) referenced in the stylesheet is declared on the base :root", () => {
   const defined = new Set();
-  for (const rule of rules) {
+  for (const rule of baseRules) {
     if (!rule.selectors.includes(":root")) continue;
     for (const match of rule.body.matchAll(/--([a-zA-Z0-9-]+)\s*:/g)) {
       defined.add(match[1]);
@@ -135,6 +164,6 @@ test("every var(--token) referenced in the stylesheet is declared on :root", () 
   assert.deepEqual(
     undeclared,
     [],
-    `var(--...) referenced a custom property never declared on :root: ${undeclared.join(", ")}`,
+    `var(--...) referenced a custom property never declared on the base :root: ${undeclared.join(", ")}`,
   );
 });

@@ -49,6 +49,18 @@ def map_http_error(response: httpx.Response) -> ForgeError:
         return ForgePermissionError(f"Insufficient permissions: {body}")
     if status == 404:
         return NotFoundError(f"Not found: {body}")
+    if status == 405:
+        # GitHub's PR merge endpoint answers a merge attempt it will not
+        # perform (merge conflicts, required checks unmet, etc.) with 405
+        # and a reason in the body, e.g. {"message": "Pull Request has merge
+        # conflicts"}. GitLab's merge endpoint uses the same status for "not
+        # currently mergeable" on the same call. Both are a definitive,
+        # known-state rejection rather than an ambiguous failure.
+        return ConflictError(f"Conflict: {body}")
+    if status == 406:
+        # GitLab's merge endpoint uses 406 specifically for "this merge
+        # request has conflicts", distinct from its 405 "not mergeable".
+        return ConflictError(f"Conflict: {body}")
     if status == 409:
         return ConflictError(f"Conflict: {body}")
     if status == 429:

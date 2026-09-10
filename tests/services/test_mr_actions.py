@@ -8,9 +8,11 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 
 from tongs.errors import AuthError, NetworkError
+from tongs.forges.http import map_http_error
 from tongs.forges.models import (
     CIStatus,
     ForgeHost,
@@ -304,6 +306,31 @@ async def test_definite_rejection_is_safe_retained_and_not_replayed() -> None:
         assert raised.value.code is ServiceErrorCode.AUTHENTICATION_FAILED
         assert "secret" not in str(raised.value)
     client.close_mr.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_merge_405_conflict_is_known_rejection_not_unknown_receipt() -> None:
+    """GitHub's merge endpoint answers a blocked merge with 405 and a reason,
+    e.g. {"message": "Pull Request has merge conflicts"} (#229). That must
+    surface as a known, typed rejection the same way a 409 does: no unknown
+    receipt, no resync required, no mutation lock, and the dispatch-level
+    error carries the forge's reason rather than a generic message.
+    """
+    reason = httpx.Response(405, json={"message": "Pull Request has merge conflicts"})
+    dispatch_error = map_http_error(reason)
+    assert "Pull Request has merge conflicts" in str(dispatch_error)
+    client = _client(merge_mr=AsyncMock(side_effect=dispatch_error))
+    service, *_rest, emitter = _service(client)
+    command = MergeReviewCommand("merge-405", _target())
+
+    for _ in range(2):
+        with pytest.raises(ServiceError) as raised:
+            await service.execute(command)
+        assert raised.value.code is ServiceErrorCode.CONFLICT
+
+    client.merge_mr.assert_awaited_once()
+    emitter.assert_not_called()
+    assert await service.receipt("merge-405") is None
 
 
 @pytest.mark.asyncio

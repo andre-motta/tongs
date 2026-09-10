@@ -19,6 +19,7 @@ from tongs.errors import (
 from tongs.forges.base import ForgeClient
 from tongs.forges.github import GitHubClient
 from tongs.forges.gitlab import GitLabClient
+from tongs.forges.http import map_http_error
 from tongs.forges.models import CIStatus, ForgeHost, PipelineJob
 from tongs.scanner.repo import ForgeType
 from tongs.services.ci_mutations import (
@@ -469,6 +470,10 @@ async def test_full_ledger_rejects_new_operation_without_eviction() -> None:
     [
         (AuthError("Bearer secret"), ServiceErrorCode.AUTHENTICATION_FAILED),
         (ConflictError("server details"), ServiceErrorCode.CONFLICT),
+        (
+            map_http_error(httpx.Response(405, json={"message": "not mergeable"})),
+            ServiceErrorCode.CONFLICT,
+        ),
     ],
 )
 async def test_known_remote_rejection_is_typed_and_does_not_refresh(

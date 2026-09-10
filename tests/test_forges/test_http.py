@@ -45,9 +45,34 @@ class TestMapHttpError:
         resp = _FakeResponse(404, '{"message": "Not Found"}')
         assert isinstance(map_http_error(resp), NotFoundError)
 
+    def test_405_returns_conflict_and_carries_the_forge_reason(self):
+        resp = _FakeResponse(405, '{"message": "Pull Request has merge conflicts"}')
+        err = map_http_error(resp)
+        assert isinstance(err, ConflictError)
+        assert "Pull Request has merge conflicts" in str(err)
+
+    def test_406_returns_conflict_and_carries_the_forge_reason(self):
+        resp = _FakeResponse(406, '{"message": "Branch cannot be merged"}')
+        err = map_http_error(resp)
+        assert isinstance(err, ConflictError)
+        assert "Branch cannot be merged" in str(err)
+
     def test_409_returns_conflict(self):
         resp = _FakeResponse(409, '{"message": "Merge conflict"}')
         assert isinstance(map_http_error(resp), ConflictError)
+
+    def test_422_returns_generic_forge_error_not_conflict(self):
+        # GitHub returns 422 for many distinct validation failures across
+        # unrelated endpoints (e.g. self-approving a PR), not only for
+        # definitive rejections of the requested state change. Treating it
+        # as an unknown outcome (rather than guessing it always means
+        # "conflict") keeps existing per-endpoint 422 handling, such as
+        # GitHubClient.approve_mr's "422" substring check, intact.
+        resp = _FakeResponse(422, '{"message": "Validation Failed"}')
+        err = map_http_error(resp)
+        assert isinstance(err, ForgeError)
+        assert not isinstance(err, ConflictError)
+        assert "422" in str(err)
 
     def test_429_returns_rate_limit(self):
         resp = _FakeResponse(

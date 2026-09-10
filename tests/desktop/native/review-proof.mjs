@@ -12,11 +12,11 @@ import { SidecarTransport } from "../../../desktop/dist/src/main/sidecar.js";
 /**
  * Repointed for the #181 review-surface redesign (rerun prep for #55). The old
  * surfaces this script drove no longer exist: the Discussions panel "Quick
- * comment" field and its composer, "Suggest replacement" / "Post quick
- * suggestion" / "Add suggestion to draft", the separate "Replacement code" and
- * "Optional explanation" fields, "Start review" / "Resume review", and the
- * "Review body" / "Verdict" single-select drawer fields are all gone. Every
- * label and aria-label below was read directly from the renderer source at
+ * comment" field and its composer, "Post quick suggestion" / "Add suggestion
+ * to draft", the separate "Replacement code" and "Optional explanation"
+ * fields, "Start review" / "Resume review", and the "Review body" / "Verdict"
+ * single-select drawer fields are all gone. Every label and aria-label below
+ * was read directly from the renderer source at
  * head `ecb7f851aec9362aa71ed178bcd8a55250e5d32f` (`origin/feat/desktop-app`,
  * the head with every #181 card integrated):
  *
@@ -81,14 +81,6 @@ import { SidecarTransport } from "../../../desktop/dist/src/main/sidecar.js";
  * - Uncertainty acknowledgment (`review-detail/index.tsx` and
  *   `features/review/index.tsx`, unchanged): button "I inspected the forge;
  *   acknowledge uncertainty".
- *
- * Not used here, and left untouched: `features/diff/index.tsx` still renders
- * a disabled-by-default "Suggest replacement" button in the diff toolbar that
- * navigates to the Discussions panel, which no longer has anywhere to receive
- * that navigation (`ThreadJumpList` offers no composer). That looks like
- * leftover wiring from the #181 migration rather than a blessed control; the
- * issue #55 rerun-prep comment names "Insert suggestion" as the intended
- * replacement, so that is what this script drives.
  */
 
 protocol.registerSchemesAsPrivileged([

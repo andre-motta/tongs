@@ -418,38 +418,190 @@ After all acceptance criteria pass, the orchestrator opens `feat/desktop-app`
 against `main` with the complete evidence package. Main merge and release remain
 CTO decisions.
 
+## Acceptance record for the v1.0.0 candidate
+
+This section records what the #55 acceptance rerun actually exercised, what
+failed, how each failure was triaged, and what remains unrun. It is a record of
+executed work, not a claim that every acceptance row is met. Everything below is
+transcribed from the retained session records named at the end of the section;
+figures that only exist in those records are quoted, never recomputed.
+
+### Heads and hosted evidence
+
+| Scope | Commit | Tree |
+| --- | --- | --- |
+| Every group except S40 | `810bf806b335000ae3fef7726fc61ff63ef9e441` | `f1e34ef839c09a4ac8bbe2d448c0d58c7b3b1663` |
+| S40 only, after the #225 fix | `55f4c0d44be76d8bfeb819b877bfa231432f3826` | not recorded; the session record describes the row as the #225 drawer fix over `810bf80` |
+
+The difference between the two heads is `styles.css` plus one renderer contract
+test; the renderer is otherwise identical and the #125 verifier and launcher are
+byte-identical across both. Both commits are ancestors of the v1.0.0 candidate
+head.
+
+Hosted evidence consumed during the session: CI run `34404308911` (success) and
+release-desktop run `34404308748` at `810bf80`; CI run `34425047036` (success)
+and attestation run `34425046846` at `55f4c0d`. Every consumed artifact was
+downloaded with a server-digest match. The core version built at `810bf80` was
+`0.4.2.dev510+g810bf806b` and at `55f4c0d` was `0.4.2.dev513+g55f4c0d44`.
+
+### What ran, with the CTO at the keyboard
+
+The rerun on 2026-09-09 and 2026-09-10 was driven by the CTO on his own host.
+Groups B, C, E, F and the merged G+H ran; S40 was re-observed at `55f4c0d`.
+
+| Group | Scenarios exercised | Outcome |
+| --- | --- | --- |
+| B, terminal | S08, S09, S10, S11, S12 | all pass; S10 and S12 had failed at `41e78b6` and confirm #167 and #168 fixed |
+| C, install lifecycle | S15, S16 | both pass; S16 had failed at `41e78b6` and confirms #169 and #171 fixed |
+| E, desktop views | S31 to S42 | all pass except S40, which failed at `810bf80` and passes at `55f4c0d`; S38 passes on its bound and carries finding #177 |
+| F, review mode and drafts | S43, S44, S45, S46 | all pass; S46 had failed at `41e78b6` and is resolved by the #181 comparison banner |
+| G and H, merged and run live | S47 to S58 | S47, S49, S50, S52 pass; S48 fails; S51 partial; S53 to S56 covered by S47 and S49; S57 and S58 not exercised |
+
+Recorded totals for the rerun, one row per scenario at its latest disposition,
+so S40 counts once as a pass at `55f4c0d` while its failure at `810bf80` stays
+in the row: **27 pass**, 1 fail, 1 partial, 4 covered by another scenario, 2 not
+exercised, **49 not run**, summing to the 84 planned scenarios.
+
+Fixes confirmed by observation during the session: #167, #168, #169, #171 and
+#176, plus the #181 review redesign and, at `55f4c0d`, #225.
+
+Two scenario subjects were changed because the GitHub fixtures could not carry
+them: S34 moved to GitLab MR 7 because every GitHub fixture pull request has one
+commit, and S36 moved to GitLab MR 7 because GitHub's largest fixture review has
+six files against a fifty-two file bound. Groups G and H were merged and run
+live because manufactured rejection, timeout and unknown outcomes were not
+inducible; the scenarios that needed a manufactured outcome are recorded as not
+exercised rather than as passes.
+
+### What failed and how it was triaged
+
+**S48, issue #229.** A known HTTP 405 merge rejection was classified and
+persisted as an unknown outcome, which also took the mutation lock. The CTO
+triaged it as a release decision rather than a v1.0.0 blocker. The defect is
+fixed on this candidate head: PR 230 adds the 405 case to `map_http_error` so
+the rejection is reported as a known merge conflict. The acceptance row itself
+remains unmet, because the scenario has not been re-executed against the fix.
+
+**S40, issue #225.** A redesigned review surface rendered light on the dark
+theme because `.review-drawer` used `var(--surface, #fff)` against a token that
+was never defined. Fixed under PR 227 and re-observed as a pass at `55f4c0d`,
+which is an ancestor of this head.
+
+**S48 approve verdict, not exercisable.** Neither forge permits author
+self-approval and every fixture belongs to the CTO, so the approve leg of S48
+could not be driven at all in this session. That is a fixture limitation, not a
+product result.
+
+**S51, partial.** Recovery after a hard SIGKILL, honest `unknown`
+classification, the persisted `reason: process_interrupted`, the confirmed and
+unknown counts, per-step granularity and the correct option set were all proven
+across three kills, and an independent forge read confirmed that nothing was
+duplicated or lost. What was not proven is that a confirmed receipt is excluded
+from the retry set: the kill never landed between the first receipt and the
+second dispatch.
+
+**S57 and S58, not exercised.** S57's fixture job records aged out of GitHub, so
+there was nothing left to re-run; that is fixture decay, not a defect. S58 needs
+the terminal client, which was not started in that session.
+
+Defects raised or reopened during the session are listed for users in
+[Known limitations](../desktop/known-limitations.md). The session record's defect
+table was renumbered against the tracker on 2026-09-10 and now agrees with it, so
+the two can be read against each other directly.
+
+### What was not run
+
+Group A (S01 to S06), the remainder of group B (S07, S13, S14), the remainder of
+group C (S17 to S20), group D in full (S21 to S30), and groups I through O (S59
+to S84) were not run. The S48 approve verdict and the S51 confirmed-receipt
+exclusion are likewise unproven. All of this is tracked in issue #234 for
+v1.0.1.
+
+### Native GPU gate
+
+**No verifier policy run was performed at this head.** Group D, the native GPU
+gate, was skipped by CTO decision and is deferred to v1.0.1 under #234. Nothing
+in this record substitutes for it.
+
+What does exist, recorded as launch evidence and not as the gate: the packaged
+application produced by CI run `34404308911` was installed with `pipx` and
+launched through the installed menu entry's `Exec` line on the CTO's Fedora KDE
+Wayland session, where the launcher supplies `--ozone-platform=x11` so the
+application runs under XWayland, which is the documented native support
+boundary. That installed application carried groups E, F and the merged G+H,
+including three SIGKILL relaunches.
+
+Memory was observed across both cgroups, because the application escapes the
+bounded unit into an unlimited `app-tongs-*.scope` through Chromium's own
+systemd integration over the forwarded session bus:
+
+| Cgroup | Peak | Limit |
+| --- | --- | --- |
+| bounded unit | 275353600 bytes (275.4 MiB) | 1073741824 bytes |
+| escaped scope | 124039168 bytes (124.0 MiB) | none |
+| combined | 399392768 bytes (380.9 MiB) | 37 percent of the 1 GiB ceiling |
+
+`memory.events` recorded `oom 0 oom_kill 0 oom_group_kill 0` on both cgroups
+throughout. The escape is a gap in the harness containment, not a product
+defect: a real user has no bounded unit at all. The interactive groups also ran
+with `TasksMax=512` and `RuntimeMaxSec=14400` instead of the planned 64 and 300,
+which the live `pids.current` of 71 at S36 justified; `MemoryMax` and
+`MemorySwapMax` were never altered.
+
+### Retained evidence
+
+The two session records are:
+
+- `.worktrees/evidence/desktop-55-810bf80-SESSION-REPORT.md`, the rerun recorded
+  above; and
+- `.worktrees/evidence/desktop-55-41e78b6-SESSION-REPORT.md`, the earlier
+  stopped session at `41e78b63b497f9fdb2e74543269cc1126752b94e` whose outcome
+  was the CTO's decision to block v1.0.0 until the desktop review workflow was
+  redesigned, which became #181.
+
+The complete evidence bundle for both sessions, including the per-group unit
+records, artifact digests and defect captures, is retained locally beside those
+records. It is not published, and it is not part of this repository.
+
 ## Dependency-driven implementation slices
 
 These are planning IDs pending reviewed design integration and native GitHub issue creation.
 Each issue will include exact files, accepted interfaces, base SHA, checks and Git
 authority before dispatch. Reuse #3/#16 rather than duplicating their outcomes.
 
+The Role column names the role contract, not a person or a model. The models
+selected for those roles on this initiative are Claude Fable 5.1 as orchestrator,
+Claude Opus 5 at high effort for senior implementation and for the separate
+independent review, and Claude Sonnet 5 at xhigh effort for bounded work under
+that review. Earlier revisions of this table used retired persona names for the
+same three roles.
+
 | ID | Scope and ownership | Dependencies | Role |
 | --- | --- | --- | --- |
-| S0 | Release manifest/archive layout schema, shared validation and deterministic reference artifact | approved design | Sol high |
-| S1 | Shared session, resource/revision models and read services; `services/`, necessary forge metadata | approved design | Sol high |
-| S2 | Pure diff conversion/alignment and position edge cases; `diff/` | approved design | Luna xhigh, Sol review |
-| S3 | Durable draft store, revisions and migrations; `state/drafts*` | S1 | Sol high |
-| S4 | Companion desktop entry-point declarations/context/lifecycle; `plugins/desktop*` | approved design | Sol high |
-| S5a | Revision-bound forge mutations, receipts, ranges, thread identity and cache invalidation | S1 | Sol high |
-| S5b | Durable safe draft submission/reconciliation | S3, S5a | Sol high |
-| S5c | CI mutation services: typed pipeline/job identity, capabilities, receipts/unknown outcomes, invalidation and events; services/tests only | S1 | Sol high |
-| S6 | Production sidecar RPC, events/cancellation and validated asset service | S1, S2, S4 | Sol high |
-| S7 | TUI service migration preserving existing workflows | S1, S2, S5a, S5c | Sol high |
-| S8 | TUI split diffs, #3 | S2, S7 | Sol high |
-| S9 | TUI persistent draft/review workflow, #16 | S3, S5b, S8 | Sol high |
-| S10 | Production Electron shell/preload/lifecycle and protocol security | S6 | Sol high |
-| S11 | Real-data React workspace, repository/inbox/detail/diff reads | S1, S2, S6 | Sol high |
-| S12 | Desktop discussions, comments, drafts and review mutations | S5b, S10, S11 | Sol high |
-| S13 | Desktop pipeline/job/log actions | S5c, S10, S11 | Sol high |
-| S14 | Production plugin UI/help/commands, example and compatibility harness | S4, S10, S11 | Sol high + bounded Luna work |
-| S15a | GitHub/Sigstore provenance, platform/compatibility and verified download/extraction | S0 | Sol high |
-| S15b | Atomic activation, same-interpreter launcher/menu/status/ownership | S15a, S6, S10 | Sol high |
-| S16 | Release archive build, licenses and prepared sources | S0, S10, S11, S14, S15b | Sol high |
-| S17 | Fedora RPM build and hosted install/upgrade/recovery checks | S16 | Sol high |
-| S18 | Production CI and adversarial integration acceptance | S9, S12, S13, S14, S15b, S17 | Sol high |
-| S19 | User/plugin documentation and migration guide | stable implemented interfaces, final S18 | Luna xhigh, Sol review |
-| S20 | Final native/GPU/TUI acceptance and evidence-backed main PR | all required slices | Astra + independent Sol |
+| S0 | Release manifest/archive layout schema, shared validation and deterministic reference artifact | approved design | senior contributor |
+| S1 | Shared session, resource/revision models and read services; `services/`, necessary forge metadata | approved design | senior contributor |
+| S2 | Pure diff conversion/alignment and position edge cases; `diff/` | approved design | bounded contributor, senior review |
+| S3 | Durable draft store, revisions and migrations; `state/drafts*` | S1 | senior contributor |
+| S4 | Companion desktop entry-point declarations/context/lifecycle; `plugins/desktop*` | approved design | senior contributor |
+| S5a | Revision-bound forge mutations, receipts, ranges, thread identity and cache invalidation | S1 | senior contributor |
+| S5b | Durable safe draft submission/reconciliation | S3, S5a | senior contributor |
+| S5c | CI mutation services: typed pipeline/job identity, capabilities, receipts/unknown outcomes, invalidation and events; services/tests only | S1 | senior contributor |
+| S6 | Production sidecar RPC, events/cancellation and validated asset service | S1, S2, S4 | senior contributor |
+| S7 | TUI service migration preserving existing workflows | S1, S2, S5a, S5c | senior contributor |
+| S8 | TUI split diffs, #3 | S2, S7 | senior contributor |
+| S9 | TUI persistent draft/review workflow, #16 | S3, S5b, S8 | senior contributor |
+| S10 | Production Electron shell/preload/lifecycle and protocol security | S6 | senior contributor |
+| S11 | Real-data React workspace, repository/inbox/detail/diff reads | S1, S2, S6 | senior contributor |
+| S12 | Desktop discussions, comments, drafts and review mutations | S5b, S10, S11 | senior contributor |
+| S13 | Desktop pipeline/job/log actions | S5c, S10, S11 | senior contributor |
+| S14 | Production plugin UI/help/commands, example and compatibility harness | S4, S10, S11 | senior contributor, plus bounded work |
+| S15a | GitHub/Sigstore provenance, platform/compatibility and verified download/extraction | S0 | senior contributor |
+| S15b | Atomic activation, same-interpreter launcher/menu/status/ownership | S15a, S6, S10 | senior contributor |
+| S16 | Release archive build, licenses and prepared sources | S0, S10, S11, S14, S15b | senior contributor |
+| S17 | Fedora RPM build and hosted install/upgrade/recovery checks | S16 | senior contributor |
+| S18 | Production CI and adversarial integration acceptance | S9, S12, S13, S14, S15b, S17 | senior contributor |
+| S19 | User/plugin documentation and migration guide | stable implemented interfaces, final S18 | bounded contributor, senior review |
+| S20 | Final native/GPU/TUI acceptance and evidence-backed main PR | all required slices | orchestrator, plus independent senior review |
 
 S1/S2/S4 can start independently; S0 queues within available capacity and then
 unblocks S15a. Reserve

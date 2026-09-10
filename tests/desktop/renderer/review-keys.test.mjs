@@ -58,6 +58,93 @@ function focusedRow() {
   return row === null ? null : row.getAttribute("data-review-row");
 }
 
+/**
+ * Waits until every control the review keyboard map presses through has an
+ * answer from `getReviewMutationCapabilities` behind it. The composer's
+ * quick and primary writes (composer.tsx's `quickReason` / `draftReason`)
+ * and the thread Reply button (thread.tsx's `replyReason`) all carry a
+ * title ending exactly this way for as long as that read is still in
+ * flight, and a key dispatched into that window finds a disabled control
+ * and does nothing, with nothing later to retry it: that is the shape of
+ * the hosted-runner flake in #235. Counted rather than matched against a
+ * node, the same shape review-components.test.mjs's settledCapabilities
+ * uses for #215.
+ *
+ * A count of zero also satisfies this wait, so it proves nothing on its own
+ * about a surface that has not rendered yet: the caller must already have
+ * waited for the gated control itself to exist (a row count, a
+ * `findByLabelText`) before calling this. All three call sites in this file
+ * do.
+ */
+async function capabilitiesReady(view) {
+  await waitFor(() => {
+    const loading = [...view.container.querySelectorAll("button")].filter(
+      (button) => button.title.endsWith("is still loading."),
+    ).length;
+    assert.equal(loading, 0);
+  });
+}
+
+/**
+ * Waits until the drawer's verdict tiles have rendered from an answered
+ * capability read. `v` cycles `allowedVerdicts(capabilities)` (drawer.tsx),
+ * which stays empty for as long as `capabilities` is null, so a `v`
+ * dispatched before this settles finds no verdict to move to and nothing
+ * later retries it.
+ */
+async function verdictTilesReady(view) {
+  await waitFor(() => {
+    const tiles = view.container.querySelectorAll(
+      ".review-drawer-verdict-tiles input",
+    ).length;
+    assert.notEqual(tiles, 0);
+  });
+}
+
+test("the capability-loading sentence capabilitiesReady keys on matches composer.tsx exactly", async () => {
+  const review = "keys-capabilities-loading";
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const view = renderDiff(
+    diffBridge(review, {
+      listDiscussions: () => read({ discussions: [thread("d-1", { line: 10 })] }),
+      getReviewMutationCapabilities: () => ({
+        requestToken: crypto.randomUUID(),
+        result: gate.then(() => ({ review, capabilities: capabilities() })),
+      }),
+    }),
+    review,
+  );
+  await waitFor(() =>
+    assert.equal(
+      view.container.querySelectorAll("[data-review-row]").length,
+      1,
+    ),
+  );
+
+  // The Reply button renders unconditionally in the thread header
+  // (thread.tsx), so while the capability read above is held open its
+  // title is exactly what capabilitiesReady's suffix match is meant to
+  // catch (composer.tsx:1315-1320). Pinning the literal sentence here
+  // means a reword that drops the "is still loading." suffix, or changes
+  // the sentence itself, fails this assertion loudly instead of leaving
+  // capabilitiesReady to quietly stop matching anything and #235 to
+  // reopen with no test naming the cause.
+  const loading = [...view.container.querySelectorAll("button")].filter(
+    (button) => button.title.endsWith("is still loading."),
+  );
+  assert.equal(loading.length, 1);
+  assert.equal(
+    loading[0].title,
+    "Reply support for this review is still loading.",
+  );
+
+  release();
+  await capabilitiesReady(view);
+});
+
 test("c opens the composer on the current selection from the document body", async () => {
   const review = "keys-comment";
   const view = renderDiff(diffBridge(review), review);
@@ -190,6 +277,13 @@ test("r replies to the thread the row cursor is on", async () => {
   fireEvent.keyDown(document.body, { key: "n" });
   assert.equal(focusedRow(), "thread:d-2");
 
+  // The Reply button on this row refuses with "Reply support for this
+  // review is still loading." for as long as getReviewMutationCapabilities
+  // is in flight, and `r` reads that same refusal (thread.tsx's
+  // replyReason), so a press before it settles finds the thread but has
+  // nothing to do; there is no second `r` to retry it (#235).
+  await capabilitiesReady(view);
+
   fireEvent.keyDown(document.body, { key: "r" });
   await waitFor(() =>
     assert.equal(
@@ -258,6 +352,12 @@ test("Ctrl+Enter and Cmd+Enter run the composer's primary action from outside it
     document.activeElement.getAttribute("aria-label"),
     "Select new line 11",
   );
+  // The composer's primary write button refuses with "Inline comment
+  // support for this review is still loading." until the same capability
+  // read answers, and Ctrl+Enter presses that button rather than reaching
+  // into the composer (keys.ts's pressComposerPrimary), so it needs the
+  // same settle as `r` above.
+  await capabilitiesReady(view);
   fireEvent.keyDown(document.body, { key: "Enter", ctrlKey: true });
   await waitFor(() => assert.equal(saves.length, 1));
   assert.equal(saves[0].content.comments[0].body, "Guard the zero divisor");
@@ -298,6 +398,10 @@ test("Ctrl+Enter reaches the composer from a focused diff row, which does not ac
   // and swallowing the write.
   const row = lineAnchor(view, "Select new line 10");
   row.focus();
+  // Same capability race as the two tests above: the primary write is
+  // pressed rather than reached into, and it refuses while the read is
+  // still in flight.
+  await capabilitiesReady(view);
   fireEvent.keyDown(row, { key: "Enter", ctrlKey: true });
   await waitFor(() => assert.equal(saves.length, 1));
   assert.equal(saves[0].content.comments[0].anchor.new_line, 11);
@@ -492,6 +596,10 @@ test("the open drawer owns the keyboard from the diff behind it", async () => {
     document.activeElement.getAttribute("aria-label"),
     "Select new line 11",
   );
+  // The tiles `v` cycles through are empty until getReviewMutationCapabilities
+  // answers (drawer.tsx's allowedVerdicts), so a press before that leaves
+  // the verdict unset with no later press to retry it.
+  await verdictTilesReady(view);
   fireEvent.keyDown(document.body, { key: "v" });
   await waitFor(() => assert.equal(checkedVerdict(view), "comment"));
 
@@ -519,6 +627,8 @@ test("the open drawer answers v and Escape from the document body", async () => 
   await openDrawer(view);
   document.body.focus();
 
+  // Same capability race as the sibling test above.
+  await verdictTilesReady(view);
   fireEvent.keyDown(document.body, { key: "v" });
   await waitFor(() => assert.equal(checkedVerdict(view), "comment"));
   fireEvent.keyDown(document.body, { key: "Escape" });
@@ -584,6 +694,9 @@ test("the drawer keys keep their guards while the drawer owns the keyboard", asy
   } finally {
     modal.remove();
   }
+  // This press is the one expected to land, so it needs the same capability
+  // settle as the two sibling tests above.
+  await verdictTilesReady(view);
   fireEvent.keyDown(document.body, { key: "v" });
   await waitFor(() => assert.equal(checkedVerdict(view), "comment"));
 });

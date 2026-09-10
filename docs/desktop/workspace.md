@@ -50,8 +50,9 @@ for an empty scan root. If discovery fails, use **Retry**.
 
 ## Find a review
 
-The workspace opens on **All reviews** with **Open** selected. The inbox
-scopes are **My Reviews**, **My MRs**, and **All Open**. **My Reviews** and
+The workspace opens on **All reviews** with the **All Open** scope and
+**Open** selected. The inbox scopes are **My Reviews**, **My MRs**, and
+**All Open**. **My Reviews** and
 **My MRs** show open items only. **All Open** can switch between **Open** and
 **Closed & merged**. The closed state is unavailable in the two personal
 scopes because closed and merged reviews are provided by **All Open**.
@@ -81,8 +82,11 @@ waiting for you.** and **You have no open merge requests.**
 
 The review header contains **← Reviews**, the review number and title, and an
 **Open on forge** button. That button opens the review's existing forge URL in
-the external browser. The desktop workspace continues to use the local
-repositories and review data described above.
+the external browser. On **Files changed** and **Discussions** the header also
+carries the **Your review** button, between the title and **Open on forge**;
+the other tabs hold no review state and show no such button. The desktop
+workspace continues to use the local repositories and review data described
+above.
 
 ## Read review details
 
@@ -90,27 +94,41 @@ Review tabs are contributed by the installed workspace features:
 
 - **Overview** shows the review description and a **Review status** panel with
   state, merge status, CI status, update time, and change counts. A review
-  without a description shows **No description was provided.**
+  without a description shows **No description was provided.** Overview also
+  carries the general composer, the review-level notes that resolve to no diff
+  position, and a **Quick verdict** section offering **Submit comment
+  verdict**, **Approve review**, and **Request changes** for the verdicts this
+  forge and this account can record.
 - **Files changed** opens the code diff. Its layout controls are described
   below.
 - **Commits** lists commit subjects, short SHAs, authors, and timestamps. An
   empty history shows **This review has no commits.**
-- **Discussions** shows review threads and the commenting and review controls.
+- **Discussions** lists the published threads that resolve to a diff position
+  and carries the review lifecycle actions.
 - **Pipelines** opens the CI view described below.
 
-Each read view has a refresh control. If a refresh fails after data was already
-loaded, the desktop keeps the previous result visible and labels the failure.
-Use the view's refresh control to try again. If the current revision is not
-available, revision-bound reads are disabled until the review can be loaded
-again.
+Every read view except **Discussions** has a refresh control. If a refresh
+fails after data was already loaded, the desktop keeps the previous result
+visible and labels the failure. Use the view's refresh control to try again.
+**Discussions** loads once when the review opens and has no refresh control of
+its own; leave the review and open it again to re-read it. If the current
+revision is not available, revision-bound reads are disabled until the review
+can be loaded again.
 
 ## Comment, suggest, and submit
 
-The **Discussions** panel is a write-free jump list: every published thread
-that resolves to a diff position, unresolved ones first, each with **Show in
-diff** to open it where it was written. Writing happens in the composers
-instead: the in-diff composer, opened from the gutter's `+` button or the
-`c` key, and the general composer on **Overview** for a review-level comment.
+The **Discussions** panel lists every published thread that resolves to a diff
+position, unresolved ones first, each with **Show in diff** to open it where it
+was written. The list itself takes no comment: writing happens in the composers
+instead, the in-diff composer opened from the gutter's `+` button or the `c`
+key, and the general composer on **Overview** for a review-level comment.
+
+The same panel also carries the review lifecycle actions, which are **Merge**,
+**Close**, **Reopen**, and **Remove approval**, with **Squash commits** and
+**Delete source branch after merge** as options on a merge, alongside an
+indicator that names the active draft and its stored version. Those actions
+exist only here; they are not reachable from the other tabs, which is
+[known limitation #228](known-limitations.md).
 Both offer the same two writes, **Add comment now** to act immediately
 against the selected review, and **Start a review** (or **Add to review**
 once one is pending) to add the entry to a durable draft. A single saved
@@ -122,8 +140,9 @@ submits, or discards it. The draft remains bound to the review revision it
 was created from.
 
 A pending review can be discarded from either surface: **Discard review** in
-**Your review**, or the **More review actions** overflow in the in-diff
-composer, which appears only while a review is pending. Both ask first with the
+**Your review**, or the composer's **More** overflow, labelled **More review
+actions** for assistive technology, which appears in the in-diff composer only
+while a review is pending. Both ask first with the
 same sentence, which names how many pending comments would go and whether the
 summary and the chosen verdict would go with them, and both then make the same
 `drafts.discard` call the terminal interface makes from ++shift+d++. Press
@@ -220,11 +239,14 @@ revision.
 
 ## Review keyboard map
 
-The review surfaces answer a small keyboard map. Every key acts from anywhere
-on the review page, including with nothing focused at all, and every key stands
-down while a text field, a `contenteditable` region, a select control, or a
-modal dialog holds the keyboard, and whenever a modifier the binding does not
-name is held.
+Two review surfaces answer a small keyboard map: the **Files changed** diff
+and the **Your review** drawer. Within either, a key acts from anywhere in that
+surface, including with nothing focused at all. The other tabs do not register
+the map, so these keys, **Shift+C** included, do nothing on **Overview**,
+**Commits**, **Discussions**, or **Pipelines**. Every key also stands down
+while a text field, a `contenteditable` region, a select control, or a modal
+dialog holds the keyboard, and whenever a modifier the binding does not name is
+held.
 
 | Key | Desktop | Terminal interface |
 |-----|---------|--------------------|
@@ -251,8 +273,7 @@ composer's primary action and carries its refusals, so an empty comment is
 refused exactly as pressing the button is. `Esc` closes the composer and keeps
 the typed text for the same review and the same anchor; typed inside the
 composer it answers the nearest question first, cancelling an armed **Discard
-review** confirmation, then the **More review actions** overflow, and only then
-closing. While **Your review** is open it owns the keyboard, wherever the focus
+review** confirmation, then the **More** overflow, and only then closing. While **Your review** is open it owns the keyboard, wherever the focus
 is sitting, including on the diff behind it: `v` cycles its verdict tiles
 through the verdicts this review can record, and `Esc` cancels an armed
 confirmation first and otherwise closes the drawer, returning the focus to the
@@ -292,8 +313,9 @@ status, name, and stage. A pipeline with no jobs shows **This pipeline has no
 jobs.** Select a job to open **Log · _job name_**. The log view provides
 **Refresh log**, line numbers, bounded windows, and a **Search log** field.
 Enter a search term, or press ++slash++ anywhere in the Pipelines tab while no
-text field holds the keyboard. Matches are filtered as you type and the first
-one is selected. ++enter++ hands the keyboard back to the log, where ++n++ and
+text field holds the keyboard. The log keeps all of its lines: matching lines
+are highlighted in place as you type, the first match is selected, and the row
+window jumps to it. ++enter++ hands the keyboard back to the log, where ++n++ and
 ++shift+n++ step to the next and previous match and wrap around; **Previous
 match** and **Next match** do the same with the mouse. The match counter reports
 the selected match and total matches; **No matches** is shown when appropriate.
@@ -322,8 +344,9 @@ whole window.
 ### CI actions and outcomes
 
 When the repository advertises support, the selected pipeline offers **Retry
-pipeline** and **Cancel pipeline**. The selected job offers **Retry job** and
-**Cancel job**. Unsupported actions are disabled with a reason, and an error
+pipeline** and **Cancel pipeline**, beside **Open pipeline on forge**. The
+selected job offers **Retry job** and **Cancel job**, beside **Open job on
+forge**. Unsupported actions are disabled with a reason, and an error
 loading action support leaves pipeline and log reads available. Actions are
 also disabled when the reported capability belongs to a different repository.
 
@@ -346,8 +369,12 @@ workspace does not silently replay an uncertain action.
 
 ## Application bar commands
 
-The top application bar carries two built-in commands in addition to anything a
-plugin contributes.
+The top application bar carries three built-in commands in addition to anything
+a plugin contributes.
+
+**Review workflow** appears while a review is open and sorts first. It moves
+the review to its **Discussions** panel, which is where the lifecycle actions
+live.
 
 **Copy URL** appears only while a review is open. It copies that review's URL to
 the clipboard, resolving the URL from the currently open review rather than from
@@ -393,8 +420,10 @@ The sidebar makes non-started states explicit:
 - **Disabled in configuration.** means the plugin is disabled.
 - **Incompatible with this desktop version.** means its declared desktop API
   is not supported by this application.
-- **Plugin failed to start.** or **Plugin stopped.** means the provider did
-  not remain available; the error detail is available from the item.
+- **Plugin is starting.** means the provider is still being brought up.
+- **Plugin failed to start.** or **Plugin stopped.** means the provider did not
+  remain available. When an error was recorded, the item shows that error text
+  in place of the sentence.
 - **No desktop views declared.** means a started provider has no navigation
   entry to display.
 

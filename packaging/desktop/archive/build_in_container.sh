@@ -32,6 +32,6 @@ PYTHONPATH="$source_root/src" python3.12 \
   --output-dir "$output_dir" \
   --release-version "$release_version" \
   --core-minimum 0.4.2-dev.183 \
-  --core-maximum-exclusive 0.5.0 \
+  --core-maximum-exclusive 2.0.0 \
   --source-commit "$source_commit" \
   --source-date-epoch "$source_date_epoch"

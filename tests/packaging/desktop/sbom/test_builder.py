@@ -172,7 +172,7 @@ def _fixture_root(tmp_path: Path) -> Path:
         "runtime/tongs-desktop": (b"#!/bin/sh\n", 0o755),
     }
     parameters = archive_builder.BuildParameters(
-        "0.5.0", "0.4.2-dev.183", "0.5.0", SOURCE_COMMIT, SOURCE_EPOCH
+        "0.5.0", "0.4.2-dev.183", "2.0.0", SOURCE_COMMIT, SOURCE_EPOCH
     )
     contract = json.loads(
         (ROOT / "packaging/desktop/archive/contract.json").read_bytes()

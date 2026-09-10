@@ -16,9 +16,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from packaging.version import Version
 
 from tests.ci.desktop_production_expectations import (
     ARCHIVE_ADAPTER_PROGRAM,
+    DESKTOP_CORE_MAXIMUM_EXCLUSIVE,
+    DESKTOP_CORE_MINIMUM,
     DESKTOP_RELEASE_VERSION,
     RECEIPT_READER_PROGRAM,
     ROOT,
@@ -286,12 +289,45 @@ def test_reviewed_constants_still_match_the_producer_literals() -> None:
     contract = json.loads((ROOT / "packaging/rpm/desktop/manifest.json").read_text())
     assert contract["accepted_desktop"]["release_version"] == DESKTOP_RELEASE_VERSION
 
+    container = (ROOT / "packaging/desktop/archive/build_in_container.sh").read_text()
+    compatibility = contract["accepted_desktop"]["compatibility"]
+    assert f"CORE_MINIMUM={DESKTOP_CORE_MINIMUM}\n" in hosted
+    assert f"CORE_MAXIMUM_EXCLUSIVE={DESKTOP_CORE_MAXIMUM_EXCLUSIVE}\n" in hosted
+    assert f"--core-minimum {DESKTOP_CORE_MINIMUM} \\\n" in container
+    assert (
+        f"--core-maximum-exclusive {DESKTOP_CORE_MAXIMUM_EXCLUSIVE} \\\n" in container
+    )
+    assert compatibility["core_minimum"] == DESKTOP_CORE_MINIMUM
+    assert compatibility["core_maximum_exclusive"] == DESKTOP_CORE_MAXIMUM_EXCLUSIVE
+
     # The trusted signing workflow hardcodes the Electron version to locate the
     # reviewed runtime configuration.  Nothing else guards that copy, so a bump
     # of desktop/package.json without it would only fail at file-open time.
     version, _, _ = electron_identity(ROOT)
     release = (ROOT / ".github/workflows/release-desktop.yml").read_text()
     assert f'ELECTRON_VERSION: "{version}"' in release
+
+
+def test_compatibility_interval_admits_core_1_0_0_and_the_pre_tag_branch_core() -> None:
+    """Both the tagged release and the untagged branch core must fall inside it.
+
+    ``package_contract.bind_manifest`` binds the payload contract to the core
+    the RPM is built from, and ``desktop-production.yml`` runs that binding on
+    every push, against whatever ``git describe`` derives at that commit.  So
+    the interval has to hold two different things at two different times: the
+    tagged ``1.0.0``, and the ``0.4.2.devN`` this branch derives until the tag
+    exists.  Pinning both here is what stops the lower bound being raised early
+    and turning the pre-merge gate red.
+    """
+
+    minimum = Version(DESKTOP_CORE_MINIMUM.replace("-dev.", ".dev"))
+    maximum = Version(DESKTOP_CORE_MAXIMUM_EXCLUSIVE)
+
+    assert minimum <= Version("1.0.0") < maximum
+    assert minimum <= Version("1.99.99") < maximum
+    assert minimum <= Version("0.4.2.dev516") < maximum
+    assert not minimum <= Version("2.0.0") < maximum
+    assert not minimum <= Version("0.4.1") < maximum
 
 
 #: Module names the SBOM chain registers.  ``sbom_evidence`` and the SPDX

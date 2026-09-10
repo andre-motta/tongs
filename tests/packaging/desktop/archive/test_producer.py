@@ -40,7 +40,7 @@ build_contract_documents = producer.build_contract_documents
 PARAMETERS = BuildParameters(
     "0.5.0",
     "0.4.2-dev.183",
-    "0.5.0",
+    "2.0.0",
     "0123456789abcdef0123456789abcdef01234567",
     1_788_846_594,
 )

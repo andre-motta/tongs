@@ -53,13 +53,18 @@ def map_http_error(response: httpx.Response) -> ForgeError:
         # GitHub's PR merge endpoint answers a merge attempt it will not
         # perform (merge conflicts, required checks unmet, etc.) with 405
         # and a reason in the body, e.g. {"message": "Pull Request has merge
-        # conflicts"}. GitLab's merge endpoint uses the same status for "not
-        # currently mergeable" on the same call. Both are a definitive,
-        # known-state rejection rather than an ambiguous failure.
+        # conflicts"}. GitLab's merge endpoint uses the same status when
+        # merge_request.mergeable? is false (conflicts, draft, unresolved
+        # threads, a failing or pending pipeline), decided before any merge
+        # is attempted. Both are a definitive, known-state rejection rather
+        # than an ambiguous failure.
         return ConflictError(f"Conflict: {body}")
     if status == 406:
-        # GitLab's merge endpoint uses 406 specifically for "this merge
-        # request has conflicts", distinct from its 405 "not mergeable".
+        # Legacy GitLab releases returned 406 on the merge endpoint itself
+        # for "branch cannot be merged"; current GitLab reserves 406 for
+        # cancel_merge_when_pipeline_succeeds (no auto-merge to cancel).
+        # Neither case runs a mutation before returning 406, so it stays a
+        # definitive, known-state rejection like 405.
         return ConflictError(f"Conflict: {body}")
     if status == 409:
         return ConflictError(f"Conflict: {body}")

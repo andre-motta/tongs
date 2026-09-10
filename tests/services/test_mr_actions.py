@@ -313,8 +313,10 @@ async def test_merge_405_conflict_is_known_rejection_not_unknown_receipt() -> No
     """GitHub's merge endpoint answers a blocked merge with 405 and a reason,
     e.g. {"message": "Pull Request has merge conflicts"} (#229). That must
     surface as a known, typed rejection the same way a 409 does: no unknown
-    receipt, no resync required, no mutation lock, and the dispatch-level
-    error carries the forge's reason rather than a generic message.
+    receipt, no resync required, no mutation lock. The dispatch-level
+    `ForgeError` carries the forge's reason, but the translated, user-visible
+    `ServiceError` must not: `translate_error` never copies exception text
+    across the service boundary.
     """
     reason = httpx.Response(405, json={"message": "Pull Request has merge conflicts"})
     dispatch_error = map_http_error(reason)
@@ -327,6 +329,7 @@ async def test_merge_405_conflict_is_known_rejection_not_unknown_receipt() -> No
         with pytest.raises(ServiceError) as raised:
             await service.execute(command)
         assert raised.value.code is ServiceErrorCode.CONFLICT
+        assert "Pull Request has merge conflicts" not in str(raised.value)
 
     client.merge_mr.assert_awaited_once()
     emitter.assert_not_called()

@@ -58,11 +58,10 @@ The long form is `tongs desktop`. The top-level alias
 | `tongs desktop status` | `--json` | Inspect the per-user installation without changing it. |
 | `tongs desktop uninstall` | none | Remove the per-user activation, owned payloads, and owned menu entry. |
 
-The parser accepts a release version such as `1.2.3`, without the
-`desktop-v` tag prefix. `--allow-downgrade` is valid only with an explicit
-`--version`; it never changes the default newest-release selection. Install
-and update reject a release older than the accepted release unless this
-explicit combination is used.
+The parser accepts a release version such as `1.2.3`, without the `v` tag
+prefix. `--allow-downgrade` is valid only with an explicit `--version`; it
+never changes the default selection. Install and update reject a release older
+than the accepted release unless this explicit combination is used.
 
 Lifecycle success returns exit code 0. Installer failures print a safe message
 and return exit code 2. `status` returns 0 when no per-user installation is
@@ -80,11 +79,27 @@ tongs desktop status [--json]
 tongs desktop uninstall
 ```
 
-For the future production path, the installer first finds an immutable stable
-`desktop-vX.Y.Z` release in the fixed Tongs repository. It then verifies the
-release manifest, archive digest, compatibility fields, and GitHub-managed
-Sigstore provenance before activation. No normal terminal start or background
-task performs this work.
+The installer first finds an immutable stable `vX.Y.Z` release in the fixed
+Tongs repository. Desktop releases share the core's tag: the tag that publishes
+`tongs` to PyPI also builds, signs and publishes the desktop assets to the
+GitHub Release of the same name. Without `--version`, `install` takes the
+release whose version equals the running core, because the archive is built
+from exactly that commit; if no such release exists, for example on a
+development build, it stops and names both versions rather than taking the
+newest. It then verifies the release manifest, archive digest, compatibility
+fields, and GitHub-managed Sigstore provenance before activation. No normal
+terminal start or background task performs this work.
+
+The complete path for one stable version is therefore:
+
+```console
+pip install tongs==1.0.0
+tongs --install-desktop
+```
+
+A release's desktop assets are built after the tag is pushed, so an installer
+run in the minutes after a new core version appears on PyPI can find no
+matching release yet. The error says so; retry once the release exists.
 
 ## Installing and launching
 
@@ -96,7 +111,7 @@ tongs desktop install --version 1.2.3
 tongs desktop install --version 1.2.3 --allow-downgrade
 ```
 
-The first command selects the newest verified stable release. The second
+The first command selects the release matching the running core. The second
 selects one exact release version. The third permits that explicit version to
 be older than the locally accepted release. All three require a persistent,
 exactly bound invoking environment before remote staging begins.
@@ -133,9 +148,9 @@ Updating is explicit:
 tongs desktop update
 ```
 
-The command selects the newest verified stable release. It uses the same
-persistent environment and journaled, recoverable activation sequence as
-install.
+The command selects the newest verified stable release, which is the path to
+take after upgrading the core to a newer version. It uses the same persistent
+environment and journaled, recoverable activation sequence as install.
 
 Two guards run before any remote staging, and they apply to `install`,
 `update`, and `repair --redownload` alike, not to `update` alone. If the

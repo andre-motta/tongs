@@ -1052,10 +1052,30 @@ def test_provenance_outputs_unrelated_to_the_archive_cannot_publish(
 
 def test_stale_producer_inputs_cannot_publish(case: dict[str, object]) -> None:
     path = case["transfer"] / "evidence/inputs.env"
-    path.write_bytes(path.read_bytes().replace(b"RELEASE_VERSION=0.5.0", b"X=1"))
+    original = path.read_bytes()
+    assert b"CORE_MINIMUM=" in original
+    path.write_bytes(original.replace(b"CORE_MINIMUM=", b"X=", 1))
     _seal(case["transfer"], case["expectations"])
 
     with pytest.raises(ADAPTER.ArchiveEvidenceError, match="producer inputs"):
+        _produce(case)
+    assert not case["output"].exists()
+
+
+def test_a_release_version_the_ref_did_not_name_cannot_publish(
+    case: dict[str, object],
+) -> None:
+    """The retained transfer validator binds the producer's version to the ref."""
+
+    path = case["transfer"] / "evidence/inputs.env"
+    path.write_bytes(
+        path.read_bytes().replace(f"RELEASE_VERSION={RELEASE_VERSION}".encode(), b"X=1")
+    )
+    _seal(case["transfer"], case["expectations"])
+
+    with pytest.raises(
+        ADAPTER.ArchiveEvidenceError, match="retained transfer validation failed"
+    ):
         _produce(case)
     assert not case["output"].exists()
 

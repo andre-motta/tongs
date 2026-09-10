@@ -217,6 +217,10 @@ higher core only ever helps.
 
 ## 3. Tag triggers and what each workflow does
 
+*Superseded by section 9: `release-desktop.yml` now fires on the same
+`vX.Y.Z` tag as `publish.yml` and publishes the desktop assets to that tag's
+GitHub Release. The audit below is kept as the state it described.*
+
 **Exactly one workflow in the repository fires on a tag, and it is not a desktop
 workflow.** A repository-wide search finds no workflow matching `desktop-v*`, no
 `gh release` or `softprops/action-gh-release` step, and no COPR step anywhere
@@ -293,15 +297,16 @@ through 5 are implementation work that does not exist yet.
    `skip-existing` is not configured. Verify wheel and sdist filenames, their
    `METADATA` version, a clean install, both entry points, and
    `importlib.metadata.version("tongs")` before going further.
-5. **Only then create `desktop-v1.0.0`**, once a reviewed production path exists
-   that builds, attests, uploads and publishes the desktop release assets for
-   that exact tag. The GitHub Release must be stable, non-prerelease, immutable,
-   and must carry at least `desktop-manifest-v1.json`,
+5. **The desktop release is created by the same tag push**, not by a second
+   tag. `release-desktop.yml` builds, attests, verifies and publishes the
+   desktop assets to the GitHub Release `v1.0.0` (section 9). There is no
+   `desktop-v1.0.0`. The release must be stable, non-prerelease, immutable, and
+   carry at least `desktop-manifest-v1.json`,
    `desktop-manifest-v1.sigstore.json`, and
    `tongs-desktop-1.0.0-fedora44-x86_64.tar.gz`, each with a unique name,
    positive size, `sha256:` digest, `uploaded` state and the expected asset URL
-   (`src/tongs/desktop/installer/metadata.py:298-348`). The reviewed RPM and
-   SBOM asset names join that set.
+   (`src/tongs/desktop/installer/metadata.py`); the publish job confirms all of
+   that before and after publication. The RPM and SBOM assets join that set.
 6. **Verify the public consumer path** from a fresh core 1.0.0 installation:
    `tongs desktop install --version 1.0.0`, status, launch, update selection,
    repair, downgrade guard, uninstall and ownership.
@@ -309,19 +314,28 @@ through 5 are implementation work that does not exist yet.
    support policy and the release notes only after step 6 passes, then verify
    the Pages deployment.
 
-Core first is the recommendation because a discoverable desktop 1.0.0 that
-requires a core nobody can install is the worst available failure. Both tags
-must resolve to one commit.
+Core first is still what happens, by construction: `publish.yml` and
+`release-desktop.yml` start from the same tag push, the PyPI upload takes
+minutes and the desktop release well over an hour, and the installer names the
+missing release and asks for a retry in between. One tag resolves to one commit.
 
 ### Stop conditions
 
 - Stop before the tag if the built metadata or the PyPI workflow have not been
   reviewed. The upload cannot be recalled.
-- Stop if `v1.0.0` and `desktop-v1.0.0` would resolve to different commits.
-- Stop if the core version falls outside the payload's declared interval, which
-  it does today.
+- Stop if the core version falls outside the payload's declared interval. The
+  upper bound is 2.0.0 since PR #238, and the publish job replays the
+  installer's compatibility check with the tag's own version before creating
+  the release.
 - Stop if the desktop production tag path is absent from the exact tagged
-  source, which it is today.
+  source: `release-desktop.yml` must carry the `release-rpm` and
+  `release-publish` jobs at the tagged commit, and
+  `docs/releases/v1.0.0.md` must exist there.
+- Stop if immutable releases are not enabled for the repository. The installer
+  refuses a mutable release, and the publish job fails after publication when
+  the flag is missing.
+- Stop if the dry run (`workflow_dispatch` of `release-desktop.yml` with
+  `dry_run`) has not passed on the release commit or its parent.
 - Stop if a signing job would receive OIDC, attestation, release or contents
   write authority in the same job that builds the archive.
 - Stop after immutability rather than mutating a published release; prepare a
@@ -391,6 +405,11 @@ desktop documented as unreleased, and treat the `desktop-v1.0.0` production path
 as its own reviewed work item with its own gate. The alternative, holding core
 1.0.0 until the desktop publisher exists, delays a release that is otherwise
 ready.*
+
+*Overruled after this audit: the CTO ruled the desktop release blocking for
+v1.0.0. The production path was built (section 9) so that the `v1.0.0` tag
+publishes both, and the installer's tag contract moved from `desktop-v` to the
+core's own `v` tag.*
 
 **4. The Python package classifier.**
 `pyproject.toml:17` still says `Development Status :: 4 - Beta`.
@@ -570,9 +589,13 @@ pre-tag state produces a `1.0.0.devN`, and a `0.4.2.devN` is not a PEP 440
 pre-release of `1.0.0` by any reading.
 
 The cost option A names, a payload that formally accepts a development core it
-was never tested against, does not arise in this release: under decision 3 no
-desktop payload is published, so the declared interval is not consumed by
-anything a user can install.
+was never tested against, now does arise, because section 9 publishes a 1.0.0
+payload whose declared interval starts at `0.4.2-dev.183`. It is contained
+rather than removed: `tongs desktop install` without `--version` selects only
+the release whose version equals the running core, so a development core cannot
+take the 1.0.0 payload implicitly; it can only be asked for with an explicit
+`--version 1.0.0`, and the interval check then admits it. Raising the lower
+bound to 1.0.0 after the tag, step 4 of 8.4, closes that path for v1.0.1.
 
 `tests/ci/desktop_production_expectations.py` now carries `DESKTOP_CORE_MINIMUM`
 and `DESKTOP_CORE_MAXIMUM_EXCLUSIVE` as caller-owned constants, and
@@ -644,10 +667,21 @@ therefore requires `expected_package_lock_sha256` to move in the same reviewed
 commit, and a rebuild confirming the two clean source roots still produce
 byte-identical output.
 
-Both are therefore work for the decision 3 desktop production release path, which
-already has to build and accept a 1.0.0 payload. `desktop/package.json`,
-`desktop/package-lock.json`, `run_hosted.sh`'s `release_version` and the whole
-accepted block are byte identical to the base commit.
+Section 9 settles decision 2 differently from a re-pin: the release version is
+no longer a checked-in literal at all. `run_hosted.sh` takes it from
+`TONGS_RELEASE_VERSION`, the trusted workflow derives that from the tag and
+falls back to the 0.5.0 candidate version on a branch, and the RPM payload
+contract is materialised per run with `--release-version`, replacing the
+accepted archive name and `release_version` while copying the reviewed
+compatibility and runtime policy from `manifest.json` unchanged. The accepted
+block in `packaging/rpm/desktop/manifest.json` therefore stays the reviewed
+0.5.0 candidate evidence that the branch gate needs, and no 1.0.0 archive has to
+be produced and accepted before the tag. The re-pin procedure below is kept for
+the case where the checked-in candidate identity itself is refreshed; it is not
+on the v1.0.0 path.
+
+Decision 7 stays deferred as described. `desktop/package.json` and
+`desktop/package-lock.json` are byte identical to the base commit.
 
 The consequence of deferring decision 7 is that `app.asar` in a desktop 1.0.0
 payload would contain a `package.json` reading `0.1.0`. Nothing reads it: the
@@ -655,11 +689,12 @@ package is `private`, is never published to npm, and `desktop/src` never imports
 it. The only version the shell knows is the core version passed on argv, as
 section 1.2 records.
 
-#### The re-pin procedure
+#### The re-pin procedure, only if the checked-in candidate identity is refreshed
 
-Run once, in one reviewed change, when the decision 3 path builds the first
-1.0.0 payload. The order matters: the lock pin gates the build, and the accepted
-set can only be written from a build that succeeded.
+Not required for v1.0.0 (see above). Run in one reviewed change when the
+reviewed candidate identity in `manifest.json` is deliberately moved to a newer
+archive. The order matters: the lock pin gates the build, and the accepted set
+can only be written from a build that succeeded.
 
 1. **Set the shell version.** `desktop/package.json` and both root `version`
    fields of `desktop/package-lock.json` to `1.0.0`. Do not touch a dependency
@@ -670,14 +705,15 @@ set can only be written from a build that succeeded.
    refuses to start. The check is `scripts/build_desktop_archive.py:596-603`;
    `tests/packaging/desktop/archive/test_producer.py` exercises the producer
    against the contract.
-3. **Set the release version.** `release_version=1.0.0` in
-   `packaging/desktop/archive/run_hosted.sh:30`, the attested subject filename at
-   `.github/workflows/release-desktop.yml:331`, the RPM assertion at
-   `packaging/rpm/desktop/install_and_verify.sh:581`, the prose at
-   `packaging/desktop/archive/README.md:6,43` and
-   `packaging/rpm/desktop/README.md:51`, and the caller-owned gate constant
+3. **Set the candidate release version.** The branch fallback in
+   `packaging/desktop/archive/run_hosted.sh` and in the `Derive the release
+   version from the ref` step of `.github/workflows/release-desktop.yml`, the
+   prose at `packaging/desktop/archive/README.md` and
+   `packaging/rpm/desktop/README.md`, and the caller-owned gate constant
    `DESKTOP_RELEASE_VERSION` in `tests/ci/desktop_production_expectations.py`.
-   The mirrored test constants listed at the end of section 1.2 move with them.
+   The attested subject and the RPM version assertion are derived at run time
+   and need no edit. The mirrored test constants listed at the end of section
+   1.2 move with them.
 4. **Produce the accepted set.** The job that generates it is the `archive` job
    of `.github/workflows/desktop-production.yml`, which runs
    `packaging/desktop/archive/run_hosted.sh` twice from two clean source roots
@@ -697,19 +733,18 @@ set can only be written from a build that succeeded.
 6. **Confirm what pins it.** `tests/packaging/rpm/desktop/test_contract.py`
    pins the accepted identity and must be updated to the new run in the same
    change. `tests/ci/test_desktop_production_expectations.py` pins
-   `DESKTOP_RELEASE_VERSION` against `run_hosted.sh`, the manifest's
-   `release_version`, the accepted archive filename, the attested subject in
-   `.github/workflows/release-desktop.yml` and the RPM version assertion in
-   `packaging/rpm/desktop/install_and_verify.sh`, so step 3 is complete only when
-   that test is green. Both must pass before the change is proposed.
+   `DESKTOP_RELEASE_VERSION` against `run_hosted.sh`'s fallback, the
+   manifest's `release_version`, the accepted archive filename and the branch
+   fallback in `.github/workflows/release-desktop.yml`, so step 3 is complete
+   only when that test is green. Both must pass before the change is proposed.
 7. **Verify end to end.** A full `desktop-production.yml` run, green through
    `rpm-lifecycle`, on the commit that carries all of the above.
 
 ### 8.4 The sequence left for the CTO
 
-Steps 1 through 3 are the whole of what the v1.0.0 core tag needs at this commit.
-Steps 4 and 5 are the decision 3 work item; the automated desktop release job may
-tie step 5 to the tag, and if it does, that pull request updates this section.
+Steps 1 through 3 are the whole of what the v1.0.0 tag needs, and the tag now
+publishes the desktop as well as the core; section 9 is the operating sequence
+and the prerequisites. Step 4 follows the tag. Step 5 is done.
 
 1. **Merge, in this order.** The implementing pull request for this section, then
    `feat/desktop-app` into `main`. Both are CTO gates. Merging into `main` also
@@ -728,38 +763,95 @@ tie step 5 to the tag, and if it does, that pull request updates this section.
    rejected as a duplicate rather than silently succeeding. Verify the wheel and
    sdist filenames, the `METADATA` version, a clean install, both entry points and
    `importlib.metadata.version("tongs")` before going further.
-   At this commit nothing else fires on the tag. The automated desktop release
-   job is being built in the pull request tracked on issue #54 (branch
-   `feat/desktop-release-publish`); when it lands it will state which tag carries
-   the desktop assets, what the installer's tag contract becomes, how the archive
-   version is derived at release time, and it will rewrite this section and 8.2
-   accordingly. Until then, creating a GitHub Release by hand adds nothing the
-   installer accepts: the notes can be posted with `gh release create v1.0.0`
-   (it does not retrigger `publish.yml`, whose only trigger is `push.tags`), but
-   `src/tongs/desktop/installer/metadata.py` refuses assets without the
-   workflow's attestation.
+   The same push fires `release-desktop.yml`, which builds, attests and
+   verifies the 1.0.0 desktop archive, rebuilds the RPMs and creates the
+   GitHub Release `v1.0.0` with every asset, as section 9 describes. Do not
+   create a release by hand: the publish job refuses to touch an existing
+   release, draft or not, and a hand-made release carries no attestation the
+   installer accepts.
 4. **Raise `core_minimum` to 1.0.0** in a reviewed change after the tag exists,
-   across `run_hosted.sh:87`, `build_in_container.sh:34`, `manifest.json:37` and
-   `DESKTOP_CORE_MINIMUM`.
-5. **Build the desktop production tag path** and create `desktop-v1.0.0`, under
-   the requirements section 4 step 5 states. That work item carries the re-pin
-   procedure in 8.3, and steps 4 and 5 here should be one change, because both
-   edit the same manifest.
+   across `run_hosted.sh`, `build_in_container.sh`, `manifest.json` and
+   `DESKTOP_CORE_MINIMUM`, for v1.0.1. Until then 8.2 explains what the wide
+   lower bound admits and why it is contained.
+5. **The desktop production tag path is built.** The `v1.0.0` tag carries both
+   publishes; the installer's tag contract, `SECURITY.md`, decision 3 and the
+   interval argument in 8.2 were revised for it, and the re-pin in 8.3 is not
+   on the release path. Section 9 is the sequence.
 
-   Section 4 step 5 and section 3 both describe this as work that does not exist.
-   It is being built: the automated desktop release job is the pull request
-   tracked on issue #54 (branch `feat/desktop-release-publish`). It owns the tag
-   policy for the desktop assets (whether `desktop-v1.0.0` stays or the `v1.0.0`
-   tag carries both publishes, which would change the installer's tag contract,
-   `SECURITY.md`, decision 3 and the interval argument in 8.2, all reviewed
-   there), the release-time archive version derivation, and the re-pin in 8.3.
-   **Read that pull request rather than creating a release by hand.** A
-   hand-made release would carry no attestation, no provenance and no
-   immutability guarantee, which is exactly what
-   `src/tongs/desktop/installer/metadata.py` refuses to install.
+Section 4's stop conditions, as revised there, hold: the unreviewed metadata or
+workflow, the tagged source lacking the publication jobs or the notes file,
+immutable releases disabled, a missing dry run, a signing job holding build
+authority, and mutating a published release instead of preparing a corrective
+version.
+## 9. Desktop release publication from the version tag
 
-Section 4's stop conditions still hold, minus the third: the core version now
-falls inside the payload's declared interval. The remaining ones are the
-unreviewed metadata or workflow, two tags resolving to different commits, an
-absent desktop production tag path, a signing job holding build authority, and
-mutating a published release instead of preparing a corrective version.
+Added by the change that made one `vX.Y.Z` tag publish the desktop. It is the
+operating sequence; sections 3, 4, 5 and 8 carry short notes where it changed
+them. The compatibility upper bound from section 8.2 (PR #238) is already on
+the branch.
+
+### What one tag now does
+
+1. `publish.yml` builds the core and publishes it to PyPI, unchanged.
+2. `release-desktop.yml` runs on the same tag push:
+   - `candidate-archive` derives the release version from the tag, exports it
+     to the producer as `TONGS_RELEASE_VERSION`, and builds
+     `tongs-desktop-X.Y.Z-fedora44-x86_64.tar.gz` twice, byte-identical.
+   - `candidate-attestation` attests the release manifest and the archive with
+     `actions/attest`, then verifies the bundle with the installer's own
+     `_verify_production_attestation` against the identity the installer
+     derives from the tag. On a branch that policy must still reject.
+   - `release-rpm` materialises the exact-mode payload contract for the tag's
+     version (`rpm_payload_contract.py --release-version`) and runs the full
+     RPM lifecycle from the signed archive.
+   - `release-publish` assembles the assets under the names the installer
+     expects (`desktop-manifest-v1.sigstore.json` for the bundle), verifies
+     them again with the installer's policy, requires that no release exists,
+     creates the release as a draft with every asset, confirms the draft
+     carries exactly the assembled bytes, publishes it as the latest release,
+     and confirms it is immutable and complete. Release notes come from
+     `docs/releases/vX.Y.Z.md`, which must exist at the tagged commit.
+3. `tongs --install-desktop` selects the release whose version equals the
+   running core. The two workflows do not wait for each other, so the desktop
+   release can appear minutes after the PyPI upload; the installer reports
+   that state and asks for a retry.
+
+### Prerequisites the CTO must confirm before the tag
+
+- **Immutable releases are enabled for the repository** (Settings, General,
+  Releases). The installer refuses a release whose `immutable` flag is not
+  `true`, and the publish job fails after publication if the flag is missing.
+  A mutable published release can be deleted and the tag's workflow run
+  re-run once the setting is on; a release is never edited in place.
+- **The compatibility upper bound admits core 1.0.0** (section 8.2, PR #238,
+  merged). The publish job replays the installer's compatibility check with the
+  tag's own version and refuses to create a release the installer would reject.
+- **`docs/releases/v1.0.0.md` exists at the tagged commit.**
+- **A dry run passed.** Dispatch `release-desktop.yml` on `main` (or the
+  release branch) with `dry_run` set. It builds, signs, verifies and rebuilds
+  the RPMs and publishes nothing.
+
+### The release sequence
+
+```console
+git checkout main && git pull --ff-only
+git tag -a v1.0.0 -m "tongs 1.0.0"
+git push origin v1.0.0
+```
+
+Then watch both workflow runs for the tag. When `release-publish` succeeds:
+
+```console
+pip install tongs==1.0.0
+tongs --install-desktop
+```
+
+### If the desktop run fails
+
+Nothing was published unless the `release-publish` job reached its last step.
+If the failure is in a job before it, fix the cause on the branch, and either
+re-run the failed jobs for the same tag (the release does not exist yet, so
+`require-absent` still passes) or release the fix as v1.0.1. If a draft was
+created and the job failed before publishing, delete the draft by hand and
+re-run; the job refuses to touch an existing release, draft or not. A
+published release is immutable and stays; the next fix is v1.0.1.

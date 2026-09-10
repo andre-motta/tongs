@@ -80,7 +80,7 @@ async def test_discovers_only_exact_immutable_desktop_release() -> None:
         return httpx.Response(
             200,
             json=[
-                {"tag_name": "v99.0.0"},
+                {"tag_name": "unrelated-v99.0.0"},
                 _release_json(),
             ],
         )
@@ -103,7 +103,7 @@ async def test_newer_prerelease_and_draft_do_not_hide_latest_stable_release() ->
     prerelease.update(
         {
             "id": 9001,
-            "tag_name": "desktop-v9.0.0",
+            "tag_name": "v9.0.0",
             "prerelease": True,
         }
     )
@@ -111,7 +111,7 @@ async def test_newer_prerelease_and_draft_do_not_hide_latest_stable_release() ->
     draft.update(
         {
             "id": 9002,
-            "tag_name": "desktop-v8.0.0",
+            "tag_name": "v8.0.0",
             "draft": True,
         }
     )
@@ -151,7 +151,9 @@ async def test_mutable_desktop_release_is_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_release_enumeration_fails_closed_at_page_bound() -> None:
-    response = lambda _request: httpx.Response(200, json=[{"tag_name": "v1.0.0"}])
+    response = lambda _request: httpx.Response(
+        200, json=[{"tag_name": "unrelated-v1.0.0"}]
+    )
     async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
         with pytest.raises(InstallerError) as raised:
             await discover_release(
@@ -173,7 +175,7 @@ async def test_annotated_release_tag_resolves_to_exact_commit() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "ref": "refs/tags/desktop-v1.2.3",
+                    "ref": "refs/tags/v1.2.3",
                     "object": {"type": "tag", "sha": tag_object},
                 },
             )
@@ -184,9 +186,7 @@ async def test_annotated_release_tag_resolves_to_exact_commit() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        resolved = await resolve_tag_commit(
-            client, "desktop-v1.2.3", limits=InstallerLimits()
-        )
+        resolved = await resolve_tag_commit(client, "v1.2.3", limits=InstallerLimits())
 
     assert resolved == SOURCE_COMMIT
 
@@ -220,7 +220,7 @@ async def test_mocked_verifier_exercises_exact_production_semantics() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "ref": "refs/tags/desktop-v1.2.3",
+                    "ref": "refs/tags/v1.2.3",
                     "object": {"type": "commit", "sha": SOURCE_COMMIT},
                 },
             )
@@ -263,7 +263,7 @@ async def test_valid_signature_semantics_for_wrong_subject_are_rejected() -> Non
         return httpx.Response(
             200,
             json={
-                "ref": "refs/tags/desktop-v1.2.3",
+                "ref": "refs/tags/v1.2.3",
                 "object": {"type": "commit", "sha": SOURCE_COMMIT},
             },
         )
@@ -334,7 +334,7 @@ async def test_valid_signature_with_noncanonical_github_predicate_is_rejected(
         return httpx.Response(
             200,
             json={
-                "ref": "refs/tags/desktop-v1.2.3",
+                "ref": "refs/tags/v1.2.3",
                 "object": {"type": "commit", "sha": SOURCE_COMMIT},
             },
         )
@@ -385,3 +385,66 @@ async def test_unsupported_target_fails_before_any_download() -> None:
             )
     assert raised.value.code is InstallerErrorCode.UNSUPPORTED_PLATFORM
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_implicit_selection_takes_the_release_matching_the_running_core() -> None:
+    newer = _release_json()
+    newer.update({"id": 9003, "tag_name": "v9.0.0"})
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=[newer, _release_json()])
+        )
+    ) as client:
+        selected = await discover_release(
+            client,
+            InstallRequest(),
+            limits=InstallerLimits(releases_per_page=100),
+            clock=lambda: NOW,
+            core_version="1.2.3",
+        )
+
+    assert selected.version == "1.2.3"
+    assert selected.tag == "v1.2.3"
+
+
+@pytest.mark.asyncio
+async def test_missing_release_for_the_running_core_names_both_versions() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=[_release_json()])
+        )
+    ) as client:
+        with pytest.raises(InstallerError) as raised:
+            await discover_release(
+                client,
+                InstallRequest(),
+                limits=InstallerLimits(releases_per_page=100),
+                clock=lambda: NOW,
+                core_version="1.3.0",
+            )
+
+    assert raised.value.code is InstallerErrorCode.INVALID_METADATA
+    assert "tongs 1.3.0" in str(raised.value)
+    assert "v1.3.0" in str(raised.value)
+    assert "retry" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_development_core_version_finds_no_desktop_release() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=[_release_json()])
+        )
+    ) as client:
+        with pytest.raises(InstallerError) as raised:
+            await discover_release(
+                client,
+                InstallRequest(),
+                limits=InstallerLimits(releases_per_page=100),
+                clock=lambda: NOW,
+                core_version="1.2.4.dev3+gabcdef0",
+            )
+
+    assert raised.value.code is InstallerErrorCode.INVALID_METADATA
+    assert "tongs 1.2.4.dev3+gabcdef0" in str(raised.value)

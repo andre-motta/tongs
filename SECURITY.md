@@ -35,13 +35,13 @@ A vulnerability that lets an *unprivileged* input cause plugin code to load or e
 
 ## Artifact Signing and Verification
 
-No desktop release has been published. There is no signed archive, production tag, attestation bundle, release asset, or signed RPM available today. The verification described here is implemented in `src/tongs/desktop/installer/` and is the contract the first production release must satisfy.
+Each stable `vX.Y.Z` tag publishes the core to PyPI and, through `.github/workflows/release-desktop.yml`, builds, attests and publishes the desktop assets to the GitHub Release of the same tag. The verification described here is implemented in `src/tongs/desktop/installer/` and is replayed by the publishing job against the assembled assets before the release is created.
 
-The desktop installer accepts releases only from the fixed `andre-motta/tongs` repository. The repository, its numeric repository and owner identifiers, the release workflow path, the GitHub OIDC issuer, and the `desktop-v` tag prefix are compile-time constants in `src/tongs/desktop/installer/metadata.py`. None is configurable and no flag relaxes the release, identity, attestation, or hash checks.
+The desktop installer accepts releases only from the fixed `andre-motta/tongs` repository. The repository, its numeric repository and owner identifiers, the release workflow path, the GitHub OIDC issuer, and the `v` tag prefix are compile-time constants in `src/tongs/desktop/installer/metadata.py`. None is configurable and no flag relaxes the release, identity, attestation, or hash checks.
 
-- Only immutable, non-draft, non-prerelease releases whose tag matches `desktop-v<major>.<minor>.<patch>` are eligible, and every asset must be fully uploaded with a `sha256:` digest and an asset URL equal to the exact `api.github.com` URL for that asset.
+- Only immutable, non-draft, non-prerelease releases whose tag matches `v<major>.<minor>.<patch>` are eligible, and every asset must be fully uploaded with a `sha256:` digest and an asset URL equal to the exact `api.github.com` URL for that asset. Without an explicit version the installer selects the release whose version equals the running core.
 - The release manifest is covered by a GitHub-managed attestation: a Sigstore bundle carrying an in-toto statement with an SLSA provenance predicate, verified against the Sigstore public-good trust root.
-- Verification requires an exact identity, not merely a valid signature: the workflow `.github/workflows/release-desktop.yml` at `refs/tags/desktop-v<version>` in that repository, issued by `https://token.actions.githubusercontent.com`, on a `github-hosted` runner from a `push` trigger, with the source repository digest equal to the commit that the tag resolves to.
+- Verification requires an exact identity, not merely a valid signature: the workflow `.github/workflows/release-desktop.yml` at `refs/tags/v<version>` in that repository, issued by `https://token.actions.githubusercontent.com`, on a `github-hosted` runner from a `push` trigger, with the source repository digest equal to the commit that the tag resolves to.
 - The attestation subjects must match exactly two hashes: the SHA-256 of the downloaded manifest and the manifest's declared SHA-256 for the selected archive. The archive is hash-checked before it is opened and validated against the manifest layout before extraction.
 - The installer keeps a local accepted-release watermark. A verified but older release is refused unless the user passes both `--version` and `--allow-downgrade`.
 

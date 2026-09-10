@@ -164,16 +164,15 @@ enabled = false
 
 ## Optional desktop workspace
 
-!!! warning "Unreleased feature"
+!!! note "Released with each stable version"
 
-    tongs is developing an optional desktop workspace. There is no public
-    desktop artifact, production tag, or release install to download yet. See
-    [Desktop installation](desktop/installation.md).
+    Every stable `vX.Y.Z` release publishes the desktop workspace to the
+    GitHub Release of the same tag. Install the matching core, then run
+    `tongs --install-desktop`. See [Desktop installation](desktop/installation.md).
 
-The terminal stays the primary interface. Once released, the desktop
-lifecycle is `tongs --install-desktop` (or `tongs desktop install`) to
-install, and `tongs desktop update`, `repair`, `status`, or `uninstall` to
-manage it. See the [Desktop installation](desktop/installation.md) and
+The terminal stays the primary interface. The desktop lifecycle is
+`tongs --install-desktop` (or `tongs desktop install`) to install, and
+`tongs desktop update`, `repair`, `status`, or `uninstall` to manage it. See the [Desktop installation](desktop/installation.md) and
 [Desktop workspace](desktop/workspace.md) guides for the current, implemented
 contract.
 

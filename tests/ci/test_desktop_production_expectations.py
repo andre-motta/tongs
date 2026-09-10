@@ -284,7 +284,10 @@ def test_reviewed_constants_still_match_the_producer_literals() -> None:
     assert f'"{USER_ARCHIVE_ARTIFACT_ID}"' in producer
 
     hosted = (ROOT / "packaging/desktop/archive/run_hosted.sh").read_text()
-    assert f"release_version={DESKTOP_RELEASE_VERSION}\n" in hosted
+    assert (
+        f"release_version=${{TONGS_RELEASE_VERSION:-{DESKTOP_RELEASE_VERSION}}}\n"
+        in hosted
+    )
 
     contract = json.loads((ROOT / "packaging/rpm/desktop/manifest.json").read_text())
     assert contract["accepted_desktop"]["release_version"] == DESKTOP_RELEASE_VERSION
@@ -297,12 +300,17 @@ def test_reviewed_constants_still_match_the_producer_literals() -> None:
     accepted_archive = f"tongs-desktop-{DESKTOP_RELEASE_VERSION}-fedora44-x86_64.tar.gz"
     assert contract["accepted_desktop"]["archive"]["filename"] == accepted_archive
 
-    # These two hold the release version as bare literals that nothing derives.
-    # This is what stops them drifting away from the accepted archive.
+    # The trusted workflow derives the release version from the ref and falls
+    # back to the candidate version on a branch; the attested subject and the
+    # RPM version assertion are derived from that, never bare literals.  The
+    # branch fallback is the one literal left, and it must be this version.
     attestation = (ROOT / ".github/workflows/release-desktop.yml").read_text()
-    assert accepted_archive in attestation
+    assert f"release_version={DESKTOP_RELEASE_VERSION}\n" in attestation
+    assert accepted_archive not in attestation
+    assert "${{ needs.candidate-archive.outputs.archive-name }}" in attestation
     lifecycle = (ROOT / "packaging/rpm/desktop/install_and_verify.sh").read_text()
-    assert f"== {DESKTOP_RELEASE_VERSION} ]]" in lifecycle
+    assert '["desktop"]["release_version"]' in lifecycle
+    assert f"== {DESKTOP_RELEASE_VERSION} ]]" not in lifecycle
 
     container = (ROOT / "packaging/desktop/archive/build_in_container.sh").read_text()
     compatibility = contract["accepted_desktop"]["compatibility"]

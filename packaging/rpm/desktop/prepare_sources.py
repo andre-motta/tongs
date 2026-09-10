@@ -139,6 +139,7 @@ def prepare(
             "archive": accepted["archive"],
             "file_count": len(install["files"]),
             "pairing_mode": manifest["rpm_pairing"]["mode"],
+            "release_version": accepted["release_version"],
         },
     }
     (output_dir / "prepared-inputs.json").write_text(

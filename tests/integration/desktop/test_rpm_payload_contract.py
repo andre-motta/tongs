@@ -18,8 +18,11 @@ import pytest
 from tests.integration.desktop.rpm_payload_contract import (
     BASE_MANIFEST,
     CHECKSUM_FILE_NAME,
+    INSTALL_MANIFEST_NAME,
+    RELEASE_MANIFEST_NAME,
     ROOT,
     PayloadContractError,
+    archive_filename_for,
     materialize_payload_contract,
     parse_checksums,
     require_exact_pairing,
@@ -30,27 +33,28 @@ CORE_VERSION = "0.4.2.dev327"
 ARTIFACT_ID = "10076121963"
 ARTIFACT_NAME = f"desktop-archive-{SOURCE_COMMIT}-34274245440-1"
 RUN_ID = "34274245440"
+TAGGED_RELEASE_VERSION = "1.0.0"
 
 
 def _base() -> dict[str, Any]:
     return json.loads((ROOT / BASE_MANIFEST).read_text())
 
 
-@pytest.fixture()
-def archive_dir(tmp_path: Path) -> Path:
+def _write_archive_dir(directory: Path, release_version: str) -> Path:
     """Build one archive directory shaped like the real producer output."""
 
-    directory = tmp_path / "archive"
     directory.mkdir()
     base = _base()["accepted_desktop"]
     records: dict[str, bytes] = {}
     for index, name in enumerate(sorted(base["evidence"])):
         if name == CHECKSUM_FILE_NAME:
             continue
-        records[name] = json.dumps(
-            {"schema_version": 1, "record": name, "index": index}
-        ).encode()
-    records[base["archive"]["filename"]] = b"fresh desktop archive payload\n" * 64
+        record: dict[str, Any] = {"schema_version": 1, "record": name, "index": index}
+        if name in {RELEASE_MANIFEST_NAME, INSTALL_MANIFEST_NAME}:
+            record["release_version"] = release_version
+        records[name] = json.dumps(record).encode()
+    archive_name = archive_filename_for(release_version)
+    records[archive_name] = b"fresh desktop archive payload\n" * 64
 
     lines = []
     for name in sorted(records):
@@ -59,6 +63,22 @@ def archive_dir(tmp_path: Path) -> Path:
         lines.append(f"{hashlib.sha256(payload).hexdigest()}  {name}")
     (directory / CHECKSUM_FILE_NAME).write_text("\n".join(lines) + "\n")
     return directory
+
+
+@pytest.fixture()
+def archive_dir(tmp_path: Path) -> Path:
+    """An archive produced for the checked-in candidate release version."""
+
+    base = _base()["accepted_desktop"]
+    assert base["archive"]["filename"] == archive_filename_for(base["release_version"])
+    return _write_archive_dir(tmp_path / "archive", base["release_version"])
+
+
+@pytest.fixture()
+def tagged_archive_dir(tmp_path: Path) -> Path:
+    """An archive produced for a release tag's version."""
+
+    return _write_archive_dir(tmp_path / "tagged-archive", TAGGED_RELEASE_VERSION)
 
 
 def _materialize(archive_dir: Path, output: Path, **overrides: Any):
@@ -111,6 +131,106 @@ def test_materializes_a_contract_bound_to_the_fresh_archive(
         assert contract[key] == base[key]
     for key in ("electron_version", "release_version", "compatibility"):
         assert accepted[key] == base["accepted_desktop"][key]
+
+
+def test_release_version_override_binds_the_tagged_archive(
+    tagged_archive_dir: Path, tmp_path: Path
+) -> None:
+    """A release tag renames the accepted archive and release version only."""
+
+    output = tmp_path / "payload-input-contract.json"
+    binding = _materialize(
+        tagged_archive_dir, output, release_version=TAGGED_RELEASE_VERSION
+    )
+
+    contract = json.loads(output.read_text())
+    base = _base()["accepted_desktop"]
+    accepted = contract["accepted_desktop"]
+    filename = archive_filename_for(TAGGED_RELEASE_VERSION)
+    observed = (tagged_archive_dir / filename).read_bytes()
+
+    assert accepted["release_version"] == TAGGED_RELEASE_VERSION
+    assert accepted["archive"] == {
+        "filename": filename,
+        "bytes": len(observed),
+        "sha256": hashlib.sha256(observed).hexdigest(),
+    }
+    assert binding.archive_filename == filename
+    assert set(accepted["evidence"]) == set(base["evidence"])
+    for key in ("electron_version", "compatibility"):
+        assert accepted[key] == base[key]
+    # Exact pairing depends on the source commit, not on the release version.
+    # Whether the tagged core itself falls inside the copied compatibility
+    # interval is the base manifest's reviewed policy, pinned by
+    # tests/ci/test_desktop_production_expectations.py rather than here.
+    require_exact_pairing(contract, SOURCE_COMMIT, CORE_VERSION)
+
+
+def test_release_version_override_refuses_an_archive_built_for_another_version(
+    archive_dir: Path, tmp_path: Path
+) -> None:
+    """The candidate archive cannot be relabelled as a tagged release."""
+
+    with pytest.raises(PayloadContractError, match="does not cover the reviewed"):
+        _materialize(archive_dir, tmp_path / "contract.json", release_version="1.0.0")
+
+
+def test_release_version_override_refuses_manifests_that_disagree(
+    tagged_archive_dir: Path, tmp_path: Path
+) -> None:
+    """An archive named for the tag must also declare the tag's version."""
+
+    manifest = tagged_archive_dir / RELEASE_MANIFEST_NAME
+    document = json.loads(manifest.read_text())
+    document["release_version"] = "0.5.0"
+    payload = json.dumps(document).encode()
+    manifest.write_bytes(payload)
+    lines = [
+        line
+        if not line.endswith(f"  {RELEASE_MANIFEST_NAME}")
+        else f"{hashlib.sha256(payload).hexdigest()}  {RELEASE_MANIFEST_NAME}"
+        for line in (tagged_archive_dir / CHECKSUM_FILE_NAME).read_text().splitlines()
+    ]
+    (tagged_archive_dir / CHECKSUM_FILE_NAME).write_text("\n".join(lines) + "\n")
+    with pytest.raises(PayloadContractError, match="does not carry release version"):
+        _materialize(
+            tagged_archive_dir,
+            tmp_path / "contract.json",
+            release_version=TAGGED_RELEASE_VERSION,
+        )
+
+
+@pytest.mark.parametrize(
+    "value", ["v1.0.0", "1.0", "1.0.0rc1", "01.0.0", "", "1.0.0\n"]
+)
+def test_rejects_a_malformed_release_version_override(
+    tagged_archive_dir: Path, tmp_path: Path, value: str
+) -> None:
+    with pytest.raises(PayloadContractError, match="release version is invalid"):
+        _materialize(
+            tagged_archive_dir, tmp_path / "contract.json", release_version=value
+        )
+
+
+def test_the_candidate_archive_must_declare_the_candidate_version(
+    archive_dir: Path, tmp_path: Path
+) -> None:
+    """Without an override the archive must still carry the base version."""
+
+    install = archive_dir / INSTALL_MANIFEST_NAME
+    document = json.loads(install.read_text())
+    document["release_version"] = "9.9.9"
+    payload = json.dumps(document).encode()
+    install.write_bytes(payload)
+    lines = [
+        line
+        if not line.endswith(f"  {INSTALL_MANIFEST_NAME}")
+        else f"{hashlib.sha256(payload).hexdigest()}  {INSTALL_MANIFEST_NAME}"
+        for line in (archive_dir / CHECKSUM_FILE_NAME).read_text().splitlines()
+    ]
+    (archive_dir / CHECKSUM_FILE_NAME).write_text("\n".join(lines) + "\n")
+    with pytest.raises(PayloadContractError, match="does not carry release version"):
+        _materialize(archive_dir, tmp_path / "contract.json")
 
 
 def test_materialized_contract_binds_only_as_exact_pairing(

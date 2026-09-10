@@ -60,7 +60,7 @@ def release() -> ReleaseRecord:
     manifest, archive, bundle = documents()
     return ReleaseRecord(
         77,
-        "desktop-v1.2.3",
+        "v1.2.3",
         "1.2.3",
         NOW,
         (
@@ -72,7 +72,7 @@ def release() -> ReleaseRecord:
 
 
 def identity() -> BuildIdentity:
-    ref = "refs/tags/desktop-v1.2.3"
+    ref = "refs/tags/v1.2.3"
     builder = f"{OFFICIAL_REPOSITORY_URL}/{OFFICIAL_WORKFLOW_PATH}@{ref}"
     return BuildIdentity(
         GITHUB_OIDC_ISSUER,

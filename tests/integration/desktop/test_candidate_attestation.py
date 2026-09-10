@@ -25,7 +25,7 @@ SOURCE_TREE = "b" * 40
 REF = "refs/heads/feat/desktop-120-candidate-attestation"
 PR_REF = "refs/pull/138/merge"
 PUSH_TRANSFER_MANIFEST_SHA256 = (
-    "504b4cbfeb93d7769a67de10b8dc0aec809932e8761fd50a52ad948df32e4230"
+    "55b3d666aa11a3c52141d28c94be91b770688aea29a15e458d0783223d484ce4"
 )
 
 
@@ -128,7 +128,7 @@ def _write_output(root: Path) -> Path:
         BuildParameters(
             release_version="0.5.0",
             core_minimum="0.4.2-dev.183",
-            core_maximum_exclusive="0.5.0",
+            core_maximum_exclusive="2.0.0",
             source_commit=SOURCE_COMMIT,
             source_date_epoch=1_700_000_000,
         ),

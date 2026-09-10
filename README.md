@@ -144,12 +144,28 @@ Refreshing retains the current context and available review data; a partial
 repository failure leaves successful results visible. Selecting another
 repository resets the inbox query to that repository's default context.
 
-In the desktop Discussions panel, **Quick comment** and **Quick inline
-comment** act immediately. **Start review** or **Resume review** opens a
-durable draft. Draft edits are revision-bound, and a stale-version conflict
-keeps unsaved text for deliberate resolution. Submissions report partial or
-unknown outcomes and require explicit reconciliation when the remote result
-cannot be established. Uncertain writes are not replayed automatically.
+Reviewing happens on the diff. Hover a line on **Files changed** and a `+`
+appears in the gutter; clicking it, or pressing `c`, opens a composer directly
+under that line. Drag over the line numbers or Shift-click a second line to
+comment on a range. The composer always offers the same two writes, so an
+immediate comment and a pending one are never the same gesture: **Add comment
+now** posts straight away, and **Start a review**, which becomes **Add to
+review** once one is pending, adds the entry to a durable draft. **Insert
+suggestion** pre-fills a suggestion block from the selected new-side lines.
+
+Pending entries render inline under their anchor with a **Pending** badge and
+can be edited or deleted where they sit. A **Your review** button on **Files
+changed** and **Discussions** carries the pending count and opens a drawer
+holding the pending comments grouped by file, the review **Summary**, the
+**Verdict** tiles the forge and your permissions allow, **Submit review**, and
+**Discard review**, together with the submission progress and the recovery
+choices.
+
+Draft edits are revision-bound. A stale-version conflict shows both texts and
+asks for a real choice rather than discarding either. Submissions report
+partial or unknown outcomes and require explicit reconciliation when the remote
+result cannot be established. Uncertain writes are never replayed
+automatically.
 
 Desktop suggestions require a complete current diff selection containing
 contiguous new-side lines. **Unified** and **Split** are display layouts;
@@ -162,6 +178,9 @@ raw HTML inert and images as text placeholders. Large or complex content can
 fall back to a bounded plain-text preview, and an aggregate discussion budget
 can omit later Markdown. HTTPS links open externally only after explicit
 activation.
+
+The defects that are known and unfixed in the desktop workspace are listed in
+[known limitations](docs/desktop/known-limitations.md).
 
 ### Pipeline / CI
 
@@ -555,7 +574,7 @@ The terminal application is the released, supported product. The version you get
 
 Two terminal features described above are not in that release yet: the split diff view with its `v` toggle and `h` / `l` side focus, and durable review drafts with the `Ctrl+G` review flow. Both are implemented on the development branch and arrive with the next release.
 
-The desktop application, its per-user installer, and the Fedora RPM packaging are also implemented in this tree and unreleased. Hardware-accelerated Electron on the supported Fedora host, packaging acceptance, and the release decision remain separate, unmet gates.
+The desktop application, its per-user installer, and the Fedora RPM packaging are also implemented in this tree and unreleased. Hardware-accelerated Electron on the supported Fedora host, packaging acceptance, and the release decision remain separate, unmet gates. The defects known to be shipping unfixed, and the acceptance scenarios not yet executed, are listed in [known limitations](docs/desktop/known-limitations.md).
 
 Track what is planned and what is blocked through the [open issues](https://github.com/andre-motta/tongs/issues) and their dependency links rather than through a phase table.
 

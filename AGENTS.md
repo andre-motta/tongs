@@ -17,6 +17,12 @@ senior implementation and independent review; a **bounded contributor** handles
 well-specified assignments under senior review. Select actual runtime models and
 record the model and effort setting actually used. Keep small fixes proportional.
 
+The models selected for the desktop initiative are Claude Fable 5.1 as
+orchestrator, Claude Opus 5 at high effort for senior implementation and for the
+separate independent review, and Claude Sonnet 5 at xhigh effort for bounded
+work under that review. The role names are the contract; the model assignment is
+a current choice.
+
 For the desktop initiative, the orchestrator owns `feat/desktop-app`. Agents use
 isolated `feat/desktop-<issue>-<slug>` branches and PRs into that branch, with
 independent senior review and orchestrator integration. Every change is
@@ -80,9 +86,18 @@ If using `uv`, create the environment with `uv venv --python 3.12`, activate it,
 The desktop test command builds and type-checks the production shell before
 running its Electron and renderer tests. Node checks need whole-process memory,
 swap, task, and time limits; native Electron needs the same OS-level guard but
-does not honor every Node heap option. Use the procedure in the
-[testing guide](.agents/testing/README.md). A successful headless test run is
-separate from native Fedora, GPU, installer, and release evidence.
+does not honor every Node heap option. Run them inside a `systemd-run --user`
+unit with a 1 GiB memory maximum, zero swap, a 64-task limit,
+`NODE_OPTIONS=--max-old-space-size=512`, `node --test --test-concurrency=1`, and
+an external deadline, asserting those effective limits from inside the guard
+before Node starts. Use the exact procedure in the
+[testing guide](.agents/testing/README.md). Never assert on a DOM node, because
+failure formatting walks jsdom recursively and allocates outside V8; assert
+text, attributes, counts, serialized payloads, and numeric rectangles instead.
+Never build a scratch worktree with the fix reverted to prove a test would have
+caught a bug: reason from the diff, because those runs are unbounded and are the
+usual cause of an out-of-memory kill. A successful headless test run is separate
+from native Fedora, GPU, installer, and release evidence.
 
 - `from __future__ import annotations` at the top of every module
 - Module-level imports unless function-level is necessary to avoid circular deps
@@ -96,7 +111,7 @@ separate from native Fedora, GPU, installer, and release evidence.
 - For approved SDLC initiatives, contributors may create coherent signed-off local commits in their assigned worktrees without per-commit approval. For desktop work, assigned contributor branch pushes and PRs into `feat/desktop-app` are authorized; the orchestrator alone integrates. The final PR into `main` requires CTO acceptance before merge. Other initiatives retain their existing upstream gates. For other work, preserve the existing requirement to approve the full commit message before committing.
 - Include a one-line description body after the title, separated by a blank line, before any trailers.
 - Use `git commit -s` to add the sign-off automatically; do not write `Signed-off-by` manually.
-- When adding a co-author trailer, use the address of the vendor that produced the commit: `Co-Authored-By: Codex <model> <noreply@openai.com>` or `Co-Authored-By: Claude <model> <noreply@anthropic.com>`. Use the actual model name and no context-window annotation. Do not claim co-authorship by a vendor that did not produce the commit.
+- When a model produced the commit, add a co-author trailer naming the vendor that actually produced it. Every agent working on this project runs on an Anthropic model, so the trailer is `Co-Authored-By: Claude <model> <noreply@anthropic.com>`, with the actual model name and no context-window annotation. Do not claim co-authorship by a vendor that did not produce the commit.
 
 ## Module Map
 
@@ -164,7 +179,7 @@ One more also triggers on that base:
 
 | Workflow | Trigger |
 |---|---|
-| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter |
+| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter, and pushes to `feat/desktop-app` |
 
 `desktop-rpm.yml` (Desktop Fedora RPM), `desktop-python-rpms.yml` (Desktop Python
 companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are manual
@@ -173,8 +188,14 @@ prove the same source rebuild, companion closure, lifecycle and byte-identical
 rebuild against the receipt-bound fresh archive on every pull request.
 
 `docs.yml` deploys the site and runs `mkdocs build --strict`, but only on a push
-to `main`. No pull-request check builds the documentation, so run the strict
-build locally before submitting a `docs/` or `mkdocs.yml` change.
+to `main` or a manual `workflow_dispatch`. No pull-request check builds the
+documentation, so run the strict build locally before submitting a `docs/` or
+`mkdocs.yml` change.
+
+`publish.yml` is the only workflow that runs on a tag: it matches `v*` and
+publishes to PyPI. Nothing listens for `desktop-v*`, and no workflow creates a
+GitHub Release. Tags match no `branches:` filter, so a tag push runs neither
+`ci.yml` nor `docs.yml`.
 
 That pre-merge aggregate is not the final production desktop release gate.
 Native Fedora/GPU proof, packaging and installer proof, candidate attestation,

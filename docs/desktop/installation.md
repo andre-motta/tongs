@@ -135,11 +135,14 @@ tongs desktop update
 
 The command selects the newest verified stable release. It uses the same
 persistent environment and journaled, recoverable activation sequence as
-install. If the current installation has pending obsolete-payload cleanup,
-update stops before remote staging and asks you to repair first. If the active
-payload is bound to another
-persistent Python environment, update stops before any download and asks you to
-run repair from the intended environment.
+install.
+
+Two guards run before any remote staging, and they apply to `install`,
+`update`, and `repair --redownload` alike, not to `update` alone. If the
+current installation has pending obsolete-payload cleanup, the command stops
+and asks you to repair first. If the active payload is bound to another
+persistent Python environment, the command stops before any download and asks
+you to run repair from the intended environment to rebind it explicitly.
 
 ## Repair and recovery
 
@@ -207,7 +210,20 @@ tongs desktop status
 tongs desktop status --json
 ```
 
-With no activation, the human-readable result is:
+With no active target, the human-readable result is one of three sentences.
+When a verified activation journal is present:
+
+```text
+A verified activation is recoverable with 'tongs desktop repair'.
+```
+
+When cleanup is still outstanding:
+
+```text
+Per-user desktop cleanup is incomplete; run 'tongs desktop uninstall' again.
+```
+
+Otherwise:
 
 ```text
 No per-user desktop installation is active.
@@ -217,7 +233,8 @@ The JSON form exposes `installed`, `version`, `active_target`,
 `previous_target`, `ownership`, `environment`, `recovery`, `menu_registered`,
 `launch_ready`, `rpm_detected`, `coexistence`, and `detail`. `detail` carries
 the same human-readable sentence the plain command prints, which is what
-distinguishes the two `cleanup-required` situations above. Paths are absolute
+distinguishes the three no-target situations above from each other and the two
+`cleanup-required` situations from each other. Paths are absolute
 when a target exists. Status acquires the per-user command lock and ensures its private
 roots exist, but it does not change activation, menu, or payload content. It
 does not download, repair, register a menu entry, or remove a payload.
@@ -292,6 +309,11 @@ Hardware GPU acceleration, an installed production artifact, final packaging,
 and the main-branch release decision are separate gates. Do not treat the
 examples on this page as evidence that a public archive, production tag, or RPM
 is already available.
+
+The defects that are known and are shipping unfixed, and the acceptance
+scenarios that were not executed at the release candidate, are listed on the
+[known limitations](known-limitations.md) page. Read it before relying on the
+desktop workspace for a review you cannot redo.
 
 The shared desktop architecture and acceptance boundary are tracked in the
 project's internal planning records rather than on this site. See

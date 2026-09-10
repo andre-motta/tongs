@@ -72,6 +72,7 @@ nav:
       - Workspace: desktop/workspace.md
       - Plugin providers: plugins/provider.md
       - Troubleshooting: desktop/troubleshooting.md
+      - Known limitations: desktop/known-limitations.md
   - Reference:
       - Keybindings: reference/keybindings.md
       - Configuration: reference/configuration.md

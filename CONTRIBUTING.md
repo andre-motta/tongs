@@ -161,7 +161,7 @@ One more runs on that base:
 
 | Workflow | Trigger |
 |---|---|
-| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter, and pushes to either of its two named branches, `feat/desktop-app` and `feat/desktop-120-candidate-attestation` |
+| `release-desktop.yml` (Unpublished desktop candidate attestation) | PRs into `feat/desktop-app` matching its path filter; pushes to either of its two named branches, `feat/desktop-app` and `feat/desktop-120-candidate-attestation`; pushes of a stable `vX.Y.Z` tag; and a manual `workflow_dispatch` dry run |
 
 `desktop-rpm.yml` (Desktop Fedora RPM), `desktop-python-rpms.yml` (Desktop Python
 companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are manual
@@ -174,9 +174,21 @@ but only on a push to `main` or a manual `workflow_dispatch`. No pull-request
 check builds the documentation, which is why the strict build belongs in your
 local run.
 
-`publish.yml` is the only workflow that runs on a tag. It matches `v*` and
-publishes to PyPI. No workflow listens for `desktop-v*`, and nothing in
-`.github/workflows` creates a GitHub Release.
+Two workflows run on a stable `vX.Y.Z` tag. `publish.yml` builds the core
+and publishes it to PyPI. `release-desktop.yml` builds the desktop archive for
+that version, attests it with GitHub-managed Sigstore, verifies the attestation
+with the installer's own code path, rebuilds the Fedora RPMs from the signed
+archive, and publishes everything to the GitHub Release of the same tag,
+created as a draft and published only after every asset is confirmed. Its
+`release-publish` job is the only job in the repository holding
+`contents: write`. The two workflows do not wait for each other, so a core
+version can be on PyPI before its desktop release exists; the installer reports
+that state and asks for a retry.
+
+A `workflow_dispatch` of `release-desktop.yml` with `dry_run` set runs the
+build, signing, verification and RPM rebuild on a branch and publishes nothing.
+It is the rehearsal to run before pushing a tag. `tests/ci/test_release_publication_workflow.py`
+pins the trigger, permission and step-order contract.
 
 Every GitHub Action referenced from a workflow under `.github/workflows` is
 pinned to a full commit SHA with a trailing `# vX.Y.Z` comment, never a mutable

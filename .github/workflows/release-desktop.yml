@@ -1,5 +1,16 @@
 name: Unpublished desktop candidate attestation
 
+# One vX.Y.Z tag publishes the core to PyPI (publish.yml) and, here, builds,
+# signs, verifies and publishes the desktop assets to the GitHub Release of the
+# same tag.  tongs --install-desktop selects the release whose version equals
+# the running core, so the release must exist under exactly that tag and must
+# be immutable before the installer will accept it.
+#
+# A branch push still runs the unpublished candidate path: build, sign and
+# verify, publish nothing.  A manual dispatch with dry_run runs the same plus
+# the RPM rebuild, and still publishes nothing.  Only the tag push reaches the
+# publish job.
+
 on:
   pull_request:
     branches: [feat/desktop-app]
@@ -7,12 +18,32 @@ on:
       - .github/workflows/release-desktop.yml
       - tests/integration/desktop/candidate_attestation.py
       - tests/integration/desktop/test_candidate_attestation.py
+      - tests/integration/desktop/release_publication.py
+      - tests/integration/desktop/test_release_publication.py
+      - tests/integration/desktop/rpm_payload_contract.py
+      - tests/integration/desktop/test_rpm_payload_contract.py
       - src/tongs/desktop/artifact_contract/**
       - src/tongs/desktop/installer/**
   push:
     branches:
       - feat/desktop-120-candidate-attestation
       - feat/desktop-app
+    tags:
+      # Stable releases only.  The pattern must match the whole ref name, so
+      # this admits v1.0.0 and refuses v1.0.0rc1, v1.0 and desktop-v1.0.0.
+      # The candidate-archive job re-checks the tag as an anchored regular
+      # expression before anything is built.
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Build, sign, verify and rebuild the RPMs for this branch without
+          publishing anything.  The only publishing path is a vX.Y.Z tag push;
+          a dispatch with this unset runs nothing.
+        type: boolean
+        required: true
+        default: true
 
 permissions:
   contents: read
@@ -90,9 +121,14 @@ jobs:
       github.repository == 'andre-motta/tongs' &&
       github.repository_id == '1305350434' &&
       github.repository_owner_id == '30708955' &&
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
-       github.ref == 'refs/heads/feat/desktop-app')
+      ((github.event_name == 'push' &&
+        (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
+         github.ref == 'refs/heads/feat/desktop-app' ||
+         startsWith(github.ref, 'refs/tags/v'))) ||
+       (github.event_name == 'workflow_dispatch' &&
+        inputs.dry_run == true &&
+        (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
+         github.ref == 'refs/heads/feat/desktop-app')))
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     permissions:
@@ -101,6 +137,9 @@ jobs:
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
       artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
       source-tree: ${{ steps.source.outputs.tree }}
+      release-version: ${{ steps.release.outputs.release_version }}
+      release-tag: ${{ steps.release.outputs.tag }}
+      archive-name: ${{ steps.release.outputs.archive_name }}
     steps:
       - name: Check out the exact candidate without persisted credentials
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -117,11 +156,45 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "andre-motta/tongs"
-          test "$GITHUB_EVENT_NAME" = "push"
+          case "$GITHUB_EVENT_NAME" in
+            push|workflow_dispatch) ;;
+            *) echo "unsupported event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
+          esac
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           tree=$(git rev-parse 'HEAD^{tree}')
           printf 'tree=%s\n' "$tree" >> "$GITHUB_OUTPUT"
           git archive --format=tar --output="$CANDIDATE_SOURCE_ARCHIVE" "$GITHUB_SHA"
+      - name: Derive the release version from the ref
+        # A release tag names the version the producer builds; every other ref
+        # builds the unpublished candidate version.  The transfer and verify
+        # commands re-derive the version from the ref and refuse producer
+        # output that disagrees, so this shell derivation cannot stand alone.
+        id: release
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              tag=${GITHUB_REF#refs/tags/}
+              release_version=${tag#v}
+              ;;
+            refs/heads/*)
+              tag=""
+              release_version=0.5.0
+              ;;
+            *)
+              echo "unsupported ref: $GITHUB_REF" >&2
+              exit 1
+              ;;
+          esac
+          if ! [[ "$release_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "ref does not name a stable X.Y.Z release: $GITHUB_REF" >&2
+            exit 1
+          fi
+          {
+            printf 'tag=%s\n' "$tag"
+            printf 'release_version=%s\n' "$release_version"
+            printf 'archive_name=tongs-desktop-%s-fedora44-x86_64.tar.gz\n' "$release_version"
+          } >> "$GITHUB_OUTPUT"
       - name: Record the hosted producer environment
         run: |
           uname -a
@@ -130,6 +203,7 @@ jobs:
       - name: Build the real archive twice with the pinned producer
         env:
           TONGS_HEAD_SHA: ${{ github.sha }}
+          TONGS_RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
         run: >-
           packaging/desktop/archive/run_hosted.sh
           --source-root "$GITHUB_WORKSPACE"
@@ -201,15 +275,23 @@ jobs:
       github.repository == 'andre-motta/tongs' &&
       github.repository_id == '1305350434' &&
       github.repository_owner_id == '30708955' &&
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
-       github.ref == 'refs/heads/feat/desktop-app')
+      ((github.event_name == 'push' &&
+        (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
+         github.ref == 'refs/heads/feat/desktop-app' ||
+         startsWith(github.ref, 'refs/tags/v'))) ||
+       (github.event_name == 'workflow_dispatch' &&
+        inputs.dry_run == true &&
+        (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
+         github.ref == 'refs/heads/feat/desktop-app')))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
       attestations: write
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-name: ${{ steps.names.outputs.artifact_name }}
     steps:
       - name: Check out the exact verifier without persisted credentials
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -231,7 +313,14 @@ jobs:
           test "$(git rev-parse 'HEAD^{tree}')" = "${{ needs.candidate-archive.outputs.source-tree }}"
           test -n "${{ needs.candidate-archive.outputs.artifact-id }}"
           test "${{ needs.candidate-archive.outputs.artifact-digest }}" != ""
+          test -n "${{ needs.candidate-archive.outputs.release-version }}"
+          test -n "${{ needs.candidate-archive.outputs.archive-name }}"
           git archive --format=tar --output="$CANDIDATE_SOURCE_ARCHIVE" "$GITHUB_SHA"
+      - name: Name this run's retry-safe attestation artifact
+        id: names
+        run: >-
+          printf 'artifact_name=desktop-candidate-attestation-%s-%s-%s\n'
+          "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Download only this run's immutable producer artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -328,7 +417,7 @@ jobs:
         with:
           subject-path: |
             ${{ runner.temp }}/tongs-desktop-candidate/archive/desktop-manifest-v1.json
-            ${{ runner.temp }}/tongs-desktop-candidate/archive/tongs-desktop-0.5.0-fedora44-x86_64.tar.gz
+            ${{ runner.temp }}/tongs-desktop-candidate/archive/${{ needs.candidate-archive.outputs.archive-name }}
           push-to-registry: false
           create-storage-record: false
           show-summary: false
@@ -395,9 +484,269 @@ jobs:
           "$CANDIDATE_PYTHON" -I -m pip freeze --all > "$CANDIDATE_ROOT/attestation-evidence/python-packages.txt"
       - name: Upload bounded candidate attestation evidence
         if: ${{ always() }}
+        id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-candidate-attestation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.names.outputs.artifact_name }}
           path: ${{ runner.temp }}/tongs-desktop-candidate
+          if-no-files-found: error
+          retention-days: 14
+
+  release-rpm:
+    name: Rebuild the release RPMs from the signed candidate archive
+    needs: [candidate-archive, candidate-attestation]
+    # Only a release tag or a dry run pays for the two-hour lifecycle here; a
+    # branch push already proves it in the pre-merge production gate.
+    if: >-
+      needs.candidate-archive.result == 'success' &&
+      needs.candidate-attestation.result == 'success' &&
+      github.repository == 'andre-motta/tongs' &&
+      github.repository_id == '1305350434' &&
+      github.repository_owner_id == '30708955' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.dry_run == true))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.candidate-archive.outputs.release-version }}
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-name: ${{ steps.names.outputs.artifact_name }}
+    steps:
+      - name: Check out the exact source with its tags and without persisted credentials
+        # The RPM identity derives the core version from git describe, which
+        # needs the release tag reachable from this checkout.
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the exact source, tree and release version
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "${{ needs.candidate-archive.outputs.source-tree }}"
+          test -n "$RELEASE_VERSION"
+          test -n "${{ needs.candidate-attestation.outputs.artifact-id }}"
+          test -n "${{ needs.candidate-attestation.outputs.artifact-name }}"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test "$GITHUB_REF" = "refs/tags/v$RELEASE_VERSION"
+          fi
+      - name: Name this run's retry-safe RPM artifact
+        id: names
+        run: >-
+          printf 'artifact_name=desktop-release-rpms-%s-%s-%s\n'
+          "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the source-built payload contract dependencies
+        # rpm_payload_contract.py loads packaging/rpm/desktop/package_contract.py,
+        # which needs packaging.version.  Nothing else in this job installs it.
+        run: python -m pip install -e .
+      - name: Record the hosted runner, Podman and gh versions
+        run: |
+          uname -a
+          podman version
+          gh version
+      - name: Download only this run's signed candidate by its exact name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.candidate-attestation.outputs.artifact-name }}
+          path: ${{ runner.temp }}/tongs-desktop-candidate
+      - name: Materialize the exact-mode payload contract for the release version
+        run: >-
+          python tests/integration/desktop/rpm_payload_contract.py
+          --archive-dir "$RUNNER_TEMP/tongs-desktop-candidate/archive"
+          --output "$RUNNER_TEMP/payload-input-contract.json"
+          --source-commit "$GITHUB_SHA"
+          --artifact-id "${{ needs.candidate-attestation.outputs.artifact-id }}"
+          --artifact-name "${{ needs.candidate-attestation.outputs.artifact-name }}"
+          --run-id "$GITHUB_RUN_ID"
+          --release-version "$RELEASE_VERSION"
+      - name: Rebuild the source RPMs and run the full package lifecycle
+        env:
+          TONGS_HEAD_SHA: ${{ github.sha }}
+        run: >-
+          packaging/rpm/desktop/run_hosted.sh
+          --output-dir "$RUNNER_TEMP/tongs-desktop-rpm"
+          --accepted-dir "$RUNNER_TEMP/tongs-desktop-candidate/archive"
+          --payload-manifest "$RUNNER_TEMP/payload-input-contract.json"
+      - name: Stage the publishable RPMs and the lifecycle evidence
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/tongs-desktop-rpm"
+          staged="$RUNNER_TEMP/tongs-desktop-release-rpms"
+          mkdir -p "$staged/rpms/final" "$staged/companion-consumer-rpms" \
+            "$staged/prepared"
+          cp -- "$output"/rpms/final/*.rpm "$staged/rpms/final/"
+          cp -- "$output"/companion-consumer-rpms/*.rpm "$staged/companion-consumer-rpms/"
+          cp -- "$output/rpms/final/SHA256SUMS" "$staged/rpms/final/SHA256SUMS"
+          cp -- "$output/rpms/final/package-metadata.txt" "$staged/rpms/final/"
+          cp -- "$output/payload-input-contract.json" "$staged/"
+          cp -- "$output/prepared/prepared-inputs.json" "$staged/prepared/"
+          cp -- "$output/ALL-SHA256SUMS" "$staged/"
+          cp -a -- "$output/install" "$staged/install"
+      - name: Upload the release RPMs for this run and attempt
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.artifact_name }}
+          path: ${{ runner.temp }}/tongs-desktop-release-rpms
+          if-no-files-found: error
+          retention-days: 14
+
+  release-publish:
+    name: Publish the immutable desktop release for the version tag
+    needs: [candidate-archive, candidate-attestation, release-rpm]
+    # The only job allowed to write repository contents, and the only one that creates
+    # anything.  It runs for a stable version tag push alone; a dry run stops
+    # at the RPM rebuild.
+    if: >-
+      needs.candidate-archive.result == 'success' &&
+      needs.candidate-attestation.result == 'success' &&
+      needs.release-rpm.result == 'success' &&
+      github.repository == 'andre-motta/tongs' &&
+      github.repository_id == '1305350434' &&
+      github.repository_owner_id == '30708955' &&
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.candidate-archive.outputs.release-tag }}
+    steps:
+      - name: Check out the exact tagged source without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Initialize runner-scoped release paths
+        run: |
+          printf 'RELEASE_ASSETS=%s/tongs-desktop-release-assets\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'RELEASE_EVIDENCE=%s/tongs-desktop-release-evidence\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Require the exact tagged source and its release notes
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_TAG"
+          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "${{ needs.candidate-archive.outputs.source-tree }}"
+          test -s "docs/releases/$RELEASE_TAG.md"
+      - name: Initialize an isolated release verification environment
+        run: |
+          "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/tongs-candidate-venv"
+          printf 'CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
+      - name: Install Sigstore 4.5 and the source-built installer verifier
+        run: >-
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
+          --disable-pip-version-check
+          -e .
+          "sigstore==${SIGSTORE_VERSION}"
+      - name: Require the isolated source-bound verification environment
+        run: |
+          "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
+          import importlib.metadata
+          import json
+          import site
+          import sys
+          from pathlib import Path
+
+          import tongs
+
+          expected_prefix = Path(sys.argv[1])
+          workspace = Path(sys.argv[2]).resolve()
+          tongs_path = Path(tongs.__file__).resolve()
+          assert Path(sys.executable) == expected_prefix / "bin/python"
+          assert Path(sys.prefix) == expected_prefix
+          assert site.ENABLE_USER_SITE is False
+          assert not [path for path in sys.path if "/.local/" in path or "dist-packages" in path]
+          assert tongs_path.is_relative_to(workspace)
+          assert importlib.metadata.version("sigstore") == "4.5.0"
+          print(json.dumps({"executable": sys.executable, "prefix": sys.prefix, "sys_path": sys.path, "tongs": str(tongs_path)}, sort_keys=True))
+          PY
+      - name: Download only this run's signed candidate by its exact name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.candidate-attestation.outputs.artifact-name }}
+          path: ${{ runner.temp }}/tongs-desktop-candidate
+      - name: Download only this run's release RPMs by their exact name
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.release-rpm.outputs.artifact-name }}
+          path: ${{ runner.temp }}/tongs-desktop-release-rpms
+      - name: Assemble the release assets under the names the installer expects
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/release_publication.py assemble
+          --tag "$RELEASE_TAG"
+          --transfer-root "$RUNNER_TEMP/tongs-desktop-candidate"
+          --rpm-root "$RUNNER_TEMP/tongs-desktop-release-rpms"
+          --output-dir "$RELEASE_ASSETS"
+      - name: Verify the assembled assets with the installer's own release policy
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/release_publication.py verify
+          --tag "$RELEASE_TAG"
+          --source-commit "$GITHUB_SHA"
+          --assets-dir "$RELEASE_ASSETS"
+          --notes "docs/releases/$RELEASE_TAG.md"
+          --report "$RELEASE_EVIDENCE/release-verification.json"
+      - name: Refuse to touch a release that already exists
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/release_publication.py require-absent
+          --tag "$RELEASE_TAG"
+      - name: Create the release as a draft with every verified asset
+        # A draft can still be deleted if an upload fails part way; a
+        # published release is immutable and cannot be repaired.
+        run: >-
+          gh release create "$RELEASE_TAG"
+          --repo "$GITHUB_REPOSITORY"
+          --draft
+          --verify-tag
+          --title "$RELEASE_TAG"
+          --notes-file "docs/releases/$RELEASE_TAG.md"
+          "$RELEASE_ASSETS"/*
+      - name: Require the draft to carry exactly the assembled assets
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/release_publication.py verify-published
+          --tag "$RELEASE_TAG"
+          --assets-dir "$RELEASE_ASSETS"
+          --expect-draft
+          --report "$RELEASE_EVIDENCE/draft-release.json"
+      - name: Publish the release as the latest stable release
+        run: >-
+          gh release edit "$RELEASE_TAG"
+          --repo "$GITHUB_REPOSITORY"
+          --draft=false
+          --latest
+      - name: Require the published release to be immutable and complete
+        run: >-
+          "$CANDIDATE_PYTHON" -I
+          tests/integration/desktop/release_publication.py verify-published
+          --tag "$RELEASE_TAG"
+          --assets-dir "$RELEASE_ASSETS"
+          --report "$RELEASE_EVIDENCE/published-release.json"
+      - name: Upload the release assets and publication evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-publication-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/tongs-desktop-release-assets
+            ${{ runner.temp }}/tongs-desktop-release-evidence
           if-no-files-found: error
           retention-days: 14

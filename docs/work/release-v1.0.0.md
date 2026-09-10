@@ -510,3 +510,76 @@ workflow run was created. No forge object was deleted. The compatibility range
 that would be wrong at tag time is recorded as decision 1 and left in place,
 because choosing its replacement is a compatibility policy decision and because
 issue #54 excludes packaging producer changes from a documentation patch.
+
+## 8. Desktop release publication from the version tag
+
+Added after the handoff above, by the change that made one `vX.Y.Z` tag
+publish the desktop. It supersedes the tag-trigger description in section 3
+and the manual desktop steps implied by section 4; the compatibility decision
+in section 2.3 still applies and must land before the tag.
+
+### What one tag now does
+
+1. `publish.yml` builds the core and publishes it to PyPI, unchanged.
+2. `release-desktop.yml` runs on the same tag push:
+   - `candidate-archive` derives the release version from the tag, exports it
+     to the producer as `TONGS_RELEASE_VERSION`, and builds
+     `tongs-desktop-X.Y.Z-fedora44-x86_64.tar.gz` twice, byte-identical.
+   - `candidate-attestation` attests the release manifest and the archive with
+     `actions/attest`, then verifies the bundle with the installer's own
+     `_verify_production_attestation` against the identity the installer
+     derives from the tag. On a branch that policy must still reject.
+   - `release-rpm` materialises the exact-mode payload contract for the tag's
+     version (`rpm_payload_contract.py --release-version`) and runs the full
+     RPM lifecycle from the signed archive.
+   - `release-publish` assembles the assets under the names the installer
+     expects (`desktop-manifest-v1.sigstore.json` for the bundle), verifies
+     them again with the installer's policy, requires that no release exists,
+     creates the release as a draft with every asset, confirms the draft
+     carries exactly the assembled bytes, publishes it as the latest release,
+     and confirms it is immutable and complete. Release notes come from
+     `docs/releases/vX.Y.Z.md`, which must exist at the tagged commit.
+3. `tongs --install-desktop` selects the release whose version equals the
+   running core. The two workflows do not wait for each other, so the desktop
+   release can appear minutes after the PyPI upload; the installer reports
+   that state and asks for a retry.
+
+### Prerequisites the CTO must confirm before the tag
+
+- **Immutable releases are enabled for the repository** (Settings, General,
+  Releases). The installer refuses a release whose `immutable` flag is not
+  `true`, and the publish job fails after publication if the flag is missing.
+  A mutable published release can be deleted and the tag's workflow run
+  re-run once the setting is on; a release is never edited in place.
+- **The compatibility upper bound admits core 1.0.0** (section 2.3, PR 238).
+  The publish job replays the installer's compatibility check with the tag's
+  own version and refuses to create a release the installer would reject.
+- **`docs/releases/v1.0.0.md` exists at the tagged commit.**
+- **A dry run passed.** Dispatch `release-desktop.yml` on `main` (or the
+  release branch) with `dry_run` set. It builds, signs, verifies and rebuilds
+  the RPMs and publishes nothing.
+
+### The release sequence
+
+```console
+git checkout main && git pull --ff-only
+git tag -a v1.0.0 -m "tongs 1.0.0"
+git push origin v1.0.0
+```
+
+Then watch both workflow runs for the tag. When `release-publish` succeeds:
+
+```console
+pip install tongs==1.0.0
+tongs --install-desktop
+```
+
+### If the desktop run fails
+
+Nothing was published unless the `release-publish` job reached its last step.
+If the failure is in a job before it, fix the cause on the branch, and either
+re-run the failed jobs for the same tag (the release does not exist yet, so
+`require-absent` still passes) or release the fix as v1.0.1. If a draft was
+created and the job failed before publishing, delete the draft by hand and
+re-run; the job refuses to touch an existing release, draft or not. A
+published release is immutable and stays; the next fix is v1.0.1.

@@ -127,9 +127,18 @@ ENTRY_POINTS: tuple[EntryPoint, ...] = (
     ),
     EntryPoint(
         program="tests/integration/desktop/rpm_payload_contract.py",
-        jobs=("desktop-production.yml:rpm-lifecycle",),
+        jobs=(
+            "desktop-production.yml:rpm-lifecycle",
+            "release-desktop.yml:release-rpm",
+        ),
         permitted=frozenset({"packaging"}),
         note="loads package_contract.py, which imports packaging.version",
+    ),
+    EntryPoint(
+        program="tests/integration/desktop/release_publication.py",
+        jobs=("release-desktop.yml:release-publish",),
+        permitted=CORE_MODULES,
+        note="replays the installer's release verification from the job's venv",
     ),
     EntryPoint(
         program="tests/containers/verify_expected_failure.py",

@@ -66,7 +66,9 @@ async def stage_desktop_release(
     repository and its production signing workflow.
     """
     platform = platform_probe()
-    release = await discover_release(client, request, limits=limits, clock=clock)
+    release = await discover_release(
+        client, request, limits=limits, clock=clock, core_version=core_version
+    )
     metadata = await verify_release_metadata(
         client,
         verifier,

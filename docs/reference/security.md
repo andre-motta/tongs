@@ -74,7 +74,9 @@ checks.
 
 ### Release selection
 
-- Only tags matching `desktop-v<major>.<minor>.<patch>` are considered.
+- Only tags matching `v<major>.<minor>.<patch>` are considered. These are the
+  core's own release tags: one tag publishes the core to PyPI and the desktop
+  assets to the GitHub Release of the same name.
 - Draft and prerelease entries are skipped, and an accepted release must report
   `immutable: true`. A mutable release is rejected outright.
 - Every asset must carry a `sha256:` digest, be fully uploaded, and have an asset
@@ -82,8 +84,9 @@ checks.
   asset ID. Duplicate asset names or IDs abort the install.
 - Each release must carry both `desktop-manifest-v1.json` and
   `desktop-manifest-v1.sigstore.json`.
-- Without an explicit `--version`, the installer takes the highest available
-  version. With one, exactly one release must match.
+- Without an explicit `--version`, `install` takes the release whose version
+  equals the running core and stops if there is none; `update` takes the
+  highest available version. With `--version`, exactly one release must match.
 - Every download is an HTTPS request to an allowlisted GitHub host, size-bounded,
   and checked against the expected byte count and SHA-256.
 
@@ -94,10 +97,10 @@ carrying an in-toto statement with an SLSA provenance predicate, verified agains
 the Sigstore public-good trust root through `Verifier.production()`.
 
 The installer requires an exact identity rather than merely a valid signature.
-For a release tagged `desktop-v<version>`, the signing identity must be
+For a release tagged `v<version>`, the signing identity must be
 
 ```
-https://github.com/andre-motta/tongs/.github/workflows/release-desktop.yml@refs/tags/desktop-v<version>
+https://github.com/andre-motta/tongs/.github/workflows/release-desktop.yml@refs/tags/v<version>
 ```
 
 issued by `https://token.actions.githubusercontent.com`. The verification policy
@@ -105,7 +108,7 @@ additionally requires all of:
 
 - source repository `https://github.com/andre-motta/tongs`, with the expected
   repository and repository-owner identifiers;
-- source repository ref `refs/tags/desktop-v<version>`;
+- source repository ref `refs/tags/v<version>`;
 - source repository digest equal to the commit that the tag resolves to, read
   back from the GitHub tag APIs through a bounded number of indirections;
 - build signer URI and build config URI equal to that same workflow identity, and

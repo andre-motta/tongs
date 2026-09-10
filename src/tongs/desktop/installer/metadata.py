@@ -63,16 +63,14 @@ OFFICIAL_REPOSITORY_ID = "1305350434"
 OFFICIAL_REPOSITORY_OWNER_ID = "30708955"
 OFFICIAL_WORKFLOW_PATH = ".github/workflows/release-desktop.yml"
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
-RELEASE_TAG_PREFIX = "desktop-v"
+RELEASE_TAG_PREFIX = "v"
 RELEASE_MANIFEST_NAME = "desktop-manifest-v1.json"
 RELEASE_BUNDLE_NAME = "desktop-manifest-v1.sigstore.json"
 INTOTO_PAYLOAD_TYPE = "application/vnd.in-toto+json"
 INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 SLSA_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 GITHUB_WORKFLOW_BUILD_TYPE = "https://actions.github.io/buildtypes/workflow/v1"
-_RELEASE_RE = re.compile(
-    r"^desktop-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
-)
+_RELEASE_RE = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _MAX_JSON_DEPTH = 32
@@ -97,8 +95,17 @@ async def discover_release(
     *,
     limits: InstallerLimits,
     clock: Clock,
+    core_version: str | None = None,
 ) -> ReleaseRecord:
-    """Enumerate immutable stable desktop releases and select one exact version."""
+    """Enumerate immutable stable desktop releases and select one exact version.
+
+    Desktop releases share the core's ``vX.Y.Z`` tag: the same tag that publishes
+    the core to PyPI publishes the desktop assets to the GitHub Release.  Without
+    an explicit request the release whose version equals the running core is the
+    only acceptable choice, because the desktop archive is built from exactly that
+    commit; an installer running a version with no published desktop release
+    stops with both versions named rather than silently taking the newest.
+    """
     now = clock()
     if now.tzinfo is None:
         _metadata_error("Installer clock must include a timezone.")
@@ -148,9 +155,32 @@ async def discover_release(
         if len(matches) != 1:
             _metadata_error("The requested desktop release is unavailable.")
         return matches[0]
+    if core_version is not None:
+        return _select_release_for_core(releases, core_version)
     if not releases:
         _metadata_error("No immutable stable desktop release is available.")
     return max(releases, key=lambda item: Version(item.version))
+
+
+def _select_release_for_core(
+    releases: list[ReleaseRecord], core_version: str
+) -> ReleaseRecord:
+    try:
+        current = Version(core_version)
+    except InvalidVersion:
+        _metadata_error("The installed core version is invalid.")
+    matches = [release for release in releases if Version(release.version) == current]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        _metadata_error("Desktop release versions are ambiguous.")
+    raise InstallerError(
+        InstallerErrorCode.INVALID_METADATA,
+        f"No desktop release matches tongs {core_version}. A release is published "
+        f"for each stable core version under the tag v{current.base_version}; if "
+        "that version was published minutes ago its desktop assets may still be "
+        "building, so retry shortly, or request an explicit version.",
+    )
 
 
 async def resolve_tag_commit(

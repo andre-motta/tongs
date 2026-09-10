@@ -218,9 +218,16 @@ The defects that are known and unfixed in the desktop workspace are listed in
 - **Copy URL** (`Ctrl+Y`) -- yank the MR URL to clipboard
 - **Refresh** (`Ctrl+R`) -- reload the current view
 
-## Desktop application (unreleased)
+## Desktop application
 
-> **No public desktop artifact exists yet.** There is no published archive, production tag, GitHub Release asset, RPM, or package repository to install from today. The commands and package names below describe the implemented contract that the first production release will use. Hardware-accelerated Electron on the supported Fedora host, packaging acceptance, and the release decision are separate gates that have not been met.
+Every stable release publishes the desktop assets to the GitHub Release of the same `vX.Y.Z` tag that publishes `tongs` to PyPI: the signed per-user archive, its release manifest and Sigstore bundle, the Fedora RPMs, an SBOM and a checksum list. `tongs --install-desktop` selects the release whose version equals the installed core, so the pair to run for one version is:
+
+```bash
+pip install tongs==1.0.0
+tongs --install-desktop
+```
+
+> Until the first stable tag is pushed there is no published archive, GitHub Release asset or RPM to install from. The commands and package names below describe the implemented contract that every release satisfies.
 
 The desktop application is optional. Plain `tongs` keeps scanning your repositories and opening the TUI; it never downloads, activates, or starts the desktop shell on its own.
 
@@ -252,7 +259,7 @@ A separate, optional RPM path builds three packages:
 | `python3-tongs+mcp` | `/usr/bin/tongs-mcp` only, which keeps the MCP dependency out of the base closure |
 | `tongs-desktop` | the Electron runtime under `/usr/libexec/tongs-desktop`, its system launcher, desktop entry, icon, AppStream metadata, and man page |
 
-`tongs-desktop` requires the exact `python3-tongs` build it was made against, plus `xorg-x11-server-Xwayland`. When a repository is published, those are the names to install with `dnf`. None is published today: there is no COPR repository, no signed package, and no Fedora review submission. The packaging sources and the local rebuild harness are under [`packaging/rpm/`](packaging/rpm/).
+`tongs-desktop` requires the exact `python3-tongs` build it was made against, plus `xorg-x11-server-Xwayland`. Each stable release attaches these RPMs, together with the source-built companion packages they depend on, to its GitHub Release; install them from there with `dnf install ./*.rpm`. There is no COPR repository and no Fedora review submission, and the RPMs are not signed with a GPG key. The packaging sources and the local rebuild harness are under [`packaging/rpm/`](packaging/rpm/).
 
 The two methods are independent. The per-user commands never install RPM packages, elevate privileges, write to `/usr`, or remove RPM-owned files, and `tongs desktop status` reports when a per-user activation and an RPM installation coexist.
 

@@ -707,8 +707,9 @@ set can only be written from a build that succeeded.
 
 ### 8.4 The sequence left for the CTO
 
-Steps 1 through 3 are the whole of what the v1.0.0 core tag needs. Steps 4 and 5
-are the decision 3 work item and are deliberately not gated on the tag.
+Steps 1 through 3 are the whole of what the v1.0.0 core tag needs at this commit.
+Steps 4 and 5 are the decision 3 work item; the automated desktop release job may
+tie step 5 to the tag, and if it does, that pull request updates this section.
 
 1. **Merge, in this order.** The implementing pull request for this section, then
    `feat/desktop-app` into `main`. Both are CTO gates. Merging into `main` also
@@ -727,15 +728,16 @@ are the decision 3 work item and are deliberately not gated on the tag.
    rejected as a duplicate rather than silently succeeding. Verify the wheel and
    sdist filenames, the `METADATA` version, a clean install, both entry points and
    `importlib.metadata.version("tongs")` before going further.
-   The same tag also fires the automated desktop release job (the pull request
-   tracked on issue #54, branch `feat/desktop-release-publish`, opened after this
-   document was written): it builds the desktop archive, signs the manifest,
-   verifies the signature with the installer's own code, and creates the GitHub
-   Release `v1.0.0` with the archive, manifest, Sigstore bundle, SBOM, checksums
-   and RPMs, using the section 6 draft as the release body. Creating the release
-   does not retrigger `publish.yml`, whose only trigger is `push.tags`. Do not
-   create the release by hand; a hand-made release carries no attestation and
-   `src/tongs/desktop/installer/metadata.py` refuses to install from it.
+   At this commit nothing else fires on the tag. The automated desktop release
+   job is being built in the pull request tracked on issue #54 (branch
+   `feat/desktop-release-publish`); when it lands it will state which tag carries
+   the desktop assets, what the installer's tag contract becomes, how the archive
+   version is derived at release time, and it will rewrite this section and 8.2
+   accordingly. Until then, creating a GitHub Release by hand adds nothing the
+   installer accepts: the notes can be posted with `gh release create v1.0.0`
+   (it does not retrigger `publish.yml`, whose only trigger is `push.tags`), but
+   `src/tongs/desktop/installer/metadata.py` refuses assets without the
+   workflow's attestation.
 4. **Raise `core_minimum` to 1.0.0** in a reviewed change after the tag exists,
    across `run_hosted.sh:87`, `build_in_container.sh:34`, `manifest.json:37` and
    `DESKTOP_CORE_MINIMUM`.
@@ -745,13 +747,16 @@ are the decision 3 work item and are deliberately not gated on the tag.
    edit the same manifest.
 
    Section 4 step 5 and section 3 both describe this as work that does not exist.
-   It now does: the automated desktop release job is the pull request tracked
-   on issue #54 (branch `feat/desktop-release-publish`), which supersedes the
-   separate `desktop-v1.0.0` tag: the `v1.0.0` tag carries both the PyPI publish
-   and the desktop release, as step 3 describes. **Read that pull request rather
-   than creating a release by hand.** A hand-made release would carry no
-   attestation, no provenance and no immutability guarantee, which is exactly
-   what `src/tongs/desktop/installer/metadata.py` refuses to install.
+   It is being built: the automated desktop release job is the pull request
+   tracked on issue #54 (branch `feat/desktop-release-publish`). It owns the tag
+   policy for the desktop assets (whether `desktop-v1.0.0` stays or the `v1.0.0`
+   tag carries both publishes, which would change the installer's tag contract,
+   `SECURITY.md`, decision 3 and the interval argument in 8.2, all reviewed
+   there), the release-time archive version derivation, and the re-pin in 8.3.
+   **Read that pull request rather than creating a release by hand.** A
+   hand-made release would carry no attestation, no provenance and no
+   immutability guarantee, which is exactly what
+   `src/tongs/desktop/installer/metadata.py` refuses to install.
 
 Section 4's stop conditions still hold, minus the third: the core version now
 falls inside the payload's declared interval. The remaining ones are the

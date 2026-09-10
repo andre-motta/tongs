@@ -289,6 +289,21 @@ def test_reviewed_constants_still_match_the_producer_literals() -> None:
     contract = json.loads((ROOT / "packaging/rpm/desktop/manifest.json").read_text())
     assert contract["accepted_desktop"]["release_version"] == DESKTOP_RELEASE_VERSION
 
+    # The accepted archive's own name carries the release version, and
+    # rpm_payload_contract.py:228 requires it to equal the name the producer
+    # actually emits.  Pinning it here is what stops the release version being
+    # raised in one place and not the other, which fails the lifecycle job with
+    # a checksum-coverage error rather than a version error.
+    accepted_archive = f"tongs-desktop-{DESKTOP_RELEASE_VERSION}-fedora44-x86_64.tar.gz"
+    assert contract["accepted_desktop"]["archive"]["filename"] == accepted_archive
+
+    # These two hold the release version as bare literals that nothing derives.
+    # This is what stops them drifting away from the accepted archive.
+    attestation = (ROOT / ".github/workflows/release-desktop.yml").read_text()
+    assert accepted_archive in attestation
+    lifecycle = (ROOT / "packaging/rpm/desktop/install_and_verify.sh").read_text()
+    assert f"== {DESKTOP_RELEASE_VERSION} ]]" in lifecycle
+
     container = (ROOT / "packaging/desktop/archive/build_in_container.sh").read_text()
     compatibility = contract["accepted_desktop"]["compatibility"]
     assert f"CORE_MINIMUM={DESKTOP_CORE_MINIMUM}\n" in hosted

@@ -510,3 +510,242 @@ workflow run was created. No forge object was deleted. The compatibility range
 that would be wrong at tag time is recorded as decision 1 and left in place,
 because choosing its replacement is a compatibility policy decision and because
 issue #54 excludes packaging producer changes from a documentation patch.
+
+## 8. Decision record, added after the CTO ruled
+
+Sections 1 through 7 above are the audit as merged in PR #236 and are left byte
+for byte. This section is the later reading and supersedes them wherever they
+disagree.
+
+The CTO took every recommendation in section 5. Decisions 4, 5, 8 and 9 landed
+whole on `chore/desktop-release-prep-v1`. Decision 1 landed in the half that can
+land now. Decisions 2 and 7 were implemented, refused by a gate, reverted, and
+moved to the desktop production release path; 8.3 says why and what re-pinning
+them costs. Decisions 3, 6 and 10 are procedure and remain the CTO's to execute.
+
+**Still true: this document prepares a release and does not perform one.** No
+tag, PyPI upload, GitHub Release, RPM or COPR publication or availability
+announcement follows from merging the implementing pull request.
+
+### 8.1 What is done, and what moved
+
+| # | Decision | Before | After |
+|---|---|---|---|
+| 1 | Core compatibility range | `core_minimum` 0.4.2-dev.183, `core_maximum_exclusive` 0.5.0 | `core_maximum_exclusive` **2.0.0**; `core_minimum` unchanged. **Option A** of 2.3, see 8.2 |
+| 2 | Desktop archive `release_version` | 0.5.0 | **Unchanged.** Moved to the decision 3 path, see 8.3 |
+| 4 | Python trove classifier | Development Status :: 4 - Beta | Development Status :: 5 - Production/Stable |
+| 5 | Security support policy | "in early development (pre-1.0)" | "released from the 1.x series", latest 1.x only, no backports |
+| 7 | Desktop shell package version | `desktop/package.json` 0.1.0 | **Unchanged.** Moved to the decision 3 path, see 8.3 |
+| 8 | `publish.yml` hardening | tag filter `v*`, no version assertion | filter `v[0-9]+.[0-9]+.[0-9]+`, plus an anchored tag check and a wheel, METADATA and sdist version assertion before any upload |
+| 9 | Documentation URL | `https://tongs.tools` | `https://www.tongs.tools`, the `docs/CNAME` host |
+
+Decision 3 (desktop ships after core), decision 6 (release notes live in the
+GitHub Release body) and decision 10 (deferred acceptance groups do not gate the
+tag) were deliberately not implemented. They are procedure, and section 5 records
+the ruling.
+
+### 8.2 Decision 1 takes option A
+
+Section 2.3 asked the release-preparation change to choose between option A, a
+lower bound the pre-tag `0.4.2.devN` still satisfies, and option B, a lower bound
+raised in the tag-time commit. **It takes option A, and option B should now be
+read as rejected rather than open.**
+
+`core_maximum_exclusive` is 2.0.0 in
+`packaging/desktop/archive/run_hosted.sh`,
+`packaging/desktop/archive/build_in_container.sh`,
+`packaging/rpm/desktop/manifest.json` and every mirrored constant. A tagged core
+1.0.0 is inside the interval, which removes the third stop condition.
+`core_minimum` stays `0.4.2-dev.183`.
+
+Option B was rejected on the evidence section 2.3 already assembles. A commit
+carrying the raise is red on its own CI run, and that run is exactly the green
+run section 4 step 3 requires before the tag is pushed, so the two requirements
+cannot both be met at the same commit. Section 2.3 states this as "a deliberate,
+documented gap in gate coverage"; measured against step 3 it is not a gap but a
+deadlock, because the run that authorises the tag is the run that cannot pass.
+Option A also cannot be repaired by admitting a pre-release of the minimum: under
+this scheme `git describe` bumps the patch of the newest tag, so no reachable
+pre-tag state produces a `1.0.0.devN`, and a `0.4.2.devN` is not a PEP 440
+pre-release of `1.0.0` by any reading.
+
+The cost option A names, a payload that formally accepts a development core it
+was never tested against, does not arise in this release: under decision 3 no
+desktop payload is published, so the declared interval is not consumed by
+anything a user can install.
+
+`tests/ci/desktop_production_expectations.py` now carries `DESKTOP_CORE_MINIMUM`
+and `DESKTOP_CORE_MAXIMUM_EXCLUSIVE` as caller-owned constants, and
+`tests/ci/test_desktop_production_expectations.py` pins them against all three
+producer sources and asserts that the interval admits a tagged `1.0.0`, admits
+the pre-tag `0.4.2.devN`, and refuses `2.0.0`. The raise is therefore a
+deliberate edit that fails a test until it is made everywhere. Make it after the
+tag, in the decision 3 work item, where the boundaries can be proved the way
+section 5 asked, against a real payload rather than a fixture.
+
+### 8.3 Decisions 2 and 7 move to the desktop production release path
+
+Both were implemented on this branch and both were refused by a production gate,
+for the same underlying reason: each edits a value that a reviewed, byte-verified
+build input depends on, and neither can be corrected without a hosted run that
+regenerates that input. Section 5 already warned about the first; the second was
+not known.
+
+**Decision 2, the archive `release_version`.** Section 5 anticipated the digest
+problem and understated it in one respect: **the accepted archive's identity is
+read by the gate, not merely recorded for the fixture path.**
+`tests/integration/desktop/rpm_payload_contract.py:228` takes
+`accepted_desktop.archive.filename` from the checked-in base manifest and
+requires the producer's own `SHA256SUMS` to cover exactly that name plus the
+seven other accepted files. Raising `release_version` renames the archive the
+producer emits, so the reviewed set and the produced set stop matching, and the
+`Materialize the exact-mode payload contract` step of `rpm-lifecycle` fails
+before any digest is compared:
+
+```
+producer checksum list does not cover the reviewed accepted file set:
+missing=['tongs-desktop-0.5.0-fedora44-x86_64.tar.gz'],
+unexpected=['tongs-desktop-1.0.0-fedora44-x86_64.tar.gz']
+```
+
+Moving the accepted filename to match does not rescue it, it only moves the
+failure later. `rpm_payload_contract.py` preserves `release_version` byte for
+byte from the base manifest, and
+`packaging/rpm/desktop/package_contract.py:204-206` then compares that preserved
+value against the freshly built `desktop-manifest-v1.json`, raising
+`accepted desktop release_version mismatch` whenever the manifest and the
+producer disagree, with `package_contract.py:217` raising
+`accepted desktop release mismatch` on the same disagreement against
+`desktop-install.json`. Every one of these is satisfied only by a manifest whose
+accepted block describes an archive that a hosted run actually produced. The
+block in `packaging/rpm/desktop/manifest.json` is evidence of a reviewed 0.5.0
+archive, so a 1.0.0 archive cannot satisfy it until a 1.0.0 archive has been
+produced and accepted.
+
+The coupling that made this a two-step failure rather than one is now pinned:
+`tests/ci/test_desktop_production_expectations.py` asserts that the accepted
+archive filename, the attested subject in `release-desktop.yml`, the RPM version
+assertion in `install_and_verify.sh`, `run_hosted.sh`'s `release_version` and the
+manifest's `release_version` all carry `DESKTOP_RELEASE_VERSION`. Raising the
+release version in one place and not the others now fails a unit test instead of
+a hosted job.
+
+**Decision 7, `desktop/package.json`.** Section 5 called it cosmetic and
+skippable, which it is not.
+`scripts/build_desktop_archive.py:596-603` refuses to build unless the SHA-256 of
+`desktop/package-lock.json` equals `expected_package_lock_sha256`, held in
+`packaging/desktop/archive/contract.json`. That pin is what makes the archive
+reproducible: the producer builds from an approved lock, never from whatever lock
+is checked out. Editing the lockfile's two root `version` fields changes its
+digest, so the producer refused the input with
+`desktop archive build failed: desktop package lock is not the approved input`,
+failing `Reproducible archive and unsigned transfer`. Bumping the shell version
+therefore requires `expected_package_lock_sha256` to move in the same reviewed
+commit, and a rebuild confirming the two clean source roots still produce
+byte-identical output.
+
+Both are therefore work for the decision 3 desktop production release path, which
+already has to build and accept a 1.0.0 payload. `desktop/package.json`,
+`desktop/package-lock.json`, `run_hosted.sh`'s `release_version` and the whole
+accepted block are byte identical to the base commit.
+
+The consequence of deferring decision 7 is that `app.asar` in a desktop 1.0.0
+payload would contain a `package.json` reading `0.1.0`. Nothing reads it: the
+package is `private`, is never published to npm, and `desktop/src` never imports
+it. The only version the shell knows is the core version passed on argv, as
+section 1.2 records.
+
+#### The re-pin procedure
+
+Run once, in one reviewed change, when the decision 3 path builds the first
+1.0.0 payload. The order matters: the lock pin gates the build, and the accepted
+set can only be written from a build that succeeded.
+
+1. **Set the shell version.** `desktop/package.json` and both root `version`
+   fields of `desktop/package-lock.json` to `1.0.0`. Do not touch a dependency
+   entry.
+2. **Re-pin the approved lock.** Put the new SHA-256 of
+   `desktop/package-lock.json` into `expected_package_lock_sha256` in
+   **`packaging/desktop/archive/contract.json`**. Without this the producer
+   refuses to start. The check is `scripts/build_desktop_archive.py:596-603`;
+   `tests/packaging/desktop/archive/test_producer.py` exercises the producer
+   against the contract.
+3. **Set the release version.** `release_version=1.0.0` in
+   `packaging/desktop/archive/run_hosted.sh:30`, the attested subject filename at
+   `.github/workflows/release-desktop.yml:331`, the RPM assertion at
+   `packaging/rpm/desktop/install_and_verify.sh:581`, the prose at
+   `packaging/desktop/archive/README.md:6,43` and
+   `packaging/rpm/desktop/README.md:51`, and the caller-owned gate constant
+   `DESKTOP_RELEASE_VERSION` in `tests/ci/desktop_production_expectations.py`.
+   The mirrored test constants listed at the end of section 1.2 move with them.
+4. **Produce the accepted set.** The job that generates it is the `archive` job
+   of `.github/workflows/desktop-production.yml`, which runs
+   `packaging/desktop/archive/run_hosted.sh` twice from two clean source roots
+   and requires the outputs to be byte identical. Its transfer artifact carries
+   `tongs-desktop-1.0.0-fedora44-x86_64.tar.gz`, the eight evidence files and the
+   producer's `SHA256SUMS`.
+5. **Receive it.** The file that holds the accepted set is
+   **`packaging/rpm/desktop/manifest.json`**, under `accepted_desktop`: the
+   `archive` block's `filename`, `bytes` and `sha256`, and all eight `evidence`
+   digests, plus `artifact_id`, `artifact_name`, `run_id` and `source_commit`
+   from that run. The `filename` must be exactly the name the producer emitted,
+   `tongs-desktop-1.0.0-fedora44-x86_64.tar.gz`, because
+   `tests/integration/desktop/rpm_payload_contract.py:228` compares it against
+   the producer's `SHA256SUMS`; that module computes every one of these values
+   and is the reference for what each must be. The `reviewed_fixture` block is
+   removed when the accepted commit is the commit the core is built from.
+6. **Confirm what pins it.** `tests/packaging/rpm/desktop/test_contract.py`
+   pins the accepted identity and must be updated to the new run in the same
+   change. `tests/ci/test_desktop_production_expectations.py` pins
+   `DESKTOP_RELEASE_VERSION` against `run_hosted.sh`, the manifest's
+   `release_version`, the accepted archive filename, the attested subject in
+   `.github/workflows/release-desktop.yml` and the RPM version assertion in
+   `packaging/rpm/desktop/install_and_verify.sh`, so step 3 is complete only when
+   that test is green. Both must pass before the change is proposed.
+7. **Verify end to end.** A full `desktop-production.yml` run, green through
+   `rpm-lifecycle`, on the commit that carries all of the above.
+
+### 8.4 The sequence left for the CTO
+
+Steps 1 through 3 are the whole of what the v1.0.0 core tag needs. Steps 4 and 5
+are the decision 3 work item and are deliberately not gated on the tag.
+
+1. **Merge, in this order.** The implementing pull request for this section, then
+   `feat/desktop-app` into `main`. Both are CTO gates. Merging into `main` also
+   deploys the documentation site through `docs.yml`, so the merged prose must
+   still describe the desktop as unreleased at that moment, which it does.
+2. **Wait for a green `main` CI run at the exact release commit.** Record every
+   required job and the aggregate, and retain them outside Actions. Nothing runs
+   on the tag, so this run is the only gate the tag will ever have. This is the
+   step that option A in 8.2 exists to keep passable.
+3. **Push `v1.0.0` at that commit, and nothing else.** Only `publish.yml` fires.
+   It now refuses any tag that is not exactly `v<major>.<minor>.<patch>`, and
+   fails the build job before the artifact upload if the built wheel filename,
+   the wheel `METADATA` version or the sdist filename disagrees with the tag.
+   **This step is irreversible.** PyPI does not allow a filename to be replaced,
+   and `skip-existing` is deliberately still off, so a moved or re-pushed tag is
+   rejected as a duplicate rather than silently succeeding. Verify the wheel and
+   sdist filenames, the `METADATA` version, a clean install, both entry points and
+   `importlib.metadata.version("tongs")` before going further.
+4. **Raise `core_minimum` to 1.0.0** in a reviewed change after the tag exists,
+   across `run_hosted.sh:87`, `build_in_container.sh:34`, `manifest.json:37` and
+   `DESKTOP_CORE_MINIMUM`.
+5. **Build the desktop production tag path** and create `desktop-v1.0.0`, under
+   the requirements section 4 step 5 states. That work item carries the re-pin
+   procedure in 8.3, and steps 4 and 5 here should be one change, because both
+   edit the same manifest.
+
+   Section 4 step 5 and section 3 both describe this as work that does not exist.
+   It now does: the automated desktop release job is being built on
+   `feat/desktop-release-publish`, in its own pull request. **Read that pull
+   request rather than creating the release by hand.** Any manual
+   `gh release create` for `desktop-v1.0.0` is superseded by it, and creating one
+   by hand would produce a release with no attestation, no provenance and no
+   immutability guarantee, which is exactly what
+   `src/tongs/desktop/installer/metadata.py` refuses to install.
+
+Section 4's stop conditions still hold, minus the third: the core version now
+falls inside the payload's declared interval. The remaining ones are the
+unreviewed metadata or workflow, two tags resolving to different commits, an
+absent desktop production tag path, a signing job holding build authority, and
+mutating a published release instead of preparing a corrective version.

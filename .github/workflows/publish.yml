@@ -9,8 +9,10 @@ on:
       # because the filter alone is not what gates the upload.
       - "v[0-9]+.[0-9]+.[0-9]+"
 
+# The workflow-level default is read only.  Trusted publishing needs
+# id-token: write, but only the publish job mints that token, so the build job
+# must never be able to.
 permissions:
-  id-token: write
   contents: read
 
 jobs:

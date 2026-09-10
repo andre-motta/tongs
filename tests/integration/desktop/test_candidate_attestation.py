@@ -995,3 +995,50 @@ def test_official_identity_admits_release_tags_and_dry_runs_only_as_allowed() ->
         official("refs/tags/v1.0.0rc1", "push")
     with pytest.raises(CandidateAttestationError):
         official("refs/heads/feat/desktop-app", "pull_request")
+
+
+def test_verify_sbom_binds_the_producer_output_to_the_ref_release_version(
+    tmp_path: Path,
+) -> None:
+    """verify-sbom must derive the release version from the ref like verify does.
+
+    The producer output below is the branch candidate (0.5.0). A tag identity
+    naming another version must be refused at the producer validation, and the
+    branch identity must get past it to the bundle read; both prove the call site
+    passes the derived version instead of raising before any check runs.
+    """
+
+    root = tmp_path / "candidate"
+    _write_output(root)
+    tagged = candidate.CandidateIdentity.official(
+        repository="andre-motta/tongs",
+        repository_id="1305350434",
+        repository_owner_id="30708955",
+        ref="refs/tags/v9.9.9",
+        source_commit=SOURCE_COMMIT,
+        source_tree=SOURCE_TREE,
+        event="push",
+        run_id="123456",
+        run_attempt=1,
+    )
+    with pytest.raises(
+        candidate.CandidateAttestationError, match="does not match the ref"
+    ):
+        candidate.verify_sbom_attestation(
+            root,
+            tmp_path / "missing.sigstore.json",
+            tmp_path / "missing.spdx.json",
+            tmp_path / "report",
+            tagged,
+        )
+    with pytest.raises(
+        candidate.CandidateAttestationError,
+        match="candidate evidence file cannot be read",
+    ):
+        candidate.verify_sbom_attestation(
+            root,
+            tmp_path / "missing.sigstore.json",
+            tmp_path / "missing.spdx.json",
+            tmp_path / "report",
+            _identity(),
+        )

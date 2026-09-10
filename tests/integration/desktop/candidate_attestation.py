@@ -614,7 +614,8 @@ def verify_sbom_attestation(
 
     if importlib.metadata.version("sigstore") != SIGSTORE_VERSION:
         _fail(f"candidate verifier requires sigstore {SIGSTORE_VERSION}")
-    archive = _validate_producer_output(root, identity.source_commit)
+    release_version = release_version_for_ref(identity.ref)
+    archive = _validate_producer_output(root, identity.source_commit, release_version)
     subjects = _subject_digests(root, archive)
     document = _decode_json(
         _read_regular_bytes(sbom_path, _MAX_JSON_BYTES), "generated SBOM"

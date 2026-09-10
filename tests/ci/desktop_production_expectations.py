@@ -69,6 +69,21 @@ USER_ARCHIVE_ARTIFACT_ID = "fedora-44-x86_64-user-archive"
 #: this constant is what makes the consumer expectation independent of it.
 DESKTOP_RELEASE_VERSION = "0.5.0"
 
+#: Reviewed half-open core compatibility interval for the desktop payload.  The
+#: producer declares it, and packaging/rpm/desktop/manifest.json repeats it,
+#: because package_contract.validate_accepted_payload compares the freshly built
+#: archive against the bound contract field by field.  All three must agree.
+#:
+#: The upper bound admits the whole core 1.x series and refuses 2.0.0, which is
+#: what makes a tagged core 1.0.0 installable.  The lower bound is deliberately
+#: still the development bound the payload was built against.  Raising it to
+#: 1.0.0 before the v1.0.0 tag exists would put this branch's own derived core,
+#: 0.4.2.devN, below the interval and make package_contract.bind_manifest raise
+#: on every push, so that raise belongs after the tag rather than here.  This is
+#: option A of section 2.3 of docs/work/release-v1.0.0.md.
+DESKTOP_CORE_MINIMUM = "0.4.2-dev.183"
+DESKTOP_CORE_MAXIMUM_EXCLUSIVE = "2.0.0"
+
 MAX_PROGRAM_BYTES = 8 * 1024 * 1024
 MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024
 MAX_RECEIPT_BYTES = 256 * 1024

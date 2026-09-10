@@ -42,7 +42,7 @@ npm --prefix desktop ci --ignore-scripts
   --output-dir /path/to/output \
   --release-version 0.5.0 \
   --core-minimum 0.4.2-dev.183 \
-  --core-maximum-exclusive 0.5.0 \
+  --core-maximum-exclusive 2.0.0 \
   --source-commit FULL_GIT_SHA \
   --source-date-epoch UNIX_SECONDS
 ```

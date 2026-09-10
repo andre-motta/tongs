@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-tongs is in early development (pre-1.0). Security fixes are applied to the latest release only.
+tongs is released from the 1.x series and follows semantic versioning. Security fixes are applied to the latest 1.x release only; there are no backports to earlier releases, so upgrading to the latest release is the supported remedy.
 
 | Version | Supported |
 |---------|-----------|

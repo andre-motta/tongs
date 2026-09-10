@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["tui", "git", "gitlab", "github", "merge-request", "pull-request", "code-review"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -55,7 +55,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/andre-motta/tongs"
-Documentation = "https://tongs.tools"
+Documentation = "https://www.tongs.tools"
 Repository = "https://github.com/andre-motta/tongs"
 Issues = "https://github.com/andre-motta/tongs/issues"
 

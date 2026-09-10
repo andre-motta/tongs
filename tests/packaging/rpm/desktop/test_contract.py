@@ -35,7 +35,7 @@ def _digest(path: Path) -> str:
 def _metadata_fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
     compatibility = {
         "core_minimum": "0.4.2-dev.183",
-        "core_maximum_exclusive": "0.5.0",
+        "core_maximum_exclusive": "2.0.0",
         "plugin_api_major": 1,
         "rpc_api_major": 1,
     }
@@ -171,7 +171,7 @@ def test_payload_validator_accepts_declared_regular_files(tmp_path: Path) -> Non
         "electron_version": "44.2.0",
         "compatibility": {
             "core_minimum": "0.4.2-dev.183",
-            "core_maximum_exclusive": "0.5.0",
+            "core_maximum_exclusive": "2.0.0",
             "plugin_api_major": 1,
             "rpc_api_major": 1,
         },

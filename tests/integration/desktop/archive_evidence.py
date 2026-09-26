@@ -1076,6 +1076,15 @@ def _require_tool_identity(
     }
 
 
+def expected_tool_digests(source_root: Path) -> dict[str, str]:
+    """Return the trusted tool digests expected for source_root."""
+    return {
+        "artifact_contract_sha256": _directory_digest(
+            source_root / ARTIFACT_CONTRACT_PACKAGE
+        )
+    }
+
+
 def _directory_digest(directory: Path) -> str:
     """Digest one trusted package directory without following any symlink."""
     try:

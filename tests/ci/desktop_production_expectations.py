@@ -168,21 +168,16 @@ def _program_digest(source_root: Path, program: str) -> str:
 
 
 def artifact_contract_digest(source_root: Path) -> str:
-    """Recompute the artifact contract package digest the archive adapter uses.
+    """Recompute the artifact contract package digest the archive adapter uses."""
 
-    The adapter owns this algorithm.  Reimplementing it here would let the two
-    drift apart silently, so the adapter's own helper is called instead: if the
-    adapter renames or changes it, this fails loudly on the next run rather
-    than producing a value the adapter will reject for the wrong reason.
-    """
-
-    helper = getattr(archive_adapter(), "_directory_digest", None)
+    helper = getattr(archive_adapter(), "expected_tool_digests", None)
     if helper is None:
-        _fail(
-            "the archive adapter no longer exposes its package directory digest; "
-            "issue #53 must be updated with its replacement"
-        )
-    return helper(source_root / ARTIFACT_CONTRACT_PACKAGE)
+        _fail("the archive adapter no longer exposes its expected tool digests")
+    digests = helper(source_root)
+    contract = digests.get("artifact_contract_sha256")
+    if not isinstance(contract, str) or not contract:
+        _fail("the archive adapter returned no artifact contract digest")
+    return contract
 
 
 def electron_identity(source_root: Path) -> tuple[str, str, str]:

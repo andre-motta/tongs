@@ -232,10 +232,9 @@ def test_electron_identity_matches_the_checked_in_configuration() -> None:
     assert len(archive_digest) == 64
 
 
-def test_artifact_contract_digest_matches_the_adapter_helper() -> None:
-    assert artifact_contract_digest(ROOT) == archive_adapter()._directory_digest(
-        ROOT / "src/tongs/desktop/artifact_contract"
-    )
+def test_artifact_contract_digest_matches_the_adapter_public_helper() -> None:
+    expected = archive_adapter().expected_tool_digests(ROOT)
+    assert artifact_contract_digest(ROOT) == expected["artifact_contract_sha256"]
 
 
 def test_tool_digests_match_the_checked_in_programs(

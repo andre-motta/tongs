@@ -144,6 +144,58 @@ async def request(
     Raises appropriate ForgeError subclass on failure.
     On 429 (rate limit), waits ``retry_after`` seconds and retries once.
     """
+    response = await _send(client, method, path, _retried=_retried, **kwargs)
+    if response.status_code == 204:
+        return {}
+    return response.json()
+
+
+async def request_page(
+    client: httpx.AsyncClient,
+    path: str,
+    *,
+    page: int,
+    per_page: int,
+    params: dict[str, str | int] | None = None,
+) -> tuple[list[dict], bool]:
+    """Read exactly one page of a list endpoint.
+
+    Returns the page's items and whether the forge reports another page. The
+    ``Link`` header (GitHub and GitLab) and GitLab's ``X-Next-Page`` header are
+    authoritative when present; without either, a full page is taken to mean
+    another page may follow, the same rule ``paginate`` uses.
+    """
+    query: dict[str, str | int] = dict(params or {})
+    query["per_page"] = per_page
+    query["page"] = page
+    response = await _send(client, "GET", path, params=query)
+    data = [] if response.status_code == 204 else response.json()
+    if not isinstance(data, list):
+        raise ValidationError("Validation failed: expected a list response")
+    return data, _has_next_page(response, len(data), per_page)
+
+
+def _has_next_page(response: httpx.Response, count: int, per_page: int) -> bool:
+    next_page = response.headers.get("X-Next-Page")
+    if next_page is not None:
+        return bool(next_page.strip())
+    link = response.headers.get("Link")
+    if link is not None:
+        return any(
+            'rel="next"' in part.replace(" ", "") or "rel=next" in part
+            for part in link.split(",")
+        )
+    return count >= per_page
+
+
+async def _send(
+    client: httpx.AsyncClient,
+    method: str,
+    path: str,
+    *,
+    _retried: bool = False,
+    **kwargs,
+) -> httpx.Response:
     try:
         response = await client.request(method, path, **kwargs)
     except httpx.TimeoutException as e:
@@ -157,13 +209,10 @@ async def request(
             delay = err.retry_after if err.retry_after is not None else 5
             log.warning("Rate limited on %s %s, retrying in %ds", method, path, delay)
             await asyncio.sleep(delay)
-            return await request(client, method, path, _retried=True, **kwargs)
+            return await _send(client, method, path, _retried=True, **kwargs)
         raise err
 
-    if response.status_code == 204:
-        return {}
-
-    return response.json()
+    return response
 
 
 async def paginate(

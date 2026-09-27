@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 import zlib
+from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -56,6 +58,23 @@ SOURCE_TREE = "1" * 40
 WHEEL_SHA256 = "2" * 64
 VENDOR_ID = 0x10DE
 DEVICE_ID = 0x2B85
+
+
+@pytest.fixture(autouse=True)
+def _drop_interpreter_copies(tmp_path: Path) -> Iterator[None]:
+    """Remove each test's interpreter copies once it finishes.
+
+    Every fixture copies the running interpreter, which is about 30 MB, and some
+    tests copy the whole fixture again. The module leaves about 6 GB in pytest's
+    base temp per run, and pytest keeps the last three runs, which fills a
+    quota-limited /tmp and makes unrelated tests fail when their cache or
+    editor export cannot be written. The evidence files stay for debugging.
+    """
+    yield
+    for candidate in tmp_path.rglob("python"):
+        with suppress(OSError):
+            if candidate.is_file() and not candidate.is_symlink():
+                candidate.unlink()
 
 
 def _sha256(value: bytes) -> str:

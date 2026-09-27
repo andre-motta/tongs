@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -19,8 +20,27 @@ import {
   safeError,
   serviceErrorOf,
 } from "../../core/presentation.js";
-import type { CoordinatedRead } from "../../core/query.js";
+import { StaleQueryError, type CoordinatedRead } from "../../core/query.js";
 import { useRetainedRead } from "../../core/use-read.js";
+import {
+  appendPage,
+  feedFailures,
+  hasMorePages,
+  loadingFeedCount,
+  mergedReviewItems,
+  nextRepositoryToLoad,
+  orderedReviewItems,
+  pendingFeed,
+  type RepositoryFeed,
+} from "./paging.js";
+
+export {
+  mergedReviewItems,
+  nextRepositoryToLoad,
+  orderedReviewItems,
+  orderWatermark,
+  type RepositoryFeed,
+} from "./paging.js";
 
 export type ReviewScope = "my_reviews" | "my_mrs" | "all_open";
 export type ReviewSort = "updated" | "title" | "ci" | "author";
@@ -292,30 +312,69 @@ function InboxResults({
   readonly releaseFocusTarget: () => void;
   readonly navigate: (route: AppRoute) => void;
 }): ReactNode {
+  const readKey = `inbox:${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`;
   // The combined read queues repositories it has not started yet, and the
   // query coordinator can only cancel reads that already have a token, so the
   // queue is stopped through this controller whenever the read is replaced,
   // disabled or unmounted.
   const discoveredRead = useRef<AbortController | null>(null);
+  // Bumped by every new combined read, so a page that belongs to an older
+  // read (or a later page requested before a refresh) is dropped.
+  const readGeneration = useRef(0);
+  const moreReads = useRef(new Set<string>());
+  // Every page loaded so far, one entry per repository in discovery order.
+  const [feeds, setFeeds] = useState<readonly RepositoryFeed[] | null>(null);
+  const feedsRef = useRef(feeds);
+  feedsRef.current = feeds;
+  // The first read fills `feeds` as each repository's first page arrives. A
+  // refresh keeps showing the previous pages and swaps them in when complete.
+  const liveRead = useRef(false);
+  const hasValue = useRef(false);
+  const cancelMoreReads = useCallback(() => {
+    for (const key of moreReads.current) void queries.cancel(key);
+    moreReads.current.clear();
+  }, [queries]);
   const begin = useCallback(() => {
     discoveredRead.current?.abort();
     discoveredRead.current = null;
-    if (repository)
-      return bridge.listReviews({
-        scope: reviewScope,
-        state: reviewState,
-        repository: repository.handle,
-      });
+    cancelMoreReads();
+    const generation = ++readGeneration.current;
     const controller = new AbortController();
     discoveredRead.current = controller;
+    const sources = repository ? [repository] : repositories;
+    const live = !hasValue.current;
+    liveRead.current = live;
+    if (live)
+      setFeeds(
+        Object.freeze(sources.map((source) => pendingFeed(source.handle))),
+      );
     return listDiscoveredReviews(
       bridge,
-      repositories,
+      sources,
       reviewScope,
       reviewState,
       controller.signal,
+      live
+        ? (index, feed) => {
+            if (generation !== readGeneration.current) return;
+            setFeeds((current) =>
+              current && current[index]?.repository === feed.repository
+                ? Object.freeze(
+                    current.map((item, at) => (at === index ? feed : item)),
+                  )
+                : current,
+            );
+          }
+        : undefined,
     );
-  }, [bridge, repositories, repository, reviewScope, reviewState]);
+  }, [
+    bridge,
+    cancelMoreReads,
+    repositories,
+    repository,
+    reviewScope,
+    reviewState,
+  ]);
   const readDependencies = [
     repository?.handle,
     repositoryGeneration,
@@ -324,18 +383,93 @@ function InboxResults({
   ];
   const state = useRetainedRead(
     queries,
-    `inbox:${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`,
+    readKey,
     begin,
     readDependencies,
     repositoriesReady,
   );
+  useEffect(() => {
+    if (!state.value) return;
+    hasValue.current = true;
+    // A live read already holds these pages and any loaded after them.
+    if (!liveRead.current) setFeeds(state.value.feeds);
+    liveRead.current = false;
+  }, [state.value]);
   useEffect(
     () => () => {
       discoveredRead.current?.abort();
       discoveredRead.current = null;
+      cancelMoreReads();
     },
     [...readDependencies, repositoriesReady],
   );
+
+  const loadMore = useCallback(
+    (target: string) => {
+      const key = `${readKey}:more:${target}`;
+      const feed = feedsRef.current?.find((item) => item.repository === target);
+      if (
+        moreReads.current.has(key) ||
+        !feed ||
+        feed.cursor === null ||
+        feed.loading
+      )
+        return;
+      const generation = readGeneration.current;
+      const cursor = feed.cursor;
+      moreReads.current.add(key);
+      const update = (
+        change: (current: RepositoryFeed) => RepositoryFeed,
+      ): void =>
+        setFeeds((current) => {
+          const found = current?.find((item) => item.repository === target);
+          return current && found
+            ? replaceFeed(current, change(found))
+            : current;
+        });
+      const settle = (
+        change: (current: RepositoryFeed) => RepositoryFeed,
+      ): void => {
+        if (generation !== readGeneration.current) return;
+        moreReads.current.delete(key);
+        update(change);
+      };
+      update((current) => ({ ...current, loading: true }));
+      void queries
+        .run(key, () =>
+          bridge.listReviews({
+            scope: reviewScope,
+            state: reviewState,
+            repository: target,
+            cursor,
+          }),
+        )
+        .then(
+          (page) =>
+            settle((current) =>
+              appendPage(
+                current,
+                page.items,
+                page.next_cursor ?? null,
+                page.failures,
+              ),
+            ),
+          (error: unknown) =>
+            settle((current) =>
+              error instanceof StaleQueryError
+                ? { ...current, loading: false }
+                : {
+                    ...current,
+                    loading: false,
+                    failures: [repositoryFailure(target, error)],
+                  },
+            ),
+        );
+    },
+    [bridge, queries, readKey, reviewScope, reviewState],
+  );
+
+  const shown = state.error && !state.value ? null : feeds;
   return (
     <>
       <div className="view-actions">
@@ -347,7 +481,7 @@ function InboxResults({
           {state.loading && state.value ? "Refreshing…" : "Refresh reviews"}
         </button>
       </div>
-      {state.loading && !state.value && (
+      {state.loading && !shown?.some((feed) => !feed.loading) && (
         <Notice kind="loading">
           {repositoriesReady
             ? "Loading reviews from the local service…"
@@ -361,9 +495,9 @@ function InboxResults({
             : safeError(state.error)}
         </Notice>
       )}
-      {state.value && (
+      {shown?.some((feed) => !feed.loading) && (
         <ReviewList
-          result={state.value}
+          feeds={shown}
           navigate={navigate}
           sort={reviewSort}
           selected={selected}
@@ -371,9 +505,21 @@ function InboxResults({
           focusTarget={focusTarget}
           releaseFocusTarget={releaseFocusTarget}
           emptyLabel={emptyReviewLabel(reviewScope, reviewState)}
+          loadMore={loadMore}
         />
       )}
     </>
+  );
+}
+
+function replaceFeed(
+  feeds: readonly RepositoryFeed[],
+  next: RepositoryFeed,
+): readonly RepositoryFeed[] {
+  return Object.freeze(
+    feeds.map((feed) =>
+      feed.repository === next.repository ? Object.freeze(next) : feed,
+    ),
   );
 }
 
@@ -399,11 +545,13 @@ export function listDiscoveredReviews(
   scope: ReviewScope,
   state: "open" | "closed",
   signal?: AbortSignal,
-): CoordinatedRead<ReviewListResult> {
+  onRepository?: (index: number, feed: RepositoryFeed) => void,
+): CoordinatedRead<DiscoveredReviews> {
   const handles = repositories.map((repository) => repository.handle);
   const requestTokens: string[] = [];
   const inFlight = new Set<string>();
   const outcomes: ReviewListResult[] = [];
+  const feeds: RepositoryFeed[] = handles.map((handle) => pendingFeed(handle));
   let nextIndex = 0;
   // Set when a read comes back cancelled without our signal firing, for
   // example when the coordinator cancels every read on a cache clear.
@@ -425,6 +573,15 @@ export function listDiscoveredReviews(
     } finally {
       if (token !== null) inFlight.delete(token);
     }
+    const outcome = outcomes[index] as ReviewListResult;
+    feeds[index] = appendPage(
+      feeds[index] as RepositoryFeed,
+      outcome.items,
+      outcome.next_cursor ?? null,
+      outcome.failures,
+    );
+    // Each repository's first page is shown as soon as it arrives.
+    if (!aborted() && !stopped) onRepository?.(index, feeds[index] as RepositoryFeed);
   };
   const worker = async (): Promise<void> => {
     while (!aborted() && !stopped && nextIndex < handles.length) {
@@ -434,7 +591,7 @@ export function listDiscoveredReviews(
     }
   };
 
-  const result = new Promise<ReviewListResult>((resolve, reject) => {
+  const result = new Promise<DiscoveredReviews>((resolve, reject) => {
     const cancelled = (): RendererReadError =>
       new RendererReadError(
         "request_cancelled",
@@ -471,10 +628,15 @@ export function listDiscoveredReviews(
         reject(new RendererReadError(first.code, first.message, first.retryable));
         return;
       }
-      resolve({ items, failures });
+      resolve({ items, failures, feeds: Object.freeze([...feeds]) });
     });
   });
   return { requestTokens, result };
+}
+
+/** A combined read: the flat list plus what each repository has loaded. */
+export interface DiscoveredReviews extends ReviewListResult {
+  readonly feeds: readonly RepositoryFeed[];
 }
 
 function repositoryFailure(
@@ -494,7 +656,7 @@ function repositoryFailure(
 type FeatureParameters = Parameters<FeatureContribution["render"]>[0];
 
 function ReviewList({
-  result,
+  feeds,
   navigate,
   sort,
   selected,
@@ -502,8 +664,9 @@ function ReviewList({
   focusTarget,
   releaseFocusTarget,
   emptyLabel,
+  loadMore,
 }: {
-  readonly result: ReviewListResult;
+  readonly feeds: readonly RepositoryFeed[];
   readonly navigate: (route: AppRoute) => void;
   readonly sort: ReviewSort;
   readonly selected: string | null;
@@ -511,9 +674,21 @@ function ReviewList({
   readonly focusTarget: string | null;
   readonly releaseFocusTarget: () => void;
   readonly emptyLabel: string;
+  readonly loadMore: (repository: string) => void;
 }): ReactNode {
-  const presentation = inboxPresentation(result);
+  const presentation = inboxFeedPresentation(feeds, sort);
+  const items = presentation.items;
   const listRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const [nearEnd, setNearEnd] = useState(false);
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const selectRef = useRef(select);
+  selectRef.current = select;
+  const open = useCallback((item: ReviewListItemDto) => {
+    selectRef.current(item.handle);
+    navigateRef.current({ kind: "review", item, panel: "overview" });
+  }, []);
   useEffect(() => {
     if (focusTarget === null) return;
     const target = [
@@ -524,7 +699,36 @@ function ReviewList({
     if (typeof target.scrollIntoView === "function")
       target.scrollIntoView({ block: "nearest" });
     releaseFocusTarget();
-  }, [focusTarget]);
+    // Rows can arrive after the list mounts; retry until the target is shown.
+  }, [focusTarget, items.length]);
+  // Update-time order loads the next page by itself when the end of the list
+  // comes into view. Other orders only load when asked through the button.
+  const autoLoad = sort === "updated";
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const Observer = globalThis.IntersectionObserver;
+    if (!autoLoad || !sentinel || typeof Observer !== "function") return;
+    const observer = new Observer(
+      (entries) => setNearEnd(entries.some((entry) => entry.isIntersecting)),
+      { rootMargin: "0px 0px 600px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [autoLoad, presentation.next !== null]);
+  // A repository whose last page read failed is retried only on request, so
+  // a persistent failure cannot turn scrolling into a request loop.
+  const autoNext =
+    presentation.next !== null &&
+    feeds.some(
+      (feed) =>
+        feed.repository === presentation.next && feed.failures.length === 0,
+    )
+      ? presentation.next
+      : null;
+  useEffect(() => {
+    if (autoLoad && nearEnd && autoNext && presentation.loading === 0)
+      loadMore(autoNext);
+  }, [autoLoad, nearEnd, autoNext, presentation.loading, loadMore]);
   const moveFocus = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (
       event.key !== "ArrowDown" &&
@@ -573,19 +777,71 @@ function ReviewList({
           ref={listRef}
           onKeyDown={moveFocus}
         >
-          {sortReviewItems(result.items, sort).map((item) => (
+          {items.map((item) => (
             <ReviewCard
               key={item.handle}
               item={item}
               selected={item.handle === selected}
-              select={select}
-              navigate={navigate}
+              open={open}
             />
           ))}
         </div>
       )}
+      <div ref={sentinelRef} className="review-list-end" aria-hidden="true" />
+      {(presentation.loading > 0 || presentation.next !== null) && (
+        <div className="review-list-more">
+          {presentation.loading > 0 && (
+            <span role="status" className="review-list-status">
+              Loading more from {presentation.loading}{" "}
+              {presentation.loading === 1 ? "repository" : "repositories"}
+            </span>
+          )}
+          {presentation.next !== null && (
+            <button
+              className="button button-secondary"
+              data-load-more={presentation.next}
+              disabled={presentation.loading > 0}
+              onClick={() => {
+                if (presentation.next) loadMore(presentation.next);
+              }}
+            >
+              Load more
+            </button>
+          )}
+        </div>
+      )}
     </>
   );
+}
+
+/**
+ * What the list shows for the pages loaded so far: the rows in the chosen
+ * order, how many repositories are still reading, and which repository to
+ * read next. In update-time order rows stop at the point where the order
+ * across repositories is known.
+ */
+export function inboxFeedPresentation(
+  feeds: readonly RepositoryFeed[],
+  sort: ReviewSort,
+): {
+  readonly items: readonly ReviewListItemDto[];
+  readonly empty: boolean;
+  readonly partialFailures: number;
+  readonly loading: number;
+  readonly next: string | null;
+} {
+  const items =
+    sort === "updated"
+      ? orderedReviewItems(feeds)
+      : sortReviewItems(mergedReviewItems(feeds), sort);
+  const loading = loadingFeedCount(feeds);
+  return Object.freeze({
+    items,
+    empty: items.length === 0 && loading === 0 && !hasMorePages(feeds),
+    partialFailures: feedFailures(feeds).length,
+    loading,
+    next: nextRepositoryToLoad(feeds)?.repository ?? null,
+  });
 }
 
 export function sortReviewItems(
@@ -638,16 +894,14 @@ function emptyReviewLabel(
     : "No closed or merged reviews match this repository scope.";
 }
 
-function ReviewCard({
+const ReviewCard = memo(function ReviewCard({
   item,
   selected,
-  select,
-  navigate,
+  open,
 }: {
   readonly item: ReviewListItemDto;
   readonly selected: boolean;
-  readonly select: (handle: string) => void;
-  readonly navigate: (route: AppRoute) => void;
+  readonly open: (item: ReviewListItemDto) => void;
 }): ReactNode {
   return (
     <button
@@ -656,10 +910,7 @@ function ReviewCard({
       data-review-number={item.summary.number}
       data-review-handle={item.handle}
       aria-current={selected ? "true" : undefined}
-      onClick={() => {
-        select(item.handle);
-        navigate({ kind: "review", item, panel: "overview" });
-      }}
+      onClick={() => open(item)}
     >
       <span className={`state state-${item.summary.ci_status}`}>
         {item.summary.ci_status}
@@ -673,7 +924,7 @@ function ReviewCard({
       </span>
     </button>
   );
-}
+});
 
 export function inboxPresentation(result: ReviewListResult): {
   readonly empty: boolean;

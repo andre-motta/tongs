@@ -14,12 +14,13 @@ from typing import Protocol, Self, TypeVar, cast
 
 from tongs.cache.store import CacheStore
 from tongs.config import Config, load_config
-from tongs.forges.base import ForgeClient
+from tongs.forges.base import ForgeClient, read_mr_page
 from tongs.forges.models import (
     Commit,
     Discussion,
     ForgeHost,
     MRDetail,
+    MRPage,
     MRSummary,
 )
 from tongs.forges.registry import ForgeRegistry
@@ -28,6 +29,7 @@ from tongs.scanner.repo import ForgeType, Repo
 from tongs.services.ci_mutations import CIMutationService
 from tongs.services.errors import ServiceError, ServiceErrorCode, translate_error
 from tongs.services.models import (
+    MAX_REVIEW_PAGE,
     ForgeCapabilities,
     HostFailure,
     JobRef,
@@ -46,6 +48,7 @@ from tongs.services.models import (
     ReviewSnapshot,
     ServiceEvent,
     ServiceEventKind,
+    review_cursor_page,
     validate_hostname,
 )
 from tongs.services.mr_actions import MRActionService
@@ -563,11 +566,14 @@ class ApplicationSession:
             )
         client = await self._get_client(hostname, "open_repository")
         try:
-            summaries = await self._call(
-                client.list_mrs(project_path, state="open", per_page=1),
+            # One single-item page proves the repository is readable; walking
+            # every page at this size would cost one request per review.
+            page = await self._call(
+                read_mr_page(client, project_path, "open", 1, 1),
                 operation="open_repository",
                 hostname=hostname,
             )
+            summaries = _page_items(page)
             self._validate_summaries(summaries, hostname, expected_repository=ref)
         except asyncio.CancelledError:
             raise
@@ -630,13 +636,28 @@ class ApplicationSession:
 
         semaphore = asyncio.Semaphore(cast(Config, self._config).max_parallel)
 
+        page_number = 1 if query.cursor is None else review_cursor_page(query.cursor)
+        next_cursors: dict[RepositoryRef, str] = {}
+
         async def fetch(
             hostname: str, repository: RepositoryRef | None
         ) -> tuple[tuple[ReviewListItem, ...], HostFailure | None]:
             async with semaphore:
                 try:
                     client = await self._get_client(hostname, "list_reviews")
-                    if query.scope == ReviewScope.ALL_OPEN:
+                    if query.scope == ReviewScope.ALL_OPEN and query.paged:
+                        assert repository is not None
+                        page = await read_mr_page(
+                            client,
+                            repository.project_path,
+                            query.state.value,
+                            page_number,
+                            query.per_page,
+                        )
+                        summaries = _page_items(page)
+                        if page.has_next and page_number < MAX_REVIEW_PAGE:
+                            next_cursors[repository] = str(page_number + 1)
+                    elif query.scope == ReviewScope.ALL_OPEN:
                         assert repository is not None
                         summaries = await client.list_mrs(
                             repository.project_path,
@@ -665,6 +686,14 @@ class ApplicationSession:
                     safe = translate_error(
                         error, operation="list_reviews", hostname=hostname
                     )
+                    if (
+                        query.paged
+                        and query.cursor is not None
+                        and repository is not None
+                    ):
+                        # A failed later page keeps its cursor so the caller
+                        # can read the same page again.
+                        next_cursors[repository] = query.cursor
                     return (), HostFailure(
                         hostname=hostname,
                         code=safe.code,
@@ -680,7 +709,10 @@ class ApplicationSession:
         failures = [failure for _result, failure in results if failure is not None]
         items.sort(key=lambda item: item.summary.updated_at, reverse=True)
         self._require_started()
-        return ReviewPage(tuple(items), tuple(failures))
+        next_cursor = (
+            next_cursors.get(query.repository) if query.repository is not None else None
+        )
+        return ReviewPage(tuple(items), tuple(failures), next_cursor)
 
     async def get_review(self, ref: ReviewRef) -> ReviewSnapshot:
         """Read review detail and bind it to complete revision metadata."""
@@ -1186,3 +1218,17 @@ __all__ = [
     "CacheResource",
     "ForgeRegistryResource",
 ]
+
+
+def _page_items(page: object) -> tuple[MRSummary, ...]:
+    """Return a forge page's items, rejecting anything that is not a page."""
+    if (
+        not isinstance(page, MRPage)
+        or not isinstance(page.items, tuple)
+        or not isinstance(page.has_next, bool)
+    ):
+        raise ServiceError(
+            ServiceErrorCode.INVALID_RESPONSE,
+            "The forge returned an invalid review list.",
+        )
+    return page.items

@@ -269,6 +269,10 @@ the job's latest attempt, and the aggregate checks those results before it
 downloads any evidence and again in the final verifier. A gate artifact left
 over from an earlier attempt of a failing lane therefore never counts.
 
+Gate artifacts are kept for 14 days. A partial re-run after that fails with
+"Artifact not found" for a lane that passed earlier; re-run all jobs or push a
+new commit instead.
+
 **Never retry a flaky gate blindly.** A test that passes on the second attempt
 is a defect in the test, and this repository fixes it rather than rolling the
 dice: see #210, #215 and #218, each of which was a real ordering bug in an

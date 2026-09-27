@@ -26,7 +26,8 @@ checks `tongs --help`, and runs the installed-wheel smoke subset named by
 covers what the wheel must carry: entry points and the MCP dependency gate,
 desktop plugin discovery and resources, packaged schemas and desktop assets,
 the installed sidecar, the MCP server, config, and launcher resolution. The
-step fails if a listed path is missing or contributes no test. The hosted core
+step fails if a listed path is missing or contributes no passing test, or if
+any test is skipped (the MCP server tests skip themselves without `mcp`). The hosted core
 lane runs the whole suite from the checkout. The probe then checks installed
 plugin discovery from both directions: the TUI registry must load the example's
 terminal command, and the desktop registry must report the example provider as

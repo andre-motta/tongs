@@ -172,13 +172,33 @@ def missing_smoke_tests(source: Path) -> list[str]:
     return [path for path in SMOKE_TESTS if not (source / path).is_file()]
 
 
-def smoke_tests_without_results(junit: Path) -> list[str]:
-    """Return the smoke test paths that contributed no testcase to a report."""
+#: A testcase carrying one of these children did not pass.
+_NOT_PASSED = ("skipped", "error", "failure")
+
+
+def _smoke_testcases(junit: Path) -> list[ET.Element]:
     try:
         root = ET.parse(junit).getroot()
     except (OSError, ET.ParseError) as error:
         raise ValueError(f"smoke report is unreadable: {junit.name}") from error
-    classnames = [case.attrib.get("classname", "") for case in root.iter("testcase")]
+    return list(root.iter("testcase"))
+
+
+def _passed(case: ET.Element) -> bool:
+    return all(case.find(tag) is None for tag in _NOT_PASSED)
+
+
+def smoke_tests_without_results(junit: Path) -> list[str]:
+    """Return the smoke test paths that contributed no passing testcase.
+
+    A skipped, erroring or failing testcase is not a result, so a file whose
+    tests all self-skip (the MCP server tests without ``mcp``) counts as empty.
+    """
+    classnames = [
+        case.attrib.get("classname", "")
+        for case in _smoke_testcases(junit)
+        if _passed(case)
+    ]
     empty = []
     for path in SMOKE_TESTS:
         module = path.removesuffix(".py").replace("/", ".")
@@ -187,6 +207,15 @@ def smoke_tests_without_results(junit: Path) -> list[str]:
         ):
             empty.append(path)
     return empty
+
+
+def skipped_smoke_tests(junit: Path) -> list[str]:
+    """Return ``classname::name`` for every skipped testcase in a report."""
+    return [
+        f"{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}"
+        for case in _smoke_testcases(junit)
+        if case.find("skipped") is not None
+    ]
 
 
 def _expose_harness_dependencies(python: Path) -> None:
@@ -292,9 +321,12 @@ def _smoke_tests(python: Path) -> StepResult:
         return _fail_step(result, f"Smoke test paths are missing: {missing}")
     if result.returncode == 0:
         try:
+            skipped = skipped_smoke_tests(junit)
             empty = smoke_tests_without_results(junit)
         except ValueError as error:
             return _fail_step(result, str(error))
+        if skipped:
+            return _fail_step(result, f"Smoke tests were skipped: {skipped[:20]}")
         if empty:
             return _fail_step(result, f"Smoke test paths ran no tests: {empty}")
     return result

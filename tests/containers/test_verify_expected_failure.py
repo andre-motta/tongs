@@ -8,10 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from . import probe
 from .probe import (
     EXPECTED_PLUGIN_EVIDENCE,
     SMOKE_TESTS,
+    StepResult,
     missing_smoke_tests,
+    skipped_smoke_tests,
     smoke_tests_without_results,
     validate_plugin_evidence,
 )
@@ -192,11 +195,24 @@ def test_every_smoke_test_path_exists() -> None:
     assert missing_smoke_tests(REPOSITORY) == []
 
 
-def _write_smoke_junit(path: Path, classnames: list[str]) -> None:
+def _write_smoke_junit(
+    path: Path, classnames: list[str], outcomes: dict[str, str] | None = None
+) -> None:
+    """One testcase per classname; ``outcomes`` adds a non-passing child."""
+
     suite = ET.Element("testsuite")
     for classname in classnames:
-        ET.SubElement(suite, "testcase", {"classname": classname, "name": "t"})
+        case = ET.SubElement(suite, "testcase", {"classname": classname, "name": "t"})
+        outcome = (outcomes or {}).get(classname)
+        if outcome is not None:
+            ET.SubElement(case, outcome, {"message": "mcp not installed"})
     ET.ElementTree(suite).write(path, encoding="unicode")
+
+
+def _smoke_classnames() -> list[str]:
+    return [
+        f"{path.removesuffix('.py').replace('/', '.')}.TestCase" for path in SMOKE_TESTS
+    ]
 
 
 def test_smoke_report_accepts_a_testcase_from_every_path(tmp_path: Path) -> None:
@@ -226,3 +242,54 @@ def test_smoke_report_rejects_malformed_junit(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="smoke report is unreadable"):
         smoke_tests_without_results(report)
+
+
+MCP_SMOKE = "tests/test_mcp/test_server.py"
+
+
+@pytest.mark.parametrize("outcome", ["skipped", "error", "failure"])
+def test_a_smoke_path_whose_only_testcase_did_not_pass_ran_nothing(
+    tmp_path: Path, outcome: str
+) -> None:
+    """The MCP server tests self-skip without ``mcp``; a skipped, erroring or
+    failing testcase must not count as that path's result."""
+
+    report = tmp_path / "smoke.junit.xml"
+    classnames = _smoke_classnames()
+    mcp = classnames[SMOKE_TESTS.index(MCP_SMOKE)]
+    _write_smoke_junit(report, classnames, {mcp: outcome})
+
+    assert smoke_tests_without_results(report) == [MCP_SMOKE]
+    assert skipped_smoke_tests(report) == (
+        [f"{mcp}::t"] if outcome == "skipped" else []
+    )
+
+
+def test_the_smoke_step_fails_on_a_skipped_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A skip-only MCP smoke run exits 0 under pytest, so the step itself must
+    turn the skip into a failure."""
+
+    classnames = _smoke_classnames()
+    mcp = classnames[SMOKE_TESTS.index(MCP_SMOKE)]
+
+    def fake_run(name: str, command: list[str], **_: object) -> StepResult:
+        _write_smoke_junit(
+            tmp_path / "smoke-tests.junit.xml", classnames, {mcp: "skipped"}
+        )
+        (tmp_path / f"{name}.stderr.txt").write_text("")
+        return StepResult(
+            name, command, 0, 0.0, f"{name}.stdout.txt", f"{name}.stderr.txt"
+        )
+
+    monkeypatch.setattr(probe, "OUTPUT", tmp_path)
+    monkeypatch.setattr(probe, "SOURCE", REPOSITORY)
+    monkeypatch.setattr(probe, "_run", fake_run)
+
+    result = probe._smoke_tests(Path("/unused/python"))
+
+    assert result.returncode == 1
+    stderr = (tmp_path / result.stderr).read_text()
+    assert "Smoke tests were skipped" in stderr
+    assert f"{mcp}::t" in stderr

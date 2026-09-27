@@ -3,7 +3,7 @@ import type {
   AcceptedResult, AssetDescriptor, CommitsResult, DesktopBridge, DesktopEvent,
   DesktopRead, DiffPage, DiscussionsPage, InvokePluginParams, JobsResult,
   JsonValue, ListPipelinesParams, ListReviewPipelinesParams, ListReviewsParams,
-  LocationParams, LogPage, OpenDiffParams, OpenLogParams, OpenRepositoryParams,
+  LocationParams, LogPage, ServiceStatusDto, OpenDiffParams, OpenLogParams, OpenRepositoryParams,
   PageParams, PipelinesResult, PluginResult, PluginsResult,
   RepositoryDto, RepositoryListResult, ReviewListResult, ReviewSnapshotDto,
 } from "../shared/bridge.js";
@@ -56,6 +56,7 @@ const IPC_CHANNELS = Object.freeze({
   listPipelines: "tongs:pipelines.list", listReviewPipelines: "tongs:review-pipelines.list", listJobs: "tongs:jobs.list", openLog: "tongs:logs.open", pageLog: "tongs:logs.page",
   listPlugins: "tongs:plugins.list", invokePlugin: "tongs:plugins.invoke", setLocation: "tongs:host.set-location", listAssets: "tongs:assets.list",
   cancelRead: "tongs:read.cancel", openExternal: "tongs:external.open", event: "tongs:event",
+  serviceStatus: "tongs:service.status", getServiceStatus: "tongs:service.status.get",
 } as const);
 const CI_IPC_CHANNELS = Object.freeze({
   capabilities: "tongs:ci.capabilities",
@@ -170,6 +171,12 @@ const bridge: DesktopBridge = Object.freeze({
     const wrapped = (_event: unknown, value: JsonValue): void => listener(value as unknown as DesktopEvent);
     ipcRenderer.on(IPC_CHANNELS.event, wrapped);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.event, wrapped);
+  },
+  getServiceStatus: async (): Promise<ServiceStatusDto> => ipcRenderer.invoke(IPC_CHANNELS.getServiceStatus) as Promise<ServiceStatusDto>,
+  onServiceStatus: (listener: (status: ServiceStatusDto) => void): (() => void) => {
+    const wrapped = (_event: unknown, value: JsonValue): void => listener(value as unknown as ServiceStatusDto);
+    ipcRenderer.on(IPC_CHANNELS.serviceStatus, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.serviceStatus, wrapped);
   },
   openExternal: async (url: string): Promise<boolean> => await ipcRenderer.invoke(IPC_CHANNELS.openExternal, url) === true,
   copyReviewUrl: async (review: string): Promise<CopyReviewUrlResult> => ipcRenderer.invoke(UTILITY_IPC_CHANNELS.copyReviewUrl, review) as Promise<CopyReviewUrlResult>,

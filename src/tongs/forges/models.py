@@ -122,6 +122,14 @@ class MRSummary:
 
 
 @dataclass(frozen=True)
+class MRPage:
+    """One page of a repository's review list, newest update first."""
+
+    items: tuple[MRSummary, ...]
+    has_next: bool
+
+
+@dataclass(frozen=True)
 class MRDetail(MRSummary):
     """Full MR with description and metadata. Still no diff/comments."""
 

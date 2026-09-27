@@ -9,6 +9,8 @@ import {
   type DesktopEvent,
   type JsonObject,
   type JsonValue,
+  type ServiceState,
+  type ServiceStatusDto,
 } from "../shared/bridge.js";
 import { REVIEW_OPERATIONS } from "./review.js";
 import { UTILITY_PROTOCOL_METHODS } from "../shared/utilities.js";
@@ -108,6 +110,7 @@ export class SidecarTransport extends EventEmitter {
   private expectedExit = false;
   private failureReported = false;
   private closeRequested = false;
+  private state: ServiceState = "stopped";
 
   constructor(
     launch: DesktopLaunchConfig,
@@ -130,6 +133,11 @@ export class SidecarTransport extends EventEmitter {
   /** The JSON budget negotiated in the current session's handshake. */
   get negotiatedJsonLimits(): JsonLimits {
     return this.jsonLimits;
+  }
+
+  /** Whether the service completed its handshake and has not stopped since. */
+  get serviceState(): ServiceState {
+    return this.state;
   }
 
   get processId(): number | undefined {
@@ -253,6 +261,16 @@ export class SidecarTransport extends EventEmitter {
       await this.stop();
       throw error;
     }
+    if (this.child === child && this.generation === generation && !this.failureReported) {
+      this.setState("connected");
+    }
+  }
+
+  /** Emits `status` once per change, so listeners see each stop and reconnect. */
+  private setState(state: ServiceState): void {
+    if (this.state === state) return;
+    this.state = state;
+    this.emit("status", state);
   }
 
   private request<T extends JsonValue>(
@@ -459,6 +477,7 @@ export class SidecarTransport extends EventEmitter {
     }
     this.pending.clear();
     if (!child.killed) child.kill("SIGTERM");
+    this.setState("stopped");
     this.emit("crash", error);
   }
 
@@ -484,6 +503,7 @@ export class SidecarTransport extends EventEmitter {
   private async stopOnce(): Promise<void> {
     const child = this.child;
     this.expectedExit = true;
+    this.setState("stopped");
     const stopped = new SidecarError("shutting_down", "The desktop service is stopping.");
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
@@ -503,6 +523,47 @@ export class SidecarTransport extends EventEmitter {
     if (await waitForExit(child, 1_000)) return;
     child.kill("SIGKILL");
     await waitForExit(child, 1_000);
+  }
+}
+
+/**
+ * Relays a transport's connection state to the renderer. It lives beside the
+ * transport, so the packaged main-process module list stays the same. Every
+ * change gets a larger revision, so a renderer that asks for the current state
+ * while a change is in flight can drop whichever of the two answers is older.
+ */
+export class ServiceStatusPublisher {
+  #revision = 0;
+  #state: ServiceState;
+  #listener: ((state: ServiceState) => void) | null = null;
+
+  constructor(
+    private readonly source: SidecarTransport,
+    private readonly publish: (status: ServiceStatusDto) => void,
+  ) {
+    this.#state = source.serviceState;
+  }
+
+  get current(): ServiceStatusDto {
+    return { state: this.#state, revision: this.#revision };
+  }
+
+  start(): void {
+    if (this.#listener) return;
+    this.#listener = (state) => {
+      if (state === this.#state) return;
+      this.#state = state;
+      this.#revision += 1;
+      this.publish(this.current);
+    };
+    this.source.on("status", this.#listener);
+    // A change between construction and subscription still reaches the renderer.
+    this.#listener(this.source.serviceState);
+  }
+
+  dispose(): void {
+    if (this.#listener) this.source.off("status", this.#listener);
+    this.#listener = null;
   }
 }
 

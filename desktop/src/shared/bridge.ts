@@ -54,8 +54,9 @@ export interface ReviewDetailDto extends ReviewSummaryDto {
 }
 export interface ReviewListItemDto { readonly handle: OpaqueHandle; readonly repository: OpaqueHandle; readonly summary: ReviewSummaryDto; }
 export interface ReviewFailureDto extends ServiceErrorDto { readonly repository: OpaqueHandle | null; }
-export interface ListReviewsParams { readonly scope: string; readonly repository?: OpaqueHandle; readonly state?: string; readonly per_page?: number; }
-export interface ReviewListResult { readonly items: readonly ReviewListItemDto[]; readonly failures: readonly ReviewFailureDto[]; }
+export interface ListReviewsParams { readonly scope: string; readonly repository?: OpaqueHandle; readonly state?: string; readonly per_page?: number; readonly cursor?: string; }
+/** `next_cursor` is set when a repository-scoped All Open read has another page. */
+export interface ReviewListResult { readonly items: readonly ReviewListItemDto[]; readonly failures: readonly ReviewFailureDto[]; readonly next_cursor?: string | null; }
 export interface ReviewSnapshotDto {
   readonly handle: OpaqueHandle; readonly repository: OpaqueHandle;
   readonly detail: ReviewDetailDto; readonly capabilities: ForgeCapabilitiesDto;
@@ -109,6 +110,10 @@ export interface LocationParams { readonly location: JsonObject | null; }
 export interface AcceptedResult { readonly accepted: true; }
 
 export interface DesktopEvent { readonly sequence: number; readonly name: string; readonly data: JsonValue; }
+/** Whether the main process currently holds a live connection to the local service. */
+export type ServiceState = "connected" | "stopped";
+/** A service state change; `revision` only grows, so a stale snapshot can be ignored. */
+export interface ServiceStatusDto { readonly state: ServiceState; readonly revision: number; }
 export interface AssetDescriptor { readonly source: "core" | "plugin"; readonly asset_id: string; readonly plugin_id: string | null; readonly kind: string; readonly media_type: string; readonly byte_count: number; readonly sha256: string; readonly url: string; }
 export interface DesktopRead<T> { readonly requestToken: string; readonly result: Promise<T>; }
 
@@ -133,6 +138,8 @@ export interface DesktopBridge extends CIDesktopBridge, ReviewDesktopBridge, Wor
   listAssets(): DesktopRead<readonly AssetDescriptor[]>;
   cancelRead(requestToken: string): Promise<boolean>;
   onEvent(listener: (event: DesktopEvent) => void): () => void;
+  getServiceStatus(): Promise<ServiceStatusDto>;
+  onServiceStatus(listener: (status: ServiceStatusDto) => void): () => void;
   openExternal(url: string): Promise<boolean>;
 }
 
@@ -145,6 +152,7 @@ export const IPC_CHANNELS = Object.freeze({
   openLog: "tongs:logs.open", pageLog: "tongs:logs.page", listPlugins: "tongs:plugins.list",
   invokePlugin: "tongs:plugins.invoke", setLocation: "tongs:host.set-location", listAssets: "tongs:assets.list",
   cancelRead: "tongs:read.cancel", openExternal: "tongs:external.open", event: "tongs:event",
+  serviceStatus: "tongs:service.status", getServiceStatus: "tongs:service.status.get",
 } as const);
 
 /**

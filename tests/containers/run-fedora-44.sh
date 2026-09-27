@@ -94,7 +94,20 @@ podman build \
 image_id=$(<"$image_iid_file")
 podman image inspect "$image_id" >"$output_dir/harness-image.inspect.json"
 
+container_name="tongs-fedora44-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$$"
+stop_probe() {
+    local status=$1
+    trap - INT TERM
+    podman stop --time 5 "$container_name" >/dev/null 2>&1 || true
+    exit "$status"
+}
+trap 'stop_probe 130' INT
+trap 'stop_probe 143' TERM
+
 podman run --rm \
+    --name "$container_name" \
+    --init \
+    --stop-timeout 5 \
     --cap-drop=all \
     --network=none \
     --read-only \

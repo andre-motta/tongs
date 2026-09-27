@@ -12,6 +12,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.content import Content
 from textual.screen import ModalScreen
 from textual.widgets import Footer, OptionList, Static, TextArea
 from textual.widgets._option_list import Option
@@ -239,7 +240,7 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
             )
         else:
             help_text = "Ctrl+S submit | e edit | x remove | D discard (destructive actions require two presses)"
-        self.query_one("#review-submit-help", Static).update(help_text)
+        self.query_one("#review-submit-help", Static).update(Content(help_text))
 
     def action_close(self) -> None:
         body = self.query_one("#review-submit-body", TextArea).text
@@ -269,7 +270,9 @@ class ReviewSubmitScreen(ModalScreen[ReviewSubmitAction | None]):
             self.notify("This draft cannot start a new submission.", severity="warning")
             return
         if not self.supports_submission:
-            self.notify(self.submission_unavailable_reason, severity="warning")
+            self.notify(
+                self.submission_unavailable_reason, severity="warning", markup=False
+            )
             return
         body = self.query_one("#review-submit-body", TextArea).text
         if self._verdict is DraftVerdict.REQUEST_CHANGES and not body.strip():

@@ -6,7 +6,6 @@ import difflib
 from enum import Enum
 from typing import ClassVar
 
-from rich.markup import escape
 from rich.style import Style
 from rich.syntax import Syntax
 from rich.text import Text
@@ -15,6 +14,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.color import Color as TextualColor
 from textual.containers import Horizontal, Vertical
+from textual.content import Content
 from textual.message import Message
 from textual.strip import Strip
 from textual.style import Style as VisualStyle
@@ -89,7 +89,9 @@ class DiffFileTree(Tree):
                 "renamed": "[blue]R[/]",
             }.get(f.status.value, "?")
             basename = f.new_path.rsplit("/", 1)[-1]
-            label = f"{icon} {escape(basename)}"
+            # The file name is appended as plain Text so Tree never parses it
+            # as markup; a path such as "pages/[id].tsx" must stay intact.
+            label = Text.assemble(Text.from_markup(icon), " ", basename)
             stats = f"[green]+{f.additions}[/] [red]-{f.deletions}[/]"
             file_discs = disc_map.get(f.new_path, [])
             unresolved = sum(1 for d in file_discs if not d.is_resolved)
@@ -398,7 +400,8 @@ class DiffOptionList(OptionList):
             self._pending_resolve = disc.id
             action = "Unresolve" if disc.is_resolved else "Resolve"
             self.app.notify(
-                f"{action} thread by @{disc.root_comment.author.username}? Press R again."
+                f"{action} thread by @{disc.root_comment.author.username}? Press R again.",
+                markup=False,
             )
 
     def action_comment(self) -> None:
@@ -1450,9 +1453,14 @@ class DiffPanel(Widget):
 
             header = self.query_one("#diff-file-header", Static)
             header.update(
-                f"[bold]{escape(file.new_path)}[/]  "
-                f"[green]+{file.additions}[/] [red]-{file.deletions}[/]  "
-                f"[dim]{file.language or ''}[/]"
+                Content.from_markup(
+                    "[bold]$path[/]  [green]+$additions[/] [red]-$deletions[/]  "
+                    "[dim]$language[/]",
+                    path=file.new_path,
+                    additions=file.additions,
+                    deletions=file.deletions,
+                    language=file.language or "",
+                )
             )
 
             content = self.query_one("#diff-content", DiffContent)

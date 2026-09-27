@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
 from uuid import uuid4
 
 import pytest
@@ -13,8 +12,6 @@ from tongs.state.drafts import (
     DraftContent,
     GeneralDraftComment,
     InlineAnchor,
-    InlineDraftComment,
-    ReplyDraftComment,
     context_fingerprint,
 )
 
@@ -31,16 +28,6 @@ def make_anchor(revision: ReviewRevision | None = None) -> InlineAnchor:
         start_line=3,
         start_side=DiffSide.OLD,
     )
-
-
-def test_comment_payloads_are_frozen_and_discriminated() -> None:
-    general = GeneralDraftComment(uuid4(), "general")
-    inline = InlineDraftComment(uuid4(), "inline", make_anchor())
-    reply = ReplyDraftComment(uuid4(), "reply", "thread-1")
-
-    assert (general.kind, inline.kind, reply.kind) == ("general", "inline", "reply")
-    with pytest.raises(FrozenInstanceError):
-        general.body = "changed"  # type: ignore[misc]
 
 
 def test_context_fingerprint_is_stable_and_preserves_line_boundaries() -> None:

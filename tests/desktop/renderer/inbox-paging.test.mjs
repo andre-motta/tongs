@@ -412,7 +412,11 @@ async function loadTwoPages(bridge) {
   await waitFor(() => assert.equal(bridge.pending.size, 1));
   bridge.respond("repo-a", page(["A10", "A09"], "cursor-a2"));
   await view.findByText("A10");
-  assert.equal(inboxLoadedDepth("inbox:all:all_open:open", "repo-a"), 2);
+  // The depth is recorded when the page is appended, which can land a commit
+  // after its rows first render on a busy runner.
+  await waitFor(() =>
+    assert.equal(inboxLoadedDepth("inbox:all:all_open:open", "repo-a"), 2),
+  );
   return view;
 }
 
@@ -445,7 +449,7 @@ test("returning from a review opened on page 2 reloads that page and focuses the
     assert.equal(document.activeElement?.dataset.reviewHandle, "review-A10"),
   );
   assert.deepEqual(cardTitles(view), ["A12", "A11", "A10", "A09"]);
-  assert.equal(inboxPendingSelectionFocus("all"), null);
+  await waitFor(() => assert.equal(inboxPendingSelectionFocus("all"), null));
   assert.equal(
     view.getByText("A10").closest("button").getAttribute("aria-current"),
     "true",

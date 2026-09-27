@@ -56,13 +56,12 @@ class TestParseRemoteUrl:
         assert remote.hostname == "gitlab.cee.redhat.com"
         assert remote.forge_type == ForgeType.GITLAB
 
-    def test_internal_gitlab_auto_detect(self):
+    def test_unconfigured_gitlab_like_host_not_guessed(self):
         remote = parse_remote_url(
             "origin",
             "https://gitlab.cee.redhat.com/alustosa/app-interface",
         )
-        assert remote is not None
-        assert remote.forge_type == ForgeType.GITLAB
+        assert remote is None
 
     def test_altssh_gitlab_normalized(self):
         remote = parse_remote_url(
@@ -91,8 +90,16 @@ class TestParseRemoteUrl:
         assert remote.hostname == "github.com"
         assert remote.repo_path == "andre-motta/tongs"
 
-    def test_github_enterprise(self):
+    def test_unconfigured_github_like_host_not_guessed(self):
         remote = parse_remote_url("origin", "https://github.mycompany.com/org/repo.git")
+        assert remote is None
+
+    def test_configured_github_enterprise(self):
+        remote = parse_remote_url(
+            "origin",
+            "https://github.mycompany.com/org/repo.git",
+            extra_github_hosts=frozenset({"github.mycompany.com"}),
+        )
         assert remote is not None
         assert remote.forge_type == ForgeType.GITHUB
 

@@ -95,17 +95,11 @@ def _detect_forge_type(
     extra_gitlab_hosts: frozenset[str] = frozenset(),
     extra_github_hosts: frozenset[str] = frozenset(),
 ) -> ForgeType | None:
-    """Detect forge type from hostname."""
+    """Detect forge type from a known or configured hostname; never guess."""
     if hostname in GITHUB_HOSTS or hostname in extra_github_hosts:
         return ForgeType.GITHUB
 
     if hostname in GITLAB_HOSTS or hostname in extra_gitlab_hosts:
         return ForgeType.GITLAB
-
-    if "gitlab" in hostname:
-        return ForgeType.GITLAB
-
-    if "github" in hostname:
-        return ForgeType.GITHUB
 
     return None

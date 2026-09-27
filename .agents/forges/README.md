@@ -88,7 +88,7 @@ class MRDetail(MRSummary):
 
 - Clients are created lazily on first `get_client(hostname)` call and cached
 - `get_host(hostname)` resolves `ForgeHost` with correct API base URL
-- `_detect_type(hostname)` uses explicit host sets + substring heuristic
+- `_detect_type(hostname)` maps only github.com, gitlab.com and configured hosts; it never guesses from the hostname
 - `active_hostnames()` returns all known hosts (defaults + configured)
 - `close_all()` closes all cached httpx clients (owned by `ApplicationSession.close()`)
 

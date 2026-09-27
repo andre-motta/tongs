@@ -115,6 +115,14 @@ export function nextRepositoryToLoad(
   return best;
 }
 
+/**
+ * Whether a repository's first page has settled. A later page read marks the
+ * feed loading again, but its rows stay on screen while it runs.
+ */
+export function firstPageArrived(feed: RepositoryFeed): boolean {
+  return !feed.loading || feed.items.length > 0 || feed.failures.length > 0;
+}
+
 export function loadingFeedCount(feeds: readonly RepositoryFeed[]): number {
   return feeds.filter((feed) => feed.loading).length;
 }

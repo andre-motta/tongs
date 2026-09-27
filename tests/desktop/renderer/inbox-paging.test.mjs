@@ -336,6 +336,45 @@ test("a failed page is not read again until asked", async () => {
   }
 });
 
+test("a refresh that fails after cancelling a pending load more leaves Load more usable", async () => {
+  const bridge = pagingBridge();
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.pending.size, 1));
+  bridge.respond("repo-a", page(["A12", "A11"], "cursor-a1"));
+  await view.findByText("A12");
+
+  fireEvent.click(view.getByRole("button", { name: "Load more" }));
+  await waitFor(() => assert.equal(bridge.calls.length, 2));
+  assert.equal(bridge.calls[1].cursor, "cursor-a1");
+  assert.equal(
+    (await view.findByText("Loading more from 1 repository")).textContent,
+    "Loading more from 1 repository",
+  );
+
+  fireEvent.click(view.getByRole("button", { name: "Refresh reviews" }));
+  await waitFor(() => assert.equal(bridge.calls.length, 3));
+  assert.equal(bridge.calls[2].cursor, undefined);
+  bridge.fail("repo-a", new Error("controlled refresh failure"));
+  await view.findByText("Refresh failed. Showing the previous review list.");
+
+  assert.deepEqual(cardTitles(view), ["A12", "A11"]);
+  assert.equal(view.queryAllByText(/Loading more from/).length, 0);
+  const loadMore = view.getByRole("button", { name: "Load more" });
+  assert.equal(loadMore.disabled, false);
+  fireEvent.click(loadMore);
+  await waitFor(() => assert.equal(bridge.calls.length, 4));
+  assert.equal(bridge.calls[3].repository, "repo-a");
+  assert.equal(bridge.calls[3].cursor, "cursor-a1");
+  bridge.respond("repo-a", page(["A10"], null));
+  await view.findByText("A10");
+  assert.deepEqual(cardTitles(view), ["A12", "A11", "A10"]);
+});
+
 test("with no repositories the list shows its empty label once the read settles", async () => {
   const bridge = pagingBridge();
   const view = render(

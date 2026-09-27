@@ -25,6 +25,7 @@ import { useRetainedRead } from "../../core/use-read.js";
 import {
   appendPage,
   feedFailures,
+  firstPageArrived,
   hasMorePages,
   loadingFeedCount,
   mergedReviewItems,
@@ -321,7 +322,8 @@ function InboxResults({
   // Bumped by every new combined read, so a page that belongs to an older
   // read (or a later page requested before a refresh) is dropped.
   const readGeneration = useRef(0);
-  const moreReads = useRef(new Set<string>());
+  // Page reads in flight past the first page, by query key to repository.
+  const moreReads = useRef(new Map<string, string>());
   // Every page loaded so far, one entry per repository in discovery order.
   const [feeds, setFeeds] = useState<readonly RepositoryFeed[] | null>(null);
   const feedsRef = useRef(feeds);
@@ -331,8 +333,24 @@ function InboxResults({
   const liveRead = useRef(false);
   const hasValue = useRef(false);
   const cancelMoreReads = useCallback(() => {
-    for (const key of moreReads.current) void queries.cancel(key);
+    const cancelled = new Set(moreReads.current.values());
+    for (const key of moreReads.current.keys()) void queries.cancel(key);
     moreReads.current.clear();
+    if (cancelled.size === 0) return;
+    // A cancelled page read never settles into its feed, so clear its loading
+    // flag here. Otherwise a refresh that fails keeps the old feeds on screen
+    // with that repository stuck loading and Load more disabled.
+    setFeeds((current) =>
+      current?.some((feed) => feed.loading && cancelled.has(feed.repository))
+        ? Object.freeze(
+            current.map((feed) =>
+              feed.loading && cancelled.has(feed.repository)
+                ? Object.freeze({ ...feed, loading: false })
+                : feed,
+            ),
+          )
+        : current,
+    );
   }, [queries]);
   const begin = useCallback(() => {
     discoveredRead.current?.abort();
@@ -417,7 +435,7 @@ function InboxResults({
         return;
       const generation = readGeneration.current;
       const cursor = feed.cursor;
-      moreReads.current.add(key);
+      moreReads.current.set(key, target);
       const update = (
         change: (current: RepositoryFeed) => RepositoryFeed,
       ): void =>
@@ -474,7 +492,7 @@ function InboxResults({
   // empty label) is shown once the read itself has finished.
   const listReady =
     shown !== null &&
-    (shown.some((feed) => !feed.loading) ||
+    (shown.some(firstPageArrived) ||
       (shown.length === 0 && !state.loading && Boolean(state.value)));
   return (
     <>
@@ -487,7 +505,7 @@ function InboxResults({
           {state.loading && state.value ? "Refreshing…" : "Refresh reviews"}
         </button>
       </div>
-      {state.loading && !shown?.some((feed) => !feed.loading) && (
+      {state.loading && !shown?.some(firstPageArrived) && (
         <Notice kind="loading">
           {repositoriesReady
             ? "Loading reviews from the local service…"

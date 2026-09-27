@@ -327,14 +327,99 @@ test("flags a URL among other words and leaves bare file names unmarked", () => 
   );
 });
 
-test("compares link text to the destination by origin and host", () => {
+test("fails closed on padded long link text and reads image alt text", () => {
+  const padded = `github.com${" ".repeat(2100)}x`;
+  const view = renderMarkdown(
+    [
+      `[${padded}](https://evil.example/long)`,
+      "[![https://github.com/org/repo](https://github.com/logo.png)](https://evil.example/img)",
+      "[![project logo](https://github.com/logo.png)](https://evil.example/logo)",
+      "[github.com.](https://evil.example/dot)",
+      "[http://github.com/x](https://github.com/x)",
+    ].join("\n\n"),
+  );
+  const links = view.getAllByRole("link");
+  assert.equal(links.length, 5);
+  const described = links.map((link) => {
+    const id = link.getAttribute("aria-describedby") ?? "";
+    const element = view.container.ownerDocument.getElementById(id);
+    return {
+      title: link.getAttribute("title"),
+      description: element?.textContent ?? "",
+      hidden: element?.hasAttribute("hidden") ?? null,
+    };
+  });
+  assert.deepEqual(described, [
+    { title: "https://evil.example/long", description: "(opens evil.example)", hidden: false },
+    { title: "https://evil.example/img", description: "(opens evil.example)", hidden: false },
+    { title: "https://evil.example/logo", description: "Opens evil.example", hidden: true },
+    { title: "https://evil.example/dot", description: "(opens evil.example)", hidden: false },
+    { title: "https://github.com/x", description: "Opens github.com", hidden: true },
+  ]);
+  assert.equal(links[1].textContent, "[Image: https://github.com/org/repo]");
+  assert.equal(
+    view.container.querySelectorAll(".safe-markdown-link-host-mismatch").length,
+    3,
+  );
+});
+
+test("marks only the padded long link text", () => {
+  const view = renderMarkdown(`[github.com${" ".repeat(2100)}x](https://evil.example/)`);
+  assert.equal(view.getAllByRole("link").length, 1);
+  assert.equal(view.container.textContent.includes("(opens evil.example)"), true);
+  assert.equal(
+    view.container.querySelectorAll(".safe-markdown-link-host-mismatch").length,
+    1,
+  );
+});
+
+test("leaves file names, file references, and code identifiers unmarked", () => {
+  const view = renderMarkdown(
+    [
+      "[setup.py:42](https://evil.example/a)",
+      "[README.md#install](https://evil.example/b)",
+      "[app.tsx#L10](https://evil.example/c)",
+      "[tongs.config.toml](https://evil.example/d)",
+      "[vite.config.ts](https://evil.example/e)",
+      "[foo.bar.baz](https://evil.example/f)",
+      "[evil.dev](https://github.com/g)",
+      "[docs.github.io](https://evil.example/h)",
+      "[github.com:8443](https://github.com/i)",
+    ].join("\n\n"),
+  );
+  const links = view.getAllByRole("link");
+  assert.equal(links.length, 9);
+  const descriptions = links.map((link) => {
+    const id = link.getAttribute("aria-describedby") ?? "";
+    return view.container.ownerDocument.getElementById(id)?.textContent ?? "";
+  });
+  assert.deepEqual(descriptions, [
+    "Opens evil.example",
+    "Opens evil.example",
+    "Opens evil.example",
+    "Opens evil.example",
+    "Opens evil.example",
+    "Opens evil.example",
+    "(opens github.com)",
+    "(opens evil.example)",
+    "(opens github.com)",
+  ]);
+  assert.equal(
+    view.container.querySelectorAll(".safe-markdown-link-host-mismatch").length,
+    3,
+  );
+});
+
+test("compares link text to the destination by host", () => {
   assert.equal(externalLinkHost("https://example.com/a"), "example.com");
   assert.equal(externalLinkHost("https://b\u00fccher.example/"), "xn--bcher-kva.example");
   const cases = [
     ["https://github.com/a", "https://github.com/b", false],
     ["HTTPS://GitHub.com/a", "https://github.com/b", false],
     ["https://github.com:444/a", "https://github.com/a", true],
-    ["http://github.com/a", "https://github.com/a", true],
+    ["http://github.com/a", "https://github.com/a", false],
+    ["http://github.com/x", "https://github.com/x", false],
+    ["http://github.com:443/x", "https://github.com/x", true],
     ["https://github.com.evil.example/a", "https://github.com/a", true],
     ["github.com", "https://github.com/", false],
     ["github.com/a", "https://gitlab.com/a", true],
@@ -344,7 +429,22 @@ test("compares link text to the destination by origin and host", () => {
     ["README.md", "https://github.com/", false],
     ["setup.py", "https://github.com/org/repo/blob/main/setup.py", false],
     ["notes.txt", "https://evil.example/", false],
-    ["setup.py/", "https://evil.example/", true],
+    ["setup.py/", "https://evil.example/", false],
+    ["setup.py:42", "https://evil.example/", false],
+    ["README.md#install", "https://evil.example/", false],
+    ["app.tsx#L10", "https://evil.example/", false],
+    ["tongs.config.toml", "https://evil.example/", false],
+    ["vite.config.ts", "https://evil.example/", false],
+    ["foo.bar.baz", "https://evil.example/", false],
+    ["see foo.bar.baz in vite.config.ts", "https://evil.example/", false],
+    ["me@corp.internal", "https://evil.example/", false],
+    ["github.com/org/repo", "https://evil.example/", true],
+    ["github.com.", "https://evil.example/", true],
+    ["github.com,", "https://evil.example/", true],
+    ["(github.com)", "https://evil.example/", true],
+    ["github.com.", "https://github.com/", false],
+    ["docs.xn--gthub-cta.com", "https://github.com/", true],
+    ["evil.xn--p1ai", "https://github.com/", true],
     ["docs.github.io", "https://evil.example/", true],
     ["evil.dev", "https://github.com/", true],
     ["github.com:8443", "https://github.com/", true],
@@ -368,6 +468,8 @@ test("compares link text to the destination by origin and host", () => {
     ["1.0.2", "https://github.com/", false],
     ["e.g.", "https://github.com/", false],
     ["github.com%/org", "https://evil.example/x", true],
+    ["setup.py:abc", "https://evil.example/x", false],
+    [`github.com${" ".repeat(2100)}x`, "https://evil.example/", true],
   ];
   for (const [text, destination, expected] of cases) {
     assert.equal(

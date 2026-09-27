@@ -22,13 +22,14 @@ const MAX_EXTERNAL_URL_LENGTH = 4096;
 const MAX_LINK_TEXT_LENGTH = 2048;
 // Unicode full stops that the URL host parser maps to "." (UTS 46).
 const HOST_LABEL_SEPARATOR = /[.\u3002\uFF0E\uFF61]/u;
-// A parsed top-level label that reads like a domain: letters, or punycode.
-const HOST_LIKE_TOP_LABEL = /^(?:[a-z]{2,}|xn--[a-z0-9-]+)$/u;
-// Bare two-label text such as "setup.py" or "README.md" reads as a file name.
-// Schemeless text is treated as a host only when it has a path, query,
-// fragment, or port after the host, has three or more labels, or ends in one of
-// these common web top-level labels (or a punycode one). The list leaves out
-// labels that double as common file extensions, such as md, py, sh, and rs.
+// Link text without a scheme is a host candidate only when its top-level label
+// is one of these common web labels or a punycode (xn--) label, however many
+// labels it has. A port, path, query, or fragment after the name does not by
+// itself make it a host, so file names, file:line references, and dotted code
+// identifiers such as setup.py:42, README.md#install, vite.config.ts, and
+// foo.bar.baz stay unmarked. The list leaves out labels that double as common
+// file extensions, such as md, py, sh, ts, and rs. Text with an explicit
+// scheme is always parsed as a URL.
 const WEB_TOP_LABELS: ReadonlySet<string> = new Set([
   "com",
   "org",
@@ -290,36 +291,38 @@ export function externalLinkHost(destination: string): string {
 }
 
 /**
- * Reports whether link text reads as a URL on a different origin than the
- * destination, so a spoofed forge address can be flagged before activation.
+ * Reports whether link text reads as a URL or host naming a different host
+ * (hostname plus effective port) than the destination, so a spoofed forge
+ * address can be flagged before activation. The scheme is not compared, so
+ * http://github.com/x text for an https://github.com/x destination is not
+ * flagged. Text longer than the inspection limit fails closed and is flagged.
  */
 export function linkTextNamesOtherOrigin(
   text: string,
   destination: string,
 ): boolean {
-  const trimmed = text.trim();
-  if (trimmed.length === 0 || trimmed.length > MAX_LINK_TEXT_LENGTH) {
-    return false;
-  }
   let target: URL;
   try {
     target = new URL(destination);
   } catch {
     return false;
   }
-  if (!/\s/u.test(trimmed)) return tokenNamesOtherOrigin(trimmed, target);
-  // Text with several words is flagged when any word, stripped of wrapping
-  // punctuation, reads as a URL or host on a different origin.
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed.length > MAX_LINK_TEXT_LENGTH) return true;
+  // The text is flagged when any word, stripped of wrapping punctuation such as
+  // "(github.com)" or a trailing "github.com.", reads as a URL or host on a
+  // different host.
   return trimmed
     .split(/\s+/u)
     .map((word) => word.replace(WRAPPING_PUNCTUATION, ""))
-    .some((word) => word.length > 0 && tokenNamesOtherOrigin(word, target));
+    .some((word) => word.length > 0 && tokenNamesOtherHost(word, target));
 }
 
-function tokenNamesOtherOrigin(token: string, target: URL): boolean {
+function tokenNamesOtherHost(token: string, target: URL): boolean {
   if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(token)) {
     try {
-      return new URL(token).origin !== target.origin;
+      return new URL(token).host !== target.host;
     } catch {
       return false;
     }
@@ -336,27 +339,29 @@ function schemelessTextNamesOtherHost(text: string, target: URL): boolean {
   try {
     parsed = new URL(`https://${text}`);
   } catch {
-    // Unparseable text that still reads like a dotted name gets the marker.
-    const textLabels = hostPart.split(HOST_LABEL_SEPARATOR);
+    // Unparseable text still gets the marker when its top-level label, with
+    // any port or trailing symbols removed, reads like a web or non-ASCII one.
+    const labels = hostPart.replace(/:[^:]*$/u, "").split(HOST_LABEL_SEPARATOR);
+    if (labels.length < 2) return false;
+    const topLabel = /^[\p{L}\p{N}-]*/u.exec(
+      (labels[labels.length - 1] ?? "").normalize("NFKC").toLowerCase(),
+    )?.[0];
     return (
-      textLabels.length > 1 && /\p{L}/u.test(textLabels[textLabels.length - 1] ?? "")
+      topLabel !== undefined &&
+      (isWebTopLabel(topLabel) || /[^\x00-\x7f]/u.test(topLabel))
     );
   }
-  if (parsed.username !== "" || parsed.password !== "") return true;
+  // Userinfo that itself reads like a dotted name, as in
+  // "github.com@evil.example", disguises the real host.
+  if (parsed.username.includes(".")) return true;
   const labels = parsed.hostname.split(".");
   if (labels.length < 2) return false;
-  const topLabel = labels[labels.length - 1] ?? "";
-  if (!HOST_LIKE_TOP_LABEL.test(topLabel)) return false;
-  const hasSuffix = hostPart.length < text.length || parsed.port !== "";
-  if (
-    !hasSuffix &&
-    labels.length < 3 &&
-    !topLabel.startsWith("xn--") &&
-    !WEB_TOP_LABELS.has(topLabel)
-  ) {
-    return false;
-  }
+  if (!isWebTopLabel(labels[labels.length - 1] ?? "")) return false;
   return parsed.host !== target.host;
+}
+
+function isWebTopLabel(label: string): boolean {
+  return WEB_TOP_LABELS.has(label) || /^xn--[a-z0-9-]+$/u.test(label);
 }
 
 function linkText(children: ReactNode): string {
@@ -371,7 +376,9 @@ function linkText(children: ReactNode): string {
       for (let index = items.length - 1; index >= 0; index -= 1) {
         stack.push(items[index]);
       }
-    } else if (isValidElement<{ children?: ReactNode }>(node)) {
+    } else if (isValidElement<{ alt?: unknown; children?: ReactNode }>(node)) {
+      // An image inside a link renders its alt text as "[Image: <alt>]".
+      if (typeof node.props.alt === "string") text += ` ${node.props.alt} `;
       stack.push(node.props.children);
     }
   }

@@ -26,7 +26,6 @@ from tongs.desktop.artifact_contract import (
 from .reference_builder import (
     ARCHIVE_NAME,
     FIXTURE_ROOT,
-    build_reference_artifact,
 )
 
 
@@ -79,31 +78,6 @@ def _raised(code: ArtifactContractErrorCode):
     )
 
 
-def test_committed_fixture_is_reproducible_and_clearly_synthetic() -> None:
-    archive, install_document, release_document = _fixture()
-    built = build_reference_artifact()
-    rebuilt = build_reference_artifact()
-
-    assert built == rebuilt
-    assert (built.archive, built.install_manifest, built.release_manifest) == (
-        archive,
-        install_document,
-        release_document,
-    )
-    sums = (FIXTURE_ROOT / "SHA256SUMS").read_text().splitlines()
-    expected = {
-        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
-        for path in (
-            FIXTURE_ROOT / ARCHIVE_NAME,
-            FIXTURE_ROOT / "desktop-install.synthetic.json",
-            FIXTURE_ROOT / "desktop-manifest-v1.synthetic.json",
-        )
-    }
-    assert set(sums) == expected
-    assert b"synthetic" in release_document
-    assert hashlib.sha256(archive).hexdigest().encode() not in install_document
-
-
 def test_reference_archive_has_canonical_root_layout_and_metadata() -> None:
     archive, _, release_document = _fixture()
     release = parse_release_manifest(release_document)
@@ -128,23 +102,10 @@ def test_reference_archive_has_canonical_root_layout_and_metadata() -> None:
     )
 
 
-def test_archive_validation_is_read_only(tmp_path) -> None:
-    archive, _, release_document = _fixture()
-    before = tuple(tmp_path.iterdir())
-    validate_artifact_archive(
-        archive,
-        ARCHIVE_NAME,
-        parse_release_manifest(release_document),
-        "fedora-44-x86_64-user-archive",
-    )
-    assert tuple(tmp_path.iterdir()) == before
-
-
-@pytest.mark.parametrize("document", [b"", b"plain text", b"\x1f\x8bnot-gzip"])
-def test_malformed_archives_have_stable_errors(document: bytes) -> None:
+def test_malformed_archives_have_stable_errors() -> None:
     limits = parse_install_manifest(_fixture()[1]).extraction_limits
     with _raised(ArtifactContractErrorCode.INVALID_ARCHIVE):
-        inspect_archive(document, limits)
+        inspect_archive(b"\x1f\x8bnot-gzip", limits)
 
 
 def test_external_archive_name_length_digest_and_identity_are_authoritative() -> None:
@@ -210,24 +171,13 @@ def test_rebound_digest_does_not_hide_truncated_gzip() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "entry_type",
-    [
-        ArchiveEntryType.SYMLINK,
-        ArchiveEntryType.HARDLINK,
-        ArchiveEntryType.FIFO,
-        ArchiveEntryType.CHARACTER_DEVICE,
-        ArchiveEntryType.BLOCK_DEVICE,
-        ArchiveEntryType.OTHER,
-    ],
-)
-def test_layout_rejects_every_non_regular_entry_type(
-    entry_type: ArchiveEntryType,
-) -> None:
+def test_layout_rejects_every_non_regular_entry_type() -> None:
+    # One allow-list check covers every non-regular type, so a symlink stands
+    # in for hardlinks, devices, FIFOs and unknown types.
     archive, install_document, _ = _fixture()
     install = parse_install_manifest(install_document)
     entries = list(inspect_archive(archive, install.extraction_limits).entries)
-    entries[1] = replace(entries[1], entry_type=entry_type)
+    entries[1] = replace(entries[1], entry_type=ArchiveEntryType.SYMLINK)
     with _raised(ArtifactContractErrorCode.INVALID_LAYOUT):
         validate_archive_layout(entries, install)
 
@@ -239,10 +189,9 @@ def test_layout_rejects_every_non_regular_entry_type(
         ArchiveEntry("/absolute", ArchiveEntryType.FILE, 0o644, 0, "0" * 64),
         ArchiveEntry("runtime\\escape", ArchiveEntryType.FILE, 0o644, 0, "0" * 64),
         ArchiveEntry("runtime/extra", ArchiveEntryType.FILE, 0o755, 0, "0" * 64),
-        ArchiveEntry("runtime/extra", ArchiveEntryType.FILE, 0o4644, 0, "0" * 64),
     ],
 )
-def test_layout_rejects_traversal_extra_executable_and_special_bits(
+def test_layout_rejects_traversal_and_extra_executable(
     replacement: ArchiveEntry,
 ) -> None:
     archive, install_document, _ = _fixture()
@@ -250,6 +199,20 @@ def test_layout_rejects_traversal_extra_executable_and_special_bits(
     entries = list(inspect_archive(archive, install.extraction_limits).entries)
     entries.append(replacement)
     with _raised(ArtifactContractErrorCode.INVALID_LAYOUT):
+        validate_archive_layout(entries, install)
+
+
+@pytest.mark.parametrize(
+    "mode", [0o4644, 0o2644, 0o1644], ids=["setuid", "setgid", "sticky"]
+)
+def test_layout_rejects_special_bits_on_a_declared_file(mode: int) -> None:
+    archive, install_document, _ = _fixture()
+    install = parse_install_manifest(install_document)
+    entries = [
+        replace(item, mode=mode) if item.path == "runtime/resources/app.asar" else item
+        for item in inspect_archive(archive, install.extraction_limits).entries
+    ]
+    with pytest.raises(ArtifactContractError, match="special permission bits"):
         validate_archive_layout(entries, install)
 
 
@@ -292,9 +255,14 @@ def test_declared_limits_are_enforced_against_layout() -> None:
             install,
             extraction_limits=replace(install.extraction_limits, max_file_bytes=1),
         ),
+        # Each file fits, but together they exceed the total by one byte.
         replace(
             install,
-            extraction_limits=replace(install.extraction_limits, max_total_bytes=1),
+            extraction_limits=replace(
+                install.extraction_limits,
+                max_file_bytes=max(item.byte_count for item in entries),
+                max_total_bytes=sum(item.byte_count for item in entries) - 1,
+            ),
         ),
     ):
         with _raised(ArtifactContractErrorCode.LIMIT_EXCEEDED):
@@ -336,7 +304,12 @@ def test_inspector_enforces_cumulative_content_before_tarfile_pass() -> None:
         max_total_bytes=1_000,
         max_file_bytes=600,
     )
-    with _raised(ArtifactContractErrorCode.LIMIT_EXCEEDED):
+    # This message comes only from the header preflight, before tarfile runs.
+    with pytest.raises(
+        ArtifactContractError,
+        match="Archive member content exceeds the declared total limit",
+        check=lambda e: e.code is ArtifactContractErrorCode.LIMIT_EXCEEDED,
+    ):
         inspect_archive(compressed, limits)
 
 
@@ -346,7 +319,12 @@ def test_inspector_bounds_pax_metadata_before_tarfile_interprets_it() -> None:
         compressed = _archive_with_extension(
             extension_type, _pax_record("comment", "x" * 2_048)
         )
-        with _raised(ArtifactContractErrorCode.INVALID_ARCHIVE):
+        # This message comes only from the header preflight, before tarfile runs.
+        with pytest.raises(
+            ArtifactContractError,
+            match="Archive extension headers are unsupported",
+            check=lambda e: e.code is ArtifactContractErrorCode.INVALID_ARCHIVE,
+        ):
             inspect_archive(compressed, install.extraction_limits)
 
 

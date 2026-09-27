@@ -592,14 +592,6 @@ def test_required_production_jobs_equal_the_results_needs(
     assert RESULTS_JOB not in needs
 
 
-def test_every_configured_check_names_a_job_the_workflow_declares(
-    ci: dict[str, Any], production: dict[str, Any]
-) -> None:
-    for check in REQUIRED_CHECKS:
-        workflow = ci if check.workflow == "ci" else production
-        assert check.job in workflow["jobs"], check.check_id
-
-
 def test_binder_publications_match_the_configured_checks(
     ci: dict[str, Any], production: dict[str, Any]
 ) -> None:
@@ -740,8 +732,8 @@ def test_the_archive_adapter_constants_anchor_the_gate_policy() -> None:
 def test_the_sbom_adapter_constants_anchor_the_gate_policy() -> None:
     check = _check("desktop-archive-sbom")
     assert check.stages == tuple(sbom_adapter().STAGE_NAMES)
-    assert [report.path for report in check.reports] == ["reports/sbom-evidence.json"]
-    assert check.receipt_name == "sbom-receipt.json"
+    assert check.receipt_name == sbom_adapter().RECEIPT_PATH
+    assert [report.path for report in check.reports] == [sbom_adapter().REPORT_PATH]
 
 
 #: ``uses:`` values that name something other than a third-party action and

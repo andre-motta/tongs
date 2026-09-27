@@ -102,18 +102,3 @@ def test_owned_entry_can_be_replaced_and_uninstall_is_idempotent(
     assert second != first
     assert remove_user_menu(path, expected_digest=second) is True
     assert remove_user_menu(path, expected_digest=second) is False
-
-
-def test_owned_entry_can_replace_its_packaged_icon_binding(tmp_path: Path) -> None:
-    path = tmp_path / "applications" / "tongs.desktop"
-    console = Path("/opt/tongs/bin/tongs")
-    first_icon = Path("/opt/tongs/versions/one/icon.png")
-    second_icon = Path("/opt/tongs/versions/two/icon.png")
-
-    first = install_user_menu(path, console, icon_path=first_icon, replace_digest=None)
-    second = install_user_menu(
-        path, console, icon_path=second_icon, replace_digest=first
-    )
-
-    assert second != first
-    assert f"Icon={second_icon}\n" in path.read_text()

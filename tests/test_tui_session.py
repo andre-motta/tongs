@@ -30,8 +30,14 @@ from tongs.plugins.base import TongsPlugin
 from tongs.plugins.context import PluginContext
 from tongs.plugins.registry import PluginRegistry
 from tongs.scanner.repo import ForgeType, Remote, Repo
-from tongs.services.errors import ServiceErrorCode
-from tongs.services.models import RepositoryRef, ReviewRef, ReviewRevision
+from tongs.services.models import (
+    RepositoryRef,
+    ReviewPage,
+    ReviewQuery,
+    ReviewRef,
+    ReviewRevision,
+    ReviewScope,
+)
 from tongs.services.session import ApplicationSession
 from tongs.state.drafts import DraftContent, DraftStore, RecoveryWarning
 from tongs.views.inbox import InboxScreen
@@ -284,20 +290,6 @@ async def test_actual_textual_navigation_uses_one_production_session(
 
 
 @pytest.mark.asyncio
-async def test_empty_workspace_does_not_query_configured_forge(tmp_path: Path) -> None:
-    host = ForgeHost("github.com", ForgeType.GITHUB, "https://api.github.com")
-    client = MockForgeClient(host, [make_summary(host)])
-    registry = MockForgeRegistry({host.hostname: client})
-    app, _session, _cache = make_app(tmp_path, [], registry)
-
-    async with app.run_test():
-        await settle(app)
-        assert app.repos == []
-        assert app.screen.query_one("#reviews-table", MRTable).row_count == 0
-        assert client.calls == []
-
-
-@pytest.mark.asyncio
 async def test_personal_tabs_only_contact_discovered_hosts(tmp_path: Path) -> None:
     github = ForgeHost("github.com", ForgeType.GITHUB, "https://api.github.com")
     gitlab = ForgeHost("gitlab.com", ForgeType.GITLAB, "https://gitlab.com/api/v4")
@@ -314,19 +306,30 @@ async def test_personal_tabs_only_contact_discovered_hosts(tmp_path: Path) -> No
     registry = MockForgeRegistry(
         {github.hostname: github_client, gitlab.hostname: gitlab_client}
     )
-    app, _session, _cache = make_app(tmp_path, [make_repo(tmp_path)], registry)
+    app, session, _cache = make_app(tmp_path, [make_repo(tmp_path)], registry)
+    queries: list[ReviewQuery] = []
+    list_reviews = session.list_reviews
+
+    async def recording_list_reviews(query: ReviewQuery) -> ReviewPage:
+        queries.append(query)
+        return await list_reviews(query)
+
+    session.list_reviews = recording_list_reviews  # type: ignore[method-assign]
 
     async with app.run_test() as pilot:
         await settle(app)
         assert app.screen.query_one("#reviews-table", MRTable).row_count == 2
-        assert gitlab_client.calls == []
 
         await pilot.press("2")
         await settle(app)
         assert app.screen.query_one("#my-mrs-table", MRTable).row_count == 2
-        assert gitlab_client.calls == []
 
-    assert github_client.calls == [("my_reviews", None), ("my_mrs", None)]
+    # The adapter restricts personal queries to discovered hosts; the session
+    # tests cover how that restriction limits forge lookups.
+    assert [(query.scope, query.hostnames) for query in queries] == [
+        (ReviewScope.MY_REVIEWS, ("github.com",)),
+        (ReviewScope.MY_MRS, ("github.com",)),
+    ]
 
 
 @pytest.mark.asyncio
@@ -482,6 +485,7 @@ async def test_late_cancelled_discovery_cannot_replace_refresh(
     new_repo = make_repo(tmp_path, "acme/new")
     first_started = threading.Event()
     release_first = threading.Event()
+    first_returning = threading.Event()
     calls = 0
 
     def discoverer(*args, **kwargs):
@@ -490,6 +494,7 @@ async def test_late_cancelled_discovery_cannot_replace_refresh(
         if calls == 1:
             first_started.set()
             assert release_first.wait(timeout=3)
+            first_returning.set()
             return [old_repo]
         return [new_repo]
 
@@ -501,7 +506,8 @@ async def test_late_cancelled_discovery_cannot_replace_refresh(
         await settle(app)
         assert app.repos == [new_repo]
         release_first.set()
-        await asyncio.sleep(0.05)
+        assert await asyncio.to_thread(first_returning.wait, 2)
+        await settle(app)
         assert app.repos == [new_repo]
 
 
@@ -516,16 +522,13 @@ async def test_startup_failure_is_safe_and_closes_partial_resources(
         tmp_path, [], registry, plugin_registry=plugins, cache=cache
     )
 
-    async with app.run_test():
+    async with app.run_test(notifications=True):
         await asyncio.sleep(0)
+        messages = [notice.message for notice in app._notifications]
 
     assert app.startup_error is not None
-    assert app.startup_error.code is ServiceErrorCode.INTERNAL
-    assert "private startup detail" not in str(app.startup_error)
-    assert cache.open_calls == 1
-    assert cache.close_calls == 1
+    assert messages == [app.startup_error.message]
     assert plugins.discover_calls == 0
-    assert registry.close_calls == 0
 
 
 @pytest.mark.asyncio

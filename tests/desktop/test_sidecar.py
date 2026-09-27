@@ -107,6 +107,7 @@ class _BlockingWriter(_QueueWriter):
 
 class _FakeSession:
     recovery_warnings: tuple[object, ...] = ()
+    read_cleanup_delay = 0.0
 
     def __init__(self) -> None:
         self.config = Config()
@@ -133,6 +134,8 @@ class _FakeSession:
         try:
             await self.release_read.wait()
         except asyncio.CancelledError:
+            if self.read_cleanup_delay:
+                await asyncio.sleep(self.read_cleanup_delay)
             self.read_cancelled.set()
             raise
         return (
@@ -583,12 +586,16 @@ class _TrackingCancellation(DesktopCancellation):
         try:
             await super().wait()
         finally:
+            # Cleanup that needs the loop: only a drained waiter finishes it.
+            await asyncio.sleep(0.02)
             self.wait_finished.set()
 
 
 @pytest.mark.asyncio
 async def test_plugin_read_outer_cancellation_drains_service_and_waiter_tasks() -> None:
     session = _FakeSession()
+    # Slow cleanup: the flags below are set only if the read awaits its tasks.
+    session.read_cleanup_delay = 0.02
     server = DesktopSidecarServer(
         session=cast(object, session),
         plugin_registry=_registry(),

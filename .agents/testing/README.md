@@ -28,8 +28,8 @@ Ruff unless the work item's approved profile says otherwise:
   --junitxml="/tmp/tongs-mcp-$$.junit.xml"
 .venv/bin/python tests/ci/verify_desktop_ci.py mcp-report \
   --path "/tmp/tongs-mcp-$$.junit.xml"
-.venv/bin/ruff check src/ tests/ packaging/
-.venv/bin/ruff format --check src/ tests/ packaging/
+.venv/bin/ruff check src/ tests/ packaging/ scripts/release-evidence/
+.venv/bin/ruff format --check src/ tests/ packaging/ scripts/release-evidence/
 ```
 
 The explicit MCP report check proves the optional tests ran and did not pass by
@@ -219,10 +219,24 @@ objects to deep-equality assertions.
 
 ## Native Electron evidence
 
-Native tests under `tests/desktop/native/` launch real Electron and therefore
-need an exclusive, coordinated display/GPU window. Do not run them concurrently
-with another native proof and do not change host display, power, sandbox, SELinux,
-or GPU settings to make them pass.
+The native proofs live in `scripts/release-evidence/native/`: the `ci-`,
+`review-` and `utility-proof` programs, their `*-proof-launcher.mjs` launchers,
+the `*-proof-app/` Electron entry directories, and the `ci_fixture_sidecar.py`
+and `editor_fixture.py` fixtures they start. They are manual release evidence
+tooling. No CI job and no pytest or `npm test` run executes them; CI only lints
+their Python files and classifies changes to them into the lint lane. Run a
+launcher by hand from the checkout root, for example
+`node scripts/release-evidence/native/ci-proof-launcher.mjs`, after
+`npm run build --prefix desktop`. Each proof writes its report under
+`.evidence/issue-<N>/` in the checkout unless its `TONGS_*_PROOF_EVIDENCE`
+variable names another directory. `tests/desktop/native/` keeps only
+`review_fixture_sidecar.py` and `native_payload_launcher.py`, which the Electron
+suite and the native payload acceptance tests use.
+
+The native proofs launch real Electron and therefore need an exclusive,
+coordinated display/GPU window. Do not run them concurrently with another
+native proof and do not change host display, power, sandbox, SELinux, or GPU
+settings to make them pass.
 
 Electron filters unsupported `NODE_OPTIONS`, including the V8 old-space option
 used by the Node test runner. For native packaged Electron, the 1 GiB complete-
@@ -258,6 +272,7 @@ using the rules in `tests/ci/ci_plan.py`:
 | sidecar | `src/tongs/cache/**`, `src/tongs/config.py`, `src/tongs/desktop/**`, `src/tongs/diff/**`, `src/tongs/errors.py`, `src/tongs/forges/**`, `src/tongs/plugins/**`, `src/tongs/scanner/**`, `src/tongs/services/**`, `src/tongs/state/**`, `src/tongs/tui_services.py`, `tests/__init__.py`, `tests/desktop/**`, `tests/fixtures/**`, `tests/integration/**`, `tests/plugins/**`, `tests/services/**`, `tests/state/**`, `examples/desktop-plugin/**` | lint, core, desktop_fixtures, desktop |
 | packaging | `LICENSE`, `scripts/build_desktop_archive.py`, `scripts/build_desktop_sbom.py`, `src/tongs/__init__.py`, `src/tongs/desktop/artifact_contract/**`, `src/tongs/desktop/installer/**`, `tests/integration/desktop/archive_evidence.py`, `tests/integration/desktop/candidate_attestation.py`, `tests/integration/desktop/rpm_payload_contract.py`, `tests/integration/desktop/sbom_evidence.py`, `tests/desktop/installer/fixtures/**`, `tests/packaging/**` | lint, core, desktop_fixtures, desktop, packaging |
 | spikes | `spikes/**` | desktop_fixtures |
+| release-evidence | `scripts/release-evidence/**` | lint |
 | ci-infrastructure | `.github/workflows/**`, `.github/scripts/**`, `tests/ci/**`, `tests/containers/**` | full graph |
 | build-configuration | `pyproject.toml`, `requirements/**`, `packaging/**`, `desktop/**`, `.gitignore` | full graph |
 | (unmatched) | any other path | full graph |

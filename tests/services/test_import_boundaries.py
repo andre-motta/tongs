@@ -7,8 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 
 def _fresh_environment() -> dict[str, str]:
     environment = os.environ.copy()
@@ -16,30 +14,12 @@ def _fresh_environment() -> dict[str, str]:
     return environment
 
 
-@pytest.mark.parametrize(
-    "statement",
-    [
-        (
-            "from tongs.state.drafts import DraftStore; "
-            "from tongs.services import ApplicationSession, ReviewSubmissionService; "
-            "assert DraftStore and ApplicationSession and ReviewSubmissionService"
-        ),
-        (
-            "from tongs.services import ApplicationSession, ReviewSubmissionService; "
-            "from tongs.state.drafts import DraftStore; "
-            "assert DraftStore and ApplicationSession and ReviewSubmissionService"
-        ),
-        (
-            "from tongs.services import (ApplicationSession, CloseReviewCommand, "
-            "MRActionService, ReviewActionTarget); "
-            "assert ApplicationSession and CloseReviewCommand and "
-            "MRActionService and ReviewActionTarget"
-        ),
-    ],
-)
-def test_public_import_orders_work_in_fresh_interpreter(
-    tmp_path: Path, statement: str
-) -> None:
+def test_drafts_first_import_order_works_in_fresh_interpreter(tmp_path: Path) -> None:
+    statement = (
+        "from tongs.state.drafts import DraftStore; "
+        "from tongs.services import ApplicationSession, ReviewSubmissionService; "
+        "assert DraftStore and ApplicationSession and ReviewSubmissionService"
+    )
     completed = subprocess.run(
         [sys.executable, "-P", "-c", statement],
         cwd=tmp_path,

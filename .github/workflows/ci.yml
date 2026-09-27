@@ -139,9 +139,9 @@ jobs:
       - name: Install Ruff
         run: python -m pip install ruff
       - name: Lint source and tests
-        run: ruff check src/ tests/ packaging/ scripts/release-evidence/
+        run: ruff check src/ tests/ packaging/ scripts/release-evidence/ examples/
       - name: Check source and test formatting
-        run: ruff format --check src/ tests/ packaging/ scripts/release-evidence/
+        run: ruff format --check src/ tests/ packaging/ scripts/release-evidence/ examples/
       - name: Install core and development dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run the CI and container harness tests with a machine-readable report

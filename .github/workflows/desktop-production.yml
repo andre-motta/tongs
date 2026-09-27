@@ -187,7 +187,7 @@ jobs:
           --test-reporter-destination="$RUNNER_TEMP/reports/desktop-shell.tap"
           ../tests/desktop/electron/*.test.mjs
           ../tests/desktop/renderer/*.test.mjs
-          ../examples/desktop-plugin/tests/test_dashboard_module.mjs
+          ../examples/desktop-plugin/tests/test_*.mjs
       - name: Show the failing cases when the TAP run fails
         if: ${{ failure() }}
         run: |

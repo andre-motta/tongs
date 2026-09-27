@@ -28,8 +28,8 @@ Ruff unless the work item's approved profile says otherwise:
   --junitxml="/tmp/tongs-mcp-$$.junit.xml"
 .venv/bin/python tests/ci/verify_desktop_ci.py mcp-report \
   --path "/tmp/tongs-mcp-$$.junit.xml"
-.venv/bin/ruff check src/ tests/ packaging/ scripts/release-evidence/
-.venv/bin/ruff format --check src/ tests/ packaging/ scripts/release-evidence/
+.venv/bin/ruff check src/ tests/ packaging/ scripts/release-evidence/ examples/
+.venv/bin/ruff format --check src/ tests/ packaging/ scripts/release-evidence/ examples/
 ```
 
 The explicit MCP report check proves the optional tests ran and did not pass by

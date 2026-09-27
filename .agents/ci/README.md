@@ -16,8 +16,8 @@ pytest tests/ --ignore=tests/test_mcp -v
 pytest tests/test_mcp -v --junitxml="/tmp/tongs-mcp-$$.junit.xml"
 python tests/ci/verify_desktop_ci.py mcp-report \
   --path "/tmp/tongs-mcp-$$.junit.xml"
-ruff check src/ tests/ packaging/ scripts/release-evidence/
-ruff format --check src/ tests/ packaging/ scripts/release-evidence/
+ruff check src/ tests/ packaging/ scripts/release-evidence/ examples/
+ruff format --check src/ tests/ packaging/ scripts/release-evidence/ examples/
 ```
 
 The MCP extra is required so MCP tests execute rather than skip on import. The
@@ -120,7 +120,7 @@ and fails when a rule no longer covers it.
 | Lane | Job |
 |---|---|
 | `docs` | `ci.yml` `Docs build`: the Astro + Starlight site build (`npm run build --prefix site`), the CNAME and repository-only record checks, and the pinned Markdown linter |
-| `lint` | `ci.yml` `Lint, format and CI harness tests`: Ruff over `src/`, `tests/`, `packaging/` and `scripts/release-evidence/`, then the `tests/ci` and `tests/containers` suites, whose report must show no skip |
+| `lint` | `ci.yml` `Lint, format and CI harness tests`: Ruff over `src/`, `tests/`, `packaging/`, `scripts/release-evidence/` and `examples/`, then the `tests/ci` and `tests/containers` suites, whose report must show no skip |
 | `core` | `ci.yml` `Core and MCP`: the core suites listed above, on Python 3.12 and 3.13 on every plan |
 | `fedora_podman` | `ci.yml` `Fedora 44 Podman` probe |
 | `desktop` | `Desktop production evidence`: source identity, the production shell and renderer TAP, installed core, and the native payload job with the integration and packaging contract suites |

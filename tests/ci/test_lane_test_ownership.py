@@ -273,3 +273,16 @@ def test_the_fedora_smoke_subset_is_a_second_run_of_owned_files(
     smoke = _load_probe().SMOKE_TESTS
     assert smoke
     assert [path for path in smoke if not runs.get(path)] == []
+
+
+@pytest.mark.needs_git
+def test_every_test_file_selects_the_lint_job_that_runs_these_checks(
+    runs: dict[str, list[str]],
+) -> None:
+    """This module runs in the lint job, so a change to any test file, the
+    example plugin's included, must select lint or a new file that no job
+    runs would go unnoticed."""
+
+    assert "examples/desktop-plugin/tests/test_dashboard_module.mjs" in runs
+    offenders = sorted(path for path in runs if "lint" not in classify_paths([path])[0])
+    assert offenders == []

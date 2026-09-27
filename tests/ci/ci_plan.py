@@ -327,11 +327,12 @@ RULES: tuple[Rule, ...] = (
         lanes=frozenset({"lint", "core", "desktop"}),
     ),
     # The example desktop plugin: the desktop TAP job installs it and runs its
-    # tests.
+    # tests, and the lint job checks its Python and runs the ownership test
+    # that proves a job runs each of its test files.
     Rule(
         name="example-plugin",
         patterns=("examples/desktop-plugin/**",),
-        lanes=frozenset({"desktop"}),
+        lanes=frozenset({"lint", "desktop"}),
     ),
     # What the Fedora Podman probe reads beyond the full-graph roots: it builds
     # the example plugin wheel and runs the installed-wheel smoke subset named

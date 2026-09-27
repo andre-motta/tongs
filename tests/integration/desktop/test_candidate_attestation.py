@@ -182,6 +182,7 @@ def _write_output(root: Path) -> Path:
         "electron-v44.2.0-linux-x64.zip": b"electron fixture",
         "inputs.env": f"TONGS_HEAD_SHA={SOURCE_COMMIT}\nRELEASE_VERSION=0.5.0\n".encode(),
         "rpm-nevra.txt": b"fixture-1.0-1.x86_64\n",
+        "rpm-qa.txt": b"fixture-1.0-1.x86_64\n",
         "rpm-sha256-check.txt": b"fixture OK\n",
         "rpm-signatures.txt": b"fixture signature\n",
         "source.tar": b"exact source archive",

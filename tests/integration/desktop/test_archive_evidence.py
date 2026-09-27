@@ -404,6 +404,7 @@ def template(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
             f"ELECTRON_ARCHIVE_SHA256={_digest(electron_archive)}\n"
         ).encode("ascii"),
         "rpm-nevra.txt": b"fixture-1.0-1.x86_64\n",
+        "rpm-qa.txt": b"fixture-1.0-1.x86_64\n",
         "rpm-sha256-check.txt": b"fixture OK\n",
         "rpm-signatures.txt": b"fixture signature\n",
         "source.tar": source_archive_bytes,

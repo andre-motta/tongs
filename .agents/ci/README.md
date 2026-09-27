@@ -120,7 +120,7 @@ and fails when a rule no longer covers it.
 |---|---|
 | `docs` | `ci.yml` `Docs build`: the Astro + Starlight site build (`npm run build --prefix site`), the CNAME and repository-only record checks, and the pinned Markdown linter |
 | `lint` | `ci.yml` `Lint, format and CI harness tests`: Ruff over `src/`, `tests/`, `packaging/` and `scripts/release-evidence/`, then the `tests/ci` and `tests/containers` suites, whose report must show no skip |
-| `core` | `ci.yml` `Core and MCP`: the core suites listed above, on Python 3.13 for a reduced pull request plan and on 3.12 and 3.13 for every full plan |
+| `core` | `ci.yml` `Core and MCP`: the core suites listed above, on Python 3.12 and 3.13 on every plan |
 | `fedora_podman` | `ci.yml` `Fedora 44 Podman` probe |
 | `desktop` | `Desktop production evidence`: source identity, the production shell and renderer TAP, installed core, and the native payload job with the integration and packaging contract suites |
 | `archive` | the archive, archive evidence and archive SBOM jobs of `Desktop production evidence` (implies `desktop`) |
@@ -129,9 +129,8 @@ and fails when a rule no longer covers it.
 A change under `desktop/src` runs the archive and SBOM jobs but not the RPM
 lifecycle or the Podman probe; the desktop manifests, lock, build script,
 TypeScript configuration and assets are build configuration and run
-everything. The core matrix reads the plan's interpreters from the planning
-job, falls back to both when that job did not succeed, and the aggregate
-requires the Python 3.12 receipt exactly when its effective plan is full.
+everything. Core always runs Python 3.12 and 3.13, and the aggregate requires
+both receipts whenever core is selected.
 
 The plan fails closed. Any doubt selects the full graph and records why: an
 event other than `pull_request`, a checkout that is not the expected two-parent

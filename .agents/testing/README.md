@@ -267,12 +267,12 @@ python tests/ci/ci_plan.py explain --base origin/main
 ```
 
 The lanes run Ruff lint and format plus the `tests/ci` and `tests/containers`
-suites (`lint`), the core and MCP suites (`core`, on Python 3.13 for a reduced
-pull request plan and on 3.12 and 3.13 for every full plan), the docs build and
-Markdown lint (`docs`), the Fedora 44 Podman probe (`fedora_podman`), the
-desktop production evidence including the Electron and renderer TAP run and
-the integration and packaging contract suites (`desktop`), the archive and
-SBOM jobs (`archive`), and the RPM lifecycle job (`packaging`). Each test file
+suites (`lint`), the core and MCP suites (`core`, on Python 3.12 and 3.13), the
+docs build and Markdown lint (`docs`), the Fedora 44 Podman probe
+(`fedora_podman`), the desktop production evidence including the Electron and
+renderer TAP run and the integration and packaging contract suites
+(`desktop`), the archive and SBOM jobs (`archive`), and the RPM lifecycle job
+(`packaging`). Each test file
 runs in exactly one pre-merge job, which `tests/ci/test_lane_test_ownership.py`
 enforces. Any doubt about the diff, a push to `main`, a rule change under
 `tests/ci/**`, or the `ci:full` label selects the full graph. The

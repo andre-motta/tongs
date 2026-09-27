@@ -20,9 +20,7 @@ Three independent classes of evidence must all agree before the gate passes:
    something other than success, and only when the effective plan is the full
    graph.
 2. Receipts.  The required check set is the union of the checks of every
-   selected lane, less the oldest core interpreter's check on a reduced plan
-   (``ci_plan.selected_checks``), and the evidence directories must equal it
-   exactly.  Each
+   selected lane, and the evidence directories must equal it exactly.  Each
    required check contributes exactly one issue #110 receipt validated against
    a consumer-owned :class:`ReceiptPolicy` carrying this run's repository, run
    ID, environment, provenance, source commit and source tree, and the attempt

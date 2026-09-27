@@ -6,9 +6,9 @@ value, because each one reproduces a way a real workflow could otherwise report
 a false green: a failed job, a skipped job, a cancelled job, a missing result,
 a stale receipt from another run, and an injected receipt or report.  The
 plan-aware cases prove that a skip passes only for a lane the effective plan
-deselected, including the partial desktop selection without packaging, the
-desktop source selection that runs the archive jobs without the RPM lifecycle,
-and the reduced plan that runs core on the newest interpreter only.
+deselected, including the partial desktop selection without packaging and
+the desktop source selection that runs the archive jobs without the RPM
+lifecycle.
 """
 
 from __future__ import annotations
@@ -1066,10 +1066,11 @@ def _gate(evidence: Path, plan: Any, **kwargs: Any) -> dict[str, str]:
     ("plan", "expected"),
     [
         (DOCS_ONLY, set()),
-        (TUI_ONLY, {"core-python-3.13"}),
+        (TUI_ONLY, {"core-python-3.12", "core-python-3.13"}),
         (
             DESKTOP_WITHOUT_PACKAGING,
             {
+                "core-python-3.12",
                 "core-python-3.13",
                 "desktop-production-tap",
                 "desktop-installed-core",
@@ -1079,6 +1080,7 @@ def _gate(evidence: Path, plan: Any, **kwargs: Any) -> dict[str, str]:
         (
             DESKTOP_SOURCE,
             {
+                "core-python-3.12",
                 "core-python-3.13",
                 "desktop-production-tap",
                 "desktop-installed-core",
@@ -1211,34 +1213,16 @@ def test_a_full_plan_without_the_python_3_12_receipt_fails(evidence: Path) -> No
         _gate(evidence, FULL)
 
 
-def test_a_reduced_plan_with_a_python_3_12_receipt_fails(evidence: Path) -> None:
-    """A reduced plan never schedules the 3.12 leg, so its receipt is drift."""
-
-    _keep_only(evidence, FULL)
-    for check in REQUIRED_CHECKS:
-        if check.check_id not in CI_PLAN.selected_checks(TUI_ONLY) | {
-            "core-python-3.12"
-        }:
-            shutil.rmtree(evidence / check.evidence_directory)
-    with pytest.raises(GateVerificationError, match="injected=..core-python-3.12"):
-        _gate(evidence, TUI_ONLY)
-
-
-def test_a_recomputed_full_plan_requires_python_3_12_that_upstream_skipped(
+def test_a_reduced_plan_without_the_python_3_12_receipt_fails(
     evidence: Path,
 ) -> None:
-    """Upstream planned a reduced run, so only 3.13 ran; the aggregate's own
-    plan is full, so the effective plan requires 3.12 and the gate fails."""
+    """Core runs Python 3.12 and 3.13 on every plan, so a reduced plan that
+    selects core still requires the 3.12 receipt."""
 
     _keep_only(evidence, TUI_ONLY)
-    effective = CI_PLAN.effective_plan(
-        recomputed=CI_PLAN.full_plan(COMMIT, "event 'push' is not pull_request"),
-        upstream_json=TUI_ONLY.to_json(),
-        changes_result="success",
-    )
-    assert effective.full
+    shutil.rmtree(evidence / "core-python-3.12")
     with pytest.raises(GateVerificationError, match="missing=..core-python-3.12"):
-        verify_check_set(evidence, IDENTITY, effective)
+        _gate(evidence, TUI_ONLY)
 
 
 @pytest.mark.parametrize(
@@ -1398,7 +1382,7 @@ def test_the_cli_verifies_against_the_plan_file(
     monkeypatch.setenv("DESKTOP_GATE_RESULTS", _plan_ci_results(TUI_ONLY))
     monkeypatch.setenv("DESKTOP_PRODUCTION_RESULTS", "")
     assert main(_cli_arguments(evidence, plan_path)) == 0
-    assert "verified the 1 checks" in capsys.readouterr().out
+    assert "verified the 2 checks" in capsys.readouterr().out
 
     plan_path.write_text(FULL.to_json())
     assert main(_cli_arguments(evidence, plan_path)) == 1

@@ -12,7 +12,7 @@ also anchors the two bespoke adapters, whose receipt and report names and stage
 lists the gate restates as its own policy, to the constants those reviewed
 adapters actually export, and pins the lane wiring: the ``changes`` job, the
 canonical lane condition on every lane job, the ``run_archive`` and
-``run_packaging`` inputs, the plan-derived core matrix, the lint job's harness
+``run_packaging`` inputs, the fixed core matrix, the lint job's harness
 suites, the docs build lane and the plan-keyed aggregate.
 """
 
@@ -46,14 +46,8 @@ CHANGES_JOB = "changes"
 PLAN_PATH = '"$RUNNER_TEMP/ci-plan.json"'
 ARCHIVE_CONDITION = "${{ inputs.run_archive }}"
 PACKAGING_CONDITION = "${{ inputs.run_packaging }}"
-#: The core matrix: the plan's interpreters, or every interpreter when the
-#: plan job failed or published nothing.
-CORE_MATRIX = (
-    "${{ fromJSON(needs.changes.result == 'success' && "
-    "needs.changes.outputs.core_versions || '"
-    + json.dumps(list(CI_PLAN.CORE_VERSIONS_FULL), separators=(",", ":"))
-    + "') }}"
-)
+#: The core interpreters, run on every plan.
+CORE_VERSIONS = ["3.12", "3.13"]
 
 
 def _lane_condition(lane: str) -> str:
@@ -182,16 +176,10 @@ def _binder_publications(workflow: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _matrix_selections(job: dict[str, Any]) -> list[dict[str, str]]:
-    """Every matrix leg a job can run; the plan-derived core matrix can run
-    every interpreter, which :func:`test_the_core_matrix_follows_the_plan`
-    pins."""
-
     matrix = (job.get("strategy") or {}).get("matrix") or {}
     if not matrix:
         return [{}]
     key, values = next(iter(matrix.items()))
-    if values == CORE_MATRIX:
-        values = CI_PLAN.CORE_VERSIONS_FULL
     return [{key: str(value)} for value in values]
 
 
@@ -285,7 +273,7 @@ def test_the_changes_job_publishes_the_plan_and_every_lane(
     assert job["name"] == "Plan CI lanes"
     assert "needs" not in job and "if" not in job
     assert job["permissions"] == {"contents": "read"}
-    assert set(job["outputs"]) == {"plan", *CI_PLAN.LANES, "full", "core_versions"}
+    assert set(job["outputs"]) == {"plan", *CI_PLAN.LANES}
     for name, value in job["outputs"].items():
         assert value == f"${{{{ steps.plan.outputs.{name} }}}}", name
     checkout = job["steps"][0]
@@ -327,10 +315,15 @@ def test_the_production_call_receives_the_archive_and_packaging_lanes(
         )
 
 
-def test_the_core_matrix_follows_the_plan(ci: dict[str, Any]) -> None:
+def test_the_core_matrix_runs_every_interpreter_on_every_plan(
+    ci: dict[str, Any],
+) -> None:
     job = ci["jobs"]["core"]
     assert job["strategy"]["fail-fast"] is False
-    assert job["strategy"]["matrix"] == {"python-version": CORE_MATRIX}
+    assert job["strategy"]["matrix"] == {"python-version": CORE_VERSIONS}
+    assert {f"core-python-{version}" for version in CORE_VERSIONS} == (
+        CI_PLAN.LANE_CHECKS["core"]
+    )
     assert job["env"]["CHECK_ID"] == "core-python-${{ matrix.python-version }}"
 
 
@@ -554,11 +547,7 @@ def test_every_download_is_keyed_on_its_owning_lane(ci: dict[str, Any]) -> None:
         directory = _flatten(step["with"]["path"]).rsplit("/", 1)[1]
         check = next(c for c in REQUIRED_CHECKS if c.evidence_directory == directory)
         lane = owner[check.check_id]
-        condition = f"steps.plan.outputs.{lane} == 'true'"
-        if check.check_id in CI_PLAN.FULL_PLAN_ONLY_CHECKS:
-            # A reduced plan never schedules this leg.
-            condition += " && steps.plan.outputs.full == 'true'"
-        assert step["if"] == condition, directory
+        assert step["if"] == f"steps.plan.outputs.{lane} == 'true'", directory
         seen.add(check.check_id)
     assert seen == {check.check_id for check in REQUIRED_CHECKS}
 

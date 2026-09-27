@@ -86,7 +86,8 @@ LANE_PRODUCTION_JOBS: dict[str, frozenset[str]] = {
     "packaging": frozenset({"rpm-lifecycle"}),
 }
 
-#: Receipt-bearing gate checks each lane publishes.
+#: Receipt-bearing gate checks each lane publishes.  Core runs Python 3.12 and
+#: 3.13 on every plan, so both of its receipts are always required.
 LANE_CHECKS: dict[str, frozenset[str]] = {
     "core": frozenset({"core-python-3.12", "core-python-3.13"}),
     "desktop": frozenset(
@@ -99,20 +100,6 @@ LANE_CHECKS: dict[str, frozenset[str]] = {
     "archive": frozenset({"desktop-archive-lifecycle", "desktop-archive-sbom"}),
     "packaging": frozenset({"desktop-rpm-lifecycle"}),
 }
-
-#: Core interpreters.  Every full plan (a push, ``ci:full``, any doubt or a
-#: full-rule path) runs both; a reduced pull request plan runs the newest only,
-#: so the oldest interpreter's check is required exactly when the plan is full.
-CORE_VERSIONS_FULL: tuple[str, ...] = ("3.12", "3.13")
-CORE_VERSIONS_REDUCED: tuple[str, ...] = ("3.13",)
-FULL_PLAN_ONLY_CHECKS: frozenset[str] = frozenset({"core-python-3.12"})
-
-
-def core_versions_for(full: bool) -> tuple[str, ...]:
-    """The core interpreter matrix for a full or a reduced plan."""
-
-    return CORE_VERSIONS_FULL if full else CORE_VERSIONS_REDUCED
-
 
 #: Every result GitHub reports for a job.
 JOB_RESULTS: frozenset[str] = frozenset({"success", "failure", "cancelled", "skipped"})
@@ -807,17 +794,12 @@ def expected_production_results(plan: Plan) -> dict[str, frozenset[str]] | None:
 
 
 def selected_checks(plan: Plan) -> frozenset[str]:
-    """The receipt-bearing checks a plan requires.
-
-    A reduced plan runs core on :data:`CORE_VERSIONS_REDUCED` only, so it does
-    not require the checks in :data:`FULL_PLAN_ONLY_CHECKS`.
-    """
+    """The receipt-bearing checks a plan requires."""
 
     validate_plan(plan)
-    checks = frozenset(
+    return frozenset(
         check for lane in plan.lanes for check in LANE_CHECKS.get(lane, frozenset())
     )
-    return checks if plan.full else checks - FULL_PLAN_ONLY_CHECKS
 
 
 def _describe(error: BaseException) -> str:
@@ -873,9 +855,6 @@ def _write_outputs(plan: Plan, arguments: argparse.Namespace) -> None:
     if arguments.github_output is not None:
         lines = [f"plan={plan.to_json()}"]
         lines.extend(f"{lane}={value}" for lane, value in plan.lane_outputs().items())
-        lines.append(f"full={'true' if plan.full else 'false'}")
-        versions = json.dumps(list(core_versions_for(plan.full)), separators=(",", ":"))
-        lines.append(f"core_versions={versions}")
         with arguments.github_output.open("a", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
 
@@ -1067,8 +1046,6 @@ def _explain(arguments: argparse.Namespace) -> int:
         for job in lane_jobs
     )
     print("desktop-production jobs that run: " + (", ".join(production) or "none"))
-    if "core" in plan.lanes:
-        print("Core interpreters: " + ", ".join(core_versions_for(plan.full)))
     print("Reasons:")
     for reason in plan.reasons:
         print(f"  {reason}")

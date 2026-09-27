@@ -54,8 +54,6 @@ jobs:
       desktop: ${{ steps.plan.outputs.desktop }}
       archive: ${{ steps.plan.outputs.archive }}
       packaging: ${{ steps.plan.outputs.packaging }}
-      full: ${{ steps.plan.outputs.full }}
-      core_versions: ${{ steps.plan.outputs.core_versions }}
     steps:
       - name: Check out the exact revision and its parents without credentials
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -168,9 +166,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The plan's interpreters: both on a full plan, the newest only on a
-        # reduced pull request plan.  A failed or empty plan runs both.
-        python-version: ${{ fromJSON(needs.changes.result == 'success' && needs.changes.outputs.core_versions || '["3.12","3.13"]') }}
+        python-version: ["3.12", "3.13"]
     env:
       CHECK_ID: core-python-${{ matrix.python-version }}
     steps:
@@ -394,9 +390,8 @@ jobs:
           --plan "$RUNNER_TEMP/ci-plan.json"
       - name: Create the gate evidence root
         run: mkdir -p "$RUNNER_TEMP/gate-evidence"
-      # A reduced plan runs core on Python 3.13 only.
       - name: Download the Python 3.12 gate evidence
-        if: steps.plan.outputs.core == 'true' && steps.plan.outputs.full == 'true'
+        if: steps.plan.outputs.core == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-

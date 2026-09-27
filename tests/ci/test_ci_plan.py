@@ -830,7 +830,7 @@ def test_expected_results_for_partial_desktop_selection() -> None:
     assert {job for job, allowed in production.items() if allowed == {"skipped"}} == (
         LANE_PRODUCTION_JOBS["archive"] | LANE_PRODUCTION_JOBS["packaging"]
     )
-    assert selected_checks(plan) == {"core-python-3.13"} | LANE_CHECKS["desktop"]
+    assert selected_checks(plan) == LANE_CHECKS["core"] | LANE_CHECKS["desktop"]
 
 
 def test_a_desktop_source_plan_runs_the_archive_jobs_but_not_the_rpm_lifecycle() -> (
@@ -846,30 +846,17 @@ def test_a_desktop_source_plan_runs_the_archive_jobs_but_not_the_rpm_lifecycle()
     )
     assert expected_ci_results(plan)["fedora-podman"] == {"skipped"}
     assert selected_checks(plan) == (
-        {"core-python-3.13"} | LANE_CHECKS["desktop"] | LANE_CHECKS["archive"]
+        LANE_CHECKS["core"] | LANE_CHECKS["desktop"] | LANE_CHECKS["archive"]
     )
 
 
-def test_core_versions_follow_the_plan_fullness() -> None:
-    assert ci_plan.core_versions_for(True) == ("3.12", "3.13")
-    assert ci_plan.core_versions_for(False) == ("3.13",)
-    # The full-plan-only checks are exactly the core legs a reduced plan drops.
-    dropped = {
-        f"core-python-{version}"
-        for version in ci_plan.CORE_VERSIONS_FULL
-        if version not in ci_plan.CORE_VERSIONS_REDUCED
-    }
-    assert dropped == ci_plan.FULL_PLAN_ONLY_CHECKS
-    assert {
-        f"core-python-{version}" for version in ci_plan.CORE_VERSIONS_FULL
-    } == LANE_CHECKS["core"]
+def test_every_plan_with_core_requires_both_core_interpreters() -> None:
+    """Core runs Python 3.12 and 3.13 on every plan, reduced or full."""
 
-
-def test_a_reduced_plan_requires_the_newest_core_check_only() -> None:
-    assert selected_checks(_plan("lint", "core")) == {"core-python-3.13"}
+    assert LANE_CHECKS["core"] == {"core-python-3.12", "core-python-3.13"}
+    assert selected_checks(_plan("lint", "core")) == LANE_CHECKS["core"]
     full = full_plan(MERGE, "x")
     assert selected_checks(full) == frozenset().union(*LANE_CHECKS.values())
-    assert "core-python-3.12" in selected_checks(full)
 
 
 def test_expected_results_for_the_full_and_docs_plans() -> None:
@@ -927,11 +914,7 @@ def test_compute_writes_the_plan_and_every_lane_output(tmp_path: Path) -> None:
     assert plan.full
     lines = github_output.read_text().splitlines()
     assert lines[0] == f"plan={plan.to_json()}"
-    assert lines[1:] == [
-        *(f"{lane}=true" for lane in LANES),
-        "full=true",
-        'core_versions=["3.12","3.13"]',
-    ]
+    assert lines[1:] == [f"{lane}=true" for lane in LANES]
     text = summary.read_text()
     assert "full graph" in text and "Merge parents" in text
 
@@ -995,33 +978,9 @@ def test_effective_writes_the_union_and_lists_mismatches(tmp_path: Path) -> None
     assert code == 0
     assert Plan.from_json(output.read_text()).full
     assert "core=true" in github_output.read_text().splitlines()
-    assert "full=true" in github_output.read_text().splitlines()
     text = summary.read_text()
     assert "Upstream and recomputed plans differ" in text
     assert "Merge parents" in text
-
-
-def test_a_reduced_plan_publishes_the_newest_core_interpreter_only(
-    tmp_path: Path,
-) -> None:
-    github_output = tmp_path / "github-output"
-    arguments = ci_plan._parser().parse_args(
-        [
-            "compute",
-            "--event-name",
-            "pull_request",
-            "--checked-out",
-            MERGE,
-            "--output",
-            str(tmp_path / "plan.json"),
-            "--github-output",
-            str(github_output),
-        ]
-    )
-    ci_plan._write_outputs(_plan("lint", "core"), arguments)
-    lines = github_output.read_text().splitlines()
-    assert lines[-2:] == ["full=false", 'core_versions=["3.13"]']
-    assert json.loads(lines[-1].split("=", 1)[1]) == ["3.13"]
 
 
 def test_the_program_runs_standalone_with_the_standard_library(

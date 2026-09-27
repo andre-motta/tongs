@@ -86,6 +86,24 @@ def test_aggregate_rejects_every_non_success_selected_lane(result: object) -> No
         verify_aggregate_results(json.dumps(results), FULL)
 
 
+def test_a_partial_rerun_passes_once_every_rerun_lane_passes() -> None:
+    """The ``needs`` context holds each job's latest attempt after a rerun.
+
+    Attempt 2 reran only the failed desktop production lane and it passed, so
+    every selected lane now reports success, whichever attempt produced it.
+    """
+
+    verify_aggregate_results(json.dumps(_results(FULL)), FULL)
+
+
+@pytest.mark.parametrize("lane", ["core", "desktop-production", "fedora-podman"])
+def test_a_lane_still_failing_after_a_partial_rerun_fails_the_aggregate(
+    lane: str,
+) -> None:
+    with pytest.raises(VerificationError, match=f"{lane}='failure'"):
+        verify_aggregate_results(json.dumps(_results(FULL, **{lane: "failure"})), FULL)
+
+
 @pytest.mark.parametrize("result", ["failure", "success", "cancelled", None])
 @pytest.mark.parametrize("job", ["core", "lint-and-format", "desktop-production"])
 def test_a_deselected_lane_must_report_exactly_skipped(

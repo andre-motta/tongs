@@ -177,8 +177,8 @@ skip. The [CI guide](.agents/ci/README.md#hosted-workflows) has the lane table
 and the label and cancellation rules.
 
 `release-desktop.yml` (Unpublished desktop candidate attestation) also runs on
-pull requests into `main` that match its path filter, on pushes to its named
-branches, on stable `vX.Y.Z` tags, and on a manual `workflow_dispatch` dry run.
+pull requests into `main` that match its path filter, on stable `vX.Y.Z` tags,
+and on a manual `workflow_dispatch` dry run from `main`.
 
 `desktop-rpm.yml` (Desktop Fedora RPM), `desktop-python-rpms.yml` (Desktop Python
 companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are manual

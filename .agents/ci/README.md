@@ -194,9 +194,11 @@ created as a draft and published only after every asset is confirmed. Its
 version can be on PyPI before its desktop release exists; the installer reports
 that state and asks for a retry.
 
-A `workflow_dispatch` of `release-desktop.yml` with `dry_run` set runs the
-build, signing, verification and RPM rebuild on a branch and publishes nothing.
-It is the rehearsal to run before pushing a tag. `tests/ci/test_release_publication_workflow.py`
+A `workflow_dispatch` of `release-desktop.yml` from `main` with `dry_run` set
+runs the build, signing, verification and RPM rebuild and publishes nothing.
+It is the rehearsal to run before pushing a tag:
+`gh workflow run release-desktop.yml --ref main -f dry_run=true`. The publish
+job, including the draft-release lookup, only runs on the tag itself. `tests/ci/test_release_publication_workflow.py`
 pins the trigger, permission and step-order contract.
 
 `docs/releases/<tag>.md` is both a site page and the GitHub Release body.

@@ -6,10 +6,9 @@ name: Unpublished desktop candidate attestation
 # the running core, so the release must exist under exactly that tag and must
 # be immutable before the installer will accept it.
 #
-# A branch push still runs the unpublished candidate path: build, sign and
-# verify, publish nothing.  A manual dispatch with dry_run runs the same plus
-# the RPM rebuild, and still publishes nothing.  Only the tag push reaches the
-# publish job.
+# A manual dispatch from main with dry_run builds, signs and verifies the
+# candidate and rebuilds the RPMs, and publishes nothing.  Run it before
+# pushing a release tag.  Only the tag push reaches the publish job.
 
 on:
   pull_request:
@@ -25,9 +24,6 @@ on:
       - src/tongs/desktop/artifact_contract/**
       - src/tongs/desktop/installer/**
   push:
-    branches:
-      - feat/desktop-120-candidate-attestation
-      - feat/desktop-app
     tags:
       # Stable releases only.  The pattern must match the whole ref name, so
       # this admits v1.0.0 and refuses v1.0.0rc1, v1.0 and desktop-v1.0.0.
@@ -38,7 +34,7 @@ on:
     inputs:
       dry_run:
         description: >-
-          Build, sign, verify and rebuild the RPMs for this branch without
+          Build, sign, verify and rebuild the RPMs from main without
           publishing anything.  The only publishing path is a vX.Y.Z tag push;
           a dispatch with this unset runs nothing.
         type: boolean
@@ -122,13 +118,10 @@ jobs:
       github.repository_id == '1305350434' &&
       github.repository_owner_id == '30708955' &&
       ((github.event_name == 'push' &&
-        (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
-         github.ref == 'refs/heads/feat/desktop-app' ||
-         startsWith(github.ref, 'refs/tags/v'))) ||
+        startsWith(github.ref, 'refs/tags/v')) ||
        (github.event_name == 'workflow_dispatch' &&
         inputs.dry_run == true &&
-        (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
-         github.ref == 'refs/heads/feat/desktop-app')))
+        github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     permissions:
@@ -276,13 +269,10 @@ jobs:
       github.repository_id == '1305350434' &&
       github.repository_owner_id == '30708955' &&
       ((github.event_name == 'push' &&
-        (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
-         github.ref == 'refs/heads/feat/desktop-app' ||
-         startsWith(github.ref, 'refs/tags/v'))) ||
+        startsWith(github.ref, 'refs/tags/v')) ||
        (github.event_name == 'workflow_dispatch' &&
         inputs.dry_run == true &&
-        (github.ref == 'refs/heads/feat/desktop-120-candidate-attestation' ||
-         github.ref == 'refs/heads/feat/desktop-app')))
+        github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

@@ -55,6 +55,8 @@ def test_the_tag_filter_admits_only_stable_version_tags(
 ) -> None:
     triggers = workflow[True]
     assert triggers["push"]["tags"] == [RELEASE_TAG_FILTER]
+    # Only a release tag push runs this workflow; branch pushes do not.
+    assert set(triggers["push"]) == {"tags"}
     # The same filter pattern must gate the PyPI publication, or one tag would
     # publish the core without the desktop or the other way round.
     publish = yaml.safe_load(PUBLISH_WORKFLOW.read_text())
@@ -121,6 +123,8 @@ def test_the_signing_and_publish_jobs_run_for_a_tag_push_only_as_expected(
         assert "startsWith(github.ref, 'refs/tags/v')" in condition
         assert "github.event_name == 'push'" in condition
         assert "inputs.dry_run == true" in condition
+        # A dry run is dispatched from main; no other branch builds a candidate.
+        assert re.findall(r"refs/heads/[\w./-]+", condition) == ["refs/heads/main"]
     publish = " ".join(jobs["release-publish"]["if"].split())
     assert "github.event_name == 'push'" in publish
     assert "startsWith(github.ref, 'refs/tags/v')" in publish

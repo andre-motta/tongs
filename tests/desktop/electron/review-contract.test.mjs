@@ -139,7 +139,7 @@ test("review mutation errors use fixed actionable copy without forwarding servic
   assert.match(reviewMutationMessage("invalid_input"), /Check the review action input/);
   assert.equal(
     reviewMutationMessage("raw backend exception with /secret/path"),
-    "The review action could not be completed. Refresh the review before deciding whether to retry.",
+    "The review action failed unexpectedly. Retry the action; if it fails again, check the desktop service diagnostics.",
   );
 });
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import sys
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
@@ -100,6 +101,7 @@ from tongs.services import (
     ServiceError,
     ServiceEvent,
 )
+from tongs.services.errors import translate_error
 
 SUPPORTED_CAPABILITIES = frozenset(
     {
@@ -571,7 +573,13 @@ class DesktopSidecarServer:
             await self._write_error(frame.request_id, _plugin_protocol_error(error))
         except (BrokenPipeError, ConnectionError):
             self._stopping = True
-        except Exception:  # noqa: BLE001 - operation boundary must stay redacted.
+        except Exception as error:  # noqa: BLE001 - operation boundary must stay redacted.
+            safe = translate_error(error, operation=frame.method)
+            print(
+                f"tongs desktop operation failed: method={frame.method} "
+                f"code={safe.code.value} message={safe.message}",
+                file=sys.stderr,
+            )
             if context.response_started:
                 self._stopping = True
                 return

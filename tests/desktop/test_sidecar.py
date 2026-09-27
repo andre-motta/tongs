@@ -13,6 +13,7 @@ from typing import cast
 import pytest
 
 from tongs.config import Config
+from tongs.desktop import sidecar
 from tongs.desktop.protocol.messages import JsonObject
 from tongs.desktop.protocol.server import (
     DesktopSidecarServer,
@@ -543,3 +544,19 @@ async def test_actual_sidecar_handshake_read_shutdown_and_hostile_frame(
         if process.returncode is None:
             process.kill()
             await process.wait()
+
+
+def test_sidecar_main_logs_redacted_unexpected_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fail() -> None:
+        raise RuntimeError("secret-token=/private/path")
+
+    monkeypatch.setattr(sidecar, "run_stdio", fail)
+
+    assert sidecar.main() == 1
+    stderr = capsys.readouterr().err
+    assert "code=internal" in stderr
+    assert "message=The operation failed." in stderr
+    assert "secret-token" not in stderr
+    assert "/private/path" not in stderr

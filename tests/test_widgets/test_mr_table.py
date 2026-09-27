@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+from textual.app import App, ComposeResult
+
 from tongs.forges.models import (
     CIStatus,
     ForgeHost,
@@ -11,8 +14,9 @@ from tongs.forges.models import (
     MRSummary,
     User,
 )
+from tongs.helpers import forge_label
 from tongs.scanner.repo import ForgeType
-from tongs.widgets.mr_table import sort_mrs
+from tongs.widgets.mr_table import MRTable, sort_mrs
 
 
 def _make_mr(
@@ -22,12 +26,14 @@ def _make_mr(
     ci_status: CIStatus = CIStatus.SUCCESS,
     updated_at: datetime | None = None,
     created_at: datetime | None = None,
+    hostname: str = "gitlab.example.com",
+    forge_type: ForgeType = ForgeType.GITLAB,
 ) -> MRSummary:
     return MRSummary(
         forge_host=ForgeHost(
-            hostname="gitlab.example.com",
-            forge_type=ForgeType.GITLAB,
-            api_base="https://gitlab.example.com/api/v4",
+            hostname=hostname,
+            forge_type=forge_type,
+            api_base=f"https://{hostname}/api/v4",
         ),
         repo_path="org/repo",
         local_path="/tmp/repo",
@@ -113,3 +119,39 @@ class TestSortMrsByAuthor:
         result = sort_mrs([mr_b, mr_a], "author")
         assert result[0].title == "Alpha"
         assert result[1].title == "Beta"
+
+
+class TestForgeMarker:
+    def test_same_helper_as_repo_list(self):
+        assert "GH" in forge_label(ForgeType.GITHUB)
+        assert "GL" in forge_label(ForgeType.GITLAB)
+        assert forge_label(ForgeType.GITHUB) != forge_label(ForgeType.GITLAB)
+
+    def test_unknown_forge_gets_placeholder(self):
+        assert "GH" not in forge_label(None) and "GL" not in forge_label(None)
+
+    @pytest.mark.asyncio
+    async def test_inbox_rows_show_gh_and_gl_markers(self):
+        github = _make_mr(
+            number=1,
+            title="From GitHub",
+            hostname="github.com",
+            forge_type=ForgeType.GITHUB,
+        )
+        gitlab = _make_mr(number=2, title="From GitLab")
+
+        class TableApp(App):
+            def compose(self) -> ComposeResult:
+                yield MRTable()
+
+        app = TableApp()
+        async with app.run_test() as pilot:
+            table = app.query_one(MRTable)
+            table.setup_columns()
+            table.add_mr_row(github)
+            table.add_mr_row(gitlab)
+            await pilot.pause()
+            first = [str(cell) for cell in table.get_row_at(0)]
+            second = [str(cell) for cell in table.get_row_at(1)]
+            assert any("GH" in cell for cell in first), first
+            assert any("GL" in cell for cell in second), second

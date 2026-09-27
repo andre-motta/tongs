@@ -9,7 +9,7 @@ from textual.widgets import DataTable
 from textual.widgets.data_table import CellDoesNotExist
 
 from tongs.forges.models import CIStatus, MRSummary
-from tongs.helpers import ci_icon, relative_time
+from tongs.helpers import ci_icon, forge_label, relative_time
 
 MR_SORT_KEYS = ("updated", "title", "ci", "author")
 
@@ -54,6 +54,7 @@ class MRTable(DataTable):
 
     def setup_columns(self, show_repo: bool = True) -> None:
         self._show_repo = show_repo
+        self.add_column("Forge", key="forge", width=5)
         self.add_column("CI", key="ci", width=4)
         self.add_column("#", key="number", width=6)
         self.add_column("Title", key="title")
@@ -68,6 +69,7 @@ class MRTable(DataTable):
         row_key = f"{mr.forge_host.hostname}:{mr.repo_path}:{mr.number}"
         self._mr_data[row_key] = mr
         row = [
+            forge_label(mr.forge_host.forge_type),
             ci,
             str(mr.number),
             f"{draft}{mr.title}",

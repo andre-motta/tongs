@@ -10,16 +10,9 @@ from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Input, Static
 
+from tongs.helpers import forge_label
 from tongs.scanner.repo import ForgeType, Repo
 from tongs.services.errors import ServiceError
-
-
-def _forge_label(forge_type: ForgeType | None) -> str:
-    if forge_type == ForgeType.GITLAB:
-        return "[blue]GL[/]"
-    if forge_type == ForgeType.GITHUB:
-        return "[white]GH[/]"
-    return "[dim]--[/]"
 
 
 class RepoListScreen(Screen):
@@ -146,14 +139,14 @@ class RepoListScreen(Screen):
             key = str(repo.path)
             self._repo_data[key] = repo
             row = [
-                _forge_label(repo.forge_type),
+                forge_label(repo.forge_type),
                 repo.display_name,
             ]
             if show_host:
                 row.append(repo.hostname or "")
             table.add_row(*row, key=key)
 
-        forge_label = {
+        filter_label = {
             None: "All",
             ForgeType.GITHUB: "GH",
             ForgeType.GITLAB: "GL",
@@ -165,11 +158,11 @@ class RepoListScreen(Screen):
         sort_label = f"[dim]sort:{self._sort_key}[/]"
         if shown == total:
             status.update(
-                f"[dim]{total} repositories[/]  [bold][{forge_label}][/]  {sort_label}"
+                f"[dim]{total} repositories[/]  [bold][{filter_label}][/]  {sort_label}"
             )
         else:
             status.update(
-                f"[dim]{shown} of {total} repositories[/]  [bold][{forge_label}][/]  {sort_label}"
+                f"[dim]{shown} of {total} repositories[/]  [bold][{filter_label}][/]  {sort_label}"
             )
 
     def action_cycle_sort(self) -> None:

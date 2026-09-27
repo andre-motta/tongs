@@ -7,6 +7,16 @@ from datetime import UTC, datetime
 from rich.style import Style
 
 from tongs.forges.models import CIStatus
+from tongs.scanner.repo import ForgeType
+
+
+def forge_label(forge_type: ForgeType | None) -> str:
+    """Short GH / GL marker shared by the repo list and the inbox."""
+    if forge_type == ForgeType.GITLAB:
+        return "[blue]GL[/]"
+    if forge_type == ForgeType.GITHUB:
+        return "[white]GH[/]"
+    return "[dim]--[/]"
 
 
 def relative_time(dt: datetime | None) -> str:

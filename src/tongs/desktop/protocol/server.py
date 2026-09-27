@@ -909,12 +909,17 @@ class DesktopSidecarServer:
             required=frozenset({"snapshot", "resource", "cursor"}),
         )
         self._handles.resolve(params["resource"], HandleKind.REVIEW, ReviewRef)
-        return self._discussions_page_wire(
+        value = self._discussions_page_wire(
             params["snapshot"],
             params["resource"],
             params["cursor"],
             params.get("max_items", _DISCUSSION_PAGE_ITEMS),
         )
+        # The renderer never reads a finished snapshot again, so the last page
+        # releases it instead of letting it crowd diff and log snapshots.
+        if value.get("next_cursor") is None:
+            self._snapshots.expire(cast(str, value["snapshot_id"]))
+        return value
 
     async def _discussions_all(
         self, params: JsonObject, _context: RequestContext

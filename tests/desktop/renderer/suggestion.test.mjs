@@ -89,6 +89,16 @@ test("suggestions reject stale sides, gaps, deletion rows, and partial source", 
     suggestionDisabledReason(selection([source(2, null, "gone", "deletion")]), "gitlab"),
     /new-side source lines/,
   );
+  // A deletion row is refused for its type, even when it carries a new-side
+  // line number, and so is the no-newline marker row.
+  assert.match(
+    suggestionDisabledReason(selection([source(2, 2, "gone", "deletion")]), "gitlab"),
+    /only new-side source lines/,
+  );
+  assert.match(
+    suggestionDisabledReason(selection([source(2, 2, "", "no_newline")]), "gitlab"),
+    /only new-side source lines/,
+  );
   assert.match(
     suggestionDisabledReason(
       { ...selection([source(1, 1, "partial")]), contextComplete: false },

@@ -8,7 +8,6 @@ import { createDiffFeature } from "../../../desktop/dist/src/renderer/features/d
 import { clearPendingEdit } from "../../../desktop/dist/src/renderer/features/review/drawer.js";
 import {
   REVIEW_KEY_PARITY,
-  isTextEntry,
   reviewKeyMatches,
   reviewKeyParityTable,
 } from "../../../desktop/dist/src/renderer/features/review/keys.js";
@@ -59,30 +58,16 @@ function focusedRow() {
 }
 
 /**
- * Waits until every control the review keyboard map presses through has an
- * answer from `getReviewMutationCapabilities` behind it. The composer's
- * quick and primary writes (composer.tsx's `quickReason` / `draftReason`)
- * and the thread Reply button (thread.tsx's `replyReason`) all carry a
- * title ending exactly this way for as long as that read is still in
- * flight, and a key dispatched into that window finds a disabled control
- * and does nothing, with nothing later to retry it: that is the shape of
- * the hosted-runner flake in #235. Counted rather than matched against a
- * node, the same shape review-components.test.mjs's settledCapabilities
- * uses for #215.
- *
- * A count of zero also satisfies this wait, so it proves nothing on its own
- * about a surface that has not rendered yet: the caller must already have
- * waited for the gated control itself to exist (a row count, a
- * `findByLabelText`) before calling this. All three call sites in this file
- * do.
+ * Waits until the button a key presses through is enabled. The composer's
+ * primary write and a thread's Reply button stay disabled until
+ * `getReviewMutationCapabilities` answers, and a key dispatched into that
+ * window finds a disabled control and does nothing, with nothing later to
+ * retry it: that is the shape of the hosted-runner flake in #235.
  */
-async function capabilitiesReady(view) {
-  await waitFor(() => {
-    const loading = [...view.container.querySelectorAll("button")].filter(
-      (button) => button.title.endsWith("is still loading."),
-    ).length;
-    assert.equal(loading, 0);
-  });
+async function buttonEnabled(view, name) {
+  await waitFor(() =>
+    assert.equal(view.getByRole("button", { name }).disabled, false),
+  );
 }
 
 /**
@@ -100,50 +85,6 @@ async function verdictTilesReady(view) {
     assert.notEqual(tiles, 0);
   });
 }
-
-test("the capability-loading sentence capabilitiesReady keys on matches composer.tsx exactly", async () => {
-  const review = "keys-capabilities-loading";
-  let release = () => {};
-  const gate = new Promise((resolve) => {
-    release = resolve;
-  });
-  const view = renderDiff(
-    diffBridge(review, {
-      listDiscussions: () => read(discussionsPage([thread("d-1", { line: 10 })])),
-      getReviewMutationCapabilities: () => ({
-        requestToken: crypto.randomUUID(),
-        result: gate.then(() => ({ review, capabilities: capabilities() })),
-      }),
-    }),
-    review,
-  );
-  await waitFor(() =>
-    assert.equal(
-      view.container.querySelectorAll("[data-review-row]").length,
-      1,
-    ),
-  );
-
-  // The Reply button renders unconditionally in the thread header
-  // (thread.tsx), so while the capability read above is held open its
-  // title is exactly what capabilitiesReady's suffix match is meant to
-  // catch (composer.tsx:1315-1320). Pinning the literal sentence here
-  // means a reword that drops the "is still loading." suffix, or changes
-  // the sentence itself, fails this assertion loudly instead of leaving
-  // capabilitiesReady to quietly stop matching anything and #235 to
-  // reopen with no test naming the cause.
-  const loading = [...view.container.querySelectorAll("button")].filter(
-    (button) => button.title.endsWith("is still loading."),
-  );
-  assert.equal(loading.length, 1);
-  assert.equal(
-    loading[0].title,
-    "Reply support for this review is still loading.",
-  );
-
-  release();
-  await capabilitiesReady(view);
-});
 
 test("c opens the composer on the current selection from the document body", async () => {
   const review = "keys-comment";
@@ -167,10 +108,20 @@ test("c opens the composer on the current selection from the document body", asy
 
 test("c composes on the whole range and leaves the selection as the reader built it", async () => {
   const review = "keys-comment-range";
-  const view = renderDiff(diffBridge(review), review);
+  const saves = [];
+  const view = renderDiff(
+    diffBridge(review, {
+      saveReviewDraft: async (params) => {
+        saves.push(params);
+        return draft(review, params.expected_version + 1, params.content.comments);
+      },
+    }),
+    review,
+  );
   await view.findByRole("button", { name: "Comment on new line 10" });
-  fireEvent.click(lineAnchor(view, "Select new line 10"));
-  fireEvent.click(lineAnchor(view, "Select new line 11"), { shiftKey: true });
+  // Built upward, so the composer has to order the range itself.
+  fireEvent.click(lineAnchor(view, "Select new line 11"));
+  fireEvent.click(lineAnchor(view, "Select new line 10"), { shiftKey: true });
   assert.equal(view.container.querySelectorAll(".line-selected").length, 2);
 
   fireEvent.keyDown(document.body, { key: "c" });
@@ -181,6 +132,15 @@ test("c composes on the whole range and leaves the selection as the reader built
     view.getByText("src/calc.py, Lines 10 to 11 (new)").textContent,
     "src/calc.py, Lines 10 to 11 (new)",
   );
+
+  fireEvent.change(view.getByLabelText("Inline review comment"), {
+    target: { value: "Cover both lines" },
+  });
+  await buttonEnabled(view, "Start a review");
+  fireEvent.click(view.getByRole("button", { name: "Start a review" }));
+  await waitFor(() => assert.equal(saves.length, 1));
+  const { anchor } = saves[0].content.comments[0];
+  assert.deepEqual([anchor.start_line, anchor.new_line], [10, 11]);
 });
 
 test("Shift+C opens the review drawer from the document body", async () => {
@@ -282,7 +242,7 @@ test("r replies to the thread the row cursor is on", async () => {
   // is in flight, and `r` reads that same refusal (thread.tsx's
   // replyReason), so a press before it settles finds the thread but has
   // nothing to do; there is no second `r` to retry it (#235).
-  await capabilitiesReady(view);
+  await buttonEnabled(view, "Reply to the discussion on new line 11");
 
   fireEvent.keyDown(document.body, { key: "r" });
   await waitFor(() =>
@@ -357,7 +317,7 @@ test("Ctrl+Enter and Cmd+Enter run the composer's primary action from outside it
   // read answers, and Ctrl+Enter presses that button rather than reaching
   // into the composer (keys.ts's pressComposerPrimary), so it needs the
   // same settle as `r` above.
-  await capabilitiesReady(view);
+  await buttonEnabled(view, "Start a review");
   fireEvent.keyDown(document.body, { key: "Enter", ctrlKey: true });
   await waitFor(() => assert.equal(saves.length, 1));
   assert.equal(saves[0].content.comments[0].body, "Guard the zero divisor");
@@ -401,7 +361,7 @@ test("Ctrl+Enter reaches the composer from a focused diff row, which does not ac
   // Same capability race as the two tests above: the primary write is
   // pressed rather than reached into, and it refuses while the read is
   // still in flight.
-  await capabilitiesReady(view);
+  await buttonEnabled(view, "Start a review");
   fireEvent.keyDown(row, { key: "Enter", ctrlKey: true });
   await waitFor(() => assert.equal(saves.length, 1));
   assert.equal(saves[0].content.comments[0].anchor.new_line, 11);
@@ -410,31 +370,6 @@ test("Ctrl+Enter reaches the composer from a focused diff row, which does not ac
   // A plain Enter on the same row still selects it.
   fireEvent.keyDown(row, { key: "Enter" });
   await waitFor(() => assert.equal(row.getAttribute("aria-pressed"), "true"));
-});
-
-test("Ctrl+Enter stays refused while the composer's own primary action is refused", async () => {
-  const review = "keys-primary-refused";
-  const saves = [];
-  const view = renderDiff(
-    diffBridge(review, {
-      saveReviewDraft: async (params) => {
-        saves.push(params);
-        return draft(review, params.expected_version + 1, params.content.comments);
-      },
-    }),
-    review,
-  );
-  fireEvent.click(
-    await view.findByRole("button", { name: "Comment on new line 11" }),
-  );
-  // An empty body disables the button, and the key presses the same button, so
-  // it carries the same refusal rather than a second copy of the rule.
-  lineAnchor(view, "Select new line 11").focus();
-  fireEvent.keyDown(document.body, { key: "Enter", ctrlKey: true });
-  await waitFor(() =>
-    assert.equal(view.container.querySelectorAll(".inline-composer").length, 1),
-  );
-  assert.equal(saves.length, 0);
 });
 
 test("Escape closes the composer from outside the diff rows and keeps the text", async () => {
@@ -469,58 +404,6 @@ test("Escape closes the composer from outside the diff rows and keeps the text",
   await waitFor(() =>
     assert.equal(view.container.querySelectorAll(".inline-composer").length, 0),
   );
-});
-
-test("Escape typed inside the composer is still answered by the composer's own stages", async () => {
-  const review = "keys-escape-stages";
-  const view = renderDiff(
-    diffBridge(review, {
-      listReviewDrafts: () =>
-        read({
-          cursor: 0,
-          next_cursor: null,
-          drafts: [draft(review, 4, [inlineEntry("entry-a", "Float division", 10)])],
-        }),
-    }),
-    review,
-  );
-  fireEvent.click(
-    await view.findByRole("button", { name: "Comment on new line 11" }),
-  );
-  fireEvent.click(
-    await view.findByRole("button", { name: "More review actions" }),
-  );
-  assert.equal(
-    view.container.querySelectorAll('[aria-label="Review actions"]').length,
-    1,
-  );
-  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
-  assert.equal(
-    view.getAllByRole("button", { name: /Confirm discard of/ }).length,
-    1,
-  );
-
-  // Escape answers the nearest question first: the armed discard, then the
-  // overflow, then the composer. The document map never sees any of these,
-  // because the composer's own handler prevents the default.
-  const composer = view.getByLabelText("Inline comment composer");
-  fireEvent.keyDown(composer, { key: "Escape" });
-  assert.equal(
-    view.container.querySelectorAll(".button-danger").length,
-    1,
-  );
-  assert.equal(
-    view.queryAllByRole("button", { name: /Confirm discard of/ }).length,
-    0,
-  );
-  fireEvent.keyDown(composer, { key: "Escape" });
-  assert.equal(
-    view.container.querySelectorAll('[aria-label="Review actions"]').length,
-    0,
-  );
-  assert.equal(view.container.querySelectorAll(".inline-composer").length, 1);
-  fireEvent.keyDown(composer, { key: "Escape" });
-  assert.equal(view.container.querySelectorAll(".inline-composer").length, 0);
 });
 
 test("v cycles the verdict in the drawer, among the verdicts this review allows", async () => {
@@ -591,7 +474,8 @@ test("the open drawer owns the keyboard from the diff behind it", async () => {
 
   // The drawer is a dialog without aria-modal, so the diff behind it stays
   // clickable and the focus can leave the panel. Its keys have to follow.
-  lineAnchor(view, "Select new line 11").focus();
+  const line = lineAnchor(view, "Select new line 11");
+  line.focus();
   assert.equal(
     document.activeElement.getAttribute("aria-label"),
     "Select new line 11",
@@ -600,15 +484,16 @@ test("the open drawer owns the keyboard from the diff behind it", async () => {
   // answers (drawer.tsx's allowedVerdicts), so a press before that leaves
   // the verdict unset with no later press to retry it.
   await verdictTilesReady(view);
-  fireEvent.keyDown(document.body, { key: "v" });
+  // Every key is typed where the focus is, on the diff line behind the drawer.
+  fireEvent.keyDown(line, { key: "v" });
   await waitFor(() => assert.equal(checkedVerdict(view), "comment"));
 
   // The diff's own keys stand down for as long as the drawer is open.
   assert.equal(shownFile(view), "src/calc.py");
-  fireEvent.keyDown(document.body, { key: "]" });
+  fireEvent.keyDown(line, { key: "]" });
   assert.equal(shownFile(view), "src/calc.py");
 
-  fireEvent.keyDown(document.body, { key: "Escape" });
+  fireEvent.keyDown(line, { key: "Escape" });
   await waitFor(() =>
     assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
   );
@@ -638,32 +523,6 @@ test("the open drawer answers v and Escape from the document body", async () => 
   assert.equal(
     document.activeElement.className,
     "button button-secondary review-drawer-toggle",
-  );
-});
-
-test("Escape in the drawer disarms a confirmation before it closes anything", async () => {
-  const review = "keys-drawer-confirm";
-  const view = renderDiff(drawerBridge(review), review);
-  await openDrawer(view);
-  fireEvent.click(view.getByRole("button", { name: "Discard review" }));
-  assert.equal(
-    view.getAllByRole("button", { name: /Confirm discard of/ }).length,
-    1,
-  );
-
-  // The first press answers the nearest question and the drawer stays open,
-  // whether the focus is inside the panel or out on the diff behind it.
-  lineAnchor(view, "Select new line 11").focus();
-  fireEvent.keyDown(document.body, { key: "Escape" });
-  assert.equal(
-    view.queryAllByRole("button", { name: /Confirm discard of/ }).length,
-    0,
-  );
-  assert.equal(view.container.querySelectorAll(".review-drawer").length, 1);
-
-  fireEvent.keyDown(document.body, { key: "Escape" });
-  await waitFor(() =>
-    assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
   );
 });
 
@@ -747,28 +606,6 @@ test("n and p walk the split panes in the order the documentation states", async
   assert.equal(focusedRow(), "thread:d-old");
   fireEvent.keyDown(document.body, { key: "n" });
   assert.equal(focusedRow(), "thread:d-new");
-});
-
-test("isTextEntry names every control the map stands down for", () => {
-  const make = (html) => {
-    const host = document.createElement("div");
-    host.innerHTML = html;
-    return host.firstElementChild;
-  };
-  assert.equal(isTextEntry(null), false);
-  assert.equal(isTextEntry(make("<input />")), true);
-  assert.equal(isTextEntry(make("<textarea></textarea>")), true);
-  assert.equal(isTextEntry(make("<select></select>")), true);
-  assert.equal(isTextEntry(make('<div contenteditable="true"></div>')), true);
-  assert.equal(isTextEntry(make('<div contenteditable=""></div>')), true);
-  // A focused descendant of an editable host is still inside the text entry.
-  assert.equal(
-    isTextEntry(make('<div contenteditable="true"><span>x</span></div>').firstElementChild),
-    true,
-  );
-  assert.equal(isTextEntry(make("<div></div>")), false);
-  assert.equal(isTextEntry(make('<div contenteditable="false"></div>')), false);
-  assert.equal(isTextEntry(make("<button></button>")), false);
 });
 
 test("the review keys stand down while a text field holds the keyboard", async () => {

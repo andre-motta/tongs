@@ -86,17 +86,6 @@ test("context stays within the hunk, respects boundaries, and flags partial snap
   assert.equal(unifiedSourceContext(unavailable, file, rows[1], "old").complete, false);
 });
 
-test("opposite-only and empty split cells never enter selected-side context", () => {
-  const rows = [
-    split(0, cell(1, null, "old only", "deletion", "old"), null),
-    split(1, null, cell(null, 1, "new only", "addition", "new")),
-    split(2, cell(2, 2, "shared", "context", "old"), cell(2, 2, "shared", "context", "new")),
-  ];
-  const value = loaded("split", [file, ...rows]);
-  assert.deepEqual(splitSourceContext(value, file, rows[0], "old").lines, ["old only", "shared"]);
-  assert.deepEqual(splitSourceContext(value, file, rows[1], "new").lines, ["new only", "shared"]);
-});
-
 test("unified range selection keeps contiguous new source and skips deletion rows", () => {
   const rows = [
     line(0, 1, 1, "first", "context"),

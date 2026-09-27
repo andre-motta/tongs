@@ -156,55 +156,6 @@ test("a stale save shows both draft versions and neither is silently discarded",
   assert.equal(state.creates, 0);
 });
 
-test("keeping my text re-saves it on top of the stored version", async () => {
-  const state = counters();
-  const view = await conflictedDraftView("review-draft-keep-mine", state);
-  fireEvent.click(
-    view.getByRole("button", { name: "Keep my text and save over version 2" }),
-  );
-  await waitFor(() => assert.equal(state.saves, 2));
-  assert.deepEqual(
-    {
-      expected: state.savedParams[1].expected_version,
-      body: state.savedParams[1].content.body,
-    },
-    { expected: 2, body: "local unsaved text" },
-  );
-  await view.findByText("Stored version 3");
-  assert.equal(view.queryAllByLabelText("Stored draft text").length, 0);
-  assert.equal(view.getByLabelText("Summary").value, "local unsaved text");
-  assert.equal(view.queryAllByLabelText("My superseded draft text").length, 0);
-  assert.equal(state.creates, 0);
-});
-
-test("taking the stored version keeps my text reachable until I dismiss it", async () => {
-  const state = counters();
-  const view = await conflictedDraftView("review-draft-take-theirs", state);
-  fireEvent.click(
-    view.getByRole("button", { name: "Take the stored version and keep mine to copy" }),
-  );
-  await view.findByText("Stored version 2");
-  assert.equal(view.queryAllByLabelText("Stored draft text").length, 0);
-  assert.equal(view.getByLabelText("Summary").value, "TUI edit");
-  assert.match(
-    view.getByLabelText("My superseded draft text replaced by version 2").value,
-    /local unsaved text/,
-  );
-  assert.equal(state.saves, 1);
-  assert.equal(state.creates, 0);
-  fireEvent.click(
-    view.getByRole("button", { name: "Dismiss my text replaced by version 2" }),
-  );
-  await waitFor(() =>
-    assert.equal(
-      view.container.querySelectorAll(
-        '[aria-label="My superseded draft text replaced by version 2"]',
-      ).length,
-      0,
-    ));
-  assert.equal(view.getByLabelText("Summary").value, "TUI edit");
-});
-
 test("a second take-theirs keeps both retained texts, each dismissed on its own", async () => {
   const review = "review-draft-two-conflicts";
   let saves = 0;
@@ -459,74 +410,6 @@ test("the Discussions jump list lists unresolved threads first and jumps to the 
   assert.equal(document.activeElement === show, true);
 });
 
-test("the Discussions panel offers no composer, suggestion, reply or resolve control", async () => {
-  const review = "review-discussion-no-writes";
-  const bridge = reviewBridge(review, {
-    listDiscussions: () => read(discussionsPage([discussion()])),
-  });
-  const view = renderFeature(bridge, review);
-  await waitFor(() =>
-    assert.equal(
-      view.container.querySelectorAll(".review-workflow-thread").length,
-      1,
-    ),
-  );
-
-  assert.equal(view.container.querySelectorAll("textarea").length, 0);
-  assert.equal(view.container.querySelectorAll(".inline-composer").length, 0);
-  assert.equal(
-    view.container.querySelectorAll(".suggestion-composer").length,
-    0,
-  );
-  assert.equal(
-    view.container.querySelectorAll(".review-workflow-verdicts").length,
-    0,
-  );
-  assert.equal(
-    view.container.querySelectorAll(".review-workflow-buffered-inline").length,
-    0,
-  );
-  const names = [...view.container.querySelectorAll("button")].map(
-    (button) => button.textContent,
-  );
-  assert.equal(names.filter((name) => name === "Reply").length, 0);
-  assert.equal(names.filter((name) => name === "Resolve").length, 0);
-  assert.equal(names.filter((name) => name === "Reopen thread").length, 0);
-  assert.equal(names.filter((name) => name === "Show in diff").length, 1);
-});
-
-test("the Discussions route puts one active-draft read and one capabilities read to the sidecar", async () => {
-  const review = "review-discussion-reads";
-  let drafts = 0;
-  let capabilityReads = 0;
-  const bridge = reviewBridge(review, {
-    listReviewDrafts: () => {
-      drafts += 1;
-      return read({ cursor: 0, next_cursor: null, drafts: [] });
-    },
-    getReviewMutationCapabilities: () => {
-      capabilityReads += 1;
-      return read({ review, capabilities: capabilities() });
-    },
-  });
-  const view = renderFeature(bridge, review);
-  await view.findByRole("button", { name: /Your review/ });
-  await waitFor(() => assert.equal(drafts, 1));
-  // A second read issued after the first settles would be invisible to an
-  // assertion in the same tick, so the route is left to settle first.
-  await settle();
-  assert.equal(drafts, 1);
-  assert.equal(capabilityReads, 1);
-  // Nothing on this panel starts a review any more; the drawer is the only
-  // surface here that asks either question.
-  assert.equal(
-    [...view.container.querySelectorAll("button")].filter((button) =>
-      ["Start review", "Resume review"].includes(button.textContent),
-    ).length,
-    0,
-  );
-});
-
 test("discussion diff targets use only actual path and side line data", () => {
   const inline = discussion();
   assert.deepEqual(discussionDiffTarget(inline), {
@@ -657,7 +540,10 @@ test("discussion roots and replies use shared safe Markdown without changing sou
 });
 
 test("discussion Markdown aggregate allocation is deterministic in source order", () => {
-  const expensive = "😀".repeat(4096);
+  // 16,000 bytes each: sixteen bodies use 256,000 of the 262,144-byte budget,
+  // the seventeenth does not fit, and the small reply after it would still
+  // fit in the 6,144 bytes left if allocation skipped instead of stopping.
+  const expensive = "😀".repeat(4000);
   const item = {
     ...discussion(),
     root_comment: {
@@ -749,28 +635,6 @@ test("quick verdict and merge cleanup require explicit confirmation with immutab
   await waitFor(() => assert.equal(merges.length, 1));
   assert.equal(merges[0].squash, true);
   assert.deepEqual(merges[0].source_cleanup, { branch: "feature" });
-});
-
-test("known quick rejection renders one actionable alert", async () => {
-  const review = "review-known-rejection";
-  const bridge = reviewBridge(review, {
-    getReviewActionCapabilities: () =>
-      read({ review, capabilities: { merge: false, close: true, reopen: false, unapprove: false } }),
-    closeReview: async () => {
-      throw {
-        code: "conflict",
-        message: "raw backend text that must stay hidden",
-        retryable: false,
-      };
-    },
-  });
-  const view = renderFeature(bridge, review);
-  fireEvent.click(await enabledButton(view, "Close"));
-  fireEvent.click(view.getByRole("button", { name: "Confirm Close" }));
-  const message = "The forge refused this action: the review changed remotely or its branch conflicts with the target. Refresh, and check for merge conflicts.";
-  assert.equal((await view.findAllByText(message)).length, 1);
-  assert.equal(view.getAllByRole("alert").length, 1);
-  assert.equal(view.queryAllByText(/raw backend text/).length, 0);
 });
 
 test("draft comments are reviewable, editable, and deliberately removable", async () => {

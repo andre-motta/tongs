@@ -610,6 +610,8 @@ class MRDetailScreen(Screen):
                 content,
                 current_revision=current_revision,
             )
+            if self._detached_from_app():
+                return
             self._replace_review_draft(saved.assessed_against(current_revision))
             self._draft_conflict = None
             if acknowledge_editor:
@@ -619,6 +621,8 @@ class MRDetailScreen(Screen):
                 self._open_draft_comment(edit_comment_id)
             self.notify("Draft saved locally.")
         except DraftConflictError as exc:
+            if self._detached_from_app():
+                return
             current_revision = self._current_review_revision or target.revision
             self._replace_review_draft(exc.current.assessed_against(current_revision))
             self._draft_conflict = exc.caller_content
@@ -633,21 +637,24 @@ class MRDetailScreen(Screen):
                 )
                 reopen_review = reopen_after_conflict
         except asyncio.CancelledError:
-            if acknowledge_editor:
+            if acknowledge_editor and not self._detached_from_app():
                 editor.reject_submission(
                     "Draft save was cancelled. Your text is still in the editor."
                 )
             raise
         except Exception as exc:  # noqa: BLE001 - Preserve the caller buffer on safe failure.
+            if self._detached_from_app():
+                return
             if acknowledge_editor:
                 editor.reject_submission(f"Draft was not saved. ({exc})")
             else:
                 self.notify(f"Draft was not saved. ({exc})", severity="error")
         finally:
             self._draft_busy = False
-            self._refresh_draft_ui()
-            if reopen_review:
-                self.call_after_refresh(self._show_review_draft)
+            if not self._detached_from_app():
+                self._refresh_draft_ui()
+                if reopen_review:
+                    self.call_after_refresh(self._show_review_draft)
 
     def _replace_review_draft(self, draft: DraftSnapshot) -> None:
         self._review_drafts = tuple(

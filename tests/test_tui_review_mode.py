@@ -1073,6 +1073,45 @@ async def test_paused_attempt_recovers_unknown_after_restart_and_can_be_asserted
 
 
 @pytest.mark.asyncio
+async def test_leaving_detail_mid_draft_save_does_not_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _forge = _app(tmp_path)
+    save_started = asyncio.Event()
+    original_save = app.services.save_draft
+
+    async def blocked_save(*args, **kwargs):
+        save_started.set()
+        await asyncio.Event().wait()
+        return await original_save(*args, **kwargs)
+
+    monkeypatch.setattr(app.services, "save_draft", blocked_save)
+
+    async with app.run_test(size=(160, 40), notifications=True) as pilot:
+        screen = await _open_detail(app, pilot)
+        screen.action_review_draft()
+        await _wait_until(app, lambda: screen._review_draft is not None)
+        screen.action_add_comment()
+        editor = screen.query_one("#comment-editor", CommentEditor)
+        editor.query_one("#comment-input", TextArea).text = "pending local note"
+        editor.action_submit()
+        await asyncio.wait_for(save_started.wait(), timeout=2)
+
+        app.pop_screen()
+        await _wait_until(
+            app,
+            lambda: (
+                app._exception is not None
+                or (screen not in app.screen_stack and not screen._draft_busy)
+            ),
+        )
+
+        assert app._exception is None
+        assert app.is_running
+        assert screen not in app.screen_stack
+
+
+@pytest.mark.asyncio
 async def test_leaving_detail_mid_submission_records_outcome_without_exiting(
     tmp_path: Path,
 ) -> None:

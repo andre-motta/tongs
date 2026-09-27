@@ -145,7 +145,12 @@ discussion display has its own Markdown budget, so later comments can show an
 omission notice once it runs out.
 
 HTTPS links open in your external browser only when you activate them.
-Displaying a link never opens it.
+Displaying a link never opens it. Hover a link to see its full destination,
+and screen readers announce the host it opens. When a link's text looks like
+a web address on a different site than the one it really opens, even one
+spelled with lookalike characters, the real host appears next to the link, for
+example `(opens example.net)`, so a link that reads like a forge address cannot
+hide where it goes.
 
 ## Inspect pipelines, jobs, and logs
 

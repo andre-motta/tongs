@@ -28,7 +28,7 @@ launch problems that have a workaround today.
 | Issue | Milestone | What you will see |
 |---|---|---|
 | [#231](https://github.com/andre-motta/tongs/issues/231) | v1.0.1 | A submission interrupted before it sent anything still asks you to reconcile zero steps. |
-| [#232](https://github.com/andre-motta/tongs/issues/232) | v1.0.1 | A merge the forge refused because of conflicts shows the message for a review that changed remotely. |
+| [#232](https://github.com/andre-motta/tongs/issues/232) | Fixed for the next release | A merge the forge refused because of conflicts shows the message for a review that changed remotely. |
 | [#233](https://github.com/andre-motta/tongs/issues/233) | v1.1.0 | An unexpected submission error shows the generic advice to refresh, and the cause is not logged. |
 | [#251](https://github.com/andre-motta/tongs/issues/251) | v1.1.0 | Stale per-attempt review submission lock files are never deleted. |
 
@@ -42,7 +42,7 @@ launch problems that have a workaround today.
 
 | Issue | Milestone | What you will see |
 |---|---|---|
-| [#221](https://github.com/andre-motta/tongs/issues/221) | v1.1.0 | The status line covers the log search box, so the text you type is hidden. |
+| [#221](https://github.com/andre-motta/tongs/issues/221) | Fixed for the next release | The status line covers the log search box, so the text you type is hidden. |
 | [#222](https://github.com/andre-motta/tongs/issues/222) | v1.1.0 | ++f2++ in the log view exports raw ANSI color codes into your editor. |
 | [#253](https://github.com/andre-motta/tongs/issues/253) | v1.0.1 | Retrying or cancelling a job does not refresh the job list, and ++ctrl+r++ does not either. |
 | [#198](https://github.com/andre-motta/tongs/issues/198) | v1.1.0 | After the terminal app crashes, the process does not exit and you have to kill it. |

@@ -218,9 +218,24 @@ documentation toolchain is pinned by `site/package-lock.json`, which `npm ci`
 installs exactly, and every direct dependency in `site/package.json`, Astro and
 Starlight included, is an exact version rather than a range; a test in the same
 module enforces both. Other tools a workflow installs ad hoc, such as
-`build` and `ruff`, are not yet pinned and are tracked by #162. Updates to
-these pins will arrive as Dependabot pull requests once #162 (v1.1.0) lands;
-until then, bump them by hand.
+`build` and `ruff`, are not yet pinned and are tracked by #162.
+
+Jobs that hold a signing or write token install nothing that resolves fresh.
+In `release-desktop.yml`, `candidate-attestation` (`id-token: write`) and
+`release-publish` (`contents: write`) run
+`pip install --require-hashes --only-binary=:all: -r requirements/release.lock`
+and then `pip install --no-deps --no-build-isolation -e .`. The lock pins, by
+hash and as wheels only, the core runtime dependencies, Sigstore and its
+closure, `jsonschema` for the SPDX generator, and the `hatchling`, `hatch-vcs`
+and `editables` build backend. Its direct inputs are in
+`requirements/release.in`; regenerate it with the `uv pip compile` command on
+its second line, moving `--exclude-newer` forward, and check the result in a
+clean Python 3.12 venv with those two installs. `GH_TOKEN` is set only on the
+publish steps that call `gh`. `tests/ci/test_release_lock.py` enforces all of
+this for every job in every workflow that holds a write or OIDC token.
+
+Updates to these pins, the release lock included, will arrive as Dependabot
+pull requests once #162 (v1.1.0) lands; until then, bump them by hand.
 
 ## Re-running a hosted check
 

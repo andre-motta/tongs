@@ -713,7 +713,9 @@ def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
     # Four isolated interpreters: validation, transfer, signing and publish.
     assert workflow.count('-I -m venv "$RUNNER_TEMP/tongs-candidate-venv"') == 4
     assert "CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python" in workflow
-    assert workflow.count('"$CANDIDATE_PYTHON" -I -m pip install') == 4
+    # The signing and publish jobs install the hash-locked closure and then
+    # the source verifier alone, so they carry two installs each.
+    assert workflow.count('"$CANDIDATE_PYTHON" -I -m pip install') == 6
     assert '"$CANDIDATE_PYTHON" -I -m pytest' in workflow
     # prepare-transfer, validate-transfer, verify and verify-sbom, then the
     # five release publication commands.  Every candidate and release command
@@ -723,7 +725,8 @@ def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
         assert f"candidate_attestation.py {command}\n" in workflow
     for command in ("assemble", "verify", "require-absent", "verify-published"):
         assert f"release_publication.py {command}\n" in workflow
-    assert workflow.count("--isolated") == 4
+    assert workflow.count("--isolated") == 6
+    assert workflow.count("--require-hashes") == 2
     assert workflow.count("PYTHONNOUSERSITE=1") == 4
     assert workflow.count("site.ENABLE_USER_SITE is False") == 4
     assert workflow.count("tongs_path.is_relative_to(workspace)") == 4

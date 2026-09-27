@@ -47,7 +47,6 @@ LANES: tuple[str, ...] = (
     "docs",
     "lint",
     "core",
-    "desktop_fixtures",
     "fedora_podman",
     "desktop",
     "packaging",
@@ -65,7 +64,6 @@ LANE_CI_JOBS: dict[str, str] = {
     "docs": "docs",
     "lint": "lint-and-format",
     "core": "core",
-    "desktop_fixtures": "desktop-fixtures",
     "fedora_podman": "fedora-podman",
     "desktop": "desktop-production",
 }
@@ -263,7 +261,7 @@ RULES: tuple[Rule, ...] = (
             "tests/state/**",
             "examples/desktop-plugin/**",
         ),
-        lanes=frozenset({"lint", "core", "desktop_fixtures", "desktop"}),
+        lanes=frozenset({"lint", "core", "desktop"}),
     ),
     # The archive producer's _SOURCE_INPUTS outside the full-graph roots, the
     # programs the archive, archive-evidence, archive-sbom and rpm-lifecycle
@@ -285,10 +283,8 @@ RULES: tuple[Rule, ...] = (
             "tests/desktop/installer/fixtures/**",
             "tests/packaging/**",
         ),
-        lanes=frozenset({"lint", "core", "desktop_fixtures", "desktop", "packaging"}),
+        lanes=frozenset({"lint", "core", "desktop", "packaging"}),
     ),
-    # The spike prototypes run only in the desktop fixture job.
-    Rule(name="spikes", patterns=("spikes/**",), lanes=frozenset({"desktop_fixtures"})),
     # Manual native evidence tooling.  Lint checks it and core runs
     # tests/desktop/test_release_evidence_fixture.py against its Python fixture.
     Rule(

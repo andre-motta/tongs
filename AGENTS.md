@@ -168,8 +168,8 @@ The terminal application, shared services, GitHub and GitLab backends, cache,
 durable review drafts, MCP server, production Electron shell, bounded sidecar
 protocol, desktop provider host, installer, and artifact contracts are
 implemented in this tree. `.github/workflows/ci.yml` selects its lanes (docs,
-lint, core, desktop fixtures, the Fedora 44 Podman probe, desktop production
-evidence, and packaging) by the paths a pull request changes, using the rules
+lint, core, the Fedora 44 Podman probe, desktop production evidence, and
+packaging) by the paths a pull request changes, using the rules
 in `tests/ci/ci_plan.py`. Any doubt fails closed to the full graph, as do rule
 changes under `tests/ci/**`, the `ci:full` label, and every push to `main`.
 Preview a branch with `python tests/ci/ci_plan.py explain --base origin/main`.

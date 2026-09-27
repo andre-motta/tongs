@@ -33,7 +33,7 @@ def _plan(*lanes: str) -> object:
 
 DOCS_ONLY = _plan("docs")
 TUI_ONLY = _plan("lint", "core")
-DESKTOP_WITHOUT_PACKAGING = _plan("lint", "core", "desktop_fixtures", "desktop")
+DESKTOP_WITHOUT_PACKAGING = _plan("lint", "core", "desktop")
 
 
 def _results(plan: object, **overrides: str | None) -> dict[str, object]:
@@ -147,8 +147,8 @@ def test_no_fallback_is_recorded_when_changes_succeeded() -> None:
 
 def test_aggregate_rejects_missing_or_unexpected_jobs() -> None:
     missing = _results(FULL)
-    missing.pop("desktop-fixtures")
-    with pytest.raises(VerificationError, match="desktop-fixtures"):
+    missing.pop("fedora-podman")
+    with pytest.raises(VerificationError, match="fedora-podman"):
         verify_aggregate_results(json.dumps(missing), FULL)
 
     unexpected = _results(FULL)

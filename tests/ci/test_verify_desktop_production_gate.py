@@ -64,7 +64,7 @@ def _plan(*lanes: str) -> Any:
 
 DOCS_ONLY = _plan("docs")
 TUI_ONLY = _plan("lint", "core")
-DESKTOP_WITHOUT_PACKAGING = _plan("lint", "core", "desktop_fixtures", "desktop")
+DESKTOP_WITHOUT_PACKAGING = _plan("lint", "core", "desktop")
 
 IDENTITY = GateIdentity(
     commit=COMMIT,
@@ -943,7 +943,7 @@ def test_gate_rejects_a_core_report_from_outside_the_test_suite(
 
     check = _check(check_id)
     directory = evidence / check.evidence_directory
-    payload = _junit("spikes.desktop.tests.test_backend")
+    payload = _junit("examples.desktop-plugin.tests.test_provider")
     identity = _write(directory / "reports/core.junit.xml", payload)
     path = directory / check.receipt_name
     receipt = _read_receipt(path)

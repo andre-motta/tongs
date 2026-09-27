@@ -56,9 +56,8 @@ TUI = frozenset({"lint", "core"})
 CORE_READ_DOCS = frozenset({"docs", "core"})
 CORE_TESTS = frozenset({"lint", "core"})
 README = frozenset({"docs", "core"})
-SIDECAR = frozenset({"lint", "core", "desktop_fixtures", "desktop"})
+SIDECAR = frozenset({"lint", "core", "desktop"})
 PACKAGING = SIDECAR | {"packaging"}
-SPIKES = frozenset({"desktop_fixtures"})
 RELEASE_EVIDENCE = frozenset({"lint", "core"})
 
 
@@ -142,9 +141,6 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("tests/integration/desktop/sbom_evidence.py", PACKAGING),
     ("tests/desktop/installer/fixtures/wheel.json", PACKAGING),
     ("tests/packaging/desktop/sbom/schema/spdx-2.3.schema.json", PACKAGING),
-    # SPIKES
-    ("spikes/desktop/README.md", SPIKES),
-    ("spikes/desktop/tests/test_backend.py", SPIKES),
     # RELEASE EVIDENCE
     ("scripts/release-evidence/native/ci-proof.mjs", RELEASE_EVIDENCE),
     # FULL rules
@@ -224,8 +220,8 @@ def test_matching_rules_add_their_lanes_together() -> None:
     assert not full and lanes == README
     lanes, full, _ = classify_paths(["docs/index.md", "src/tongs/forges/github.py"])
     assert not full and lanes == DOCS | SIDECAR
-    lanes, full, _ = classify_paths(["src/tongs/views/x.py", "spikes/desktop/a.py"])
-    assert not full and lanes == TUI | SPIKES
+    lanes, full, _ = classify_paths(["src/tongs/views/x.py", "LICENSE"])
+    assert not full and lanes == TUI | PACKAGING
     lanes, full, _ = classify_paths(["docs/index.md", "src/tongs/new_module.py"])
     assert full and lanes == ALL_LANES
 
@@ -723,7 +719,7 @@ def test_plan_mismatches_report_an_unusable_upstream() -> None:
 
 
 def test_expected_results_for_partial_desktop_selection() -> None:
-    plan = _plan("lint", "core", "desktop_fixtures", "desktop")
+    plan = _plan("lint", "core", "desktop")
     ci = expected_ci_results(plan)
     assert ci["desktop-production"] == {"success"}
     assert ci["docs"] == {"skipped"} and ci["fedora-podman"] == {"skipped"}

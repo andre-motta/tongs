@@ -38,21 +38,9 @@ TONGS_TEST_PYTHON="$(command -v python)" npm test --prefix desktop
 
 `npm run build --prefix desktop` prepares assets, runs TypeScript checking, and
 creates build output. The test command repeats that build before the Electron
-and renderer test suites. The historical comparison fixtures have separate checks:
-
-```bash
-PYTHONPATH=spikes/desktop pytest spikes/desktop/tests/test_backend.py -v
-npm ci --prefix spikes/desktop/frontend
-npm test --prefix spikes/desktop/frontend
-npm run build --prefix spikes/desktop/frontend
-pytest spikes/desktop/electron/test/test_launcher.py -v
-npm ci --prefix spikes/desktop/electron
-TONGS_DESKTOP_PYTHON="$(command -v python)" \
-  npm test --prefix spikes/desktop/electron
-```
-
-Install `./spikes/desktop/reference-plugin` in the same Python environment before
-running fixture tests that discover it. The installable production provider example has focused Python and prebuilt ESM
+and renderer test suites. Run it under the
+[bounded local Node procedure](../testing/README.md#bounded-local-node-procedure).
+The installable production provider example has focused Python and prebuilt ESM
 checks:
 
 ```bash
@@ -107,9 +95,8 @@ table below is generated from it:
 | core-read-docs | `.agents/ci/README.md`, `.agents/testing/README.md`, `.github/linters/**` | docs, core |
 | tui | `src/tongs/views/**`, `src/tongs/widgets/**`, `src/tongs/mcp/**`, `src/tongs/app.py`, `src/tongs/commands.py`, `src/tongs/helpers.py`, `src/tongs/__main__.py` | lint, core |
 | core-tests | `tests/test_*.py`, `tests/test_cache/**`, `tests/test_diff/**`, `tests/test_forges/**`, `tests/test_mcp/**`, `tests/test_plugins/**`, `tests/test_scanner/**`, `tests/test_views/**`, `tests/test_widgets/**` | lint, core |
-| sidecar | `src/tongs/cache/**`, `src/tongs/config.py`, `src/tongs/desktop/**`, `src/tongs/diff/**`, `src/tongs/errors.py`, `src/tongs/forges/**`, `src/tongs/plugins/**`, `src/tongs/scanner/**`, `src/tongs/services/**`, `src/tongs/state/**`, `src/tongs/tui_services.py`, `tests/__init__.py`, `tests/desktop/**`, `tests/fixtures/**`, `tests/integration/**`, `tests/plugins/**`, `tests/services/**`, `tests/state/**`, `examples/desktop-plugin/**` | lint, core, desktop_fixtures, desktop |
-| packaging | `LICENSE`, `scripts/build_desktop_archive.py`, `scripts/build_desktop_sbom.py`, `src/tongs/__init__.py`, `src/tongs/desktop/artifact_contract/**`, `src/tongs/desktop/installer/**`, `tests/integration/desktop/archive_evidence.py`, `tests/integration/desktop/candidate_attestation.py`, `tests/integration/desktop/rpm_payload_contract.py`, `tests/integration/desktop/sbom_evidence.py`, `tests/desktop/installer/fixtures/**`, `tests/packaging/**` | lint, core, desktop_fixtures, desktop, packaging |
-| spikes | `spikes/**` | desktop_fixtures |
+| sidecar | `src/tongs/cache/**`, `src/tongs/config.py`, `src/tongs/desktop/**`, `src/tongs/diff/**`, `src/tongs/errors.py`, `src/tongs/forges/**`, `src/tongs/plugins/**`, `src/tongs/scanner/**`, `src/tongs/services/**`, `src/tongs/state/**`, `src/tongs/tui_services.py`, `tests/__init__.py`, `tests/desktop/**`, `tests/fixtures/**`, `tests/integration/**`, `tests/plugins/**`, `tests/services/**`, `tests/state/**`, `examples/desktop-plugin/**` | lint, core, desktop |
+| packaging | `LICENSE`, `scripts/build_desktop_archive.py`, `scripts/build_desktop_sbom.py`, `src/tongs/__init__.py`, `src/tongs/desktop/artifact_contract/**`, `src/tongs/desktop/installer/**`, `tests/integration/desktop/archive_evidence.py`, `tests/integration/desktop/candidate_attestation.py`, `tests/integration/desktop/rpm_payload_contract.py`, `tests/integration/desktop/sbom_evidence.py`, `tests/desktop/installer/fixtures/**`, `tests/packaging/**` | lint, core, desktop, packaging |
 | release-evidence | `scripts/release-evidence/**` | lint, core |
 | ci-infrastructure | `.github/workflows/**`, `.github/scripts/**`, `tests/ci/**`, `tests/containers/**` | full graph |
 | build-configuration | `pyproject.toml`, `requirements/**`, `packaging/**`, `desktop/**`, `.gitignore` | full graph |
@@ -123,9 +110,8 @@ Matching rules add their lanes together, and a push to `main`, the `ci:full` lab
 | `docs` | `Docs build`: the Astro + Starlight site build (`npm run build --prefix site`), the CNAME and repository-only record checks, and the pinned Markdown linter |
 | `lint` | `Lint and format`: Ruff over `src/`, `tests/` and `packaging/` |
 | `core` | `Core and MCP` on Python 3.12 and 3.13 |
-| `desktop_fixtures` | `Desktop fixture checks`: the spike fixtures and the production Electron shell suite |
 | `fedora_podman` | `Fedora 44 Podman` probe |
-| `desktop` | `Desktop production evidence`: source identity, the production shell, installed core and native payload |
+| `desktop` | `Desktop production evidence`: source identity, the production shell and renderer TAP, installed core and native payload |
 | `packaging` | the archive, archive evidence, SBOM and RPM lifecycle jobs of `Desktop production evidence` (implies `desktop`) |
 
 The plan fails closed. Any doubt selects the full graph and records why: an
@@ -219,7 +205,7 @@ documentation toolchain is pinned by `site/package-lock.json`, which `npm ci`
 installs exactly, and every direct dependency in `site/package.json`, Astro and
 Starlight included, is an exact version rather than a range; a test in the same
 module enforces both. Other tools a workflow installs ad hoc, such as
-`ruff` and the `build` used for desktop fixture wheels, are not yet pinned and
+`ruff` and the `build` the installed-core job uses, are not yet pinned and
 are tracked by #162.
 
 Jobs that hold a signing or write token install nothing that resolves fresh.

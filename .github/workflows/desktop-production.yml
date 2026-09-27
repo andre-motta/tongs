@@ -160,8 +160,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/reports"
           # The production sidecar transport rejects a relative interpreter, so
-          # this must be the absolute path rather than the bare name, matching
-          # the desktop fixture job in ci.yml.
+          # this must be the absolute path rather than the bare name.
           interpreter=$(command -v python)
           case "$interpreter" in
             /*) ;;

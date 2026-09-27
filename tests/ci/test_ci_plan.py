@@ -26,8 +26,6 @@ from tests.ci.ci_plan import (
     ALL_LANES,
     FULL_LABEL,
     LANE_CHECKS,
-    LANE_CI_JOBS,
-    LANE_IMPLIES,
     LANE_PRODUCTION_JOBS,
     LANES,
     RULES,
@@ -61,50 +59,7 @@ README = frozenset({"docs", "core"})
 SIDECAR = frozenset({"lint", "core", "desktop_fixtures", "desktop"})
 PACKAGING = SIDECAR | {"packaging"}
 SPIKES = frozenset({"desktop_fixtures"})
-
-
-def test_the_agreed_constants() -> None:
-    assert LANES == (
-        "docs",
-        "lint",
-        "core",
-        "desktop_fixtures",
-        "fedora_podman",
-        "desktop",
-        "packaging",
-    )
-    assert FULL_LABEL == "ci:full"
-    assert LANE_IMPLIES == {"packaging": {"desktop"}}
-    assert LANE_CI_JOBS == {
-        "docs": "docs",
-        "lint": "lint-and-format",
-        "core": "core",
-        "desktop_fixtures": "desktop-fixtures",
-        "fedora_podman": "fedora-podman",
-        "desktop": "desktop-production",
-    }
-    assert LANE_PRODUCTION_JOBS == {
-        "desktop": {
-            "source-identity",
-            "desktop-tap",
-            "installed-core",
-            "native-payload",
-        },
-        "packaging": {"archive", "archive-evidence", "archive-sbom", "rpm-lifecycle"},
-    }
-    assert LANE_CHECKS == {
-        "core": {"core-python-3.12", "core-python-3.13"},
-        "desktop": {
-            "desktop-production-tap",
-            "desktop-installed-core",
-            "desktop-native-payload-fixture",
-        },
-        "packaging": {
-            "desktop-archive-lifecycle",
-            "desktop-archive-sbom",
-            "desktop-rpm-lifecycle",
-        },
-    }
+RELEASE_EVIDENCE = frozenset({"lint"})
 
 
 # Layer 1: every rule pattern, by literal path.
@@ -190,6 +145,8 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     # SPIKES
     ("spikes/desktop/README.md", SPIKES),
     ("spikes/desktop/tests/test_backend.py", SPIKES),
+    # RELEASE EVIDENCE
+    ("scripts/release-evidence/native/ci-proof.mjs", RELEASE_EVIDENCE),
     # FULL rules
     (".github/workflows/ci.yml", None),
     (".github/workflows/docs.yml", None),

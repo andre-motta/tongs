@@ -18,7 +18,7 @@ const electron = path.join(
 const child = spawn(
   electron,
   [
-    path.join(sourceRoot, "tests", "desktop", "native", "ci-proof-app"),
+    path.join(sourceRoot, "scripts", "release-evidence", "native", "ci-proof-app"),
     "--ozone-platform=x11",
     `--user-data-dir=${path.join(evidenceRoot, "electron-profile")}`,
   ],

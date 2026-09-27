@@ -33,8 +33,8 @@ const evidenceRoot = path.resolve(
 const pythonExecutable = path.join(sourceRoot, ".venv", "bin", "python");
 const fixtureSidecar = path.join(
   sourceRoot,
-  "tests",
-  "desktop",
+  "scripts",
+  "release-evidence",
   "native",
   "ci_fixture_sidecar.py",
 );

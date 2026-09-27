@@ -409,12 +409,14 @@ test("review list filter and selection survive opening a review and returning", 
     state: "open",
     repository: "repo",
   });
-  const restored = view.getByText("Zulu").closest("button");
+  // Look the row up inside the callback so a re-render cannot leave the
+  // check holding a stale button.
   await waitFor(() => {
+    const restored = view.getByText("Zulu").closest("button");
     assert.equal(restored.getAttribute("aria-current"), "true");
+    assert.equal(restored.dataset.reviewHandle, "review-zulu");
     assert.equal(document.activeElement?.dataset.reviewHandle, "review-zulu");
   });
-  assert.equal(restored.dataset.reviewHandle, "review-zulu");
   assert.equal(
     view.getByText("Alpha").closest("button").getAttribute("aria-current"),
     null,

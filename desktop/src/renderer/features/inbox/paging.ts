@@ -129,17 +129,23 @@ export function feedFailures(
   return Object.freeze(feeds.flatMap((feed) => feed.failures));
 }
 
-/** Append one more page to a repository, keeping its earlier rows. */
+/**
+ * Append one more page to a repository, keeping its earlier rows. A page read
+ * that failed at the forge arrives as a successful response with no rows, a
+ * failure and no next cursor; the repository keeps its cursor then, so it
+ * still holds the watermark and Load more can read that page again.
+ */
 export function appendPage(
   feed: RepositoryFeed,
   items: readonly ReviewListItemDto[],
   cursor: string | null,
   failures: readonly ReviewFailureDto[],
 ): RepositoryFeed {
+  const failed = items.length === 0 && failures.length > 0;
   return Object.freeze({
     repository: feed.repository,
     items: Object.freeze([...feed.items, ...items]),
-    cursor,
+    cursor: cursor ?? (failed ? feed.cursor : null),
     loading: false,
     failures: Object.freeze([...failures]),
   });

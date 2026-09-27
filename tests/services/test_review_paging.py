@@ -158,3 +158,64 @@ def test_cursor_query_accepts_a_later_page() -> None:
         cursor="35",
     )
     assert query.cursor == "35"
+
+
+class _FlakyPagedClient(_PagedClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failing_pages: set[int] = set()
+
+    async def list_mrs_page(
+        self, repo_path: str, state: str = "open", page: int = 1, per_page: int = 100
+    ) -> MRPage:
+        if page in self.failing_pages:
+            self.page_calls.append((repo_path, state, page, per_page))
+            raise TimeoutError("controlled page timeout")
+        return await super().list_mrs_page(repo_path, state, page, per_page)
+
+
+@pytest.mark.asyncio
+async def test_failed_later_page_keeps_its_cursor_for_a_retry() -> None:
+    client = _FlakyPagedClient()
+    session = await _session_with(client)
+    client.failing_pages.add(2)
+    query = {
+        "scope": ReviewScope.ALL_OPEN,
+        "repository": _REPOSITORY,
+        "per_page": 2,
+        "paged": True,
+    }
+
+    failed = await session.list_reviews(ReviewQuery(**query, cursor="2"))
+
+    assert failed.items == ()
+    assert len(failed.failures) == 1
+    assert failed.failures[0].repository == _REPOSITORY
+    assert failed.next_cursor == "2"
+
+    client.failing_pages.clear()
+    retried = await session.list_reviews(
+        ReviewQuery(**query, cursor=failed.next_cursor)
+    )
+    assert [item.summary.number for item in retried.items] == [3, 4]
+    assert retried.failures == ()
+    assert retried.next_cursor == "3"
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_first_page_has_no_cursor() -> None:
+    client = _FlakyPagedClient()
+    session = await _session_with(client)
+    client.failing_pages.add(1)
+
+    page = await session.list_reviews(
+        ReviewQuery(
+            ReviewScope.ALL_OPEN, repository=_REPOSITORY, per_page=2, paged=True
+        )
+    )
+
+    assert page.items == ()
+    assert len(page.failures) == 1
+    assert page.next_cursor is None
+    await session.close()

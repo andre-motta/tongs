@@ -244,7 +244,8 @@ class ReviewPage:
 
     items: tuple[ReviewListItem, ...]
     failures: tuple[HostFailure, ...] = ()
-    # Set only for a paged read of one repository that has another page.
+    # Set only for a paged read of one repository that has another page, or
+    # whose later page failed and can be read again.
     next_cursor: str | None = None
 
 

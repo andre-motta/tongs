@@ -186,6 +186,49 @@ test("a failed next page keeps the loaded rows and reports the repository", asyn
   assert.equal(view.getAllByRole("button", { name: "Load more" }).length, 1);
 });
 
+test("a next page that failed at the forge keeps its cursor and holds the watermark", async () => {
+  const bridge = pagingBridge();
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a"), repository("repo-b")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.pending.size, 2));
+  bridge.respond("repo-a", page(["A12", "A10"], "cursor-a1"));
+  bridge.respond("repo-b", page(["B11", "B09", "B08"], null));
+  await view.findByText("A12");
+  // repo-a may still hold reviews older than 10:00, so B09 and B08 wait.
+  assert.deepEqual(cardTitles(view), ["A12", "B11", "A10"]);
+  fireEvent.click(view.getByRole("button", { name: "Load more" }));
+  await waitFor(() => assert.equal(bridge.pending.size, 1));
+  assert.equal(bridge.calls.at(-1).cursor, "cursor-a1");
+  // The session reports a forge failure as a successful partial response.
+  bridge.respond("repo-a", {
+    items: [],
+    failures: [
+      {
+        code: "rate_limited",
+        message: "The forge rate limit was reached.",
+        retryable: true,
+        repository: "repo-a",
+      },
+    ],
+    next_cursor: null,
+  });
+  await view.findByText("1 repository read failed. Available reviews are shown below.");
+  assert.deepEqual(cardTitles(view), ["A12", "B11", "A10"]);
+  assert.equal(view.getAllByRole("button", { name: "Load more" }).length, 1);
+  fireEvent.click(view.getByRole("button", { name: "Load more" }));
+  await waitFor(() => assert.equal(bridge.pending.size, 1));
+  assert.equal(bridge.calls.at(-1).repository, "repo-a");
+  assert.equal(bridge.calls.at(-1).cursor, "cursor-a1");
+  bridge.respond("repo-a", page(["A0930"], null));
+  await view.findByText("B08");
+  assert.deepEqual(cardTitles(view), ["A12", "B11", "A10", "A0930", "B09", "B08"]);
+  assert.equal(view.queryAllByRole("button", { name: "Load more" }).length, 0);
+});
+
 test("a single repository tab pages the same way", async () => {
   const bridge = pagingBridge();
   const view = render(

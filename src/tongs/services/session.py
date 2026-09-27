@@ -686,6 +686,14 @@ class ApplicationSession:
                     safe = translate_error(
                         error, operation="list_reviews", hostname=hostname
                     )
+                    if (
+                        query.paged
+                        and query.cursor is not None
+                        and repository is not None
+                    ):
+                        # A failed later page keeps its cursor so the caller
+                        # can read the same page again.
+                        next_cursors[repository] = query.cursor
                     return (), HostFailure(
                         hostname=hostname,
                         code=safe.code,

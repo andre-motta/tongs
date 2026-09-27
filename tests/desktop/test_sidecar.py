@@ -15,11 +15,13 @@ import pytest
 
 from tongs.config import Config
 from tongs.desktop import sidecar
-from tongs.desktop.protocol.messages import JsonObject
+from tongs.desktop.protocol.messages import JsonLimits, JsonObject
 from tongs.desktop.protocol.server import (
     DesktopSidecarServer,
     RequestContext,
+    _encode_event_or_resync,
     _EventBuffer,
+    _QueuedEvent,
 )
 from tongs.desktop.protocol.state import HandleKind
 from tongs.plugins.desktop import (
@@ -364,6 +366,45 @@ async def test_event_overflow_replaces_stale_events_with_resync_marker() -> None
     assert event is not None
     assert event.name == "protocol.resync_required"
     assert event.data == {"reason": "queue_overflow"}
+
+
+@pytest.mark.asyncio
+async def test_event_over_the_negotiated_budget_becomes_a_resync_marker() -> None:
+    buffer = _EventBuffer()
+    await buffer.set_limits(JsonLimits(values=1_024, depth=8))
+    await buffer.publish("service.changed", {"items": [0] * 2_000})
+
+    event = await buffer.get()
+    assert event is not None
+    assert event.name == "protocol.resync_required"
+    assert event.data == {"reason": "event_too_large"}
+    frame = json.loads(
+        _encode_event_or_resync(event, JsonLimits(values=1_024, depth=8))
+    )
+    assert frame["event"] == "protocol.resync_required"
+
+
+@pytest.mark.asyncio
+async def test_tighter_negotiated_budget_replaces_queued_events_with_resync() -> None:
+    buffer = _EventBuffer()
+    await buffer.publish("service.changed", {"items": [0] * 2_000})
+    await buffer.set_limits(JsonLimits(values=1_024, depth=8))
+
+    event = await buffer.get()
+    assert event is not None
+    assert event.name == "protocol.resync_required"
+    assert event.data == {"reason": "event_too_large"}
+
+
+def test_pump_encoding_replaces_an_over_budget_event_with_resync() -> None:
+    event = _QueuedEvent(7, "service.changed", {"items": [0] * 2_000}, None)
+    frame = json.loads(
+        _encode_event_or_resync(event, JsonLimits(values=1_024, depth=8))
+    )
+
+    assert frame["sequence"] == 7
+    assert frame["event"] == "protocol.resync_required"
+    assert frame["data"] == {"reason": "event_too_large"}
 
 
 @pytest.mark.asyncio

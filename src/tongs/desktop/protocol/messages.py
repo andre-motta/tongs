@@ -245,10 +245,11 @@ def encode_response(
         return _encode_response_fallback(request_id, _unencodable_response())
     if len(encoded) <= MAX_RESPONSE_FRAME_BYTES:
         return encoded
+    # Not retryable: repeating the same read returns the same oversized result.
     fallback = ProtocolError(
         ProtocolErrorCode.RESPONSE_TOO_LARGE,
         "The response exceeds the supported size; request a smaller page.",
-        retryable=True,
+        retryable=False,
     )
     return _encode_response_fallback(request_id, fallback)
 
@@ -260,22 +261,43 @@ def _unencodable_response() -> ProtocolError:
     )
 
 
-def encode_event(sequence: int, event: str, data: object) -> bytes:
-    """Encode one event, enforcing the dedicated event-frame limit."""
+def encode_event(
+    sequence: int,
+    event: str,
+    data: object,
+    *,
+    limits: JsonLimits = DEFAULT_JSON_LIMITS,
+) -> bytes:
+    """Encode one event, enforcing the event-frame size and the JSON budget.
+
+    The whole frame must fit the byte limit and the value count and depth the
+    client negotiated, so the peer never receives an event it would reject.
+    Any overflow raises ``EVENT_OVERFLOW``.
+    """
     if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence <= 0:
         raise ValueError("event sequence must be positive")
     if not _METHOD_RE.fullmatch(event):
         raise ValueError("invalid event name")
     try:
-        encoded = _encode(
-            {
-                "v": PROTOCOL_MAJOR,
-                "type": "event",
-                "sequence": sequence,
-                "event": event,
-                "data": to_json_value(data),
-            }
+        document: JsonObject = {
+            "v": PROTOCOL_MAJOR,
+            "type": "event",
+            "sequence": sequence,
+            "event": event,
+            "data": to_json_value(data),
+        }
+        _validate_json(
+            document,
+            limits=limits,
+            code=ProtocolErrorCode.EVENT_OVERFLOW,
+            subject="event",
         )
+        encoded = _encode(document)
+    except ProtocolError as error:
+        raise ProtocolError(
+            ProtocolErrorCode.EVENT_OVERFLOW,
+            "The event exceeds the supported JSON value or depth limit.",
+        ) from error
     except (TypeError, ValueError, UnicodeError) as error:
         raise ProtocolError(
             ProtocolErrorCode.EVENT_OVERFLOW,

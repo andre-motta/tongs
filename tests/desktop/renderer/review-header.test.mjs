@@ -525,7 +525,7 @@ function reviewBridge(review, changes = {}) {
     cancelRead: async () => true,
     openExternal: async () => true,
     getReview: () => read(snapshot(review)),
-    listDiscussions: () => read({ discussions: [] }),
+    listDiscussions: () => read(discussionsPage([])),
     openDiff: (params) => read(diffPage(review, params.layout ?? "unified")),
     pageDiff: () => {
       throw new Error("the fixture diff has one page");
@@ -698,4 +698,9 @@ function diffPage(review, layout) {
     next_cursor: null,
     entries: [file, hunk, ...entries],
   };
+}
+
+/** A first discussions page that holds every thread, as the sidecar sends it. */
+function discussionsPage(discussions) {
+  return { discussions, revision: { discussion_count: discussions.length } };
 }

@@ -109,7 +109,7 @@ test("the capability-loading sentence capabilitiesReady keys on matches composer
   });
   const view = renderDiff(
     diffBridge(review, {
-      listDiscussions: () => read({ discussions: [thread("d-1", { line: 10 })] }),
+      listDiscussions: () => read(discussionsPage([thread("d-1", { line: 10 })])),
       getReviewMutationCapabilities: () => ({
         requestToken: crypto.randomUUID(),
         result: gate.then(() => ({ review, capabilities: capabilities() })),
@@ -221,7 +221,7 @@ test("n and p step the threads and pending cards in document order and wrap", as
   const view = renderDiff(
     diffBridge(review, {
       listDiscussions: () =>
-        read({ discussions: [thread("d-1", { line: 10 }), thread("d-2", { line: 11 })] }),
+        read(discussionsPage([thread("d-1", { line: 10 }), thread("d-2", { line: 11 })])),
       listReviewDrafts: () =>
         read({
           cursor: 0,
@@ -263,7 +263,7 @@ test("r replies to the thread the row cursor is on", async () => {
   const view = renderDiff(
     diffBridge(review, {
       listDiscussions: () =>
-        read({ discussions: [thread("d-1", { line: 10 }), thread("d-2", { line: 11 })] }),
+        read(discussionsPage([thread("d-1", { line: 10 }), thread("d-2", { line: 11 })])),
     }),
     review,
   );
@@ -722,12 +722,12 @@ test("n and p walk the split panes in the order the documentation states", async
   const view = renderDiff(
     diffBridge(review, {
       listDiscussions: () =>
-        read({
-          discussions: [
+        read(
+          discussionsPage([
             thread("d-new", { line: 11, side: "new" }),
             thread("d-old", { line: 12, side: "old" }),
-          ],
-        }),
+          ]),
+        ),
     }),
     review,
   );
@@ -999,7 +999,7 @@ function diffBridge(review, changes = {}) {
     },
     getReviewMutationCapabilities: () =>
       read({ review, capabilities: capabilities() }),
-    listDiscussions: () => read({ discussions: [] }),
+    listDiscussions: () => read(discussionsPage([])),
     listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [] }),
     getReviewDraft: () => read(draft(review, 1, [])),
     createReviewDraft: async () => draft(review, 1, []),
@@ -1221,4 +1221,9 @@ function diffPage(review, layout) {
       ...rows(1, guideSources),
     ],
   };
+}
+
+/** A first discussions page that holds every thread, as the sidecar sends it. */
+function discussionsPage(discussions) {
+  return { discussions, revision: { discussion_count: discussions.length } };
 }

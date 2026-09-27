@@ -319,6 +319,10 @@ class SnapshotStore:
             snapshot.projection,
         )
 
+    def expire(self, snapshot_id: str) -> None:
+        """Release one snapshot early, such as one whose first page was all of it."""
+        self._expire(snapshot_id)
+
     def expire_for_resource(self, resource_handle: str) -> None:
         for snapshot_id, snapshot in tuple(self._snapshots.items()):
             if snapshot.resource_handle == resource_handle:

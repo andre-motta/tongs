@@ -287,16 +287,24 @@ class SubmissionPlanRecord:
 
 
 RECOVERY_CORRUPT_ATTEMPT_MESSAGE = (
-    "An interrupted review submission could not be read and was skipped; "
-    "its draft was kept."
+    "An interrupted review submission could not be read. Its draft was "
+    "returned to editing with its content kept, but part of the review may "
+    "already have posted: check the review on the forge before submitting again."
+)
+RECOVERY_WRITE_FAILED_MESSAGE = (
+    "An interrupted review submission could not be recovered because the draft "
+    "database write failed. Its draft was kept unchanged and recovery will try "
+    "again on the next start."
 )
 
 
 @dataclass(frozen=True, slots=True)
 class RecoveryWarning:
-    """A submission attempt that startup recovery skipped as unreadable.
+    """A submission attempt startup recovery could not handle normally.
 
-    It carries only the attempt identity, when readable, and a fixed message,
+    An unreadable attempt has its draft returned to editing; an attempt whose
+    recovery write failed is left unchanged for the next start. The warning
+    carries only the attempt identity, when readable, and a fixed message,
     never draft text.
     """
 

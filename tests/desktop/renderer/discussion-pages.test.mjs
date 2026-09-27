@@ -167,6 +167,71 @@ test("a page from another snapshot fails the read", async () => {
   );
 
   await assert.rejects(read.result, { code: "discussions_changed" });
+  // The one automatic restart ran before the read reported the change.
+  assert.equal(pages.calls.list, 2);
+});
+
+test("pages that do not add up to the snapshot count restart the read once", async () => {
+  const review = "short-count";
+  const threads = Array.from({ length: 15 }, (_, index) =>
+    thread(`d-${index}`, { line: 1000 + index }),
+  );
+  const pages = pagedDiscussions(review, threads, 10);
+  let short = 1;
+  const read = readAllDiscussions(
+    {
+      listDiscussions: pages.list,
+      pageDiscussions: (params) => {
+        const next = pages.page(params);
+        if (short === 0) return next;
+        short -= 1;
+        return {
+          requestToken: next.requestToken,
+          result: next.result.then((page) => ({
+            ...page,
+            discussions: page.discussions.slice(1),
+          })),
+        };
+      },
+      cancelRead: async () => true,
+    },
+    review,
+  );
+
+  const result = await read.result;
+
+  assert.equal(result.discussions.length, 15);
+  assert.equal(pages.calls.list, 2);
+});
+
+test("a single page that disagrees with its count fails after one restart", async () => {
+  const review = "one-page-short";
+  const threads = [thread("d-1", { line: 1000 }), thread("d-2", { line: 1001 })];
+  const pages = pagedDiscussions(review, threads, PAGE_SIZE);
+  const read = readAllDiscussions(
+    {
+      listDiscussions: () => {
+        const first = pages.list();
+        return {
+          requestToken: first.requestToken,
+          result: first.result.then((page) => ({
+            ...page,
+            revision: { discussion_count: 3 },
+          })),
+        };
+      },
+      pageDiscussions: pages.page,
+      cancelRead: async () => true,
+    },
+    review,
+  );
+
+  const failure = await read.result.then(
+    () => null,
+    (error) => ({ code: error.code, retryable: error.retryable }),
+  );
+  assert.deepEqual(failure, { code: "discussions_changed", retryable: true });
+  assert.equal(pages.calls.list, 2);
 });
 
 test("a snapshot that expires part way through restarts the read once", async () => {

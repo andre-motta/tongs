@@ -366,6 +366,43 @@ async def test_the_first_page_request_is_direct_and_bounded() -> None:
     assert page["next_cursor"] == 50
 
 
+@pytest.mark.asyncio
+async def test_single_page_reads_do_not_retain_snapshots() -> None:
+    server = DesktopSidecarServer(session=cast(object, _Session(_discussions(3))))
+    handle = server._handles.issue(HandleKind.REVIEW, _REVIEW)
+    context = RequestContext("threads", DesktopCancellation())
+
+    # More single-page reads than the 32-snapshot cap leave nothing retained.
+    for _ in range(40):
+        page = cast(
+            JsonObject, await server._discussions_list({"review": handle}, context)
+        )
+        assert page["next_cursor"] is None
+        assert len(cast(list[JsonValue], page["discussions"])) == 3
+    assert len(server._snapshots._snapshots) == 0
+
+
+@pytest.mark.asyncio
+async def test_multi_page_reads_keep_their_snapshot_and_failures_release_it() -> None:
+    session = _Session(_discussions(_LARGE_THREAD_COUNT))
+    server = DesktopSidecarServer(session=cast(object, session))
+    handle = server._handles.issue(HandleKind.REVIEW, _REVIEW)
+    context = RequestContext("threads", DesktopCancellation())
+
+    page = cast(
+        JsonObject,
+        await server._discussions_list({"review": handle, "max_items": 50}, context),
+    )
+    assert page["next_cursor"] == 50
+    assert list(server._snapshots._snapshots) == [page["snapshot_id"]]
+
+    session.discussions = _discussions(1, replies=1_000)
+    with pytest.raises(ProtocolError) as oversized:
+        await server._discussions_list({"review": handle}, context)
+    assert oversized.value.code.value == "response_too_large"
+    assert list(server._snapshots._snapshots) == [page["snapshot_id"]]
+
+
 def test_snapshot_pages_stop_before_the_value_limit() -> None:
     store = SnapshotStore()
     entries = [{"id": str(index), "values": [1, 2, 3]} for index in range(10)]

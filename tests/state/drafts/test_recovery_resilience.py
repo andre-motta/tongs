@@ -19,7 +19,10 @@ from tongs.state.drafts import (
     RecoveryWarning,
     SubmissionAttempt,
 )
-from tongs.state.drafts.models import RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+from tongs.state.drafts.models import (
+    RECOVERY_CORRUPT_ATTEMPT_MESSAGE,
+    RECOVERY_WRITE_FAILED_MESSAGE,
+)
 
 REVISION = ReviewRevision("head-1", "base-1", "start-1")
 SECRET_BODY = "private review text that must never appear in a warning"
@@ -155,17 +158,79 @@ async def test_corrupt_attempt_is_reported_and_others_still_recover(
     assert warning.message == RECOVERY_CORRUPT_ATTEMPT_MESSAGE
     assert str(damaged.id) in warning.describe()
     assert SECRET_BODY not in warning.describe()
-    # The damaged attempt and its draft are kept, never deleted.
+    # The damaged attempt row is kept, never deleted, and the draft is back
+    # in the normal editing path with its content intact.
     with sqlite3.connect(db_path) as connection:
         attempt_rows = connection.execute(
             "SELECT state FROM submission_attempts WHERE id = ?", (str(damaged.id),)
         ).fetchall()
-        draft_rows = connection.execute(
-            "SELECT state, body FROM drafts WHERE id = ?",
-            (str(damaged.draft_id),),
-        ).fetchall()
-    assert attempt_rows == [(DraftState.SUBMITTING.value,)]
-    assert draft_rows == [(DraftState.SUBMITTING.value, SECRET_BODY)]
+    assert attempt_rows == [(DraftState.UNKNOWN.value,)]
+    draft = await store.get_draft(damaged.draft_id)
+    assert draft.state is DraftState.EDITABLE
+    assert draft.version == damaged.frozen_version + 2
+    assert draft.content == _content()
+    edited = await store.save_draft(
+        draft.id,
+        draft.version,
+        DraftContent(body="edited after recovery", comments=draft.comments),
+        current_revision=REVISION,
+    )
+    assert edited.body == "edited after recovery"
+    assert damaged.id not in {item.id for item in await store.list_recovery_attempts()}
+    await store.close()
+
+    # The next start neither repeats the warning nor touches the draft again.
+    again = DraftStore(db_path)
+    await again.open()
+    assert await again.recover_incomplete_attempts() == ()
+    assert again.recovery_warnings == ()
+    assert (await again.get_draft(damaged.draft_id)).body == "edited after recovery"
+    await again.close()
+
+
+def test_corrupt_attempt_warning_tells_the_user_to_check_the_forge() -> None:
+    assert "check the review on the forge" in RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+    assert "may" in RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+    assert "editing" in RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_recovery_write_failure_skips_one_attempt_and_keeps_starting(
+    db_path: Path,
+) -> None:
+    attempts = await _abandoned_attempts(db_path, 2)
+    failing = attempts[0]
+
+    store = DraftStore(db_path)
+    await store.open()
+    real = store._connection()
+
+    class _FailingWrite:
+        async def execute(self, sql: str, parameters: object = ()) -> object:
+            if (
+                "UPDATE submission_attempts" in sql
+                and isinstance(parameters, tuple)
+                and str(failing.id) in parameters
+            ):
+                raise sqlite3.OperationalError("disk I/O error")
+            return await real.execute(sql, parameters)  # type: ignore[arg-type]
+
+    store._connection = lambda: _FailingWrite()  # type: ignore[assignment,method-assign]
+    try:
+        recovered = await store.recover_incomplete_attempts()
+    finally:
+        del store._connection
+
+    assert tuple(item.id for item in recovered) == (attempts[1].id,)
+    assert store.recovery_warnings == (
+        RecoveryWarning(failing.id, RECOVERY_WRITE_FAILED_MESSAGE),
+    )
+    assert SECRET_BODY not in store.recovery_warnings[0].describe()
+    # The failed attempt was rolled back unchanged, so the next pass retries it.
+    assert (await store.get_draft(failing.draft_id)).state is DraftState.SUBMITTING
+    retried = await store.recover_incomplete_attempts()
+    assert tuple(item.id for item in retried) == (failing.id,)
+    assert store.recovery_warnings == ()
     await store.close()
 
 
@@ -194,3 +259,9 @@ async def test_unparseable_attempt_id_is_reported_without_identity(
     assert store.recovery_warnings == (RecoveryWarning(None),)
     assert store.recovery_warnings[0].describe() == RECOVERY_CORRUPT_ATTEMPT_MESSAGE
     await store.close()
+    # The draft whose attempt had no readable identity is editable again.
+    with sqlite3.connect(db_path) as connection:
+        states = connection.execute(
+            "SELECT state FROM submission_attempts WHERE id = 'not-a-uuid'"
+        ).fetchall()
+    assert states == [(DraftState.UNKNOWN.value,)]

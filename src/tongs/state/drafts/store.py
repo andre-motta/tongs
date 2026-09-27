@@ -33,6 +33,7 @@ from tongs.state.drafts.errors import (
     DraftStoreError,
 )
 from tongs.state.drafts.models import (
+    RECOVERY_WRITE_FAILED_MESSAGE,
     DiffSide,
     DraftComment,
     DraftContent,
@@ -1338,9 +1339,14 @@ class DraftStore:
         """Mark only attempts whose process ownership lock is no longer held unknown.
 
         Recovery is per attempt. An attempt that another process resolved or
-        removed after the initial listing is skipped. An unreadable attempt is
-        skipped without changing any stored row and reported through
-        :attr:`recovery_warnings`, so one damaged record cannot stop startup.
+        removed after the initial listing is skipped. An unreadable attempt
+        cannot be offered for reconciliation, so its draft is returned to
+        editing with the draft row's content untouched, the attempt row is
+        kept but parked as unknown and detached, and a warning tells the user
+        to check the forge before submitting again. An attempt whose recovery
+        write fails is left unchanged for the next start. Both are reported
+        through :attr:`recovery_warnings`, so one damaged record cannot stop
+        startup.
         """
         self._recovery_warnings = ()
         db = self._connection()
@@ -1362,7 +1368,11 @@ class DraftStore:
             try:
                 attempt_id = UUID(row[0])
             except (TypeError, ValueError, AttributeError):
-                warnings.append(RecoveryWarning(None))
+                # No process can own an attempt without a UUID identity, so
+                # it is released without an ownership lock.
+                warnings.append(
+                    await self._release_unreadable_attempt(db, row[0], None)
+                )
                 continue
             if attempt_id in self._held_attempt_locks:
                 continue
@@ -1380,7 +1390,11 @@ class DraftStore:
                         continue
                     except DraftCorruptionError:
                         await self._rollback(db)
-                        warnings.append(RecoveryWarning(attempt_id))
+                        warnings.append(
+                            await self._release_unreadable_attempt(
+                                db, str(attempt_id), attempt_id
+                            )
+                        )
                         continue
                     if attempt.state not in {DraftState.SUBMITTING, DraftState.PARTIAL}:
                         await self._rollback(db)
@@ -1424,9 +1438,12 @@ class DraftStore:
                     result = await self._attempt_in_transaction(db, attempt_id)
                     await db.execute("COMMIT")
                     recovered.append(result)
-                except sqlite3.Error as error:
+                except sqlite3.Error:
                     await self._rollback(db)
-                    raise DraftStoreError("submission recovery write failed") from error
+                    warnings.append(
+                        RecoveryWarning(attempt_id, RECOVERY_WRITE_FAILED_MESSAGE)
+                    )
+                    continue
                 except BaseException:
                     await self._rollback(db)
                     raise
@@ -1434,6 +1451,49 @@ class DraftStore:
                 ownership.release()
         self._recovery_warnings = tuple(warnings)
         return tuple(recovered)
+
+    async def _release_unreadable_attempt(
+        self, db: aiosqlite.Connection, raw_id: object, attempt_id: UUID | None
+    ) -> RecoveryWarning:
+        """Return an unreadable attempt's draft to editing without losing content.
+
+        The draft row still holds the user's content, because locking a
+        submission only freezes a copy into the attempt. Only the state
+        columns change: the draft becomes editable with a bumped version so
+        stale editors conflict, and the attempt row is kept, parked as unknown
+        and detached from its draft, so later starts neither list nor warn
+        about it again. A failed write leaves both rows unchanged.
+        """
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            now = _format_time(_now())
+            await db.execute(
+                """
+                UPDATE drafts
+                SET state = ?, active_attempt_id = NULL, version = version + 1,
+                    updated_at = ?
+                WHERE active_attempt_id = ? AND state IN (?, ?)
+                """,
+                (
+                    DraftState.EDITABLE.value,
+                    now,
+                    raw_id,
+                    DraftState.SUBMITTING.value,
+                    DraftState.PARTIAL.value,
+                ),
+            )
+            await db.execute(
+                "UPDATE submission_attempts SET state = ?, updated_at = ? WHERE id = ?",
+                (DraftState.UNKNOWN.value, now, raw_id),
+            )
+            await db.execute("COMMIT")
+        except sqlite3.Error:
+            await self._rollback(db)
+            return RecoveryWarning(attempt_id, RECOVERY_WRITE_FAILED_MESSAGE)
+        except BaseException:
+            await self._rollback(db)
+            raise
+        return RecoveryWarning(attempt_id)
 
     @_serialized
     async def list_recovery_attempts(self) -> tuple[SubmissionAttempt, ...]:

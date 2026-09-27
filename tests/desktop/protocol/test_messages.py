@@ -6,10 +6,12 @@ import pytest
 
 from tongs.desktop.protocol.messages import (
     MAX_RESPONSE_FRAME_BYTES,
+    JsonLimits,
     ProtocolError,
     ProtocolErrorCode,
     RequestFrame,
     decode_frame,
+    encode_event,
     encode_response,
 )
 
@@ -86,3 +88,36 @@ def test_encode_response_replaces_oversized_result() -> None:
 
     assert len(encoded) < 1024
     assert document["error"]["code"] == "response_too_large"
+    # Retrying the same read returns the same oversized result.
+    assert document["error"]["retryable"] is False
+
+
+def test_response_too_large_is_never_retryable_for_any_limit() -> None:
+    limits = JsonLimits(values=1_024, depth=8)
+    by_bytes = json.loads(encode_response("a", result="x" * MAX_RESPONSE_FRAME_BYTES))
+    by_values = json.loads(encode_response("b", result=[0] * 2_000, limits=limits))
+    deep: object = "leaf"
+    for _ in range(10):
+        deep = [deep]
+    by_depth = json.loads(encode_response("c", result=deep, limits=limits))
+
+    for document in (by_bytes, by_values, by_depth):
+        assert document["error"]["code"] == "response_too_large"
+        assert document["error"]["retryable"] is False
+
+
+def test_encode_event_enforces_the_negotiated_value_and_depth_limits() -> None:
+    limits = JsonLimits(values=1_024, depth=8)
+    fits = json.loads(encode_event(1, "service.changed", [0] * 100, limits=limits))
+    assert fits["data"] == [0] * 100
+
+    with pytest.raises(ProtocolError) as too_many:
+        encode_event(2, "service.changed", [0] * 1_024, limits=limits)
+    assert too_many.value.code is ProtocolErrorCode.EVENT_OVERFLOW
+
+    deep: object = "leaf"
+    for _ in range(8):
+        deep = [deep]
+    with pytest.raises(ProtocolError) as too_deep:
+        encode_event(3, "service.changed", deep, limits=limits)
+    assert too_deep.value.code is ProtocolErrorCode.EVENT_OVERFLOW

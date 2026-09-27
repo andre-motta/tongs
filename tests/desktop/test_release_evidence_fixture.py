@@ -1,4 +1,8 @@
-"""Contract checks for the controlled native utility proof session."""
+"""Contract check for the native utility proof session in scripts/release-evidence.
+
+The proof tooling is run by hand, so this keeps its imports of sidecar and
+service internals honest on every change to them.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +19,10 @@ from tongs.services import EditorReservation, ServiceEventKind
 
 
 def _load_fixture() -> ModuleType:
-    fixture_path = Path(__file__).with_name("ci_fixture_sidecar.py")
+    fixture_path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/release-evidence/native/ci_fixture_sidecar.py"
+    )
     spec = importlib.util.spec_from_file_location("ci_fixture_sidecar", fixture_path)
     if spec is None or spec.loader is None:  # pragma: no cover - import invariant
         raise AssertionError("native fixture module is not loadable")

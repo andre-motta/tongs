@@ -110,6 +110,7 @@ async def test_v1_database_migrates_without_losing_attempt_or_receipt(
 
     second = DraftStore(db_path)
     await second.open()
+    assert await second.get_draft(draft.id)
     migrated = await second.get_attempt(attempt.id)
 
     assert migrated.snapshot == attempt.snapshot
@@ -120,6 +121,7 @@ async def test_v1_database_migrates_without_losing_attempt_or_receipt(
     assert migrated.retry_authorizations == ()
     assert migrated.unknown_outcomes == ()
     assert migrated.pending_dispatch is None
+    assert migrated.plan is None
     with sqlite3.connect(db_path) as db:
         assert db.execute("PRAGMA user_version").fetchone() == (2,)
     await second.close()

@@ -16,6 +16,7 @@ sidecar projects today.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -34,18 +35,6 @@ from tongs.plugins.desktop import DesktopCancellation
 from tongs.services import RawDiffSnapshot, RepositoryRef, ReviewRef, ReviewRevision
 
 _FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "diff-shapes.json"
-# Text fields the desktop DTO requires to be present and non-empty.
-_REQUIRED_FILE_TEXT = ("old_path", "new_path", "status")
-_EXPECTED_SHAPES = (
-    ("assets/icon.bin", "modified"),
-    ("docs/guide.md", "modified"),
-    ("src/calc.py", "modified"),
-    ("src/empty_placeholder.py", "added"),
-    ("src/no_newline.txt", "modified"),
-    ("src/obsolete.py", "deleted"),
-    ("src/renamed_module.py", "renamed"),
-    ("src/tool.sh", "modified"),
-)
 _METADATA_FLAGS = (
     "is_binary",
     "is_truncated",
@@ -135,29 +124,6 @@ async def _file_rows(forge: str) -> list[JsonObject]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forge", ["github", "gitlab"])
-async def test_every_diff_shape_projects_a_wire_conformant_file_row(
-    forge: str,
-) -> None:
-    """All eight sandbox shapes must survive one read, on either forge.
-
-    GitHub omits ``patch`` for the binary, added-empty, rename-only and
-    mode-only files, and GitLab omits ``diff`` for three of them, so this drives
-    the shapes the acceptance fixture exists to exercise.
-    """
-    files = await _file_rows(forge)
-
-    assert [(file["new_path"], file["status"]) for file in files] == list(
-        _EXPECTED_SHAPES
-    )
-    for file in files:
-        for key in _REQUIRED_FILE_TEXT:
-            assert file[key] != "", f"{key} must never be empty on the wire"
-        language = file["language"]
-        assert language is None or (isinstance(language, str) and language != "")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("forge", ["github", "gitlab"])
 async def test_withheld_patch_projects_the_state_the_forge_determines(
     forge: str,
 ) -> None:
@@ -234,7 +200,11 @@ async def test_review_level_note_projects_a_null_inline_path() -> None:
     """A note with no position keeps the thread readable, path absent."""
     review = ReviewRef(RepositoryRef("forge.example.com", "team/project"), 9)
     threads = (
-        Discussion("53f505e47aca", False, _comment("1", "", None)),
+        Discussion(
+            "53f505e47aca",
+            False,
+            replace(_comment("1", "", None), replies=(_comment("4", "", None),)),
+        ),
         Discussion(
             "b689d5db45fc",
             True,
@@ -267,6 +237,10 @@ async def test_review_level_note_projects_a_null_inline_path() -> None:
     assert unpositioned["file_path"] is None
     assert unpositioned["old_line"] is None
     assert unpositioned["new_line"] is None
+    unpositioned_reply = cast(
+        JsonObject, cast(list[object], unpositioned["replies"])[0]
+    )
+    assert unpositioned_reply["file_path"] is None
     assert positioned["file_path"] == "src/calc.py"
     reply = cast(JsonObject, cast(list[object], positioned["replies"])[0])
     assert reply["file_path"] == "src/calc.py"

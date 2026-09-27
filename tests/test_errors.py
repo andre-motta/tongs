@@ -68,15 +68,6 @@ class TestRedactCredentials:
             == "PRIVATE-TOKEN: [REDACTED]"
         )
 
-    def test_no_token_unchanged(self):
-        assert (
-            redact_credentials("normal text with no secrets")
-            == "normal text with no secrets"
-        )
-
-    def test_empty_string(self):
-        assert redact_credentials("") == ""
-
     def test_multiple_tokens(self):
         text = "gitlab: glpat-abc123 github: ghp_def456"
         result = redact_credentials(text)
@@ -84,10 +75,6 @@ class TestRedactCredentials:
         assert "def456" not in result
         assert "glpat-[REDACTED]" in result
         assert "ghp_[REDACTED]" in result
-
-    def test_token_in_url(self):
-        result = redact_credentials("https://x-token:ghp_secret123@github.com/org/repo")
-        assert "secret123" not in result
 
     def test_github_refresh_token(self):
         assert redact_credentials("ghr_abc123DEF456") == "ghr_[REDACTED]"

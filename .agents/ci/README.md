@@ -110,6 +110,7 @@ table below is generated from it:
 | sidecar | `src/tongs/cache/**`, `src/tongs/config.py`, `src/tongs/desktop/**`, `src/tongs/diff/**`, `src/tongs/errors.py`, `src/tongs/forges/**`, `src/tongs/plugins/**`, `src/tongs/scanner/**`, `src/tongs/services/**`, `src/tongs/state/**`, `src/tongs/tui_services.py`, `tests/__init__.py`, `tests/desktop/**`, `tests/fixtures/**`, `tests/integration/**`, `tests/plugins/**`, `tests/services/**`, `tests/state/**`, `examples/desktop-plugin/**` | lint, core, desktop_fixtures, desktop |
 | packaging | `LICENSE`, `scripts/build_desktop_archive.py`, `scripts/build_desktop_sbom.py`, `src/tongs/__init__.py`, `src/tongs/desktop/artifact_contract/**`, `src/tongs/desktop/installer/**`, `tests/integration/desktop/archive_evidence.py`, `tests/integration/desktop/candidate_attestation.py`, `tests/integration/desktop/rpm_payload_contract.py`, `tests/integration/desktop/sbom_evidence.py`, `tests/desktop/installer/fixtures/**`, `tests/packaging/**` | lint, core, desktop_fixtures, desktop, packaging |
 | spikes | `spikes/**` | desktop_fixtures |
+| release-evidence | `scripts/release-evidence/**` | lint, core |
 | ci-infrastructure | `.github/workflows/**`, `.github/scripts/**`, `tests/ci/**`, `tests/containers/**` | full graph |
 | build-configuration | `pyproject.toml`, `requirements/**`, `packaging/**`, `desktop/**`, `.gitignore` | full graph |
 | (unmatched) | any other path | full graph |

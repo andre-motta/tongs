@@ -203,6 +203,7 @@ async def _services(
     snapshot: ReviewSnapshot | None = None,
     emit_change: Callable[[ServiceEventKind, ReviewRef, ReviewRevision | None], None]
     | None = None,
+    draft_revision: ReviewRevision = REVISION,
 ) -> tuple[
     DraftStore,
     ReviewSubmissionService,
@@ -214,7 +215,7 @@ async def _services(
     actual_client = client or _client()
     store = DraftStore(db_path)
     await store.open()
-    draft = await store.create_draft(current.ref, REVISION, content)
+    draft = await store.create_draft(current.ref, draft_revision, content)
     mutations = _mutation_service(actual_client, current, emit_change=emit_change)
     service = ReviewSubmissionService(
         store=store,
@@ -476,15 +477,29 @@ async def test_get_distinguishes_recovered_attempt_without_a_plan(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "snapshot",
+    ("snapshot", "draft_revision", "code"),
     [
-        _snapshot(revision=None),
-        _snapshot(revision=ReviewRevision("new-head", "base-1", "start-1")),
-        _snapshot(ForgeType.GITLAB, revision=ReviewRevision("head-1", "base-1", None)),
+        (_snapshot(revision=None), REVISION, ServiceErrorCode.REVISION_UNAVAILABLE),
+        (
+            _snapshot(revision=ReviewRevision("new-head", "base-1", "start-1")),
+            REVISION,
+            ServiceErrorCode.REVISION_CHANGED,
+        ),
+        (
+            _snapshot(
+                ForgeType.GITLAB, revision=ReviewRevision("head-1", "base-1", None)
+            ),
+            ReviewRevision("head-1", "base-1", None),
+            ServiceErrorCode.REVISION_UNAVAILABLE,
+        ),
     ],
+    ids=["missing", "changed", "gitlab-without-start"],
 )
 async def test_incomplete_or_changed_revision_unlocks_without_dispatch(
-    tmp_path: Path, snapshot: ReviewSnapshot
+    tmp_path: Path,
+    snapshot: ReviewSnapshot,
+    draft_revision: ReviewRevision,
+    code: ServiceErrorCode,
 ) -> None:
     client = _client()
     store, service, _, _, draft = await _services(
@@ -492,15 +507,13 @@ async def test_incomplete_or_changed_revision_unlocks_without_dispatch(
         _content(GeneralDraftComment(uuid4(), "general")),
         client=client,
         snapshot=snapshot,
+        draft_revision=draft_revision,
     )
 
     with pytest.raises(ServiceError) as raised:
         await service.start(draft.id, draft.version)
 
-    assert raised.value.code in {
-        ServiceErrorCode.REVISION_UNAVAILABLE,
-        ServiceErrorCode.REVISION_CHANGED,
-    }
+    assert raised.value.code is code
     assert (await store.get_draft(draft.id)).state is DraftState.EDITABLE
     client.add_comment.assert_not_awaited()
     await store.close()
@@ -960,37 +973,6 @@ async def test_failed_close_can_finish_after_uncooperative_owner_settles(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_start_creates_one_attempt_and_one_remote_call(
-    tmp_path: Path,
-) -> None:
-    entered = asyncio.Event()
-    release = asyncio.Event()
-
-    async def blocked_comment(*_args: object) -> ForgeMutationResult:
-        entered.set()
-        await release.wait()
-        return ForgeMutationResult("known", "known")
-
-    client = _client(add_comment=AsyncMock(side_effect=blocked_comment))
-    store, service, _, _, draft = await _services(
-        tmp_path / "drafts.db",
-        _content(GeneralDraftComment(uuid4(), "comment")),
-        client=client,
-    )
-    first = asyncio.create_task(service.start(draft.id, draft.version))
-    await entered.wait()
-    second = asyncio.create_task(service.start(draft.id, draft.version))
-    result = await asyncio.gather(second, return_exceptions=True)
-    release.set()
-    submitted = await first
-
-    assert submitted.outcome is SubmissionOutcome.SUBMITTED
-    assert isinstance(result[0], (DraftConflictError, DraftStateError))
-    assert client.add_comment.await_count == 1
-    await store.close()
-
-
-@pytest.mark.asyncio
 async def test_concurrent_explicit_resume_advances_rejected_step_once(
     tmp_path: Path,
 ) -> None:
@@ -1015,3 +997,35 @@ async def test_concurrent_explicit_resume_advances_rejected_step_once(
     recovered = await store.get_attempt(paused.attempt_id)
     assert len(recovered.retry_authorizations) == 1
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_second_start_during_submission_is_refused_and_posts_once(
+    tmp_path: Path,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_comment(*_args: object) -> ForgeMutationResult:
+        entered.set()
+        await release.wait()
+        return ForgeMutationResult("known", "known")
+
+    client = _client(add_comment=AsyncMock(side_effect=blocked_comment))
+    store, service, _, _, draft = await _services(
+        tmp_path / "drafts.db",
+        _content(GeneralDraftComment(uuid4(), "comment")),
+        client=client,
+    )
+    first = asyncio.create_task(service.start(draft.id, draft.version))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # A second start must be refused at once, never join the attempt in flight.
+        with pytest.raises((DraftConflictError, DraftStateError)):
+            await asyncio.wait_for(service.start(draft.id, draft.version), 5)
+    finally:
+        release.set()
+        submitted = await first
+        await store.close()
+    assert submitted.outcome is SubmissionOutcome.SUBMITTED
+    assert client.add_comment.await_count == 1

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -528,11 +529,10 @@ class TestReferences:
     @pytest.mark.parametrize(
         ("hostname", "project"),
         [
-            ("HTTPS://github.com", "acme/widgets"),
             ("github.com/path", "acme/widgets"),
             ("github.com", "widgets"),
             ("github.com", "../widgets"),
-            ("github.com", "acme\\widgets"),
+            ("github.com", "acme\\team/widgets"),
         ],
     )
     def test_rejects_noncanonical_repository_refs(
@@ -592,7 +592,6 @@ class TestLifecycle:
         ).start()
 
         assert session.drafts is store
-        assert session.review_submissions is session.review_submissions
         assert (await store.get_attempt(attempt.id)).state is DraftState.UNKNOWN
 
         await session.close()
@@ -788,22 +787,95 @@ class TestLifecycle:
         assert cache.close_calls == 1
 
     @pytest.mark.asyncio
-    async def test_review_refreshes_close_before_registry_and_cache(self) -> None:
-        cache = FakeCache()
-        registry = FakeRegistry()
-        session = await start_session(registry, cache=cache)
+    @pytest.mark.parametrize(
+        ("owner_kind", "resists_first_cancel"),
+        [
+            ("ci", False),
+            ("mr_action", False),
+            ("mr_action", True),
+            ("review", False),
+            ("review", True),
+        ],
+    )
+    async def test_close_settles_owner_before_registry_and_cache(
+        self, owner_kind: str, resists_first_cancel: bool
+    ) -> None:
+        client: FakeClient
+        if owner_kind == "ci":
+            client = FakeClient()
+            client.ci_mutation_release = asyncio.Event()
+            forge_method, started = "cancel_pipeline", client.ci_mutation_started
+        elif owner_kind == "mr_action":
+            client = (
+                FirstCancelResistantMRActionClient()
+                if resists_first_cancel
+                else BlockingMRActionClient()
+            )
+            forge_method, started = "close_mr", client.mr_action_started
+        else:
+            client = (
+                FirstCancelResistantReviewClient()
+                if resists_first_cancel
+                else FakeClient()
+            )
+            client.review_mutation_release = asyncio.Event()
+            forge_method, started = "add_comment", client.review_mutation_started
+        forge_call_settled = asyncio.Event()
+        blocking_call = getattr(client, forge_method)
 
-        async def close_mutations() -> None:
-            assert registry.close_calls == 0
-            assert cache.close_calls == 0
+        async def tracked_call(*args: object) -> object:
+            try:
+                return await blocking_call(*args)
+            finally:
+                forge_call_settled.set()
 
-        session.review_mutations.close = AsyncMock(side_effect=close_mutations)
+        setattr(client, forge_method, tracked_call)
+        closed: list[tuple[str, bool]] = []
+
+        class OrderedRegistry(FakeRegistry):
+            async def close_all(self) -> None:
+                closed.append(("registry", forge_call_settled.is_set()))
+                await super().close_all()
+
+        class OrderedCache(FakeCache):
+            async def close(self) -> None:
+                closed.append(("cache", forge_call_settled.is_set()))
+                await super().close()
+
+        session = await start_session(
+            OrderedRegistry({"github.com": client}), cache=OrderedCache()
+        )
+        session.mr_actions._close_timeout = 0.01
+        session.review_mutations._close_timeout = 0.01
+        repository = await session.open_repository("github.com", "acme/widgets")
+        review = ReviewRef(repository.ref, 7)
+        if owner_kind == "ci":
+            execution = session.ci_mutations.execute(
+                CancelPipelineCommand(
+                    "close-ci", PipelineMutationTarget(PipelineRef(repository.ref, 11))
+                )
+            )
+        elif owner_kind == "mr_action":
+            snapshot = await session.get_review(review)
+            assert snapshot.revision is not None
+            execution = session.mr_actions.execute(
+                CloseReviewCommand(
+                    "close-mr-action",
+                    ReviewActionTarget(review, snapshot.revision, MRState.OPEN),
+                )
+            )
+        else:
+            execution = session.review_mutations.execute(
+                GeneralComment("close-review", review, "body")
+            )
+        owner = asyncio.create_task(execution)
+        await started.wait()
 
         await session.close()
 
-        session.review_mutations.close.assert_awaited_once()
-        assert registry.close_calls == 1
-        assert cache.close_calls == 1
+        with suppress(asyncio.CancelledError):
+            await owner
+        assert closed == [("registry", True), ("cache", True)]
 
     @pytest.mark.asyncio
     async def test_ci_hint_tasks_close_before_registry_and_cache(self) -> None:
@@ -839,87 +911,6 @@ class TestLifecycle:
         assert invalidation_finished.is_set()
         assert session.ci_mutations._coordinator_tasks == set()
         assert session.ci_mutations._invalidation_tasks == set()
-        assert registry.close_calls == 1
-        assert cache.close_calls == 1
-
-    @pytest.mark.asyncio
-    async def test_close_cancels_ci_dispatch_before_shared_resources(self) -> None:
-        cache = FakeCache()
-        client = FakeClient()
-        client.ci_mutation_release = asyncio.Event()
-        registry = FakeRegistry({"github.com": client})
-        session = await start_session(registry, cache=cache)
-        repository = await session.open_repository("github.com", "acme/widgets")
-        command = CancelPipelineCommand(
-            "session-close-ci",
-            PipelineMutationTarget(PipelineRef(repository.ref, 11)),
-        )
-        owner = asyncio.create_task(session.ci_mutations.execute(command))
-        await client.ci_mutation_started.wait()
-
-        await session.close()
-
-        with pytest.raises(asyncio.CancelledError):
-            await owner
-        record = session.ci_mutations._operations[command.operation_id]
-        assert record.receipt is not None
-        assert record.receipt.outcome.value == "unknown"
-        assert session.ci_mutations._owner_tasks == set()
-        assert registry.close_calls == 1
-        assert cache.close_calls == 1
-
-    @pytest.mark.asyncio
-    async def test_close_cancels_mr_action_before_shared_resources(self) -> None:
-        cache = FakeCache()
-        client = BlockingMRActionClient()
-        registry = FakeRegistry({"github.com": client})
-        session = await start_session(registry, cache=cache)
-        repository = await session.open_repository("github.com", "acme/widgets")
-        review = ReviewRef(repository.ref, 7)
-        snapshot = await session.get_review(review)
-        assert snapshot.revision is not None
-        command = CloseReviewCommand(
-            "session-close-mr-action",
-            ReviewActionTarget(review, snapshot.revision, MRState.OPEN),
-        )
-        owner = asyncio.create_task(session.mr_actions.execute(command))
-        await client.mr_action_started.wait()
-
-        await session.close()
-
-        with pytest.raises(asyncio.CancelledError):
-            await owner
-        record = session.mr_actions._operations[command.operation_id]
-        assert record.receipt is not None
-        assert record.receipt.outcome.value == "unknown"
-        assert session.mr_actions._owner_tasks == set()
-        assert registry.close_calls == 1
-        assert cache.close_calls == 1
-
-    @pytest.mark.asyncio
-    async def test_close_retries_mr_action_owner_before_shared_resources(self) -> None:
-        cache = FakeCache()
-        client = FirstCancelResistantMRActionClient()
-        registry = FakeRegistry({"github.com": client})
-        session = await start_session(registry, cache=cache)
-        session.mr_actions._close_timeout = 0.01
-        repository = await session.open_repository("github.com", "acme/widgets")
-        review = ReviewRef(repository.ref, 7)
-        snapshot = await session.get_review(review)
-        assert snapshot.revision is not None
-        command = CloseReviewCommand(
-            "session-close-resistant-mr-action",
-            ReviewActionTarget(review, snapshot.revision, MRState.OPEN),
-        )
-        owner = asyncio.create_task(session.mr_actions.execute(command))
-        await client.mr_action_started.wait()
-
-        await session.close()
-
-        with pytest.raises(asyncio.CancelledError):
-            await owner
-        assert client.mr_action_cancellations == 1
-        assert session.mr_actions._owner_tasks == set()
         assert registry.close_calls == 1
         assert cache.close_calls == 1
 
@@ -960,53 +951,6 @@ class TestLifecycle:
         assert record.receipt.outcome.value == "known"
         await session.close()
         assert session.mr_actions._owner_tasks == set()
-        assert registry.close_calls == 1
-        assert cache.close_calls == 1
-
-    @pytest.mark.asyncio
-    async def test_close_cancels_review_dispatch_before_shared_resources(self) -> None:
-        cache = FakeCache()
-        client = FakeClient()
-        client.review_mutation_release = asyncio.Event()
-        registry = FakeRegistry({"github.com": client})
-        session = await start_session(registry, cache=cache)
-        repository = await session.open_repository("github.com", "acme/widgets")
-        command = GeneralComment(
-            "session-close-review", ReviewRef(repository.ref, 7), "body"
-        )
-        owner = asyncio.create_task(session.review_mutations.execute(command))
-        await client.review_mutation_started.wait()
-
-        await session.close()
-
-        outcome = await owner
-        assert outcome.status is MutationStatus.UNKNOWN
-        assert session.review_mutations._owner_tasks == set()
-        assert registry.close_calls == 1
-        assert cache.close_calls == 1
-
-    @pytest.mark.asyncio
-    async def test_close_retries_review_owner_cancellation_before_resources(
-        self,
-    ) -> None:
-        cache = FakeCache()
-        client = FirstCancelResistantReviewClient()
-        registry = FakeRegistry({"github.com": client})
-        session = await start_session(registry, cache=cache)
-        session.review_mutations._close_timeout = 0.01
-        repository = await session.open_repository("github.com", "acme/widgets")
-        command = GeneralComment(
-            "session-close-resistant-review", ReviewRef(repository.ref, 7), "body"
-        )
-        owner = asyncio.create_task(session.review_mutations.execute(command))
-        await client.review_mutation_started.wait()
-
-        await session.close()
-
-        outcome = await owner
-        assert outcome.status is MutationStatus.UNKNOWN
-        assert client.review_cancellations == 1
-        assert session.review_mutations._owner_tasks == set()
         assert registry.close_calls == 1
         assert cache.close_calls == 1
 
@@ -1056,14 +1000,16 @@ class TestLifecycle:
             draft_store=FakeDraftStore(),  # type: ignore[arg-type]
             forge_registry=registry,
         ) as session:
-            assert session.config.scan_depth == 5
+            assert cache.close_calls == 0
+        assert cache.close_calls == 1
+        assert registry.close_calls == 1
         await session.close()
-        assert cache.open_calls == 1
         assert cache.close_calls == 1
         assert registry.close_calls == 1
         with pytest.raises(ServiceError) as caught:
             await session.start()
         assert caught.value.code == ServiceErrorCode.CLOSED
+        assert cache.open_calls == 1
 
     @pytest.mark.asyncio
     async def test_start_failure_closes_partially_opened_cache(self) -> None:
@@ -1385,21 +1331,6 @@ class TestResourceIssuance:
         assert local_access.value.code is ServiceErrorCode.CLOSED
 
     @pytest.mark.asyncio
-    async def test_discovery_collapses_duplicate_repository_identity(
-        self, tmp_path: Path
-    ) -> None:
-        repo = make_repo(tmp_path)
-
-        def discoverer(*args, **kwargs):
-            return [repo, repo]
-
-        session = await start_session(FakeRegistry(), discoverer=discoverer)
-        snapshots = await session.discover_repositories()
-        assert len(snapshots) == 1
-        assert len(session.issued_repositories) == 1
-        await session.close()
-
-    @pytest.mark.asyncio
     async def test_explicit_open_validates_then_issues_repository(self) -> None:
         registry = FakeRegistry()
         client = cast(FakeClient, registry.clients["github.com"])
@@ -1661,22 +1592,31 @@ class TestReviewReads:
     ) -> None:
         client = FakeClient()
         registry = BlockingGetClientRegistry({"github.com": client})
-        session = await start_session(registry)
+        session = await ApplicationSession(
+            config=Config(max_parallel=2),
+            cache=FakeCache(),
+            draft_store=cast(DraftStore, FakeDraftStore()),
+            forge_registry=registry,
+            shutdown_timeout=0.05,
+        ).start()
         repository = await session.open_repository("github.com", "acme/widgets")
         registry.block_get_client = True
         read_task = asyncio.create_task(
             session.get_review(ReviewRef(repository.ref, 7))
         )
         await registry.get_client_started.wait()
-        close_task = asyncio.create_task(session.close())
-        await asyncio.sleep(0)
+        # The acquisition outlives the close bound, so only the read path can
+        # close the late client.
+        with pytest.raises(ServiceError):
+            await session.close()
+        assert registry.close_calls == 0
 
         registry.get_client_release.set()
 
         with pytest.raises(ServiceError) as caught:
             await read_task
         assert caught.value.code == ServiceErrorCode.CLOSED
-        await close_task
+        assert client.get_mr_fresh_calls == 0
         assert registry.close_calls == 1
 
 

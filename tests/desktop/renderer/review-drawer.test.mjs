@@ -346,8 +346,14 @@ test("a zero-step interrupted attempt only offers returning to editing", async (
   );
   await view.findByText(/interrupted before anything was sent/);
   assert.ok(view.getByRole("button", { name: "Return draft to editing" }));
-  assert.equal(view.queryByRole("button", { name: "Retry only remaining steps" }), null);
-  assert.equal(view.queryByRole("button", { name: "Mark submitted" }), null);
+  assert.equal(
+    view.queryAllByRole("button", { name: "Retry only remaining steps" }).length,
+    0,
+  );
+  assert.equal(
+    view.queryAllByRole("button", { name: "Mark submitted" }).length,
+    0,
+  );
 });
 
 test("a partial interrupted attempt can retry remaining steps without repeat warning", async () => {
@@ -376,8 +382,14 @@ test("a partial interrupted attempt can retry remaining steps without repeat war
   await view.findByText(/interrupted after 1 confirmed step/);
   assert.ok(view.getByRole("button", { name: "Retry only remaining steps" }));
   assert.ok(view.getByRole("button", { name: "Return draft to editing" }));
-  assert.equal(view.queryByText(/repeat an unconfirmed remote write/), null);
-  assert.equal(view.queryByRole("button", { name: "Mark submitted" }), null);
+  assert.equal(
+    view.queryAllByText(/repeat an unconfirmed remote write/).length,
+    0,
+  );
+  assert.equal(
+    view.queryAllByRole("button", { name: "Mark submitted" }).length,
+    0,
+  );
 });
 
 

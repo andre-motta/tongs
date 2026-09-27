@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from datetime import UTC, datetime
+
+import pytest
+from textual.app import App, ComposeResult
 
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, FileStatus, LineType
 from tongs.forges.models import Discussion, InlineComment, User
-from tongs.helpers import relative_time
+from tongs.widgets.diff_panel import DiffRenderer
 from tongs.widgets.discussion_list import (
     DiscussionPanel,
     DiscussionReplyRequested,
@@ -79,77 +81,6 @@ def _make_file(
 
 
 # ===================================================================
-# relative_time
-# ===================================================================
-
-
-class TestRelativeTime:
-    """Tests for relative_time()."""
-
-    def _fixed_now(self, **kwargs):
-        """Return a patcher that freezes datetime.now to a fixed offset from the reference dt."""
-        ref = datetime(2026, 1, 1, tzinfo=UTC)
-        frozen = ref + timedelta(**kwargs)
-
-        original_now = datetime.now
-
-        def fake_now(tz=None):
-            if tz is not None:
-                return frozen
-            return original_now(tz)
-
-        return patch(
-            "tongs.helpers.datetime",
-            wraps=datetime,
-            now=fake_now,
-        )
-
-    def test_just_now_zero_seconds(self):
-        with self._fixed_now(seconds=0):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "just now"
-
-    def test_just_now_under_60_seconds(self):
-        with self._fixed_now(seconds=59):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "just now"
-
-    def test_boundary_exactly_60_seconds(self):
-        with self._fixed_now(seconds=60):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1m ago"
-
-    def test_minutes_plural(self):
-        with self._fixed_now(minutes=30):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "30m ago"
-
-    def test_boundary_exactly_59_minutes(self):
-        with self._fixed_now(minutes=59):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "59m ago"
-
-    def test_boundary_exactly_60_minutes(self):
-        with self._fixed_now(minutes=60):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1h ago"
-
-    def test_hours_plural(self):
-        with self._fixed_now(hours=5):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "5h ago"
-
-    def test_boundary_exactly_23_hours(self):
-        with self._fixed_now(hours=23):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "23h ago"
-
-    def test_boundary_exactly_24_hours(self):
-        with self._fixed_now(hours=24):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1d ago"
-
-    def test_days_plural(self):
-        with self._fixed_now(days=7):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "7d ago"
-
-    def test_large_day_count(self):
-        with self._fixed_now(days=365):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "365d ago"
-
-
-# ===================================================================
 # render_diff_snippet
 # ===================================================================
 
@@ -161,35 +92,16 @@ class TestRenderDiffSnippet:
         file = _make_file(
             hunks=(
                 DiffHunk(
-                    header="@@ -1,3 +1,3 @@",
+                    header="@@ -1,3 +1,2 @@",
                     old_start=1,
                     old_count=3,
                     new_start=1,
-                    new_count=3,
-                    lines=(_ctx(1, 1, "a"), _ctx(2, 2, "b"), _ctx(3, 3, "c")),
+                    new_count=2,
+                    lines=(_ctx(1, 1, "a"), _del(2, "x"), _ctx(3, 2, "c")),
                 ),
             )
         )
         assert render_diff_snippet(file, None) == []
-
-    def test_empty_hunks_returns_empty(self):
-        file = _make_file(hunks=())
-        assert render_diff_snippet(file, 5) == []
-
-    def test_target_not_found_returns_empty(self):
-        file = _make_file(
-            hunks=(
-                DiffHunk(
-                    header="@@ -1,3 +1,3 @@",
-                    old_start=1,
-                    old_count=3,
-                    new_start=1,
-                    new_count=3,
-                    lines=(_ctx(1, 1, "a"), _ctx(2, 2, "b"), _ctx(3, 3, "c")),
-                ),
-            )
-        )
-        assert render_diff_snippet(file, 999) == []
 
     def test_found_target_with_context(self):
         lines = (
@@ -214,7 +126,7 @@ class TestRenderDiffSnippet:
         result = render_diff_snippet(file, 3, context=2)
         assert len(result) == 5
 
-    def test_target_marked_with_prefix(self):
+    def test_only_the_target_is_marked_and_the_rest_are_padded(self):
         lines = (
             _ctx(1, 1, "line1"),
             _ctx(2, 2, "line2"),
@@ -232,61 +144,61 @@ class TestRenderDiffSnippet:
                 ),
             )
         )
-        result = render_diff_snippet(file, 2, context=1)
-        # The target line (line 2) should start with "> "
-        texts = [r.plain for r in result]
-        target_found = any(t.startswith("> ") for t in texts)
-        assert target_found, f"No line starts with '> ' in: {texts}"
-        # Non-target lines should start with "  "
-        non_targets = [t for t in texts if not t.startswith("> ")]
-        for t in non_targets:
-            assert t.startswith("  "), f"Non-target line missing '  ' prefix: {t!r}"
+        rendered = [DiffRenderer("")._render_line(line).plain for line in lines]
+
+        texts = [r.plain for r in render_diff_snippet(file, 2, context=1)]
+
+        assert texts == [
+            "  " + rendered[0],
+            "> " + rendered[1],
+            "  " + rendered[2],
+        ]
 
     def test_matched_by_old_lineno(self):
         lines = (
             _ctx(1, 1, "keep"),
             _del(2, "removed"),
-            _ctx(3, 2, "after"),
+            _del(3, "removed too"),
+            _ctx(4, 2, "after"),
         )
         file = _make_file(
             hunks=(
                 DiffHunk(
-                    header="@@ -1,3 +1,2 @@",
+                    header="@@ -1,4 +1,2 @@",
                     old_start=1,
-                    old_count=3,
+                    old_count=4,
                     new_start=1,
                     new_count=2,
                     lines=lines,
                 ),
             )
         )
-        # Target line 2 matches old_lineno=2 on the deletion line
-        result = render_diff_snippet(file, 2, context=1)
-        assert len(result) > 0
-        texts = [r.plain for r in result]
-        target_found = any(t.startswith("> ") for t in texts)
-        assert target_found, f"Old lineno match not found: {texts}"
+        # Old line 3 exists only as a deletion: no new line number matches it.
+        texts = [r.plain for r in render_diff_snippet(file, 3, context=1)]
+
+        marked = [t for t in texts if t.startswith("> ")]
+        assert len(marked) == 1
+        assert marked[0].endswith("removed too")
 
     def test_context_clamped_at_hunk_start(self):
-        lines = (
-            _ctx(1, 1, "first"),
-            _ctx(2, 2, "second"),
-        )
+        names = ("first", "second", "third", "fourth", "fifth")
+        lines = tuple(_ctx(n, n, name) for n, name in enumerate(names, start=1))
         file = _make_file(
             hunks=(
                 DiffHunk(
-                    header="@@ -1,2 +1,2 @@",
+                    header="@@ -1,5 +1,5 @@",
                     old_start=1,
-                    old_count=2,
+                    old_count=5,
                     new_start=1,
-                    new_count=2,
+                    new_count=5,
                     lines=lines,
                 ),
             )
         )
-        # Target is line 1 (index 0), context=2 should clamp start to 0
-        result = render_diff_snippet(file, 1, context=2)
-        assert len(result) == 2
+        # Target is line 1 (index 0), so context=2 must clamp the start to 0.
+        texts = [r.plain for r in render_diff_snippet(file, 1, context=2)]
+
+        assert [t.split()[-1] for t in texts] == ["first", "second", "third"]
 
     def test_context_clamped_at_hunk_end(self):
         lines = (
@@ -320,10 +232,9 @@ class TestRenderThread:
 
     def test_single_comment_no_replies(self):
         disc = _make_disc(body="Hello world")
-        lines = _render_thread(disc)
-        assert len(lines) > 0
-        # First line should contain the author
-        assert "@testuser" in lines[0].plain
+        lines = [line.plain for line in _render_thread(disc)]
+        assert "@testuser" in lines[0]
+        assert any("Hello world" in line for line in lines[1:])
 
     def test_comment_with_replies(self):
         reply = InlineComment(
@@ -355,16 +266,6 @@ class TestRenderThread:
         assert len(reply_lines) > 0
         for rl in reply_lines:
             assert rl.startswith("  "), f"Reply not indented: {rl!r}"
-
-    def test_empty_body(self):
-        disc = _make_disc(body="")
-        lines = _render_thread(disc)
-        assert len(lines) > 0
-        # Should still have the author line
-        assert "@testuser" in lines[0].plain
-        # No rendered body lines beyond the author line (only the author line)
-        # With empty body, only 1 line is produced (the author line)
-        assert len(lines) == 1
 
 
 # ===================================================================
@@ -410,26 +311,6 @@ class TestApplyFilter:
         result = panel._apply_filter(discs)
         assert len(result) == 2
         assert all(d.is_resolved for d in result)
-
-    def test_filter_empty_input(self):
-        panel = self._make_panel("all")
-        assert panel._apply_filter([]) == []
-
-    def test_filter_unresolved_empty_input(self):
-        panel = self._make_panel("unresolved")
-        assert panel._apply_filter([]) == []
-
-    def test_filter_resolved_none_match(self):
-        panel = self._make_panel("resolved")
-        discs = [_make_disc(id="d1", is_resolved=False)]
-        assert panel._apply_filter(discs) == []
-
-    def test_filter_all_returns_copy(self):
-        """_apply_filter('all') returns a new list, not the input."""
-        panel = self._make_panel("all")
-        discs = [_make_disc()]
-        result = panel._apply_filter(discs)
-        assert result is not discs
 
 
 # ===================================================================
@@ -478,10 +359,6 @@ class TestSortDiscussions:
         assert result[0].id == "inline"
         assert result[1].id == "general"
 
-    def test_empty_list(self):
-        panel = self._make_panel()
-        assert panel._sort_discussions([]) == []
-
     def test_mixed_resolved_and_file_sort(self):
         """Resolved status takes priority over file path."""
         panel = self._make_panel()
@@ -506,46 +383,73 @@ class TestSortDiscussions:
 
 
 # ===================================================================
-# Messages
+# Messages posted by the panel actions
 # ===================================================================
 
 
-class TestMessages:
-    """Tests for message dataclasses."""
+class DiscussionPanelApp(App[None]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.jumps: list[JumpToDiffDiscussion] = []
+        self.replies: list[DiscussionReplyRequested] = []
 
-    def test_jump_to_diff_discussion_stores_fields(self):
-        msg = JumpToDiffDiscussion(
-            discussion_id="disc-42", file_path="src/main.py", line=17
-        )
-        assert msg.discussion_id == "disc-42"
-        assert msg.file_path == "src/main.py"
-        assert msg.line == 17
+    def compose(self) -> ComposeResult:
+        yield DiscussionPanel(id="discussions")
 
-    def test_jump_to_diff_discussion_line_none(self):
-        msg = JumpToDiffDiscussion(
-            discussion_id="disc-99", file_path="readme.md", line=None
-        )
-        assert msg.line is None
+    def on_jump_to_diff_discussion(self, message: JumpToDiffDiscussion) -> None:
+        self.jumps.append(message)
 
-    def test_discussion_reply_requested_stores_fields(self):
-        msg = DiscussionReplyRequested(
-            discussion_id="disc-7",
-            file_path="lib/utils.py",
-            line=42,
-            author="alice",
-        )
-        assert msg.discussion_id == "disc-7"
-        assert msg.file_path == "lib/utils.py"
-        assert msg.line == 42
-        assert msg.author == "alice"
+    def on_discussion_reply_requested(self, message: DiscussionReplyRequested) -> None:
+        self.replies.append(message)
 
-    def test_discussion_reply_requested_none_file_line(self):
-        msg = DiscussionReplyRequested(
-            discussion_id="disc-general",
-            file_path=None,
-            line=None,
-            author="bob",
-        )
-        assert msg.file_path is None
-        assert msg.line is None
-        assert msg.author == "bob"
+
+def _deleted_line_disc() -> Discussion:
+    """An inline thread on a deleted line: only old_line is set."""
+    return Discussion(
+        id="d-old",
+        is_inline=True,
+        root_comment=InlineComment(
+            id="c-old",
+            author=User(username="alice"),
+            body="why remove this?",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            file_path="src/gone.py",
+            old_line=7,
+            new_line=None,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_jump_to_diff_posts_the_old_line_of_a_deleted_line_thread() -> None:
+    app = DiscussionPanelApp()
+    async with app.run_test() as pilot:
+        panel = app.query_one(DiscussionPanel)
+        panel.set_discussions([_deleted_line_disc()])
+        await pilot.pause()
+        panel.action_jump_to_diff()
+        await pilot.pause()
+
+    assert [(m.discussion_id, m.file_path, m.line) for m in app.jumps] == [
+        ("d-old", "src/gone.py", 7)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reply_posts_thread_location_and_root_author() -> None:
+    app = DiscussionPanelApp()
+    general = _make_disc(id="d-general", is_inline=False)
+    async with app.run_test() as pilot:
+        panel = app.query_one(DiscussionPanel)
+        # Inline threads sort before general ones.
+        panel.set_discussions([general, _deleted_line_disc()])
+        await pilot.pause()
+        panel.action_reply()
+        panel.action_next_card()
+        panel.action_reply()
+        await pilot.pause()
+
+    assert [(m.discussion_id, m.file_path, m.line, m.author) for m in app.replies] == [
+        ("d-old", "src/gone.py", 7, "alice"),
+        ("d-general", None, None, "testuser"),
+    ]

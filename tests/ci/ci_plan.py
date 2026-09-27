@@ -289,6 +289,13 @@ RULES: tuple[Rule, ...] = (
     ),
     # The spike prototypes run only in the desktop fixture job.
     Rule(name="spikes", patterns=("spikes/**",), lanes=frozenset({"desktop_fixtures"})),
+    # Manual native evidence tooling.  Lint checks it and core runs
+    # tests/desktop/test_release_evidence_fixture.py against its Python fixture.
+    Rule(
+        name="release-evidence",
+        patterns=("scripts/release-evidence/**",),
+        lanes=frozenset({"lint", "core"}),
+    ),
     Rule(
         name="ci-infrastructure",
         patterns=(

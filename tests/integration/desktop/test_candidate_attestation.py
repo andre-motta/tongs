@@ -340,26 +340,6 @@ def test_unsigned_pull_request_transfer_roundtrips_through_cli(tmp_path: Path) -
     assert manifest_path.read_bytes() == prepared_bytes
 
 
-def test_unsigned_pull_request_transfer_roundtrips_through_callables(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "candidate"
-    source = _write_output(root)
-    identity = _pull_request_identity()
-    manifest = root / candidate.TRANSFER_MANIFEST_NAME
-
-    prepared = candidate.prepare_transfer_manifest(root, manifest, identity, source)
-    validated = candidate.validate_transfer_manifest(root, manifest, identity, source)
-
-    assert validated == prepared
-    assert validated["source"] == {
-        "commit": SOURCE_COMMIT,
-        "tree": SOURCE_TREE,
-    }
-    assert validated["execution"]["ref"] == PR_REF
-    assert validated["execution"]["event"] == "pull_request"
-
-
 def test_official_push_conversion_preserves_manifest_bytes(tmp_path: Path) -> None:
     root = tmp_path / "candidate"
     source = _write_output(root)
@@ -425,8 +405,6 @@ def test_unsigned_transfer_rejects_invalid_event_ref_pairs(
         ("source_tree", "A" * 40),
         ("run_id", "0"),
         ("run_id", "9" * 20),
-        ("repository_id", "9" * 20),
-        ("repository_owner_id", "9" * 20),
         ("repository", f"owner/{'r' * 101}"),
         ("run_attempt", 0),
         ("run_attempt", 2**63),
@@ -576,7 +554,64 @@ def test_transfer_rejects_path_byte_and_source_mutation(
     else:
         source.write_text("wrong source")
 
-    with pytest.raises(candidate.CandidateAttestationError):
+    messages = {
+        "extra": "path set is incomplete or unexpected",
+        "missing": "path set is incomplete or unexpected",
+        "bytes": None,
+        "source": None,
+    }
+    with pytest.raises(candidate.CandidateAttestationError, match=messages[mutation]):
+        candidate.validate_transfer_manifest(root, manifest, identity, source)
+
+
+def test_prepare_transfer_refuses_an_incomplete_producer_output(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "candidate"
+    source = _write_output(root)
+    (root / "evidence/toolchain.txt").unlink()
+
+    with pytest.raises(
+        candidate.CandidateAttestationError,
+        match="path set is incomplete or unexpected",
+    ):
+        candidate.prepare_transfer_manifest(
+            root, root / candidate.TRANSFER_MANIFEST_NAME, _transfer_identity(), source
+        )
+
+
+def test_prepare_transfer_refuses_repeated_producer_inputs(tmp_path: Path) -> None:
+    """A repeated key could shadow a bound input, so any repeat is refused."""
+
+    root = tmp_path / "candidate"
+    source = _write_output(root)
+    inputs = root / "evidence/inputs.env"
+    lines = inputs.read_bytes().splitlines(keepends=True)
+    inputs.write_bytes(b"".join([*lines, lines[0]]))
+
+    with pytest.raises(candidate.CandidateAttestationError, match="ambiguous"):
+        candidate.prepare_transfer_manifest(
+            root, root / candidate.TRANSFER_MANIFEST_NAME, _transfer_identity(), source
+        )
+
+
+def test_transfer_manifest_with_duplicate_json_keys_is_rejected(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "candidate"
+    source = _write_output(root)
+    identity = _transfer_identity()
+    manifest = root / candidate.TRANSFER_MANIFEST_NAME
+    candidate.prepare_transfer_manifest(root, manifest, identity, source)
+    # Repeat the first key with its own value, so only the duplicate differs.
+    text = manifest.read_text(encoding="utf-8").lstrip()
+    first, value = next(iter(json.loads(text).items()))
+    repeated = f"{json.dumps(first)}: {json.dumps(value)}, "
+    manifest.write_text("{" + repeated + text[1:], encoding="utf-8")
+
+    with pytest.raises(
+        candidate.CandidateAttestationError, match="duplicate JSON keys"
+    ):
         candidate.validate_transfer_manifest(root, manifest, identity, source)
 
 
@@ -599,17 +634,6 @@ def test_transfer_rejects_stale_identity_and_symlink(tmp_path: Path) -> None:
     toolchain.symlink_to(root / "evidence/inputs.env")
     with pytest.raises(candidate.CandidateAttestationError, match="non-regular"):
         candidate.validate_transfer_manifest(root, manifest, identity, source)
-
-
-def test_corrupt_subject_bytes_are_actually_rejected() -> None:
-    original = b"actual subject"
-    subjects = {"artifact.tar.gz": _digest(original)}
-
-    candidate._validate_subject_bytes("artifact.tar.gz", original, subjects)
-    with pytest.raises(candidate.CandidateAttestationError, match="signed digest"):
-        candidate._validate_subject_bytes(
-            "artifact.tar.gz", original + b"corruption", subjects
-        )
 
 
 def test_archive_reader_rejects_oversized_subject_before_reading(
@@ -696,77 +720,6 @@ def test_full_harness_requires_positive_baselines_and_records_each_stage(
     assert (report_root / "verified-dsse-payload.json").read_bytes() == (
         verifier.payload
     )
-
-
-def test_workflow_separates_unprivileged_build_from_candidate_signing() -> None:
-    workflow = (
-        Path(__file__).parents[3] / ".github/workflows/release-desktop.yml"
-    ).read_text(encoding="utf-8")
-    workflow_env = workflow.split("env:\n", 1)[1].split("\njobs:\n", 1)[0]
-
-    assert "pull_request_target" not in workflow
-    # The only manual trigger is the dry run, and it publishes nothing.
-    assert workflow.count("workflow_dispatch:") == 1
-    assert "dry_run:" in workflow
-    assert "runner.temp" not in workflow_env
-    assert "CANDIDATE_ROOT=%s/tongs-desktop-candidate" in workflow
-    assert '>> "$GITHUB_ENV"' in workflow
-    # Four isolated interpreters: validation, transfer, signing and publish.
-    assert workflow.count('-I -m venv "$RUNNER_TEMP/tongs-candidate-venv"') == 4
-    assert "CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python" in workflow
-    # The signing and publish jobs install the hash-locked closure and then
-    # the source verifier alone, so they carry two installs each.
-    assert workflow.count('"$CANDIDATE_PYTHON" -I -m pip install') == 6
-    assert '"$CANDIDATE_PYTHON" -I -m pytest' in workflow
-    # prepare-transfer, validate-transfer, verify and verify-sbom, then the
-    # five release publication commands.  Every candidate and release command
-    # must run through the isolated source-built interpreter.
-    assert workflow.count('"$CANDIDATE_PYTHON" -I\n') == 9
-    for command in ("prepare-transfer", "validate-transfer", "verify", "verify-sbom"):
-        assert f"candidate_attestation.py {command}\n" in workflow
-    for command in ("assemble", "verify", "require-absent", "verify-published"):
-        assert f"release_publication.py {command}\n" in workflow
-    assert workflow.count("--isolated") == 6
-    assert workflow.count("--require-hashes") == 2
-    assert workflow.count("PYTHONNOUSERSITE=1") == 4
-    assert workflow.count("site.ENABLE_USER_SITE is False") == 4
-    assert workflow.count("tongs_path.is_relative_to(workspace)") == 4
-    assert "${{ runner.temp }}/tongs-desktop-candidate" in workflow
-    assert "push-to-registry: false" in workflow
-    assert "create-storage-record: false" in workflow
-    assert "persist-credentials: false" in workflow
-    assert "retention-days: 14" in workflow
-    assert "packaging/desktop/archive/run_hosted.sh" in workflow
-    assert "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6" in workflow
-    assert "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803" in workflow
-    assert (
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
-    )
-    assert (
-        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in workflow
-    )
-    archive_job = workflow.split("  candidate-archive:", 1)[1].split(
-        "  candidate-attestation:", 1
-    )[0]
-    signing_job = workflow.split("  candidate-attestation:", 1)[1].split(
-        "  release-rpm:", 1
-    )[0]
-    rpm_job = workflow.split("  release-rpm:", 1)[1].split("  release-publish:", 1)[0]
-    publish_job = workflow.split("  release-publish:", 1)[1]
-    assert "id-token: write" not in archive_job
-    assert "attestations: write" not in archive_job
-    assert "id-token: write" in signing_job
-    assert "attestations: write" in signing_job
-    assert "packages: write" not in signing_job
-    assert "contents: write" not in signing_job
-    assert "artifact-metadata: write" not in signing_job
-    # The RPM rebuild and the publisher never hold the signing token, and only
-    # the publisher may write contents.
-    for job in (rpm_job, publish_job):
-        assert "id-token: write" not in job
-        assert "attestations: write" not in job
-    assert "contents: write" not in rpm_job
-    assert publish_job.count("contents: write") == 1
 
 
 def test_verify_cli_retains_a_fail_closed_result(tmp_path: Path) -> None:

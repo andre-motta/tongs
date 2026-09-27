@@ -240,7 +240,7 @@ test("the search keys are ignored while a modal dialog owns the keyboard", async
 
   // Escape belongs to the dialog alone, so the log search survives it.
   fireEvent.keyDown(document.activeElement, { key: "Escape" });
-  assert.equal(view.queryByText("Clear shared API cache?"), null);
+  assert.equal(view.queryAllByText("Clear shared API cache?").length, 0);
   assert.equal(search.value, "error");
   await matchCount(view, `1 of ${MATCH_LINES.length} matches`);
 });

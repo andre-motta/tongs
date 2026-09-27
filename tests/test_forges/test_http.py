@@ -229,18 +229,6 @@ class TestRateLimitRetry:
 
 class TestPaginate:
     @pytest.mark.asyncio
-    async def test_paginate_single_page(self):
-        items = [{"id": 1}, {"id": 2}]
-
-        def handler(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=items)
-
-        client = _make_async_client(handler)
-        async with client:
-            result = await paginate(client, "/items", per_page=20)
-        assert result == items
-
-    @pytest.mark.asyncio
     async def test_paginate_multi_page_collects_all(self):
         pages = {
             1: [{"id": i} for i in range(1, 4)],

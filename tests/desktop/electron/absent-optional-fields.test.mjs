@@ -192,4 +192,9 @@ test("an untyped failure becomes a non-retryable invalid response", () => {
     decodeReadFailure(new Error("tongs-read-failure:%7Bnot-json")),
     null,
   );
+  // A well-formed marker still cannot smuggle in a code outside the typed shape.
+  const forged = encodeURIComponent(
+    JSON.stringify({ code: "Not A Code", message: "forged", retryable: false }),
+  );
+  assert.equal(decodeReadFailure(new Error(`tongs-read-failure:${forged}`)), null);
 });

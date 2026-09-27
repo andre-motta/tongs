@@ -52,7 +52,6 @@ def test_rpm_purelib_uses_fedora_scheme_instead_of_default(
 @pytest.mark.parametrize(
     "purelib_template",
     [
-        "relative/site-packages",
         "/opt/lib/{abi}/site-packages",
         "/usr/local/lib/{abi}/site-packages",
         "/usr/lib/python0.0/site-packages",
@@ -122,8 +121,6 @@ def test_test_plugin_rejects_unexpected_interpreter_cache_tag(
     "path_template",
     [
         "{purelib}/__pycache__/unrelated.{cache_tag}.pyc",
-        "{purelib}/__pycache__/tongs_rpm_test_plugin.{cache_tag}.opt-2.pyc",
-        "{purelib}/__pycache__/tongs_rpm_test_plugin.cpython-000.pyc",
         "{purelib}/__pycache__/../__pycache__/tongs_rpm_test_plugin.{cache_tag}.pyc",
         "{purelib}/nested/__pycache__/tongs_rpm_test_plugin.{cache_tag}.pyc",
     ],

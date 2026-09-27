@@ -423,8 +423,34 @@ for (const [label, panel] of [
 test("the header tabs switch panels and keep the same controls", async () => {
   const review = "header-tabs";
   const view = renderReview(reviewBridge(review), review, "overview");
-  for (const tab of ["Files changed", "Discussions", "Overview"]) {
+  // Each panel is named by its own marker, present only on that panel.
+  const markers = {
+    diff: ".diff-toolbar",
+    discussions: ".review-workflow-discussions",
+    overview: ".review-level-discussions",
+  };
+  for (const [tab, panel] of [
+    ["Files changed", "diff"],
+    ["Discussions", "discussions"],
+    ["Overview", "overview"],
+  ]) {
     fireEvent.click(view.getByRole("button", { name: tab }));
+    await waitFor(() =>
+      assert.deepEqual(
+        [...view.container.querySelectorAll('[aria-current="page"]')].map(
+          (button) => button.getAttribute("data-panel"),
+        ),
+        [panel],
+      ),
+    );
+    await waitFor(() =>
+      assert.deepEqual(
+        Object.entries(markers)
+          .filter(([, selector]) => view.container.querySelectorAll(selector).length > 0)
+          .map(([id]) => id),
+        [panel],
+      ),
+    );
     await waitFor(() => assert.equal(yourReviewButtons(view), 1));
     await waitFor(() => assert.equal(actionButtons(view).length, 4));
     assert.equal(

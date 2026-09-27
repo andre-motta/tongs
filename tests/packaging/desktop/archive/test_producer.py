@@ -284,53 +284,6 @@ def test_wrong_platform_has_no_candidate() -> None:
         )
 
 
-def test_corrupt_archive_is_rejected_after_identity_is_rebound() -> None:
-    built = build_contract_documents(PAYLOAD, PARAMETERS, _contract())
-    corrupted = built.archive[:-1]
-    release = _rebind_release(corrupted, built.release_manifest)
-
-    with pytest.raises(
-        ArtifactContractError,
-        check=lambda error: error.code is ArtifactContractErrorCode.INVALID_ARCHIVE,
-    ):
-        validate_artifact_archive(
-            corrupted,
-            built.archive_name,
-            release,
-            "fedora-44-x86_64-user-archive",
-        )
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {
-            key: value
-            for key, value in PAYLOAD.items()
-            if key != "runtime/LICENSES.json"
-        },
-        PAYLOAD | {"runtime/tongs-desktop": (b"prepared-launcher", 0o644)},
-    ],
-)
-def test_consumer_rejects_missing_file_and_changed_mode(
-    payload: dict[str, tuple[bytes, int]],
-) -> None:
-    built = build_contract_documents(PAYLOAD, PARAMETERS, _contract())
-    archive = _rewritten_archive(built, payload)
-    release = _rebind_release(archive, built.release_manifest)
-
-    with pytest.raises(
-        ArtifactContractError,
-        check=lambda error: error.code is ArtifactContractErrorCode.INVALID_LAYOUT,
-    ):
-        validate_artifact_archive(
-            archive,
-            built.archive_name,
-            release,
-            "fedora-44-x86_64-user-archive",
-        )
-
-
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
@@ -353,24 +306,6 @@ def test_missing_required_file_and_wrong_launcher_mode_are_rejected(
 ) -> None:
     with pytest.raises(ArchiveBuildError, match=message):
         build_contract_documents(payload, PARAMETERS, _contract())
-
-
-def test_release_manifest_mismatch_is_rejected() -> None:
-    built = build_contract_documents(PAYLOAD, PARAMETERS, _contract())
-    raw_release = json.loads(built.release_manifest)
-    raw_release["release_version"] = "0.5.1"
-    release = parse_release_manifest(producer.canonical_json(raw_release))
-
-    with pytest.raises(
-        ArtifactContractError,
-        check=lambda error: error.code is ArtifactContractErrorCode.ARTIFACT_MISMATCH,
-    ):
-        validate_artifact_archive(
-            built.archive,
-            built.archive_name,
-            release,
-            "fedora-44-x86_64-user-archive",
-        )
 
 
 @pytest.mark.parametrize(

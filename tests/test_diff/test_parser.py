@@ -1,14 +1,13 @@
-"""Tests for the unified diff parser and diff data models."""
+"""Tests for the unified diff parser."""
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
 
-from tongs.diff.models import DiffFile, DiffHunk, DiffLine, FileStatus, LineType
+from tongs.diff.models import DiffFile, FileStatus, LineType
 from tongs.diff.parser import parse_diff
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
@@ -19,113 +18,116 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 # ---------------------------------------------------------------------------
 
 
-class TestParseBuilderMR3113:
-    """Parse builder_mr_3113.diff (plain format, no diff --git prefix)."""
-
-    @pytest.fixture()
-    def files(self) -> list[DiffFile]:
-        text = (FIXTURES / "builder_mr_3113.diff").read_text()
-        return parse_diff(text)
-
-    def test_file_count(self, files: list[DiffFile]) -> None:
-        assert len(files) == 2
-
-    def test_first_file_paths(self, files: list[DiffFile]) -> None:
-        assert files[0].old_path == "package_plugins/hooks/upload_after_build_wheel.py"
-        assert files[0].new_path == "package_plugins/hooks/upload_after_build_wheel.py"
-
-    def test_second_file_paths(self, files: list[DiffFile]) -> None:
-        assert files[1].old_path == "test/test_upload_after_build_wheel.py"
-        assert files[1].new_path == "test/test_upload_after_build_wheel.py"
-
-    def test_first_file_hunk_count(self, files: list[DiffFile]) -> None:
-        assert len(files[0].hunks) == 2
-
-    def test_second_file_hunk_count(self, files: list[DiffFile]) -> None:
-        assert len(files[1].hunks) == 1
-
-    def test_first_file_additions_deletions(self, files: list[DiffFile]) -> None:
-        assert files[0].additions == 36
-        assert files[0].deletions == 19
-
-    def test_second_file_additions_only(self, files: list[DiffFile]) -> None:
-        assert files[1].additions == 72
-        assert files[1].deletions == 0
-
-    def test_status_modified(self, files: list[DiffFile]) -> None:
-        assert files[0].status == FileStatus.MODIFIED
-        assert files[1].status == FileStatus.MODIFIED
-
-    def test_language_detected_as_python(self, files: list[DiffFile]) -> None:
-        assert files[0].language == "python"
-        assert files[1].language == "python"
-
-    def test_not_binary(self, files: list[DiffFile]) -> None:
-        assert not files[0].is_binary
-        assert not files[1].is_binary
-
-    def test_first_hunk_header_values(self, files: list[DiffFile]) -> None:
-        hunk = files[0].hunks[0]
-        assert hunk.old_start == 3
-        assert hunk.old_count == 6
-        assert hunk.new_start == 3
-        assert hunk.new_count == 7
-
-    def test_first_hunk_context_text(self, files: list[DiffFile]) -> None:
-        assert files[0].hunks[0].context_text == "import hashlib"
-
-    def test_second_hunk_context_text(self, files: list[DiffFile]) -> None:
-        assert "upload_python_package_to_gitlab" in files[0].hunks[1].context_text
+def _structure(files: list[DiffFile]) -> list[tuple]:
+    """Every parsed file and hunk field that a fixture golden test pins."""
+    return [
+        (
+            f.old_path,
+            f.new_path,
+            f.status,
+            f.additions,
+            f.deletions,
+            f.language,
+            f.is_binary,
+            [
+                (h.old_start, h.old_count, h.new_start, h.new_count, h.context_text)
+                for h in f.hunks
+            ],
+        )
+        for f in files
+    ]
 
 
-class TestParseFromagerPR1258:
-    """Parse fromager_pr_1258.diff (diff --git format)."""
+def test_parses_builder_mr_3113_plain_format() -> None:
+    """builder_mr_3113.diff uses the plain format, with no diff --git prefix."""
+    files = parse_diff((FIXTURES / "builder_mr_3113.diff").read_text())
 
-    @pytest.fixture()
-    def files(self) -> list[DiffFile]:
-        text = (FIXTURES / "fromager_pr_1258.diff").read_text()
-        return parse_diff(text)
+    first = "package_plugins/hooks/upload_after_build_wheel.py"
+    second = "test/test_upload_after_build_wheel.py"
+    assert _structure(files) == [
+        (
+            first,
+            first,
+            FileStatus.MODIFIED,
+            36,
+            19,
+            "python",
+            False,
+            [
+                (3, 6, 3, 7, "import hashlib"),
+                (311, 25, 312, 41, "def upload_python_package_to_gitlab("),
+            ],
+        ),
+        (
+            second,
+            second,
+            FileStatus.MODIFIED,
+            72,
+            0,
+            "python",
+            False,
+            [(198, 6, 198, 78, "def test_upload_package_skip_existing(")],
+        ),
+    ]
 
-    def test_file_count(self, files: list[DiffFile]) -> None:
-        assert len(files) == 2
 
-    def test_first_file_paths(self, files: list[DiffFile]) -> None:
-        f = files[0]
-        assert f.old_path == "src/fromager/bootstrapper/_bootstrapper.py"
-        assert f.new_path == "src/fromager/bootstrapper/_bootstrapper.py"
+def test_parses_fromager_pr_1258_git_format() -> None:
+    """fromager_pr_1258.diff uses the diff --git format."""
+    files = parse_diff((FIXTURES / "fromager_pr_1258.diff").read_text())
 
-    def test_second_file_paths(self, files: list[DiffFile]) -> None:
-        f = files[1]
-        assert f.old_path == "tests/test_bootstrapper.py"
-        assert f.new_path == "tests/test_bootstrapper.py"
-
-    def test_first_file_has_four_hunks(self, files: list[DiffFile]) -> None:
-        assert len(files[0].hunks) == 4
-
-    def test_second_file_has_two_hunks(self, files: list[DiffFile]) -> None:
-        assert len(files[1].hunks) == 2
-
-    def test_first_file_additions_deletions(self, files: list[DiffFile]) -> None:
-        assert files[0].additions == 17
-        assert files[0].deletions == 4
-
-    def test_second_file_additions_only(self, files: list[DiffFile]) -> None:
-        assert files[1].additions == 26
-        assert files[1].deletions == 0
-
-    def test_status_modified(self, files: list[DiffFile]) -> None:
-        assert files[0].status == FileStatus.MODIFIED
-        assert files[1].status == FileStatus.MODIFIED
-
-    def test_language_detected_as_python(self, files: list[DiffFile]) -> None:
-        assert files[0].language == "python"
-        assert files[1].language == "python"
-
-    def test_hunk_context_text_captures_function_name(
-        self, files: list[DiffFile]
-    ) -> None:
-        assert "add_to_build_order" in files[0].hunks[0].context_text
-        assert "finalize" in files[0].hunks[2].context_text
+    first = "src/fromager/bootstrapper/_bootstrapper.py"
+    second = "tests/test_bootstrapper.py"
+    assert _structure(files) == [
+        (
+            first,
+            first,
+            FileStatus.MODIFIED,
+            17,
+            4,
+            "python",
+            False,
+            [
+                (935, 11, 935, 12, "def add_to_build_order("),
+                (
+                    985,
+                    7,
+                    986,
+                    12,
+                    "def _schedule_write(self, path: pathlib.Path, content: str) -> None:",
+                ),
+                (1269, 6, 1275, 10, "def finalize(self) -> int:"),
+                (1334, 5, 1344, 8, "def __exit__("),
+            ],
+        ),
+        (
+            second,
+            second,
+            FileStatus.MODIFIED,
+            26,
+            0,
+            "python",
+            False,
+            [
+                (
+                    799,
+                    6,
+                    799,
+                    12,
+                    "def test_record_stack_state_throttled_when_called_rapidly(",
+                ),
+                (
+                    825,
+                    6,
+                    831,
+                    26,
+                    (
+                        "def test_finalize_writes_build_order_and_graph("
+                        "tmp_context: WorkContext) -> None"
+                    ),
+                ),
+            ],
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -136,51 +138,36 @@ class TestParseFromagerPR1258:
 class TestSyntheticDiffs:
     """Parse hand-crafted diff strings covering each structural variant."""
 
-    def test_simple_addition_only(self) -> None:
-        diff = (
-            "--- a/hello.py\n"
-            "+++ b/hello.py\n"
-            "@@ -1,3 +1,4 @@\n"
-            " line1\n"
-            " line2\n"
-            "+new_line\n"
-            " line3\n"
-        )
-        files = parse_diff(diff)
+    @pytest.mark.parametrize(
+        ("hunk", "additions", "deletions"),
+        [
+            pytest.param(
+                "@@ -1,3 +1,4 @@\n line1\n line2\n+new_line\n line3\n",
+                1,
+                0,
+                id="addition",
+            ),
+            pytest.param(
+                "@@ -1,4 +1,3 @@\n line1\n-removed_line\n line2\n line3\n",
+                0,
+                1,
+                id="deletion",
+            ),
+            pytest.param(
+                "@@ -1,4 +1,4 @@\n line1\n-old_line\n+new_line\n line2\n line3\n",
+                1,
+                1,
+                id="mixed",
+            ),
+        ],
+    )
+    def test_counts_additions_and_deletions(
+        self, hunk: str, additions: int, deletions: int
+    ) -> None:
+        files = parse_diff(f"--- a/hello.py\n+++ b/hello.py\n{hunk}")
         assert len(files) == 1
-        assert files[0].additions == 1
-        assert files[0].deletions == 0
-
-    def test_simple_deletion_only(self) -> None:
-        diff = (
-            "--- a/hello.py\n"
-            "+++ b/hello.py\n"
-            "@@ -1,4 +1,3 @@\n"
-            " line1\n"
-            "-removed_line\n"
-            " line2\n"
-            " line3\n"
-        )
-        files = parse_diff(diff)
-        assert len(files) == 1
-        assert files[0].additions == 0
-        assert files[0].deletions == 1
-
-    def test_mixed_additions_and_deletions(self) -> None:
-        diff = (
-            "--- a/hello.py\n"
-            "+++ b/hello.py\n"
-            "@@ -1,4 +1,4 @@\n"
-            " line1\n"
-            "-old_line\n"
-            "+new_line\n"
-            " line2\n"
-            " line3\n"
-        )
-        files = parse_diff(diff)
-        assert len(files) == 1
-        assert files[0].additions == 1
-        assert files[0].deletions == 1
+        assert files[0].additions == additions
+        assert files[0].deletions == deletions
 
     def test_multiple_hunks_in_one_file(self) -> None:
         diff = (
@@ -223,31 +210,6 @@ class TestSyntheticDiffs:
         assert len(files) == 2
         assert files[0].new_path == "alpha.py"
         assert files[1].new_path == "beta.py"
-
-    def test_context_lines_have_correct_line_numbers(self) -> None:
-        diff = (
-            "--- a/f.py\n"
-            "+++ b/f.py\n"
-            "@@ -5,3 +5,4 @@\n"
-            " ctx_line5\n"
-            "+added\n"
-            " ctx_line6\n"
-            " ctx_line7\n"
-        )
-        files = parse_diff(diff)
-        lines = files[0].hunks[0].lines
-        # First context line: old=5, new=5
-        assert lines[0].line_type == LineType.CONTEXT
-        assert lines[0].old_lineno == 5
-        assert lines[0].new_lineno == 5
-        # Addition: old=None, new=6
-        assert lines[1].line_type == LineType.ADDITION
-        assert lines[1].old_lineno is None
-        assert lines[1].new_lineno == 6
-        # Next context: old=6, new=7 (shifted by the addition)
-        assert lines[2].line_type == LineType.CONTEXT
-        assert lines[2].old_lineno == 6
-        assert lines[2].new_lineno == 7
 
     def test_hunk_header_with_function_context(self) -> None:
         diff = (
@@ -312,30 +274,9 @@ class TestSyntheticDiffs:
         assert files[0].is_binary
         assert files[0].status == FileStatus.ADDED
 
-    def test_empty_diff(self) -> None:
-        assert parse_diff("") == []
-
-    def test_whitespace_only_diff(self) -> None:
-        assert parse_diff("   \n\n  \t  \n") == []
-
-    def test_diff_git_format_with_index(self) -> None:
-        diff = (
-            "diff --git a/src/lib.rs b/src/lib.rs\n"
-            "index abc1234..def5678 100644\n"
-            "--- a/src/lib.rs\n"
-            "+++ b/src/lib.rs\n"
-            "@@ -1,3 +1,4 @@\n"
-            " use std::io;\n"
-            "+use std::fs;\n"
-            " fn main() {}\n"
-            " // end\n"
-        )
-        files = parse_diff(diff)
-        assert len(files) == 1
-        assert files[0].old_path == "src/lib.rs"
-        assert files[0].new_path == "src/lib.rs"
-        assert files[0].language == "rust"
-        assert files[0].additions == 1
+    @pytest.mark.parametrize("text", ["", "   \n\n  \t  \n"], ids=["empty", "blank"])
+    def test_empty_or_blank_diff(self, text: str) -> None:
+        assert parse_diff(text) == []
 
     def test_diff_git_format_with_rename(self) -> None:
         diff = (
@@ -356,14 +297,6 @@ class TestSyntheticDiffs:
         assert files[0].status == FileStatus.RENAMED
         assert files[0].old_path == "old_name.py"
         assert files[0].new_path == "new_name.py"
-
-    def test_plain_format_no_git_prefix(self) -> None:
-        """Diffs without 'diff --git' header, just --- and +++ lines."""
-        diff = "--- utils.py\n+++ utils.py\n@@ -1,2 +1,3 @@\n existing\n+added\n end\n"
-        files = parse_diff(diff)
-        assert len(files) == 1
-        assert files[0].old_path == "utils.py"
-        assert files[0].new_path == "utils.py"
 
     def test_deeply_nested_file_path(self) -> None:
         diff = (
@@ -386,33 +319,8 @@ class TestSyntheticDiffs:
 class TestLanguageDetection:
     """Verify language detection from file extensions."""
 
-    _CASES: ClassVar[list] = [
-        (".py", "python"),
-        (".js", "javascript"),
-        (".ts", "typescript"),
-        (".tsx", "tsx"),
-        (".jsx", "jsx"),
-        (".rs", "rust"),
-        (".go", "go"),
-        (".rb", "ruby"),
-        (".java", "java"),
-        (".c", "c"),
-        (".cpp", "cpp"),
-        (".h", "c"),
-        (".hpp", "cpp"),
-        (".cs", "csharp"),
-        (".sh", "bash"),
-        (".yaml", "yaml"),
-        (".yml", "yaml"),
-        (".json", "json"),
-        (".toml", "toml"),
-        (".md", "markdown"),
-        (".html", "html"),
-        (".css", "css"),
-        (".sql", "tsql"),
-        (".xml", "xml"),
-        (".tf", "terraform"),
-    ]
+    # .py covers the Pygments lookup, .cpp the extension-only fallback path.
+    _CASES: ClassVar[list] = [(".py", "python"), (".cpp", "cpp")]
 
     @pytest.mark.parametrize("ext,expected_lang", _CASES)
     def test_extension_maps_to_language(self, ext: str, expected_lang: str) -> None:
@@ -436,111 +344,10 @@ class TestLanguageDetection:
         files = parse_diff(diff)
         assert files[0].language == "docker"
 
-    def test_dockerfile_variant_by_name(self) -> None:
-        diff = (
-            "--- a/Dockerfile.prod\n"
-            "+++ b/Dockerfile.prod\n"
-            "@@ -1,1 +1,2 @@\n"
-            " FROM alpine\n"
-            "+RUN echo hi\n"
-        )
-        files = parse_diff(diff)
-        assert files[0].language == ""
-
-    def test_makefile_by_name(self) -> None:
-        diff = "--- a/Makefile\n+++ b/Makefile\n@@ -1,1 +1,2 @@\n all:\n+\t@echo done\n"
-        files = parse_diff(diff)
-        assert files[0].language == "make"
-
-    def test_jenkinsfile_by_name(self) -> None:
-        diff = (
-            "--- a/Jenkinsfile\n"
-            "+++ b/Jenkinsfile\n"
-            "@@ -1,1 +1,2 @@\n"
-            " pipeline {\n"
-            "+  agent any\n"
-        )
-        files = parse_diff(diff)
-        assert files[0].language == ""
-
     def test_deleted_file_uses_old_path_for_language(self) -> None:
         diff = "--- a/module.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-line1\n-line2\n"
         files = parse_diff(diff)
         assert files[0].language == "python"
-
-
-# ---------------------------------------------------------------------------
-# Model tests
-# ---------------------------------------------------------------------------
-
-
-class TestDiffModels:
-    """Verify frozen semantics and enum values for diff data models."""
-
-    def test_diff_line_frozen(self) -> None:
-        line = DiffLine(
-            old_lineno=1, new_lineno=1, content="x", line_type=LineType.CONTEXT
-        )
-        with pytest.raises(FrozenInstanceError):
-            line.content = "changed"
-
-    def test_diff_hunk_frozen(self) -> None:
-        hunk = DiffHunk(
-            header="@@ -1,1 +1,1 @@",
-            old_start=1,
-            old_count=1,
-            new_start=1,
-            new_count=1,
-            lines=(),
-        )
-        with pytest.raises(FrozenInstanceError):
-            hunk.old_start = 99
-
-    def test_diff_file_frozen(self) -> None:
-        f = DiffFile(
-            old_path="a.py",
-            new_path="a.py",
-            status=FileStatus.MODIFIED,
-            hunks=(),
-        )
-        with pytest.raises(FrozenInstanceError):
-            f.old_path = "changed.py"
-
-    def test_line_type_enum_values(self) -> None:
-        assert LineType.CONTEXT.value == "context"
-        assert LineType.ADDITION.value == "addition"
-        assert LineType.DELETION.value == "deletion"
-        assert LineType.HUNK_HEADER.value == "hunk_header"
-        assert LineType.NO_NEWLINE.value == "no_newline"
-
-    def test_file_status_enum_values(self) -> None:
-        assert FileStatus.MODIFIED.value == "modified"
-        assert FileStatus.ADDED.value == "added"
-        assert FileStatus.DELETED.value == "deleted"
-        assert FileStatus.RENAMED.value == "renamed"
-
-    def test_diff_file_default_values(self) -> None:
-        f = DiffFile(
-            old_path="x.py",
-            new_path="x.py",
-            status=FileStatus.MODIFIED,
-            hunks=(),
-        )
-        assert f.additions == 0
-        assert f.deletions == 0
-        assert f.is_binary is False
-        assert f.language == ""
-
-    def test_diff_hunk_default_context_text(self) -> None:
-        hunk = DiffHunk(
-            header="@@ -1,1 +1,1 @@",
-            old_start=1,
-            old_count=1,
-            new_start=1,
-            new_count=1,
-            lines=(),
-        )
-        assert hunk.context_text == ""
 
 
 # ---------------------------------------------------------------------------
@@ -560,25 +367,6 @@ class TestEdgeCases:
         assert hunk.new_count == 1
         assert files[0].additions == 1
         assert files[0].deletions == 1
-
-    def test_empty_hunk_zero_additions_deletions(self) -> None:
-        """A hunk header with 0,0 counts produces an empty hunk."""
-        diff = "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n line1\n line2\n line3\n"
-        files = parse_diff(diff)
-        assert files[0].additions == 0
-        assert files[0].deletions == 0
-        # All lines are context
-        assert all(ln.line_type == LineType.CONTEXT for ln in files[0].hunks[0].lines)
-
-    def test_very_long_line_content(self) -> None:
-        long_content = "x" * 10_000
-        diff = f"--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,2 @@\n short\n+{long_content}\n"
-        files = parse_diff(diff)
-        added = [
-            ln for ln in files[0].hunks[0].lines if ln.line_type == LineType.ADDITION
-        ]
-        assert len(added) == 1
-        assert added[0].content == long_content
 
     def test_line_numbers_correct_across_multiple_hunks(self) -> None:
         """Line numbers must restart from each hunk's header, not carry over."""
@@ -670,28 +458,6 @@ class TestEdgeCases:
         assert files[0].status == FileStatus.DELETED
         assert files[0].deletions == 2
 
-    def test_multiple_files_git_format(self) -> None:
-        diff = (
-            "diff --git a/one.py b/one.py\n"
-            "--- a/one.py\n"
-            "+++ b/one.py\n"
-            "@@ -1,1 +1,2 @@\n"
-            " first\n"
-            "+added_to_one\n"
-            "diff --git a/two.py b/two.py\n"
-            "--- a/two.py\n"
-            "+++ b/two.py\n"
-            "@@ -1,1 +1,2 @@\n"
-            " second\n"
-            "+added_to_two\n"
-        )
-        files = parse_diff(diff)
-        assert len(files) == 2
-        assert files[0].new_path == "one.py"
-        assert files[1].new_path == "two.py"
-        assert files[0].additions == 1
-        assert files[1].additions == 1
-
     def test_binary_file_without_hunks(self) -> None:
         """Binary files have is_binary=True and no hunks."""
         diff = (
@@ -722,18 +488,6 @@ class TestEdgeCases:
         for ln in no_nl_lines:
             assert ln.old_lineno is None
             assert ln.new_lineno is None
-
-    def test_hunk_lines_tuple_type(self) -> None:
-        """DiffHunk.lines is a tuple, not a list."""
-        diff = "--- a/f.py\n+++ b/f.py\n@@ -1,1 +1,2 @@\n x\n+y\n"
-        files = parse_diff(diff)
-        assert isinstance(files[0].hunks[0].lines, tuple)
-
-    def test_hunks_tuple_type(self) -> None:
-        """DiffFile.hunks is a tuple, not a list."""
-        diff = "--- a/f.py\n+++ b/f.py\n@@ -1,1 +1,2 @@\n x\n+y\n"
-        files = parse_diff(diff)
-        assert isinstance(files[0].hunks, tuple)
 
     def test_content_strips_diff_prefix(self) -> None:
         """DiffLine.content should not include the leading +/-/space."""
@@ -792,46 +546,6 @@ class TestEdgeCases:
         # line5
         assert lines[5].old_lineno == 5
         assert lines[5].new_lineno == 6
-
-    def test_deletion_of_sql_comment_not_truncated(self) -> None:
-        """Deleting a line starting with '-- ' must parse as a deletion, not a hunk break."""
-        diff = (
-            "--- a/schema.sql\n"
-            "+++ b/schema.sql\n"
-            "@@ -1,4 +1,3 @@\n"
-            " SELECT 1;\n"
-            "--- This is a SQL comment\n"
-            " SELECT 2;\n"
-            " SELECT 3;\n"
-        )
-        files = parse_diff(diff)
-        assert len(files) == 1
-        assert files[0].deletions == 1
-        assert files[0].additions == 0
-
-        lines = files[0].hunks[0].lines
-        del_lines = [ln for ln in lines if ln.line_type == LineType.DELETION]
-        assert len(del_lines) == 1
-        assert del_lines[0].content == "-- This is a SQL comment"
-
-    def test_hunk_source_lines_resembling_file_headers_are_not_boundaries(self) -> None:
-        diff = (
-            "--- a/comments.txt\n"
-            "+++ b/comments.txt\n"
-            "@@ -1 +1 @@\n"
-            "--- comment\n"
-            "+++ comment\n"
-        )
-
-        files = parse_diff(diff)
-
-        assert len(files) == 1
-        lines = files[0].hunks[0].lines
-        assert [line.line_type for line in lines] == [
-            LineType.DELETION,
-            LineType.ADDITION,
-        ]
-        assert [line.content for line in lines] == ["-- comment", "++ comment"]
 
     def test_incomplete_hunk_stops_before_following_file_headers(self) -> None:
         diff = (

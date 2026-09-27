@@ -141,34 +141,42 @@ def test_release_manifest_rejects_invalid_fields(
     _error(parse_release_manifest, canonical_json(data), code)
 
 
-def test_release_manifest_rejects_duplicate_id_name_and_target() -> None:
-    for field, value in (
-        ("artifact_id", "fedora-44-x86-64-user-archive"),
-        ("name", ARCHIVE_NAME[0].upper() + ARCHIVE_NAME[1:]),
-        ("platform", deepcopy(_release_data()["artifacts"][0]["platform"])),
-    ):
-        data = _release_data()
-        duplicate = deepcopy(data["artifacts"][0])
-        duplicate["artifact_id"] = "second-artifact"
-        duplicate["name"] = "second-artifact.tar.gz"
-        if field == "artifact_id":
-            duplicate[field] = data["artifacts"][0][field]
-        elif field == "name":
-            duplicate[field] = value
-        else:
-            duplicate[field] = value
-        data["artifacts"].append(duplicate)
-        _error(
-            parse_release_manifest,
-            canonical_json(data),
-            ArtifactContractErrorCode.DUPLICATE_VALUE,
-        )
+@pytest.mark.parametrize("duplicated", ["artifact_id", "name", "target"])
+def test_release_manifest_rejects_duplicate_id_name_and_target(duplicated: str) -> None:
+    data = _release_data()
+    original = data["artifacts"][0]
+    duplicate = deepcopy(original)
+    duplicate["artifact_id"] = "second-artifact"
+    duplicate["name"] = "second-artifact.tar.gz"
+    if duplicated != "target":
+        # A distinct target, so only the rule under test can reject it.
+        duplicate["platform"]["architecture"] = "aarch64"
+    if duplicated == "artifact_id":
+        duplicate["artifact_id"] = original["artifact_id"]
+    elif duplicated == "name":
+        # Names collide case-insensitively on common filesystems.
+        duplicate["name"] = ARCHIVE_NAME[0].upper() + ARCHIVE_NAME[1:]
+    data["artifacts"].append(duplicate)
+
+    _error(
+        parse_release_manifest,
+        canonical_json(data),
+        ArtifactContractErrorCode.DUPLICATE_VALUE,
+    )
 
 
 def test_install_manifest_rejects_traversal_collision_and_missing_runtime() -> None:
     cases = (
         (
             lambda files: files[0].update(path="runtime/../escape"),
+            ArtifactContractErrorCode.INVALID_LAYOUT,
+        ),
+        (
+            lambda files: files[0].update(path="/runtime/escape"),
+            ArtifactContractErrorCode.INVALID_LAYOUT,
+        ),
+        (
+            lambda files: files[0].update(path="runtime\\..\\escape"),
             ArtifactContractErrorCode.INVALID_LAYOUT,
         ),
         (

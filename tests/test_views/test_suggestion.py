@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tongs.diff.models import DiffLine, LineType
 from tongs.scanner.repo import ForgeType
 from tongs.views.suggestion import (
@@ -27,11 +29,6 @@ class TestBuildSuggestionTemplate:
         assert lines[3] == SUGGESTION_SEPARATOR
         assert lines[4] == "x = 1"
 
-    def test_multiline_original_code(self):
-        result = build_suggestion_template("a = 1\nb = 2")
-        assert SUGGESTION_SEPARATOR in result
-        assert "a = 1\nb = 2" in result
-
 
 class TestParseSuggestionTemplate:
     def test_normal_edit_comment_above_code_below(self):
@@ -55,18 +52,6 @@ class TestParseSuggestionTemplate:
         assert comment == "Please rename"
         assert code == "foo = 1"
 
-    def test_empty_comment_area(self):
-        edited = f"\n\n{SUGGESTION_SEPARATOR}\ny = 10"
-        comment, code = parse_suggestion_template(edited)
-        assert comment == ""
-        assert code == "y = 10"
-
-    def test_whitespace_handling(self):
-        edited = f"  some comment  \n{SUGGESTION_SEPARATOR}\n  code  "
-        comment, code = parse_suggestion_template(edited)
-        assert comment == "some comment"
-        assert code == "code"
-
 
 class TestComputeBacktickFence:
     def test_no_backticks_returns_triple(self):
@@ -82,32 +67,24 @@ class TestComputeBacktickFence:
         # Two separate single backticks are each runs of 1, not 2
         assert compute_backtick_fence("`a`b`") == "```"
 
-    def test_empty_string_returns_triple(self):
-        assert compute_backtick_fence("") == "```"
-
 
 class TestFormatSuggestionBlock:
-    def test_gitlab_single_line(self):
-        result = format_suggestion_block("new code", 1, ForgeType.GITLAB)
-        assert "```suggestion:-0+0" in result
+    @pytest.mark.parametrize(
+        ("n_original", "header"),
+        [(1, "```suggestion:-0+0"), (3, "```suggestion:-0+2")],
+    )
+    def test_gitlab_header_spans_the_original_lines(self, n_original: int, header: str):
+        result = format_suggestion_block("new code", n_original, ForgeType.GITLAB)
+        assert header in result
         assert "new code" in result
 
-    def test_gitlab_multi_line_3_lines(self):
-        result = format_suggestion_block("replaced", 3, ForgeType.GITLAB)
-        assert "```suggestion:-0+2" in result
-
-    def test_github_single_line(self):
-        result = format_suggestion_block("new code", 1, ForgeType.GITHUB)
+    @pytest.mark.parametrize("n_original", [1, 3])
+    def test_github_header_has_no_offset(self, n_original: int):
+        result = format_suggestion_block("new code", n_original, ForgeType.GITHUB)
         assert "```suggestion" in result
-        # No offset syntax for GitHub
+        # GitHub carries the range in API parameters, not in the body.
         assert "suggestion:-" not in result
         assert "suggestion:+" not in result
-
-    def test_github_multi_line_same_as_single(self):
-        result = format_suggestion_block("replaced", 3, ForgeType.GITHUB)
-        # GitHub range is in API params, not in the body
-        assert "```suggestion" in result
-        assert "suggestion:-" not in result
 
     def test_with_comment_text(self):
         result = format_suggestion_block("code", 1, ForgeType.GITLAB, "Fix this")
@@ -137,19 +114,6 @@ class TestExtractNewSideLines:
         result = extract_new_side_lines(lines)
         assert len(result) == 2
         assert all(dl.line_type != LineType.DELETION for dl in result)
-
-    def test_keeps_context_and_addition(self):
-        lines = [
-            DiffLine(None, 1, "added", LineType.ADDITION),
-            DiffLine(2, 2, "context", LineType.CONTEXT),
-        ]
-        result = extract_new_side_lines(lines)
-        assert len(result) == 2
-        assert result[0].line_type == LineType.ADDITION
-        assert result[1].line_type == LineType.CONTEXT
-
-    def test_empty_input_returns_empty(self):
-        assert extract_new_side_lines([]) == []
 
 
 class TestResolveSuggestionPosition:

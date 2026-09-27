@@ -168,6 +168,38 @@ def test_download_retries_transient_failure(
     assert output.read_bytes() == contents
 
 
+def test_download_rejects_bytes_that_differ_from_the_pinned_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    served = b"forged"
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.close()
+
+        def geturl(self) -> str:
+            return "https://files.pythonhosted.org/source.tar.gz"
+
+    monkeypatch.setattr(
+        prepare_sources.urllib.request, "urlopen", lambda *_a, **_k: Response(served)
+    )
+    output = tmp_path / "source.tar.gz"
+    # The declared size matches, so only the pinned hash can reject the bytes.
+    with pytest.raises(RuntimeError, match="source hash mismatch"):
+        prepare_sources._download(
+            {
+                "url": "https://files.pythonhosted.org/source.tar.gz",
+                "filename": output.name,
+                "bytes": len(served),
+                "sha256": prepare_sources.hashlib.sha256(b"source").hexdigest(),
+            },
+            output,
+        )
+
+
 def test_download_retries_server_http_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

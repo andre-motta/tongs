@@ -22,10 +22,10 @@ from tongs.desktop.installer.models import InstallerLimits
 
 SOURCE_COMMIT = "a" * 40
 SOURCE_TREE = "b" * 40
-REF = "refs/heads/feat/desktop-120-candidate-attestation"
+REF = "refs/heads/main"
 PR_REF = "refs/pull/138/merge"
 PUSH_TRANSFER_MANIFEST_SHA256 = (
-    "58b2a15bfbf9190cbe4a7d06c51931bb89d0fe0916fe068e1851d01b1d02fd5b"
+    "dd483b54858125bb8abca224fee00e95188ceca11e22fb57fb27907b2cd9945c"
 )
 
 
@@ -372,7 +372,7 @@ def test_official_push_conversion_preserves_manifest_bytes(tmp_path: Path) -> No
     )
 
     manifest = (root / candidate.TRANSFER_MANIFEST_NAME).read_bytes()
-    assert len(manifest) == 3171
+    assert len(manifest) == 3137
     assert _digest(manifest) == PUSH_TRANSFER_MANIFEST_SHA256
     assert json.loads(manifest)["execution"] == {
         "repository": official.repository,
@@ -956,9 +956,7 @@ def test_release_tag_refs_derive_their_version_and_archive_name() -> None:
 
     assert release_version_for_ref("refs/tags/v1.0.0") == "1.0.0"
     assert release_version_for_ref("refs/tags/v12.3.4") == "12.3.4"
-    assert release_version_for_ref("refs/heads/feat/desktop-app") == (
-        CANDIDATE_RELEASE_VERSION
-    )
+    assert release_version_for_ref("refs/heads/main") == CANDIDATE_RELEASE_VERSION
     assert is_release_tag_ref("refs/tags/v1.0.0")
     assert not is_release_tag_ref("refs/tags/v1.0.0rc1")
     assert not is_release_tag_ref("refs/tags/v01.0.0")
@@ -987,14 +985,14 @@ def test_official_identity_admits_release_tags_and_dry_runs_only_as_allowed() ->
 
     tagged = official("refs/tags/v1.0.0", "push")
     assert tagged.builder_id.endswith("@refs/tags/v1.0.0")
-    dry = official("refs/heads/feat/desktop-app", "workflow_dispatch")
+    dry = official("refs/heads/main", "workflow_dispatch")
     assert dry.event == "workflow_dispatch"
     with pytest.raises(CandidateAttestationError):
         official("refs/tags/v1.0.0", "workflow_dispatch")
     with pytest.raises(CandidateAttestationError):
         official("refs/tags/v1.0.0rc1", "push")
     with pytest.raises(CandidateAttestationError):
-        official("refs/heads/feat/desktop-app", "pull_request")
+        official("refs/heads/main", "pull_request")
 
 
 def test_verify_sbom_binds_the_producer_output_to_the_ref_release_version(

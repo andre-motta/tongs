@@ -82,12 +82,8 @@ SPDX_PREDICATE_PREFIX: Final = "https://spdx.dev/Document/v"
 CANDIDATE_RELEASE_VERSION: Final = "0.5.0"
 CANDIDATE_ARCHIVE_NAME: Final = "tongs-desktop-0.5.0-fedora44-x86_64.tar.gz"
 TRANSFER_MANIFEST_NAME: Final = "candidate-attestation-transfer-v1.json"
-ALLOWED_REFS: Final = frozenset(
-    {
-        "refs/heads/feat/desktop-120-candidate-attestation",
-        "refs/heads/feat/desktop-app",
-    }
-)
+#: The only branch a candidate is built from: a dry-run dispatch from main.
+ALLOWED_REFS: Final = frozenset({"refs/heads/main"})
 #: Release tags share the core's ``vX.Y.Z`` shape; the installer selects the
 #: release whose tag version equals the running core.
 _RELEASE_TAG_REF_RE: Final = re.compile(

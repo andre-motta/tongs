@@ -410,9 +410,11 @@ test("review list filter and selection survive opening a review and returning", 
     repository: "repo",
   });
   const restored = view.getByText("Zulu").closest("button");
-  assert.equal(restored.getAttribute("aria-current"), "true");
+  await waitFor(() => {
+    assert.equal(restored.getAttribute("aria-current"), "true");
+    assert.equal(document.activeElement?.dataset.reviewHandle, "review-zulu");
+  });
   assert.equal(restored.dataset.reviewHandle, "review-zulu");
-  assert.equal(document.activeElement?.dataset.reviewHandle, "review-zulu");
   assert.equal(
     view.getByText("Alpha").closest("button").getAttribute("aria-current"),
     null,

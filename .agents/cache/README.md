@@ -57,7 +57,7 @@ Keys starting with `_EXCLUDED_PREFIXES` (`"job_log:"`, `"stream_log:"`) are sile
 
 `src/tongs/cache/cached_client.py` wraps any `ForgeClient` with transparent SQLite caching. `ForgeRegistry.get_client()` automatically wraps every forge client in `CachedForgeClient` when a cache is configured.
 
-- **Cached reads:** `list_mrs` (keyed by hostname, repo_path and state, not per_page; TTL = mr_list_ttl) and `get_mr_diff` (keyed by hostname, repo_path and MR number; TTL = diff_ttl). On a hit they return deserialized JSON without an API call.
+- **Cached reads:** `list_mrs` (keyed by hostname, repo_path and state, not per_page; TTL = mr_list_ttl) and `get_mr_diff` (keyed by hostname, repo_path and MR number; TTL = diff_ttl). On a hit they return deserialized JSON without an API call. `list_mrs_page` caches only page 1 (keyed by hostname, repo_path, state and per_page; TTL = mr_list_ttl). A later page always reads the forge and drops that cached page 1, because offset pages shift as reviews are updated.
 - **Fresh reads:** `get_mr_fresh` and `get_mr_diff_fresh` always bypass the cache. `ApplicationSession` uses them for review detail and raw diff reads, so the built-in terminal and desktop views get only MR lists from the cache. The MCP server builds its own registry without a cache.
 - **Mutation coherence:** approve/unapprove, close/reopen, general and inline
   comments, replies, discussion resolution, and review submission all call

@@ -1,4 +1,4 @@
-"""Review list pages are cached one page at a time (#344)."""
+"""Only the first review list page is cached (#344)."""
 
 from __future__ import annotations
 
@@ -69,24 +69,63 @@ async def cached(tmp_path) -> AsyncIterator[tuple[CachedForgeClient, _PagedClien
 
 
 @pytest.mark.asyncio
-async def test_each_page_is_cached_under_its_own_key(cached) -> None:
+async def test_the_first_page_is_cached_per_page_size(cached) -> None:
     client, inner = cached
     first = await client.list_mrs_page("acme/repo", page=1, per_page=2)
-    second = await client.list_mrs_page("acme/repo", page=2, per_page=2)
     again = await client.list_mrs_page("acme/repo", page=1, per_page=2)
     other_size = await client.list_mrs_page("acme/repo", page=1, per_page=5)
+    closed = await client.list_mrs_page("acme/repo", state="closed", page=1)
 
     assert inner.calls == [
         ("acme/repo", "open", 1, 2),
-        ("acme/repo", "open", 2, 2),
         ("acme/repo", "open", 1, 5),
+        ("acme/repo", "closed", 1, 100),
     ]
     assert first.items[0].number == 10
-    assert second.items[0].number == 20
     assert again == first
     assert again.items[0].labels == ("bug",)
     assert again.items[0].review_decision is ReviewDecision.APPROVED
     assert other_size.has_next is True
+    assert closed.has_next is True
+
+
+@pytest.mark.asyncio
+async def test_later_pages_are_fresh_and_drop_the_cached_first_page(cached) -> None:
+    client, inner = cached
+    await client.list_mrs_page("acme/repo", page=1, per_page=2)
+    await client.list_mrs_page("acme/repo", page=1, per_page=2)
+    second = await client.list_mrs_page("acme/repo", page=2, per_page=2)
+    second_again = await client.list_mrs_page("acme/repo", page=2, per_page=2)
+    first_again = await client.list_mrs_page("acme/repo", page=1, per_page=2)
+
+    # Page 2 always comes from the forge, and after it page 1 does too: a
+    # review updated meanwhile moved from page 2 to page 1, and a cached page 1
+    # older than page 2 would hide it from both.
+    assert inner.calls == [
+        ("acme/repo", "open", 1, 2),
+        ("acme/repo", "open", 2, 2),
+        ("acme/repo", "open", 2, 2),
+        ("acme/repo", "open", 1, 2),
+    ]
+    assert second.items[0].number == 20
+    assert second_again == second
+    assert first_again.items[0].number == 10
+
+
+@pytest.mark.asyncio
+async def test_a_later_page_leaves_other_first_pages_cached(cached) -> None:
+    client, inner = cached
+    await client.list_mrs_page("acme/repo", page=1, per_page=2)
+    await client.list_mrs_page("acme/other", page=1, per_page=2)
+    await client.list_mrs_page("acme/repo", state="closed", page=1, per_page=2)
+    await client.list_mrs_page("acme/repo", page=2, per_page=2)
+    inner.calls.clear()
+
+    await client.list_mrs_page("acme/other", page=1, per_page=2)
+    await client.list_mrs_page("acme/repo", state="closed", page=1, per_page=2)
+    await client.list_mrs_page("acme/repo", page=1, per_page=2)
+
+    assert inner.calls == [("acme/repo", "open", 1, 2)]
 
 
 @pytest.mark.asyncio

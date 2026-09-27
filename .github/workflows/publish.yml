@@ -29,11 +29,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: pip install build
+      # The wheel and sdist built here are what the publish job uploads, so
+      # the build frontend and backend come from the hash lock, and the build
+      # runs without isolation so pip never resolves a fresh build backend.
+      - name: Install the hash-locked build frontend and backend
+        run: >-
+          python -I -m pip install
+          --isolated
+          --disable-pip-version-check
+          --require-hashes
+          --only-binary=:all:
+          -r requirements/release.lock
 
       - name: Build package
-        run: python -m build
+        run: python -I -m build --no-isolation
 
       - name: Assert the built version equals the tag before anything is uploaded
         env:

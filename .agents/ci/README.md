@@ -218,7 +218,8 @@ documentation toolchain is pinned by `site/package-lock.json`, which `npm ci`
 installs exactly, and every direct dependency in `site/package.json`, Astro and
 Starlight included, is an exact version rather than a range; a test in the same
 module enforces both. Other tools a workflow installs ad hoc, such as
-`build` and `ruff`, are not yet pinned and are tracked by #162.
+`ruff` and the `build` used for desktop fixture wheels, are not yet pinned and
+are tracked by #162.
 
 Jobs that hold a signing or write token install nothing that resolves fresh.
 In `release-desktop.yml`, `candidate-attestation` (`id-token: write`) and
@@ -231,8 +232,14 @@ and `editables` build backend. Its direct inputs are in
 `requirements/release.in`; regenerate it with the `uv pip compile` command on
 its second line, moving `--exclude-newer` forward, and check the result in a
 clean Python 3.12 venv with those two installs. `GH_TOKEN` is set only on the
-publish steps that call `gh`. `tests/ci/test_release_lock.py` enforces all of
-this for every job in every workflow that holds a write or OIDC token.
+publish steps that call `gh`. The `build` job of `publish.yml` holds no token,
+but the PyPI publish job uploads its wheel and sdist as they are, so it installs
+the same lock (which also pins `build`) and runs
+`python -m build --no-isolation`. `tests/ci/test_release_lock.py` enforces all of
+this for every job in every workflow that holds a write or OIDC token and for
+that build job. `tests/ci/test_workflow_hygiene.py` shares its install scanner
+and allows a follow-up `--no-deps` install without hashes only for local wheels
+and local source trees built with `--no-build-isolation`.
 
 Updates to these pins, the release lock included, will arrive as Dependabot
 pull requests once #162 (v1.1.0) lands; until then, bump them by hand.

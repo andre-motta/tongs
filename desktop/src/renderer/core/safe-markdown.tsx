@@ -5,7 +5,6 @@ import {
   useId,
   useMemo,
   useState,
-  type CSSProperties,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -71,15 +70,6 @@ const WEB_TOP_LABELS: ReadonlySet<string> = new Set([
 ]);
 // Punctuation that commonly wraps a URL inside prose, such as "(github.com)".
 const WRAPPING_PUNCTUATION = /^[("'<[{]+|[)"'>\]},;:!?.]+$/gu;
-
-// Theme tokens from the shell stylesheet; the renderer sets them through the
-// CSSOM, which the style-src 'self' policy permits.
-const MISMATCHED_HOST_STYLE: CSSProperties = Object.freeze({
-  marginLeft: "5px",
-  fontSize: "12px",
-  color: "var(--warning)",
-  overflowWrap: "anywhere",
-});
 
 const ALLOWED_ELEMENTS = Object.freeze([
   "p",
@@ -263,7 +253,6 @@ function SafeExternalLink({
         <span
           className="safe-markdown-link-host safe-markdown-link-host-mismatch"
           id={descriptionId}
-          style={MISMATCHED_HOST_STYLE}
         >
           (opens {host})
         </span>

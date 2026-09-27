@@ -247,17 +247,31 @@ pull requests once #162 (v1.1.0) lands; until then, bump them by hand.
 ## Re-running a hosted check
 
 **Download the evidence you need before you re-run anything.** Every gate
-artifact is named with the run id and the run attempt, and re-running all jobs
-starts a new attempt and drops the artifacts the previous attempt produced.
-Once a re-run has started, the evidence that would have explained the failure
-may already be gone.
+artifact is named with the commit and the run id but not the run attempt, and
+a lane that re-runs overwrites its own gate artifact. Diagnostic artifacts,
+such as the raw TAP reports and the RPM producer output, keep the attempt in
+their names. Once a re-run has started, the evidence that would have explained
+the failure may already be gone.
 
-**A partial re-run fails closed, by design.** Re-running only the failed jobs
-does not re-run the jobs that passed, so those jobs never upload artifacts under
-the new attempt number, and `CI aggregate` cannot download the
-complete receipt set it requires. That is intended: the aggregate asserts that
-one attempt produced every receipt for one revision. To get a green aggregate,
-re-run all jobs or push a new commit.
+**A partial re-run can turn the aggregate green.** "Re-run failed jobs" re-runs
+the failed jobs and the jobs that depend on them, including `CI aggregate`.
+Lanes that passed earlier keep the gate artifact of the attempt that produced
+it, and a lane that re-runs replaces its own, so the aggregate finds one
+artifact per selected lane whichever attempt produced it. Each receipt still
+records the attempt that produced it; the aggregate accepts any attempt of the
+same run up to its own and rejects a later one. The archive transfer artifact
+keeps the attempt in its name, and the archive job publishes that attempt so
+an archive lifecycle or SBOM job re-run alone checks the transfer against the
+attempt that built it.
+
+A lane that is still failing still fails the aggregate. Every `needs` result is
+the job's latest attempt, and the aggregate checks those results before it
+downloads any evidence and again in the final verifier. A gate artifact left
+over from an earlier attempt of a failing lane therefore never counts.
+
+Gate artifacts are kept for 14 days. A partial re-run after that fails with
+"Artifact not found" for a lane that passed earlier; re-run all jobs or push a
+new commit instead.
 
 **Never retry a flaky gate blindly.** A test that passes on the second attempt
 is a defect in the test, and this repository fixes it rather than rolling the

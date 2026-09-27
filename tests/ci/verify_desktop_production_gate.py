@@ -23,8 +23,15 @@ Three independent classes of evidence must all agree before the gate passes:
    selected lane, and the evidence directories must equal it exactly.  Each
    required check contributes exactly one issue #110 receipt validated against
    a consumer-owned :class:`ReceiptPolicy` carrying this run's repository, run
-   ID, attempt, environment, provenance, source commit and source tree.  A receipt from another run, another attempt, another
-   commit or another check is therefore stale and rejected.
+   ID, environment, provenance, source commit and source tree, and the attempt
+   the receipt records.  That attempt may be any attempt of this run up to the
+   aggregate's own: after "Re-run failed jobs" a lane that passed earlier keeps
+   the receipt of the attempt that produced it, and each gate artifact name
+   omits the attempt so a rerun lane overwrites its own.  A receipt from
+   another run, a later attempt, another commit or another check is stale and
+   rejected.  A receipt left behind by a lane that is failing now never
+   satisfies the gate, because class 1 already requires that lane's latest
+   job result to be ``success``.
 3. Report outcomes.  Every staged report is read back through issue #130
    ``read_bound_bytes`` and parsed by the issue #115 semantic parsers, so a
    receipt whose ``result`` says ``success`` while its report records a
@@ -305,6 +312,7 @@ class GateIdentity:
     tree: str
     repository: str
     run_id: str
+    #: The aggregate's own run attempt: the latest attempt a receipt may record.
     attempt: int
     environment: str
     provenance: str
@@ -405,21 +413,57 @@ def _discovered_check_directories(evidence_root: Path) -> dict[str, Path]:
     return discovered
 
 
+def receipt_attempt(receipt_path: Path, identity: GateIdentity) -> int:
+    """Return the run attempt a receipt records, bounded by this run's attempts.
+
+    The receipt reader requires one exact attempt, so the gate reads the
+    recorded attempt first and passes it on as the expectation when it lies in
+    ``1..identity.attempt``.  A receipt from a later attempt than the
+    aggregate's own is rejected here.  An unreadable or malformed receipt, or a
+    malformed attempt, falls back to the aggregate's attempt, so the receipt
+    reader rejects it with its own precise message.
+    """
+
+    path = Path(receipt_path)
+    if path.is_symlink() or not path.is_file():
+        return identity.attempt
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(RECEIPTS.MAX_RECEIPT_BYTES + 1)
+        document = json.loads(payload.decode("utf-8", errors="strict"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return identity.attempt
+    if len(payload) > RECEIPTS.MAX_RECEIPT_BYTES or not isinstance(document, dict):
+        return identity.attempt
+    execution = document.get("execution")
+    if not isinstance(execution, dict):
+        return identity.attempt
+    recorded = execution.get("attempt")
+    if type(recorded) is not int or recorded < 1:
+        return identity.attempt
+    if recorded > identity.attempt:
+        raise GateVerificationError(
+            f"receipt {path.name!r} records attempt {recorded}, later than this "
+            f"run's attempt {identity.attempt}"
+        )
+    return recorded
+
+
 def _verify_one_check(
     check: RequiredCheck, directory: Path, identity: GateIdentity
 ) -> str:
+    receipt_path = directory / check.receipt_name
     policy = RECEIPTS.ReceiptPolicy(
         expected_commit=identity.commit,
         expected_tree=identity.tree,
         expected_repository=identity.repository,
         expected_run_id=identity.run_id,
-        expected_attempt=identity.attempt,
+        expected_attempt=receipt_attempt(receipt_path, identity),
         expected_environment=identity.environment,
         expected_provenance=identity.provenance,
         expected_check_id=check.check_id,
         allowed_report_formats=check.report_formats,
     )
-    receipt_path = directory / check.receipt_name
     validation = RECEIPTS.validate_receipt_file(
         receipt_path, evidence_root=directory, policy=policy
     )

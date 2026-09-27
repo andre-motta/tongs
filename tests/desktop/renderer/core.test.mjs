@@ -158,6 +158,18 @@ test("read failures report the cause instead of one generic sentence", () => {
   );
 });
 
+test("an over-budget read reports that its result is too large to show", () => {
+  const message = safeError(
+    encodeReadFailure({
+      code: "response_too_large",
+      message: "The desktop response is too large to show.",
+      retryable: false,
+    }),
+  );
+  assert.match(message, /too large to show/);
+  assert.doesNotMatch(message, /Try again/);
+});
+
 test("only the diff surface advises reloading a diff", () => {
   const threads = safeError(
     encodeReadFailure(

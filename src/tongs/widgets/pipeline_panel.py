@@ -15,8 +15,8 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.content import Content
 from textual.css.query import NoMatches
-from textual.markup import escape
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -305,7 +305,9 @@ class PipelinePanel(Widget, can_focus=True):
         card_idx = 0
         self._job_card_map: dict[int, int] = {}
         for stage_name, stage_jobs in stages.items():
-            scroll.mount(Static(f"\n  [bold]{escape(stage_name)}[/]"))
+            scroll.mount(
+                Static(Content.from_markup("\n  [bold]$stage[/]", stage=stage_name))
+            )
             for job_idx, job in stage_jobs:
                 card = JobCard(job)
                 card.id = f"job-card-{g}-{card_idx}"
@@ -484,7 +486,7 @@ class PipelinePanel(Widget, can_focus=True):
                 self.post_message(CancelJobRequested(self._current_pipeline.id, j.id))
             else:
                 self._pending_cancel = j.id
-                self.app.notify(f"Cancel job {escape(j.name)}? Press C again.")
+                self.app.notify(f"Cancel job {j.name}? Press C again.", markup=False)
 
     def action_retry(self) -> None:
         if self._view_level == 0:
@@ -509,7 +511,7 @@ class PipelinePanel(Widget, can_focus=True):
                 self.post_message(RetryJobRequested(self._current_pipeline.id, j.id))
             else:
                 self._pending_retry = j.id
-                self.app.notify(f"Retry job {escape(j.name)}? Press R again.")
+                self.app.notify(f"Retry job {j.name}? Press R again.", markup=False)
 
     def action_open_browser(self) -> None:
         if self._view_level == 0:
@@ -549,7 +551,7 @@ class PipelinePanel(Widget, can_focus=True):
             with self.app.suspend():
                 subprocess.run([*shlex.split(editor_cmd), tmp_path], check=False)
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            self.app.notify(f"Editor failed: {escape(str(exc))}")
+            self.app.notify(f"Editor failed: {exc}", markup=False)
         finally:
             if tmp_path:
                 with suppress(OSError):

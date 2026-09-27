@@ -95,6 +95,19 @@ branches, and last update time. Select a card to open the review. When
 above the cards, and reviews from the repositories that responded stay
 available.
 
+**All Open** loads reviews a page at a time, most recently updated first, so
+a repository with thousands of open reviews still shows its newest ones
+quickly. Each repository's first page appears as soon as it arrives. With the
+**Updated** sort, the list shows reviews down to the point where the order
+across repositories is certain, and reading further down loads the next page
+from the repository that comes next in time. **Load more** below the list does
+the same from the keyboard, and **Loading more from 2 repositories** (or
+however many are reading) reports reads in progress. The other sorts order the
+reviews loaded so far and load more only when you choose **Load more**. A
+repository page pages the same way. If a later page fails, the reviews already
+loaded stay, the failure is reported above the cards, and **Load more** tries
+that page again.
+
 An empty scope says so: **No open reviews match this repository scope.** or
 **No closed or merged reviews match this repository scope.** The personal
 scopes have their own messages, such as **No open reviews are waiting for

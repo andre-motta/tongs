@@ -17,7 +17,7 @@ from tongs.errors import (
     redact_credentials,
 )
 from tongs.forges.base import ForgeClient
-from tongs.forges.http import map_http_error, paginate, request
+from tongs.forges.http import map_http_error, paginate, request, request_page
 from tongs.forges.models import (
     CIStatus,
     Commit,
@@ -27,6 +27,7 @@ from tongs.forges.models import (
     ForgeMutationResult,
     InlineComment,
     MRDetail,
+    MRPage,
     MRState,
     MRSummary,
     Pipeline,
@@ -245,6 +246,41 @@ class GitHubClient(ForgeClient):
             self._parse_pr_summary(pr, repo_path, ci_status=ci)
             for pr, ci in zip(data, ci_results)
         ]
+
+    async def list_mrs_page(
+        self,
+        repo_path: str,
+        state: str = "open",
+        page: int = 1,
+        per_page: int = 100,
+    ) -> MRPage:
+        """Read one page of pull requests, most recently updated first.
+
+        CI status is fetched only for the pull requests on this page.
+        """
+        import asyncio
+
+        owner, repo = _split_repo_path(repo_path)
+        data, has_next = await request_page(
+            self._http,
+            f"/repos/{owner}/{repo}/pulls",
+            page=page,
+            per_page=per_page,
+            params={"state": state, "sort": "updated", "direction": "desc"},
+        )
+        ci_results = await asyncio.gather(
+            *(
+                self._fetch_ci_status(owner, repo, pr.get("head", {}).get("sha", ""))
+                for pr in data
+            )
+        )
+        return MRPage(
+            tuple(
+                self._parse_pr_summary(pr, repo_path, ci_status=ci)
+                for pr, ci in zip(data, ci_results)
+            ),
+            has_next=has_next,
+        )
 
     async def list_my_reviews(self) -> list[MRSummary]:
         return await self._search_prs("is:pr is:open review-requested:@me")

@@ -2171,13 +2171,13 @@ test("a failed reread after the reply is named and blocks a second reply on that
             requestToken: crypto.randomUUID(),
             result: Promise.reject(new Error("sidecar closed")),
           };
-        return read({
-          discussions: [
+        return read(
+          discussionsPage([
             reads === 1
               ? thread("d1")
               : thread("d1", { replies: ["Guarded now"], replyAuthor: "you" }),
-          ],
-        });
+          ]),
+        );
       },
     }),
     review,
@@ -2398,7 +2398,7 @@ function diffBridge(review, changes = {}) {
       read({ review, capabilities: capabilities() }),
     // The diff reads the published discussions to place its thread rows, so
     // every diff bridge answers that read.
-    listDiscussions: () => read({ discussions: [] }),
+    listDiscussions: () => read(discussionsPage([])),
     listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [] }),
     getReviewDraft: () => read(draft(review, 1, [])),
     createReviewDraft: async () => draft(review, 1, []),
@@ -2554,7 +2554,7 @@ function threadBridge(review, pages, calls, changes = {}) {
     listDiscussions: () => {
       const discussions = pages[Math.min(index, pages.length - 1)];
       index += 1;
-      return read({ discussions });
+      return read(discussionsPage(discussions));
     },
     replyReviewDiscussion: async (params) => {
       calls.push(["reply", params.discussion_id, params.body]);
@@ -2790,4 +2790,9 @@ function diffPage(review, layout) {
     next_cursor: null,
     entries: [file, hunk, ...entries],
   };
+}
+
+/** A first discussions page that holds every thread, as the sidecar sends it. */
+function discussionsPage(discussions) {
+  return { discussions, revision: { discussion_count: discussions.length } };
 }

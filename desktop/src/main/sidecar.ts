@@ -5,9 +5,12 @@ import { TextDecoder } from "node:util";
 import {
   PROTOCOL_MAJOR,
   REQUIRED_CAPABILITIES,
+  RESPONSE_TOO_LARGE,
   type DesktopEvent,
   type JsonObject,
   type JsonValue,
+  type ServiceState,
+  type ServiceStatusDto,
 } from "../shared/bridge.js";
 import { REVIEW_OPERATIONS } from "./review.js";
 import { UTILITY_PROTOCOL_METHODS } from "../shared/utilities.js";
@@ -23,9 +26,11 @@ export const MAX_EVENT_BYTES = 64 * 1024;
 export const MAX_PENDING = 64;
 export const MAX_QUEUED_EVENTS = 256;
 export const MAX_ASSET_CHUNK_BYTES = 512 * 1024;
+export const MAX_JSON_DEPTH = 24;
+export const MAX_JSON_ITEMS = 20_000;
+export const MIN_JSON_DEPTH = 8;
+export const MIN_JSON_ITEMS = 1_024;
 const MAX_CRASH_HISTORY = 16;
-const MAX_JSON_DEPTH = 24;
-const MAX_JSON_ITEMS = 20_000;
 const EDITOR_EXPORT_ROOT_ENV = "TONGS_DESKTOP_EDITOR_EXPORT_ROOT";
 
 export class SidecarError extends Error {
@@ -49,6 +54,19 @@ export interface SidecarRequest<T extends JsonValue = JsonValue> {
   readonly requestId: string;
   readonly result: Promise<T>;
 }
+
+/** The JSON value-count and depth budget every protocol frame must respect. */
+export interface JsonLimits {
+  readonly values: number;
+  readonly depth: number;
+}
+
+const DEFAULT_JSON_LIMITS: JsonLimits = Object.freeze({
+  values: MAX_JSON_ITEMS,
+  depth: MAX_JSON_DEPTH,
+});
+
+class JsonLimitError extends Error {}
 
 interface PendingRequest {
   readonly method: string;
@@ -86,11 +104,14 @@ export class SidecarTransport extends EventEmitter {
   private nextId = 1;
   private generation = 0;
   private lastEventSequence = 0;
+  private jsonLimits: JsonLimits = DEFAULT_JSON_LIMITS;
   private starting: Promise<void> | null = null;
   private stopping: Promise<void> | null = null;
   private expectedExit = false;
   private failureReported = false;
   private closeRequested = false;
+  private state: ServiceState = "stopped";
+  private notices: readonly string[] = NO_NOTICES;
 
   constructor(
     launch: DesktopLaunchConfig,
@@ -108,6 +129,27 @@ export class SidecarTransport extends EventEmitter {
 
   get sessionGeneration(): number {
     return this.generation;
+  }
+
+  /** The JSON budget negotiated in the current session's handshake. */
+  get negotiatedJsonLimits(): JsonLimits {
+    return this.jsonLimits;
+  }
+
+  /** Whether the service completed its handshake and has not stopped since. */
+  get serviceState(): ServiceState {
+    return this.state;
+  }
+
+  /**
+   * Startup warnings every handshake of this app run reported, such as a
+   * review draft whose interrupted submission could not be read. The store
+   * warns about such a draft only once, so a later session that reports
+   * nothing must not erase the warning; the renderer hides each one when the
+   * user dismisses it.
+   */
+  get serviceNotices(): readonly string[] {
+    return this.notices;
   }
 
   get processId(): number | undefined {
@@ -185,6 +227,7 @@ export class SidecarTransport extends EventEmitter {
     this.failureReported = false;
     this.buffer = Buffer.alloc(0);
     this.lastEventSequence = 0;
+    this.jsonLimits = DEFAULT_JSON_LIMITS;
     this.generation += 1;
     const environment = { ...process.env };
     delete environment.PYTHONHOME;
@@ -219,16 +262,29 @@ export class SidecarTransport extends EventEmitter {
         core_version: this.launch.coreVersion,
         capabilities: [...REQUIRED_CAPABILITIES],
         client: "tongs-electron-44.2.0",
+        limits: { json_values: MAX_JSON_ITEMS, json_depth: MAX_JSON_DEPTH },
       },
       false,
       this.startupTimeoutMs,
     );
     try {
-      validateHandshake(await handshake.result, this.launch.coreVersion);
+      const result = await handshake.result;
+      this.jsonLimits = validateHandshake(result, this.launch.coreVersion);
+      this.notices = mergeNotices(this.notices, handshakeNotices(result));
     } catch (error) {
       await this.stop();
       throw error;
     }
+    if (this.child === child && this.generation === generation && !this.failureReported) {
+      this.setState("connected");
+    }
+  }
+
+  /** Emits `status` once per change, so listeners see each stop and reconnect. */
+  private setState(state: ServiceState): void {
+    if (this.state === state) return;
+    this.state = state;
+    this.emit("status", state);
   }
 
   private request<T extends JsonValue>(
@@ -243,7 +299,7 @@ export class SidecarTransport extends EventEmitter {
     if (this.pending.size >= MAX_PENDING) {
       throw new SidecarError("too_many_requests", "Too many desktop requests are pending.");
     }
-    validateJson(params);
+    validateJson(params, this.jsonLimits);
     const requestId = `electron-${this.generation}-${this.nextId}`;
     this.nextId = this.nextId === Number.MAX_SAFE_INTEGER ? 1 : this.nextId + 1;
     if (this.pending.has(requestId)) {
@@ -324,9 +380,16 @@ export class SidecarTransport extends EventEmitter {
     let value: unknown;
     try {
       value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw));
-      validateJson(value);
     } catch {
       this.failConnection(child, generation, "invalid_frame");
+      return;
+    }
+    try {
+      validateJson(value, this.jsonLimits);
+    } catch (error) {
+      if (!(error instanceof JsonLimitError) || !this.failOversizedResponse(value)) {
+        this.failConnection(child, generation, "invalid_frame");
+      }
       return;
     }
     if (!isRecord(value) || value.v !== PROTOCOL_MAJOR || typeof value.type !== "string") {
@@ -377,6 +440,47 @@ export class SidecarTransport extends EventEmitter {
     );
   }
 
+  /**
+   * Fail only the request an over-budget response answers. A frame that parses
+   * but exceeds the JSON value or depth budget still names its request, so the
+   * other pending requests and the service itself survive. Returns false when
+   * the frame is not a response with a request id, which fails the connection.
+   */
+  private failOversizedResponse(value: unknown): boolean {
+    if (
+      !isRecord(value) ||
+      value.v !== PROTOCOL_MAJOR ||
+      value.type !== "response" ||
+      typeof value.id !== "string"
+    ) {
+      return false;
+    }
+    const pending = this.pending.get(value.id);
+    if (!pending) return true;
+    clearTimeout(pending.timer);
+    this.pending.delete(value.id);
+    if (!pending.read) {
+      // The mutation may have run before its answer overflowed, so its
+      // outcome is unknown and a blind retry could repeat the write.
+      pending.reject(
+        new SidecarError(
+          "invalid_response",
+          "The action's result was too large to read, so its outcome is unknown. Refresh before retrying.",
+          false,
+        ),
+      );
+      return true;
+    }
+    pending.reject(
+      new SidecarError(
+        RESPONSE_TOO_LARGE,
+        "The desktop response is too large to show.",
+        false,
+      ),
+    );
+    return true;
+  }
+
   private failConnection(child: ChildProcessWithoutNullStreams, generation: number, code: string): void {
     if (this.child !== child || this.generation !== generation || this.failureReported) return;
     this.failureReported = true;
@@ -387,6 +491,7 @@ export class SidecarTransport extends EventEmitter {
     }
     this.pending.clear();
     if (!child.killed) child.kill("SIGTERM");
+    this.setState("stopped");
     this.emit("crash", error);
   }
 
@@ -412,6 +517,7 @@ export class SidecarTransport extends EventEmitter {
   private async stopOnce(): Promise<void> {
     const child = this.child;
     this.expectedExit = true;
+    this.setState("stopped");
     const stopped = new SidecarError("shutting_down", "The desktop service is stopping.");
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
@@ -431,6 +537,52 @@ export class SidecarTransport extends EventEmitter {
     if (await waitForExit(child, 1_000)) return;
     child.kill("SIGKILL");
     await waitForExit(child, 1_000);
+  }
+}
+
+/**
+ * Relays a transport's connection state to the renderer. It lives beside the
+ * transport, so the packaged main-process module list stays the same. Every
+ * change gets a larger revision, so a renderer that asks for the current state
+ * while a change is in flight can drop whichever of the two answers is older.
+ */
+export class ServiceStatusPublisher {
+  #revision = 0;
+  #state: ServiceState;
+  #listener: ((state: ServiceState) => void) | null = null;
+
+  constructor(
+    private readonly source: SidecarTransport,
+    private readonly publish: (status: ServiceStatusDto) => void,
+  ) {
+    this.#state = source.serviceState;
+  }
+
+  get current(): ServiceStatusDto {
+    // Notices outlive a stopped session: they are this app run's warnings.
+    return {
+      state: this.#state,
+      revision: this.#revision,
+      notices: [...this.source.serviceNotices],
+    };
+  }
+
+  start(): void {
+    if (this.#listener) return;
+    this.#listener = (state) => {
+      if (state === this.#state) return;
+      this.#state = state;
+      this.#revision += 1;
+      this.publish(this.current);
+    };
+    this.source.on("status", this.#listener);
+    // A change between construction and subscription still reaches the renderer.
+    this.#listener(this.source.serviceState);
+  }
+
+  dispose(): void {
+    if (this.#listener) this.source.off("status", this.#listener);
+    this.#listener = null;
   }
 }
 
@@ -468,7 +620,53 @@ function mutationErrorCode(
     : protocolCode;
 }
 
-function validateHandshake(value: JsonValue, coreVersion: string): asserts value is HandshakeResult {
+const NO_NOTICES: readonly string[] = Object.freeze([]);
+const MAX_SERVICE_NOTICES = 20;
+const MAX_SERVICE_NOTICE_LENGTH = 1000;
+
+/**
+ * Reads the optional startup warnings of a handshake. They are plain text for
+ * the user. A value that is not a list of strings means an incompatible
+ * service, like any other malformed handshake field; an over-long list or text
+ * is only cut down, so one long notice cannot stop the service from starting.
+ */
+function handshakeNotices(value: JsonValue): readonly string[] {
+  if (!isRecord(value) || value.recovery_warnings === undefined) return NO_NOTICES;
+  const warnings = value.recovery_warnings;
+  if (!Array.isArray(warnings) || !warnings.every((warning) => typeof warning === "string")) {
+    throw new SidecarError("incompatible_handshake", "The desktop service is incompatible.");
+  }
+  const notices = (warnings as string[])
+    .filter((warning) => warning.length > 0)
+    .slice(0, MAX_SERVICE_NOTICES)
+    .map(truncateNotice);
+  return notices.length === 0 ? NO_NOTICES : Object.freeze(notices);
+}
+
+/** Adds the new notices after the kept ones, without repeats, up to the bound. */
+function mergeNotices(
+  kept: readonly string[],
+  added: readonly string[],
+): readonly string[] {
+  if (added.length === 0) return kept;
+  const merged = [...new Set([...kept, ...added])].slice(0, MAX_SERVICE_NOTICES);
+  return merged.length === kept.length ? kept : Object.freeze(merged);
+}
+
+/**
+ * Cuts a notice to `MAX_SERVICE_NOTICE_LENGTH` UTF-16 units, ending in an
+ * ellipsis, without splitting a surrogate pair. Python bounds the text the
+ * same way, so a current service never needs the cut.
+ */
+function truncateNotice(text: string): string {
+  if (text.length <= MAX_SERVICE_NOTICE_LENGTH) return text;
+  let end = MAX_SERVICE_NOTICE_LENGTH - 1;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}…`;
+}
+
+function validateHandshake(value: JsonValue, coreVersion: string): JsonLimits {
   if (!isRecord(value)) throw new SidecarError("invalid_handshake", "Invalid desktop handshake.");
   const required = [...REQUIRED_CAPABILITIES].sort();
   const capabilities = stringArray(value.capabilities);
@@ -492,11 +690,36 @@ function validateHandshake(value: JsonValue, coreVersion: string): asserts value
   ) {
     throw new SidecarError("incompatible_handshake", "The desktop service is incompatible.");
   }
+  return negotiatedJsonLimits(value.limits);
+}
+
+/**
+ * Accept the sidecar's negotiated JSON budget only when it is an integer pair
+ * no looser than this client's own limits and no tighter than the protocol
+ * floor, so the two sides can never enforce different budgets silently.
+ */
+function negotiatedJsonLimits(limits: Record<string, unknown>): JsonLimits {
+  const values = limits.json_values;
+  const depth = limits.json_depth;
+  if (
+    !Number.isSafeInteger(values) ||
+    !Number.isSafeInteger(depth) ||
+    Number(values) < MIN_JSON_ITEMS ||
+    Number(values) > MAX_JSON_ITEMS ||
+    Number(depth) < MIN_JSON_DEPTH ||
+    Number(depth) > MAX_JSON_DEPTH
+  ) {
+    throw new SidecarError(
+      "incompatible_handshake",
+      "The desktop service JSON limits are incompatible with this app.",
+    );
+  }
+  return Object.freeze({ values: Number(values), depth: Number(depth) });
 }
 
 const REQUIRED_METHODS = Object.freeze([
   "assets.list", "assets.read", "ci.capabilities", "ci.receipt", "commits.list", "diff.open", "diff.page",
-  "discussions.list", "host.set_location", "jobs.list", "logs.open", "logs.page",
+  "discussions.list", "discussions.page", "host.set_location", "jobs.list", "logs.open", "logs.page",
   "jobs.cancel", "jobs.retry", "pipelines.cancel", "pipelines.list", "pipelines.retry",
   "plugins.invoke", "plugins.list", "repositories.discover",
   "repositories.open", "review_pipelines.list", "reviews.get", "reviews.list", "shutdown",
@@ -528,18 +751,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function validateJson(value: unknown, depth = 0, budget = { items: 0 }): asserts value is JsonValue {
-  if (depth > MAX_JSON_DEPTH || budget.items++ > MAX_JSON_ITEMS) throw new Error("invalid JSON");
+function validateJson(
+  value: unknown,
+  limits: JsonLimits,
+  depth = 0,
+  budget = { items: 0 },
+): asserts value is JsonValue {
+  // The same whole-frame budget the sidecar applies: at most `limits.values`
+  // values, and nothing nested deeper than `limits.depth` below the frame.
+  if (depth > limits.depth) throw new JsonLimitError("JSON is nested too deeply");
+  budget.items += 1;
+  if (budget.items > limits.values) throw new JsonLimitError("JSON has too many values");
   if (value === null || typeof value === "string" || typeof value === "boolean") return;
   if (typeof value === "number" && Number.isFinite(value)) return;
   if (Array.isArray(value)) {
-    for (const item of value) validateJson(item, depth + 1, budget);
+    for (const item of value) validateJson(item, limits, depth + 1, budget);
     return;
   }
   if (!isRecord(value)) throw new Error("invalid JSON");
   for (const [key, item] of Object.entries(value)) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") throw new Error("invalid JSON key");
-    validateJson(item, depth + 1, budget);
+    validateJson(item, limits, depth + 1, budget);
   }
 }
 

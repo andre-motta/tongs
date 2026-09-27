@@ -286,6 +286,46 @@ class SubmissionPlanRecord:
             raise ValueError("submission plan step IDs must be unique")
 
 
+RECOVERY_CORRUPT_ATTEMPT_MESSAGE = (
+    "An interrupted review submission could not be read. Its draft was "
+    "returned to editing with its content kept, but part of the review may "
+    "already have posted: check the review on the forge before submitting again."
+)
+RECOVERY_WRITE_FAILED_MESSAGE = (
+    "An interrupted review submission could not be recovered because the draft "
+    "database write failed. Its draft was kept unchanged and recovery will try "
+    "again on the next start."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryWarning:
+    """A submission attempt startup recovery could not handle normally.
+
+    An unreadable attempt has its draft returned to editing; an attempt whose
+    recovery write failed is left unchanged for the next start. The warning
+    carries the attempt identity and the draft's review, when readable, and a
+    fixed message, never draft text.
+    """
+
+    attempt_id: UUID | None
+    message: str = RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+    review: ReviewRef | None = None
+
+    def describe(self) -> str:
+        """Return the message with the review and attempt, for logs and notices."""
+        parts = [self.message]
+        if self.review is not None:
+            repository = self.review.repository
+            parts.append(
+                f"Review: {repository.hostname}/{repository.project_path} "
+                f"#{self.review.number}."
+            )
+        if self.attempt_id is not None:
+            parts.append(f"Attempt {self.attempt_id}.")
+        return " ".join(parts)
+
+
 @dataclass(frozen=True, slots=True)
 class SubmissionAttempt:
     """A frozen draft submission and all confirmed durable outcomes."""

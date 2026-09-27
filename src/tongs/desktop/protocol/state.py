@@ -149,9 +149,11 @@ class _Snapshot:
     resource_handle: str
     revision: bytes
     entries: tuple[bytes, ...]
+    value_counts: tuple[int, ...]
     byte_count: int
     created_at: float
     projection: str | None
+    kind: str | None
 
 
 class SnapshotStore:
@@ -191,7 +193,14 @@ class SnapshotStore:
         entries: Sequence[Mapping[str, JsonValue]],
         *,
         projection: str | None = None,
+        kind: str | None = None,
     ) -> str:
+        """Retain ``entries`` and return the new snapshot id.
+
+        ``kind`` names what the snapshot holds. A page request that names a
+        different kind cannot read it, so two snapshots bound to the same
+        resource, such as a review's diff and its discussions, never cross.
+        """
         self.prune()
         encoded_revision = _encode_object(revision)
         if (
@@ -203,9 +212,11 @@ class SnapshotStore:
                 "The snapshot exceeds the session retention limit.",
             )
         retained: list[bytes] = []
+        value_counts: list[int] = []
         byte_count = len(encoded_revision)
         for entry in entries:
             encoded_entry = _encode_object(entry)
+            value_counts.append(_count_values(entry))
             byte_count += len(encoded_entry)
             if byte_count > self._max_retained_bytes:
                 raise ProtocolError(
@@ -227,9 +238,11 @@ class SnapshotStore:
             resource_handle,
             encoded_revision,
             encoded_entries,
+            tuple(value_counts),
             byte_count,
             self._clock(),
             projection,
+            kind,
         )
         self._snapshots[snapshot_id] = snapshot
         self._order.append(snapshot_id)
@@ -243,8 +256,18 @@ class SnapshotStore:
         resource_handle: object,
         cursor: object = 0,
         max_items: object = _DEFAULT_PAGE_ITEMS,
+        *,
+        max_values: int | None = None,
+        kind: str | None = None,
     ) -> SnapshotPage:
-        snapshot = self._resolve(snapshot_id, resource_handle)
+        """Return the page that starts at ``cursor``.
+
+        A page holds at most ``max_items`` entries and stops before the entry
+        that would take it past the byte target or, when given, past
+        ``max_values`` JSON values across its entries. An entry that alone
+        exceeds either bound fails this request as too large.
+        """
+        snapshot = self._resolve(snapshot_id, resource_handle, kind)
         if (
             not isinstance(cursor, int)
             or isinstance(cursor, bool)
@@ -260,18 +283,30 @@ class SnapshotStore:
             )
         selected: list[JsonObject] = []
         size = 0
+        values = 0
         next_index = cursor
-        for encoded_entry in snapshot.entries[cursor : cursor + max_items]:
+        stop = cursor + max_items
+        for encoded_entry, entry_values in zip(
+            snapshot.entries[cursor:stop],
+            snapshot.value_counts[cursor:stop],
+            strict=True,
+        ):
             entry_size = len(encoded_entry)
-            if selected and size + entry_size > _PAGE_TARGET_BYTES:
+            if selected and (
+                size + entry_size > _PAGE_TARGET_BYTES
+                or (max_values is not None and values + entry_values > max_values)
+            ):
                 break
-            if entry_size > _PAGE_TARGET_BYTES * 8:
+            if entry_size > _PAGE_TARGET_BYTES * 8 or (
+                max_values is not None and entry_values > max_values
+            ):
                 raise ProtocolError(
                     ProtocolErrorCode.RESPONSE_TOO_LARGE,
-                    "A diff entry exceeds the supported response size.",
+                    "A snapshot entry exceeds the supported response size.",
                 )
             selected.append(_decode_object(encoded_entry))
             size += entry_size
+            values += entry_values
             next_index += 1
         next_cursor = next_index if next_index < len(snapshot.entries) else None
         return SnapshotPage(
@@ -283,6 +318,10 @@ class SnapshotStore:
             tuple(selected),
             snapshot.projection,
         )
+
+    def expire(self, snapshot_id: str) -> None:
+        """Release one snapshot early, such as one whose first page was all of it."""
+        self._expire(snapshot_id)
 
     def expire_for_resource(self, resource_handle: str) -> None:
         for snapshot_id, snapshot in tuple(self._snapshots.items()):
@@ -299,7 +338,9 @@ class SnapshotStore:
         for snapshot_id in tuple(self._snapshots):
             self._expire(snapshot_id)
 
-    def _resolve(self, snapshot_id: object, resource_handle: object) -> _Snapshot:
+    def _resolve(
+        self, snapshot_id: object, resource_handle: object, kind: str | None
+    ) -> _Snapshot:
         if not isinstance(snapshot_id, str) or not isinstance(resource_handle, str):
             raise ProtocolError(
                 ProtocolErrorCode.SNAPSHOT_EXPIRED,
@@ -308,7 +349,11 @@ class SnapshotStore:
             )
         self.prune()
         snapshot = self._snapshots.get(snapshot_id)
-        if snapshot is None or snapshot.resource_handle != resource_handle:
+        if (
+            snapshot is None
+            or snapshot.resource_handle != resource_handle
+            or snapshot.kind != kind
+        ):
             raise ProtocolError(
                 ProtocolErrorCode.SNAPSHOT_EXPIRED,
                 "The resource snapshot is invalid or expired; refetch it.",
@@ -344,6 +389,15 @@ def _encode_object(value: Mapping[str, JsonValue]) -> bytes:
             ProtocolErrorCode.INTERNAL,
             "The snapshot contained an invalid value.",
         ) from error
+
+
+def _count_values(value: JsonValue) -> int:
+    """Count JSON values the way the frame budget does: every node is one."""
+    if isinstance(value, Mapping):
+        return 1 + sum(_count_values(item) for item in value.values())
+    if isinstance(value, list | tuple):
+        return 1 + sum(_count_values(item) for item in value)
+    return 1
 
 
 def _decode_object(value: bytes) -> JsonObject:

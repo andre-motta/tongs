@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -55,6 +56,7 @@ from tongs.state.drafts import (
     DraftState,
     DraftStore,
     GeneralDraftComment,
+    RecoveryWarning,
 )
 
 NOW = datetime(2026, 9, 7, tzinfo=UTC)
@@ -128,6 +130,8 @@ class FakeCache:
 
 
 class FakeDraftStore:
+    recovery_warnings: tuple[object, ...] = ()
+
     def __init__(self) -> None:
         self.open_calls = 0
         self.recover_calls = 0
@@ -591,6 +595,47 @@ class TestLifecycle:
         assert session.review_submissions is session.review_submissions
         assert (await store.get_attempt(attempt.id)).state is DraftState.UNKNOWN
 
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_session_starts_past_corrupt_attempt_and_reports_it(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "drafts.db"
+        setup = DraftStore(path)
+        await setup.open()
+        revision = ReviewRevision("head-1", "base-1")
+        attempts = []
+        for number in (7, 8):
+            draft = await setup.create_draft(
+                ReviewRef(RepositoryRef("github.com", "acme/widgets"), number),
+                revision,
+                DraftContent(body="private text"),
+            )
+            attempts.append(await setup.lock_submission(draft.id, draft.version))
+        await setup.close()
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                "UPDATE submission_attempts SET updated_at = 'bad' WHERE id = ?",
+                (str(attempts[0].id),),
+            )
+
+        session = await ApplicationSession(
+            config=Config(),
+            cache=FakeCache(),
+            draft_db_path=path,
+            forge_registry=FakeRegistry(),
+        ).start()
+
+        assert session.recovery_warnings == (
+            RecoveryWarning(
+                attempts[0].id,
+                review=ReviewRef(RepositoryRef("github.com", "acme/widgets"), 7),
+            ),
+        )
+        assert "private text" not in session.recovery_warnings[0].describe()
+        recovered = await session.drafts.get_attempt(attempts[1].id)
+        assert recovered.state is DraftState.UNKNOWN
         await session.close()
 
     @pytest.mark.asyncio

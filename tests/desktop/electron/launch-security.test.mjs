@@ -26,10 +26,19 @@ test("runtime parameter boundary rejects unknown, malformed, and oversized value
   assert.throws(() => assertParams("diff.page", { snapshot: "s", resource: "r", cursor: -1 }));
   assert.throws(() => assertParams("reviews.list", { scope: "all_open", per_page: 101 }));
   assert.throws(() => assertParams("reviews.list", { scope: "everything" }));
+  assertParams("reviews.list", { scope: "all_open", repository: "r", cursor: "rc1.2.0123456789abcdef0123456789abcdef" });
+  assert.throws(() => assertParams("reviews.list", { scope: "all_open", repository: "r", cursor: 2 }));
+  assert.throws(() => assertParams("reviews.list", { scope: "all_open", repository: "r", cursor: "x".repeat(65) }));
+  assert.throws(() => assertParams("reviews.list", { scope: "all_open", repository: "r", cursor: "rc1 2" }));
   assert.throws(() => assertParams("plugins.invoke", { plugin: "p", method: "m", params: { body: "x".repeat(300_000) } }));
 });
 
 test("runtime result boundary validates operation-specific DTOs", () => {
+  assertResult("reviews.list", { next_cursor: null, items: [], failures: [] });
+  assertResult("reviews.list", { next_cursor: "rc1.2.0123456789abcdef0123456789abcdef", items: [], failures: [] });
+  assert.throws(() => assertResult("reviews.list", { items: [], failures: [] }));
+  assert.throws(() => assertResult("reviews.list", { next_cursor: 2, items: [], failures: [] }));
+  assert.throws(() => assertResult("reviews.list", { next_cursor: "", items: [], failures: [] }));
   assertResult("repositories.discover", { repositories: [{ handle: "r", display_name: "repo", forge_type: "github" }] });
   assertResult("repositories.discover", { repositories: [{ handle: "r", display_name: "repo", forge_type: "github", hostname: "github.example" }] });
   assert.throws(() => assertResult("repositories.discover", { repositories: [{ handle: "r", display_name: "repo", forge_type: "github", hostname: "" }] }));

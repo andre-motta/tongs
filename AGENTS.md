@@ -86,8 +86,9 @@ Never build a scratch worktree with the fix reverted to prove a test would have
 caught a bug: reason from the diff, because those runs are unbounded and are the
 usual cause of an out-of-memory kill. A successful headless test run is separate
 from native Fedora, GPU, installer, and release evidence. The documentation
-site's `npm ci` and `npm run build` run under the same guard; the build needs
-about 0.5 GiB.
+site's `npm ci` and `npm run build` run under the same guard with a 256-task
+limit instead of 64, because Node starts a worker thread per CPU and the build
+aborts at startup on hosts with many cores; it peaks near 0.9 GiB.
 
 - `from __future__ import annotations` at the top of every module
 - Module-level imports unless function-level is necessary to avoid circular deps

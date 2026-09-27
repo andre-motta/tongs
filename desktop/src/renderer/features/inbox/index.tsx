@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -19,8 +20,28 @@ import {
   safeError,
   serviceErrorOf,
 } from "../../core/presentation.js";
-import type { CoordinatedRead } from "../../core/query.js";
+import { StaleQueryError, type CoordinatedRead } from "../../core/query.js";
 import { useRetainedRead } from "../../core/use-read.js";
+import {
+  appendPage,
+  feedFailures,
+  firstPageArrived,
+  hasMorePages,
+  loadingFeedCount,
+  mergedReviewItems,
+  nextRepositoryToLoad,
+  orderedReviewItems,
+  pendingFeed,
+  type RepositoryFeed,
+} from "./paging.js";
+
+export {
+  mergedReviewItems,
+  nextRepositoryToLoad,
+  orderedReviewItems,
+  orderWatermark,
+  type RepositoryFeed,
+} from "./paging.js";
 
 export type ReviewScope = "my_reviews" | "my_mrs" | "all_open";
 export type ReviewSort = "updated" | "title" | "ci" | "author";
@@ -76,6 +97,21 @@ const listSelections = new Map<string, InboxListSelection>();
  */
 const pendingSelectionFocus = new Map<string, string>();
 
+/**
+ * How many pages each repository had loaded in each review list, keyed by the
+ * list's read key and then by repository. Opening a review unmounts the list
+ * and Refresh replaces its feeds; both read each repository again down to this
+ * depth, so a review opened from a later page is still listed on return.
+ */
+const loadedDepths = new Map<string, Map<string, number>>();
+
+/**
+ * Deepest a reload goes per repository. Each page is one forge request, so a
+ * long scroll is not replayed in full on every refresh; a review past this
+ * depth is found again by scrolling.
+ */
+export const MAX_RESTORED_PAGES = 10;
+
 export function inboxListSelection(key: string): InboxListSelection {
   return listSelections.get(key) ?? DEFAULT_LIST_SELECTION;
 }
@@ -84,9 +120,32 @@ export function inboxPendingSelectionFocus(key: string): string | null {
   return pendingSelectionFocus.get(key) ?? null;
 }
 
+export function inboxLoadedDepth(
+  readKey: string,
+  repository: string,
+): number {
+  return loadedDepths.get(readKey)?.get(repository) ?? 0;
+}
+
+function rememberLoadedDepth(
+  readKey: string,
+  feeds: readonly RepositoryFeed[],
+): void {
+  let depths = loadedDepths.get(readKey);
+  for (const feed of feeds) {
+    if (feed.pages <= (depths?.get(feed.repository) ?? 0)) continue;
+    if (!depths) {
+      depths = new Map();
+      loadedDepths.set(readKey, depths);
+    }
+    depths.set(feed.repository, feed.pages);
+  }
+}
+
 export function resetInboxListSelections(): void {
   listSelections.clear();
   pendingSelectionFocus.clear();
+  loadedDepths.clear();
 }
 
 const CI_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
@@ -292,30 +351,89 @@ function InboxResults({
   readonly releaseFocusTarget: () => void;
   readonly navigate: (route: AppRoute) => void;
 }): ReactNode {
+  const readKey = `inbox:${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`;
   // The combined read queues repositories it has not started yet, and the
   // query coordinator can only cancel reads that already have a token, so the
   // queue is stopped through this controller whenever the read is replaced,
   // disabled or unmounted.
   const discoveredRead = useRef<AbortController | null>(null);
+  // Bumped by every new combined read, so a page that belongs to an older
+  // read (or a later page requested before a refresh) is dropped.
+  const readGeneration = useRef(0);
+  // Page reads in flight past the first page, by query key to repository.
+  const moreReads = useRef(new Map<string, string>());
+  // Every page loaded so far, one entry per repository in discovery order.
+  const [feeds, setFeeds] = useState<readonly RepositoryFeed[] | null>(null);
+  const feedsRef = useRef(feeds);
+  feedsRef.current = feeds;
+  // The first read fills `feeds` as each repository's first page arrives. A
+  // refresh keeps showing the previous pages and swaps them in when complete.
+  const liveRead = useRef(false);
+  const hasValue = useRef(false);
+  const cancelMoreReads = useCallback(() => {
+    const cancelled = new Set(moreReads.current.values());
+    for (const key of moreReads.current.keys()) void queries.cancel(key);
+    moreReads.current.clear();
+    if (cancelled.size === 0) return;
+    // A cancelled page read never settles into its feed, so clear its loading
+    // flag here. Otherwise a refresh that fails keeps the old feeds on screen
+    // with that repository stuck loading and Load more disabled.
+    setFeeds((current) =>
+      current?.some((feed) => feed.loading && cancelled.has(feed.repository))
+        ? Object.freeze(
+            current.map((feed) =>
+              feed.loading && cancelled.has(feed.repository)
+                ? Object.freeze({ ...feed, loading: false })
+                : feed,
+            ),
+          )
+        : current,
+    );
+  }, [queries]);
   const begin = useCallback(() => {
     discoveredRead.current?.abort();
     discoveredRead.current = null;
-    if (repository)
-      return bridge.listReviews({
-        scope: reviewScope,
-        state: reviewState,
-        repository: repository.handle,
-      });
+    cancelMoreReads();
+    const generation = ++readGeneration.current;
     const controller = new AbortController();
     discoveredRead.current = controller;
+    const sources = repository ? [repository] : repositories;
+    const live = !hasValue.current;
+    liveRead.current = live;
+    if (live)
+      setFeeds(
+        Object.freeze(sources.map((source) => pendingFeed(source.handle))),
+      );
+    const depths = new Map(loadedDepths.get(readKey) ?? []);
     return listDiscoveredReviews(
       bridge,
-      repositories,
+      sources,
       reviewScope,
       reviewState,
       controller.signal,
+      live
+        ? (index, feed) => {
+            if (generation !== readGeneration.current) return;
+            setFeeds((current) =>
+              current && current[index]?.repository === feed.repository
+                ? Object.freeze(
+                    current.map((item, at) => (at === index ? feed : item)),
+                  )
+                : current,
+            );
+          }
+        : undefined,
+      depths,
     );
-  }, [bridge, repositories, repository, reviewScope, reviewState]);
+  }, [
+    bridge,
+    cancelMoreReads,
+    readKey,
+    repositories,
+    repository,
+    reviewScope,
+    reviewState,
+  ]);
   const readDependencies = [
     repository?.handle,
     repositoryGeneration,
@@ -324,18 +442,102 @@ function InboxResults({
   ];
   const state = useRetainedRead(
     queries,
-    `inbox:${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`,
+    readKey,
     begin,
     readDependencies,
     repositoriesReady,
   );
+  useEffect(() => {
+    if (feeds) rememberLoadedDepth(readKey, feeds);
+  }, [feeds, readKey]);
+  useEffect(() => {
+    if (!state.value) return;
+    hasValue.current = true;
+    // A live read already holds these pages and any loaded after them.
+    if (!liveRead.current) setFeeds(state.value.feeds);
+    liveRead.current = false;
+  }, [state.value]);
   useEffect(
     () => () => {
       discoveredRead.current?.abort();
       discoveredRead.current = null;
+      cancelMoreReads();
     },
     [...readDependencies, repositoriesReady],
   );
+
+  const loadMore = useCallback(
+    (target: string) => {
+      const key = `${readKey}:more:${target}`;
+      const feed = feedsRef.current?.find((item) => item.repository === target);
+      if (
+        moreReads.current.has(key) ||
+        !feed ||
+        feed.cursor === null ||
+        feed.loading
+      )
+        return;
+      const generation = readGeneration.current;
+      const cursor = feed.cursor;
+      moreReads.current.set(key, target);
+      const update = (
+        change: (current: RepositoryFeed) => RepositoryFeed,
+      ): void =>
+        setFeeds((current) => {
+          const found = current?.find((item) => item.repository === target);
+          return current && found
+            ? replaceFeed(current, change(found))
+            : current;
+        });
+      const settle = (
+        change: (current: RepositoryFeed) => RepositoryFeed,
+      ): void => {
+        if (generation !== readGeneration.current) return;
+        moreReads.current.delete(key);
+        update(change);
+      };
+      update((current) => ({ ...current, loading: true }));
+      void queries
+        .run(key, () =>
+          bridge.listReviews({
+            scope: reviewScope,
+            state: reviewState,
+            repository: target,
+            cursor,
+          }),
+        )
+        .then(
+          (page) =>
+            settle((current) =>
+              appendPage(
+                current,
+                page.items,
+                page.next_cursor ?? null,
+                page.failures,
+              ),
+            ),
+          (error: unknown) =>
+            settle((current) =>
+              error instanceof StaleQueryError
+                ? { ...current, loading: false }
+                : {
+                    ...current,
+                    loading: false,
+                    failures: [repositoryFailure(target, error)],
+                  },
+            ),
+        );
+    },
+    [bridge, queries, readKey, reviewScope, reviewState],
+  );
+
+  const shown = state.error && !state.value ? null : feeds;
+  // With no repositories there is no feed to settle, so the list (and its
+  // empty label) is shown once the read itself has finished.
+  const listReady =
+    shown !== null &&
+    (shown.some(firstPageArrived) ||
+      (shown.length === 0 && !state.loading && Boolean(state.value)));
   return (
     <>
       <div className="view-actions">
@@ -347,7 +549,7 @@ function InboxResults({
           {state.loading && state.value ? "Refreshing…" : "Refresh reviews"}
         </button>
       </div>
-      {state.loading && !state.value && (
+      {state.loading && !shown?.some(firstPageArrived) && (
         <Notice kind="loading">
           {repositoriesReady
             ? "Loading reviews from the local service…"
@@ -361,9 +563,9 @@ function InboxResults({
             : safeError(state.error)}
         </Notice>
       )}
-      {state.value && (
+      {listReady && shown !== null && (
         <ReviewList
-          result={state.value}
+          feeds={shown}
           navigate={navigate}
           sort={reviewSort}
           selected={selected}
@@ -371,9 +573,21 @@ function InboxResults({
           focusTarget={focusTarget}
           releaseFocusTarget={releaseFocusTarget}
           emptyLabel={emptyReviewLabel(reviewScope, reviewState)}
+          loadMore={loadMore}
         />
       )}
     </>
+  );
+}
+
+function replaceFeed(
+  feeds: readonly RepositoryFeed[],
+  next: RepositoryFeed,
+): readonly RepositoryFeed[] {
+  return Object.freeze(
+    feeds.map((feed) =>
+      feed.repository === next.repository ? Object.freeze(next) : feed,
+    ),
   );
 }
 
@@ -386,7 +600,8 @@ export const DISCOVERED_REVIEW_CONCURRENCY = 8;
 
 /**
  * Read one review list per discovered repository through a small pool and
- * merge them in repository order. A repository whose read is refused or fails
+ * merge them in repository order. `depths` asks for more than the first page
+ * of a repository, up to `MAX_RESTORED_PAGES`. A repository whose read is refused or fails
  * becomes one entry in `failures` instead of rejecting the whole list.
  *
  * `requestTokens` grows as reads start, so a coordinator cancelling this read
@@ -399,42 +614,110 @@ export function listDiscoveredReviews(
   scope: ReviewScope,
   state: "open" | "closed",
   signal?: AbortSignal,
-): CoordinatedRead<ReviewListResult> {
+  onRepository?: (index: number, feed: RepositoryFeed) => void,
+  depths?: ReadonlyMap<string, number>,
+): CoordinatedRead<DiscoveredReviews> {
   const handles = repositories.map((repository) => repository.handle);
   const requestTokens: string[] = [];
   const inFlight = new Set<string>();
   const outcomes: ReviewListResult[] = [];
-  let nextIndex = 0;
+  const feeds: RepositoryFeed[] = handles.map((handle) => pendingFeed(handle));
   // Set when a read comes back cancelled without our signal firing, for
   // example when the coordinator cancels every read on a cache clear.
   let stopped = false;
   const aborted = (): boolean => signal?.aborted === true;
 
-  const readRepository = async (index: number): Promise<void> => {
-    const handle = handles[index] as string;
+  // Reads one page of a repository and appends it. A failed read becomes a
+  // failure on the feed, which keeps its cursor so the page can be retried.
+  const readPage = async (
+    handle: string,
+    feed: RepositoryFeed,
+    cursor?: string,
+  ): Promise<RepositoryFeed> => {
     let token: string | null = null;
+    let outcome: ReviewListResult;
     try {
-      const read = bridge.listReviews({ scope, state, repository: handle });
+      const read = bridge.listReviews(
+        cursor === undefined
+          ? { scope, state, repository: handle }
+          : { scope, state, repository: handle, cursor },
+      );
       token = read.requestToken;
       requestTokens.push(token);
       inFlight.add(token);
-      outcomes[index] = await read.result;
+      outcome = await read.result;
     } catch (error) {
       if (serviceErrorOf(error)?.code === "request_cancelled") stopped = true;
-      outcomes[index] = { items: [], failures: [repositoryFailure(handle, error)] };
+      outcome = { items: [], failures: [repositoryFailure(handle, error)] };
     } finally {
       if (token !== null) inFlight.delete(token);
     }
+    return appendPage(
+      feed,
+      outcome.items,
+      outcome.next_cursor ?? null,
+      outcome.failures,
+    );
   };
-  const worker = async (): Promise<void> => {
-    while (!aborted() && !stopped && nextIndex < handles.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      await readRepository(index);
+  // Reads one page of a repository. When the list had loaded that repository
+  // deeper before it was reloaded, the next page goes to the back of the queue
+  // as its own task, so every repository's first page is read before any
+  // deeper page and a deep repository never holds back a shallow one. The rows
+  // read so far are shown meanwhile, marked as still loading.
+  const readRepository = async (
+    index: number,
+    feed: RepositoryFeed,
+    cursor?: string,
+  ): Promise<void> => {
+    const handle = handles[index] as string;
+    const depth = Math.min(depths?.get(handle) ?? 1, MAX_RESTORED_PAGES);
+    const next = await readPage(handle, feed, cursor);
+    feeds[index] = next;
+    const deeper = next.cursor;
+    if (
+      next.pages < depth &&
+      deeper !== null &&
+      next.failures.length === 0 &&
+      !aborted() &&
+      !stopped
+    ) {
+      onRepository?.(index, Object.freeze({ ...next, loading: true }));
+      queue.push(() => readRepository(index, next, deeper));
+      return;
     }
+    outcomes[index] = { items: next.items, failures: next.failures };
+    // Each repository is shown as soon as its last restored page arrives.
+    if (!aborted() && !stopped) onRepository?.(index, next);
+  };
+  const queue: (() => Promise<void>)[] = handles.map(
+    (_handle, index) => () => readRepository(index, feeds[index] as RepositoryFeed),
+  );
+  let active = 0;
+  let drain: () => void = () => undefined;
+  const drained = new Promise<void>((resolve) => {
+    drain = resolve;
+  });
+  // Starts queued reads up to the pool size; settles once none is left to run.
+  const pump = (): void => {
+    while (
+      active < DISCOVERED_REVIEW_CONCURRENCY &&
+      queue.length > 0 &&
+      !aborted() &&
+      !stopped
+    ) {
+      const task = queue.shift() as () => Promise<void>;
+      active += 1;
+      void task()
+        .catch(() => undefined)
+        .then(() => {
+          active -= 1;
+          pump();
+        });
+    }
+    if (active === 0) drain();
   };
 
-  const result = new Promise<ReviewListResult>((resolve, reject) => {
+  const result = new Promise<DiscoveredReviews>((resolve, reject) => {
     const cancelled = (): RendererReadError =>
       new RendererReadError(
         "request_cancelled",
@@ -451,11 +734,8 @@ export function listDiscoveredReviews(
       reject(cancelled());
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    const workers = Array.from(
-      { length: Math.min(DISCOVERED_REVIEW_CONCURRENCY, handles.length) },
-      () => worker(),
-    );
-    void Promise.all(workers).then(() => {
+    pump();
+    void drained.then(() => {
       signal?.removeEventListener("abort", onAbort);
       if (aborted()) return;
       if (stopped) {
@@ -471,10 +751,15 @@ export function listDiscoveredReviews(
         reject(new RendererReadError(first.code, first.message, first.retryable));
         return;
       }
-      resolve({ items, failures });
+      resolve({ items, failures, feeds: Object.freeze([...feeds]) });
     });
   });
   return { requestTokens, result };
+}
+
+/** A combined read: the flat list plus what each repository has loaded. */
+export interface DiscoveredReviews extends ReviewListResult {
+  readonly feeds: readonly RepositoryFeed[];
 }
 
 function repositoryFailure(
@@ -494,7 +779,7 @@ function repositoryFailure(
 type FeatureParameters = Parameters<FeatureContribution["render"]>[0];
 
 function ReviewList({
-  result,
+  feeds,
   navigate,
   sort,
   selected,
@@ -502,8 +787,9 @@ function ReviewList({
   focusTarget,
   releaseFocusTarget,
   emptyLabel,
+  loadMore,
 }: {
-  readonly result: ReviewListResult;
+  readonly feeds: readonly RepositoryFeed[];
   readonly navigate: (route: AppRoute) => void;
   readonly sort: ReviewSort;
   readonly selected: string | null;
@@ -511,20 +797,66 @@ function ReviewList({
   readonly focusTarget: string | null;
   readonly releaseFocusTarget: () => void;
   readonly emptyLabel: string;
+  readonly loadMore: (repository: string) => void;
 }): ReactNode {
-  const presentation = inboxPresentation(result);
+  const presentation = inboxFeedPresentation(feeds, sort);
+  const items = presentation.items;
   const listRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const [nearEnd, setNearEnd] = useState(false);
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const selectRef = useRef(select);
+  selectRef.current = select;
+  const open = useCallback((item: ReviewListItemDto) => {
+    selectRef.current(item.handle);
+    navigateRef.current({ kind: "review", item, panel: "overview" });
+  }, []);
   useEffect(() => {
     if (focusTarget === null) return;
     const target = [
       ...(listRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []),
     ].find((button) => button.dataset.reviewHandle === focusTarget);
-    if (!target) return;
+    if (!target) {
+      // Rows can arrive after the list mounts, so wait while pages are still
+      // loading. Once every read has settled without the review, give the
+      // target up: a page loaded later by scrolling must not pull focus.
+      if (presentation.loading === 0) releaseFocusTarget();
+      return;
+    }
     target.focus();
     if (typeof target.scrollIntoView === "function")
       target.scrollIntoView({ block: "nearest" });
     releaseFocusTarget();
-  }, [focusTarget]);
+  }, [focusTarget, items.length, presentation.loading]);
+  // Update-time order loads the next page by itself when the end of the list
+  // comes into view. Other orders only load when asked through the button.
+  const autoLoad = sort === "updated";
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const Observer = globalThis.IntersectionObserver;
+    if (!autoLoad || !sentinel || typeof Observer !== "function") return;
+    const observer = new Observer(
+      (entries) => setNearEnd(entries.some((entry) => entry.isIntersecting)),
+      { rootMargin: "0px 0px 600px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [autoLoad, presentation.next !== null]);
+  // A repository whose last page read failed is retried only on request, so
+  // a persistent failure cannot turn scrolling into a request loop.
+  const autoNext =
+    presentation.next !== null &&
+    feeds.some(
+      (feed) =>
+        feed.repository === presentation.next && feed.failures.length === 0,
+    )
+      ? presentation.next
+      : null;
+  useEffect(() => {
+    if (autoLoad && nearEnd && autoNext && presentation.loading === 0)
+      loadMore(autoNext);
+  }, [autoLoad, nearEnd, autoNext, presentation.loading, loadMore]);
   const moveFocus = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (
       event.key !== "ArrowDown" &&
@@ -573,19 +905,71 @@ function ReviewList({
           ref={listRef}
           onKeyDown={moveFocus}
         >
-          {sortReviewItems(result.items, sort).map((item) => (
+          {items.map((item) => (
             <ReviewCard
               key={item.handle}
               item={item}
               selected={item.handle === selected}
-              select={select}
-              navigate={navigate}
+              open={open}
             />
           ))}
         </div>
       )}
+      <div ref={sentinelRef} className="review-list-end" aria-hidden="true" />
+      {(presentation.loading > 0 || presentation.next !== null) && (
+        <div className="review-list-more">
+          {presentation.loading > 0 && (
+            <span role="status" className="review-list-status">
+              Loading more from {presentation.loading}{" "}
+              {presentation.loading === 1 ? "repository" : "repositories"}
+            </span>
+          )}
+          {presentation.next !== null && (
+            <button
+              className="button button-secondary"
+              data-load-more={presentation.next}
+              disabled={presentation.loading > 0}
+              onClick={() => {
+                if (presentation.next) loadMore(presentation.next);
+              }}
+            >
+              Load more
+            </button>
+          )}
+        </div>
+      )}
     </>
   );
+}
+
+/**
+ * What the list shows for the pages loaded so far: the rows in the chosen
+ * order, how many repositories are still reading, and which repository to
+ * read next. In update-time order rows stop at the point where the order
+ * across repositories is known.
+ */
+export function inboxFeedPresentation(
+  feeds: readonly RepositoryFeed[],
+  sort: ReviewSort,
+): {
+  readonly items: readonly ReviewListItemDto[];
+  readonly empty: boolean;
+  readonly partialFailures: number;
+  readonly loading: number;
+  readonly next: string | null;
+} {
+  const items =
+    sort === "updated"
+      ? orderedReviewItems(feeds)
+      : sortReviewItems(mergedReviewItems(feeds), sort);
+  const loading = loadingFeedCount(feeds);
+  return Object.freeze({
+    items,
+    empty: items.length === 0 && loading === 0 && !hasMorePages(feeds),
+    partialFailures: feedFailures(feeds).length,
+    loading,
+    next: nextRepositoryToLoad(feeds)?.repository ?? null,
+  });
 }
 
 export function sortReviewItems(
@@ -638,16 +1022,14 @@ function emptyReviewLabel(
     : "No closed or merged reviews match this repository scope.";
 }
 
-function ReviewCard({
+const ReviewCard = memo(function ReviewCard({
   item,
   selected,
-  select,
-  navigate,
+  open,
 }: {
   readonly item: ReviewListItemDto;
   readonly selected: boolean;
-  readonly select: (handle: string) => void;
-  readonly navigate: (route: AppRoute) => void;
+  readonly open: (item: ReviewListItemDto) => void;
 }): ReactNode {
   return (
     <button
@@ -656,10 +1038,7 @@ function ReviewCard({
       data-review-number={item.summary.number}
       data-review-handle={item.handle}
       aria-current={selected ? "true" : undefined}
-      onClick={() => {
-        select(item.handle);
-        navigate({ kind: "review", item, panel: "overview" });
-      }}
+      onClick={() => open(item)}
     >
       <span className={`state state-${item.summary.ci_status}`}>
         {item.summary.ci_status}
@@ -673,7 +1052,7 @@ function ReviewCard({
       </span>
     </button>
   );
-}
+});
 
 export function inboxPresentation(result: ReviewListResult): {
   readonly empty: boolean;

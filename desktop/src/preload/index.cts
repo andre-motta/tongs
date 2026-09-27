@@ -1,9 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron") as typeof import("electron");
 import type {
   AcceptedResult, AssetDescriptor, CommitsResult, DesktopBridge, DesktopEvent,
-  DesktopRead, DiffPage, DiscussionsResult, InvokePluginParams, JobsResult,
+  DesktopRead, DiffPage, DiscussionsPage, InvokePluginParams, JobsResult,
   JsonValue, ListPipelinesParams, ListReviewPipelinesParams, ListReviewsParams,
-  LocationParams, LogPage, OpenDiffParams, OpenLogParams, OpenRepositoryParams,
+  LocationParams, LogPage, ServiceStatusDto, OpenDiffParams, OpenLogParams, OpenRepositoryParams,
   PageParams, PipelinesResult, PluginResult, PluginsResult,
   RepositoryDto, RepositoryListResult, ReviewListResult, ReviewSnapshotDto,
 } from "../shared/bridge.js";
@@ -52,10 +52,11 @@ import type {
 
 const IPC_CHANNELS = Object.freeze({
   discoverRepositories: "tongs:repositories.discover", openRepository: "tongs:repositories.open", listReviews: "tongs:reviews.list", getReview: "tongs:reviews.get",
-  openDiff: "tongs:diff.open", pageDiff: "tongs:diff.page", listDiscussions: "tongs:discussions.list", listCommits: "tongs:commits.list",
+  openDiff: "tongs:diff.open", pageDiff: "tongs:diff.page", listDiscussions: "tongs:discussions.list", pageDiscussions: "tongs:discussions.page", listCommits: "tongs:commits.list",
   listPipelines: "tongs:pipelines.list", listReviewPipelines: "tongs:review-pipelines.list", listJobs: "tongs:jobs.list", openLog: "tongs:logs.open", pageLog: "tongs:logs.page",
   listPlugins: "tongs:plugins.list", invokePlugin: "tongs:plugins.invoke", setLocation: "tongs:host.set-location", listAssets: "tongs:assets.list",
   cancelRead: "tongs:read.cancel", openExternal: "tongs:external.open", event: "tongs:event",
+  serviceStatus: "tongs:service.status", getServiceStatus: "tongs:service.status.get",
 } as const);
 const CI_IPC_CHANNELS = Object.freeze({
   capabilities: "tongs:ci.capabilities",
@@ -125,7 +126,8 @@ const bridge: DesktopBridge = Object.freeze({
   getReview: (review: string): DesktopRead<ReviewSnapshotDto> => read(IPC_CHANNELS.getReview, { review }),
   openDiff: (params: OpenDiffParams): DesktopRead<DiffPage> => read(IPC_CHANNELS.openDiff, params),
   pageDiff: (params: PageParams): DesktopRead<DiffPage> => read(IPC_CHANNELS.pageDiff, params),
-  listDiscussions: (review: string): DesktopRead<DiscussionsResult> => read(IPC_CHANNELS.listDiscussions, { review }),
+  listDiscussions: (review: string): DesktopRead<DiscussionsPage> => read(IPC_CHANNELS.listDiscussions, { review }),
+  pageDiscussions: (params: PageParams): DesktopRead<DiscussionsPage> => read(IPC_CHANNELS.pageDiscussions, params),
   listCommits: (review: string): DesktopRead<CommitsResult> => read(IPC_CHANNELS.listCommits, { review }),
   listPipelines: (params: ListPipelinesParams): DesktopRead<PipelinesResult> => read(IPC_CHANNELS.listPipelines, params),
   listReviewPipelines: (params: ListReviewPipelinesParams): DesktopRead<PipelinesResult> => read(IPC_CHANNELS.listReviewPipelines, params),
@@ -169,6 +171,12 @@ const bridge: DesktopBridge = Object.freeze({
     const wrapped = (_event: unknown, value: JsonValue): void => listener(value as unknown as DesktopEvent);
     ipcRenderer.on(IPC_CHANNELS.event, wrapped);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.event, wrapped);
+  },
+  getServiceStatus: async (): Promise<ServiceStatusDto> => ipcRenderer.invoke(IPC_CHANNELS.getServiceStatus) as Promise<ServiceStatusDto>,
+  onServiceStatus: (listener: (status: ServiceStatusDto) => void): (() => void) => {
+    const wrapped = (_event: unknown, value: JsonValue): void => listener(value as unknown as ServiceStatusDto);
+    ipcRenderer.on(IPC_CHANNELS.serviceStatus, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.serviceStatus, wrapped);
   },
   openExternal: async (url: string): Promise<boolean> => await ipcRenderer.invoke(IPC_CHANNELS.openExternal, url) === true,
   copyReviewUrl: async (review: string): Promise<CopyReviewUrlResult> => ipcRenderer.invoke(UTILITY_IPC_CHANNELS.copyReviewUrl, review) as Promise<CopyReviewUrlResult>,

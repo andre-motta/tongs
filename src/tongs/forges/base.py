@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 from tongs.forges.models import (
     Commit,
@@ -11,6 +12,7 @@ from tongs.forges.models import (
     ForgeMergeResult,
     ForgeMutationResult,
     MRDetail,
+    MRPage,
     MRSummary,
     Pipeline,
     PipelineJob,
@@ -32,6 +34,29 @@ class ForgeClient(ABC):
         state: str = "open",
         per_page: int = 100,
     ) -> list[MRSummary]: ...
+
+    async def list_mrs_page(
+        self,
+        repo_path: str,
+        state: str = "open",
+        page: int = 1,
+        per_page: int = 100,
+    ) -> MRPage:
+        """Read one page of reviews, most recently updated first.
+
+        Forge clients override this with a single list request and CI lookups
+        for that page only. This fallback keeps third-party clients working by
+        slicing the complete list.
+        """
+        if page < 1 or per_page < 1:
+            raise ValueError("page and per_page must be positive")
+        everything = await self.list_mrs(repo_path, state=state, per_page=per_page)
+        ordered = sorted(everything, key=_newest_first_key, reverse=True)
+        start = (page - 1) * per_page
+        return MRPage(
+            tuple(ordered[start : start + per_page]),
+            has_next=len(ordered) > start + per_page,
+        )
 
     @abstractmethod
     async def list_my_reviews(self) -> list[MRSummary]: ...
@@ -216,3 +241,32 @@ class ForgeClient(ABC):
     async def close(self) -> None:
         """Close the underlying HTTP client."""
         ...
+
+
+def _newest_first_key(item: MRSummary) -> tuple[bool, datetime]:
+    """Sort key for newest first that puts items without a time last.
+
+    A third-party client may leave ``updated_at`` unset; such items keep their
+    list order after every dated one instead of failing the whole page.
+    """
+    updated = getattr(item, "updated_at", None)
+    if isinstance(updated, datetime):
+        return True, updated
+    return False, datetime.min.replace(tzinfo=UTC)
+
+
+async def read_mr_page(
+    client: ForgeClient, repo_path: str, state: str, page: int, per_page: int
+) -> MRPage:
+    """Read one review page from any client, including ones without paging.
+
+    A client that does not define ``list_mrs_page`` (for example a duck-typed
+    test double or an older plugin) gets the slicing fallback of the base class.
+    """
+    if getattr(type(client), "list_mrs_page", None) is None:
+        return await ForgeClient.list_mrs_page(
+            client, repo_path, state=state, page=page, per_page=per_page
+        )
+    return await client.list_mrs_page(
+        repo_path, state=state, page=page, per_page=per_page
+    )

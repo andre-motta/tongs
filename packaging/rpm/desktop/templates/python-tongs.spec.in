@@ -18,7 +18,7 @@ BuildRequires:  python3dist(packaging) >= 24
 BuildRequires:  python3dist(platformdirs) >= 4
 BuildRequires:  python3dist(pyperclip) >= 1.8
 BuildRequires:  python3dist(sigstore) >= 4.5
-BuildRequires:  python3dist(textual) >= 1
+BuildRequires:  python3dist(textual) >= 4
 
 %description
 Tongs is a terminal-native interface for reviewing GitHub and GitLab changes and
@@ -33,7 +33,7 @@ Requires:       python3dist(packaging) >= 24
 Requires:       python3dist(platformdirs) >= 4
 Requires:       python3dist(pyperclip) >= 1.8
 Requires:       (python3dist(sigstore) >= 4.5 with python3dist(sigstore) < 5)
-Requires:       python3dist(textual) >= 1
+Requires:       python3dist(textual) >= 4
 
 %description -n python3-tongs
 Tongs is a terminal-native interface for reviewing GitHub and GitLab changes and

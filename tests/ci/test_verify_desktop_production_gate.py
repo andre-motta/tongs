@@ -394,7 +394,6 @@ def test_gate_rejects_a_receipt_claiming_the_reserved_gpu_gate(
         ("commit", "3" * 40),
         ("tree", "4" * 40),
         ("run_id", "34274245441"),
-        ("attempt", 2),
         ("repository", "someone-else/tongs"),
         ("environment", "self-hosted"),
     ],
@@ -405,6 +404,80 @@ def test_gate_rejects_stale_or_foreign_receipt_identity(
     identity = replace(IDENTITY, **{field: value})
     with pytest.raises(GateVerificationError, match="rejected"):
         verify_check_set(evidence, identity)
+
+
+def _set_receipt_attempt(evidence: Path, check_id: str, attempt: Any) -> None:
+    check = _check(check_id)
+    path = evidence / check.evidence_directory / check.receipt_name
+    receipt = _read_receipt(path)
+    receipt["execution"]["attempt"] = attempt
+    _write_receipt(path, receipt)
+
+
+def test_gate_accepts_receipts_from_every_attempt_after_a_partial_rerun(
+    evidence: Path,
+) -> None:
+    """Attempt 3 reran only the RPM lane; attempt 2 reran only the TAP lane.
+
+    Every other lane keeps the receipt its attempt 1 produced, because gate
+    artifact names omit the attempt and nothing reran them.
+    """
+
+    _set_receipt_attempt(evidence, "desktop-production-tap", 2)
+    _set_receipt_attempt(evidence, "desktop-rpm-lifecycle", 3)
+    verified = verify_production_gate(
+        ci_results=_ci_results(),
+        production_results=_production_results(),
+        evidence_root=evidence,
+        identity=replace(IDENTITY, attempt=3),
+        plan=FULL,
+    )
+    assert set(verified) == {check.check_id for check in REQUIRED_CHECKS}
+
+
+def test_gate_rejects_a_receipt_from_a_later_attempt_than_its_own(
+    evidence: Path,
+) -> None:
+    _set_receipt_attempt(evidence, "core-python-3.13", 2)
+    with pytest.raises(GateVerificationError, match="later than this run's attempt 1"):
+        verify_check_set(evidence, IDENTITY)
+
+
+@pytest.mark.parametrize("attempt", [0, -1, True, "1", 1.0, None])
+def test_gate_rejects_a_malformed_receipt_attempt(evidence: Path, attempt: Any) -> None:
+    _set_receipt_attempt(evidence, "desktop-installed-core", attempt)
+    with pytest.raises(GateVerificationError, match="desktop-installed-core"):
+        verify_check_set(evidence, replace(IDENTITY, attempt=2))
+
+
+@pytest.mark.parametrize(
+    ("ci_job", "production_job"),
+    [
+        ("core", None),
+        ("desktop-production", "rpm-lifecycle"),
+        ("desktop-production", "desktop-tap"),
+    ],
+)
+def test_a_lane_still_failing_after_a_partial_rerun_fails_the_gate(
+    evidence: Path, ci_job: str, production_job: str | None
+) -> None:
+    """A passing receipt from attempt 1 never masks the lane's latest failure.
+
+    The lane uploaded its evidence in attempt 1 and then failed; its rerun in
+    attempt 2 failed before uploading, so the attempt 1 receipt is still the
+    one under the lane's artifact name.  The job result is the latest attempt's
+    and rejects the gate.
+    """
+
+    production = {production_job: {"result": "failure"}} if production_job else {}
+    with pytest.raises(GateVerificationError, match="did not match the effective plan"):
+        verify_production_gate(
+            ci_results=_ci_results(**{ci_job: {"result": "failure"}}),
+            production_results=_production_results(**production),
+            evidence_root=evidence,
+            identity=replace(IDENTITY, attempt=2),
+            plan=FULL,
+        )
 
 
 def test_gate_rejects_a_receipt_whose_check_id_was_swapped(evidence: Path) -> None:

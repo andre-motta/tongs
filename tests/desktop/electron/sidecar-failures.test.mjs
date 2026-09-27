@@ -1,173 +1,14 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
 import path from "node:path";
 import test from "node:test";
 import {
+  MAX_JSON_DEPTH,
+  MAX_JSON_ITEMS,
   MAX_RESPONSE_BYTES,
+  MIN_JSON_ITEMS,
   SidecarTransport,
 } from "../../../desktop/dist/src/main/sidecar.js";
-
-const caps = [
-  "assets",
-  "cancellation",
-  "ci_mutations",
-  "events",
-  "opaque_handles",
-  "paged_diffs",
-  "paged_logs",
-  "plugins",
-  "review_mutations",
-  "workspace_utilities",
-];
-const methods = [
-  "assets.list",
-  "assets.read",
-  "ci.capabilities",
-  "ci.receipt",
-  "commits.list",
-  "diff.open",
-  "diff.page",
-  "discussions.list",
-  "host.set_location",
-  "jobs.list",
-  "jobs.cancel",
-  "jobs.retry",
-  "logs.open",
-  "logs.page",
-  "pipelines.list",
-  "pipelines.cancel",
-  "pipelines.retry",
-  "plugins.invoke",
-  "plugins.list",
-  "repositories.discover",
-  "repositories.open",
-  "review_actions.capabilities",
-  "review_actions.close",
-  "review_actions.merge",
-  "review_actions.receipt",
-  "review_actions.reopen",
-  "review_actions.unapprove",
-  "review_mutations.capabilities",
-  "review_mutations.comment",
-  "review_mutations.inline_comment",
-  "review_mutations.reply",
-  "review_mutations.resolve",
-  "review_mutations.verdict",
-  "review_pipelines.list",
-  "review_submissions.list",
-  "review_submissions.reconcile",
-  "review_submissions.resume",
-  "review_submissions.start",
-  "review_submissions.status",
-  "reviews.get",
-  "reviews.list",
-  "utilities.cache_clear",
-  "utilities.job_log_export",
-  "utilities.job_log_release",
-  "utilities.review_url",
-  "drafts.create",
-  "drafts.discard",
-  "drafts.get",
-  "drafts.list",
-  "drafts.save",
-  "shutdown",
-];
-
-function harness({
-  autoHandshake = true,
-  delayedKill = false,
-  delayedShutdown = false,
-  extraCapabilities = [],
-} = {}) {
-  const children = [];
-  const respond = (child, frame) => {
-    const result = {
-      protocol_major: 1,
-      core_version: "1.0",
-      session_id: "1234567890abcdef",
-      capabilities: [...caps, ...extraCapabilities],
-      accepted_capabilities: caps,
-      methods,
-      limits: {
-        request_frame_bytes: 262144,
-        response_frame_bytes: 8388608,
-        event_frame_bytes: 65536,
-        pending_requests: 64,
-        queued_events: 256,
-        asset_chunk_bytes: 524288,
-      },
-    };
-    child.stdout.write(
-      `${JSON.stringify({ v: 1, type: "response", id: frame.id, result })}\n`,
-    );
-  };
-  const spawn = (_executable, _arguments, options) => {
-    const child = new EventEmitter();
-    children.push(child);
-    child.stdin = new PassThrough();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    child.pid = 4000 + children.length;
-    child.killed = false;
-    child.exitCode = null;
-    child.signalCode = null;
-    child.frames = [];
-    child.spawnOptions = options;
-    child.finish = (code = 0, signal = null) => {
-      child.exitCode = code;
-      child.signalCode = signal;
-      child.emit("exit", code, signal);
-    };
-    child.kill = (signal) => {
-      child.killed = true;
-      if (!delayedKill) queueMicrotask(() => child.finish(null, signal));
-      return true;
-    };
-    let input = "";
-    child.stdin.on("data", (chunk) => {
-      input += chunk;
-      while (input.includes("\n")) {
-        const newline = input.indexOf("\n");
-        const frame = JSON.parse(input.slice(0, newline));
-        input = input.slice(newline + 1);
-        child.frames.push(frame);
-        if (frame.method === "handshake") {
-          child.handshake = frame;
-          if (autoHandshake) respond(child, frame);
-        }
-        if (frame.method === "shutdown" && !delayedShutdown) {
-          child.stdout.write(
-            `${JSON.stringify({ v: 1, type: "response", id: frame.id, result: {} })}\n`,
-          );
-          queueMicrotask(() => child.finish(0, null));
-        }
-      }
-    });
-    return child;
-  };
-  return {
-    spawn,
-    children,
-    respond: (child) => respond(child, child.handshake),
-  };
-}
-
-const launch = {
-  pythonExecutable: process.execPath,
-  coreVersion: "1.0",
-  safeCwd: process.cwd(),
-};
-
-function transportFor(fake, shutdownTimeout = 1_000) {
-  return new SidecarTransport(
-    launch,
-    1_000,
-    1_000,
-    shutdownTimeout,
-    fake.spawn,
-  );
-}
+import { harness, launch, transportFor } from "./fake-sidecar.mjs";
 
 test("trusted launch binds the sidecar to the exact editor export root", async () => {
   const fake = harness();
@@ -478,3 +319,177 @@ test("restart rejects an in-flight mutation and never replays it in the new sess
   assert.equal(transport.sessionGeneration, 2);
   await transport.stop();
 });
+
+function respondTo(child, id, body) {
+  child.stdout.write(`${JSON.stringify({ v: 1, type: "response", id, ...body })}\n`);
+}
+
+function nested(depth) {
+  let value = "leaf";
+  for (let level = 0; level < depth; level += 1) value = [value];
+  return value;
+}
+
+function watchCrashes(transport) {
+  const crashes = [];
+  transport.on("crash", (error) => crashes.push(error.code));
+  return crashes;
+}
+
+test("handshake declares the JSON value and depth limits", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  assert.deepEqual(fake.children[0].handshake.params.limits, {
+    json_values: MAX_JSON_ITEMS,
+    json_depth: MAX_JSON_DEPTH,
+  });
+  assert.deepEqual(transport.negotiatedJsonLimits, {
+    values: MAX_JSON_ITEMS,
+    depth: MAX_JSON_DEPTH,
+  });
+  await transport.stop();
+});
+
+test("over-budget response fails only its request and other reads survive", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const crashes = watchCrashes(transport);
+  const threads = transport.requestRead("discussions.list", { review: "review-handle" });
+  const commits = transport.requestRead("commits.list", { review: "review-handle" });
+  const deep = transport.requestRead("jobs.list", { pipeline: "pipeline-handle" });
+  const child = fake.children[0];
+
+  respondTo(child, threads.requestId, {
+    result: { discussions: new Array(MAX_JSON_ITEMS).fill(0) },
+  });
+  await assert.rejects(threads.result, {
+    code: "response_too_large",
+    message: /too large to show/,
+    retryable: false,
+  });
+  respondTo(child, deep.requestId, { result: nested(MAX_JSON_DEPTH) });
+  await assert.rejects(deep.result, { code: "response_too_large" });
+  respondTo(child, commits.requestId, { result: { commits: [] } });
+  assert.deepEqual(await commits.result, { commits: [] });
+
+  const later = transport.requestRead("reviews.list", {});
+  respondTo(child, later.requestId, { result: { items: [], failures: [] } });
+  assert.deepEqual(await later.result, { items: [], failures: [] });
+  assert.equal(crashes.length, 0);
+  assert.equal(transport.crashHistory.length, 0);
+  assert.equal(fake.children.length, 1);
+  assert.equal(child.killed, false);
+  await transport.stop();
+});
+
+test("over-budget mutation response rejects as outcome unknown", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const crashes = watchCrashes(transport);
+  const mutation = transport.requestMutation("pipelines.retry", {
+    operation_id: "oversized-operation",
+    pipeline: "pipeline-handle",
+  });
+  respondTo(fake.children[0], mutation.requestId, {
+    result: { receipts: new Array(MAX_JSON_ITEMS).fill(0) },
+  });
+  const failure = await mutation.result.then(
+    () => null,
+    (error) => ({ code: error.code, message: error.message, retryable: error.retryable }),
+  );
+  assert.equal(failure?.code, "invalid_response");
+  assert.equal(failure?.retryable, false);
+  assert.match(String(failure?.message), /outcome is unknown/);
+  assert.match(String(failure?.message), /Refresh before retrying/);
+  assert.equal(crashes.length, 0);
+  await transport.stop();
+});
+
+test("response exactly at the value budget is delivered", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const read = transport.requestRead("commits.list", { review: "review-handle" });
+  // The envelope holds the object, v, type, id, and the result list itself.
+  const items = new Array(MAX_JSON_ITEMS - 5).fill(0);
+  respondTo(fake.children[0], read.requestId, { result: items });
+  assert.equal((await read.result).length, items.length);
+  await transport.stop();
+});
+
+test("over-budget response for an unknown request is dropped without a crash", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const crashes = watchCrashes(transport);
+  respondTo(fake.children[0], "electron-1-999", {
+    result: new Array(MAX_JSON_ITEMS).fill(0),
+  });
+  const read = transport.requestRead("reviews.list", {});
+  respondTo(fake.children[0], read.requestId, { result: { items: [] } });
+  assert.deepEqual(await read.result, { items: [] });
+  assert.equal(crashes.length, 0);
+  await transport.stop();
+});
+
+test("over-budget frame without a request id still fails the connection", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const crashes = watchCrashes(transport);
+  const pending = transport.requestRead("reviews.list", {});
+  fake.children[0].stdout.write(
+    `${JSON.stringify({ v: 1, type: "event", sequence: 1, event: "x", data: nested(MAX_JSON_DEPTH) })}\n`,
+  );
+  await assert.rejects(pending.result, { code: "invalid_frame" });
+  assert.deepEqual(crashes, ["invalid_frame"]);
+});
+
+test("unparseable frame still fails every pending request", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const crashes = watchCrashes(transport);
+  const first = transport.requestRead("reviews.list", {});
+  const second = transport.requestRead("commits.list", { review: "review-handle" });
+  fake.children[0].stdout.write(`{"v":1,"type":"response","id":"${first.requestId}"\n`);
+  await assert.rejects(first.result, { code: "invalid_frame" });
+  await assert.rejects(second.result, { code: "invalid_frame" });
+  assert.deepEqual(crashes, ["invalid_frame"]);
+});
+
+test("negotiated tighter limits apply to responses and requests", async () => {
+  const fake = harness({ limitOverrides: { json_values: MIN_JSON_ITEMS, json_depth: 12 } });
+  const transport = transportFor(fake);
+  await transport.start();
+  assert.deepEqual(transport.negotiatedJsonLimits, { values: MIN_JSON_ITEMS, depth: 12 });
+  const crashes = watchCrashes(transport);
+  const read = transport.requestRead("commits.list", { review: "review-handle" });
+  respondTo(fake.children[0], read.requestId, { result: new Array(MIN_JSON_ITEMS).fill(0) });
+  await assert.rejects(read.result, { code: "response_too_large" });
+  assert.throws(() => transport.requestRead("reviews.list", { deep: nested(12) }));
+  assert.equal(crashes.length, 0);
+  await transport.stop();
+});
+
+for (const [name, overrides] of [
+  ["missing value limit", { json_values: undefined }],
+  ["missing depth limit", { json_depth: undefined }],
+  ["looser value limit", { json_values: MAX_JSON_ITEMS + 1 }],
+  ["looser depth limit", { json_depth: MAX_JSON_DEPTH + 1 }],
+  ["value limit below the floor", { json_values: MIN_JSON_ITEMS - 1 }],
+  ["fractional depth limit", { json_depth: 12.5 }],
+  ["textual value limit", { json_values: "20000" }],
+]) {
+  test(`handshake with a ${name} fails closed`, async () => {
+    const fake = harness({ limitOverrides: overrides });
+    const transport = transportFor(fake);
+    await assert.rejects(transport.start(), {
+      code: "incompatible_handshake",
+      message: /JSON limits are incompatible/,
+    });
+  });
+}

@@ -5,9 +5,17 @@ import type { WorkspaceUtilityBridge } from "./utilities.js";
 export const PROTOCOL_MAJOR = 1 as const;
 export const REQUIRED_CAPABILITIES = Object.freeze([
   "assets", "cancellation", "ci_mutations", "events", "opaque_handles", "paged_diffs",
-  "paged_logs", "plugins", "review_mutations",
+  "paged_discussions", "paged_logs", "plugins", "review_mutations",
   "workspace_utilities",
 ] as const);
+
+/**
+ * Protocol error code for a response that exceeds the negotiated byte, JSON
+ * value-count, or JSON depth budget. The sidecar sends it in place of the
+ * oversized result, and the main process raises it when a frame still
+ * overflows, so only that one request fails and the service stays up.
+ */
+export const RESPONSE_TOO_LARGE = "response_too_large" as const;
 
 export type JsonScalar = string | number | boolean | null;
 export type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };
@@ -46,8 +54,9 @@ export interface ReviewDetailDto extends ReviewSummaryDto {
 }
 export interface ReviewListItemDto { readonly handle: OpaqueHandle; readonly repository: OpaqueHandle; readonly summary: ReviewSummaryDto; }
 export interface ReviewFailureDto extends ServiceErrorDto { readonly repository: OpaqueHandle | null; }
-export interface ListReviewsParams { readonly scope: string; readonly repository?: OpaqueHandle; readonly state?: string; readonly per_page?: number; }
-export interface ReviewListResult { readonly items: readonly ReviewListItemDto[]; readonly failures: readonly ReviewFailureDto[]; }
+export interface ListReviewsParams { readonly scope: string; readonly repository?: OpaqueHandle; readonly state?: string; readonly per_page?: number; readonly cursor?: string; }
+/** `next_cursor` is set when a repository-scoped All Open read has another page. */
+export interface ReviewListResult { readonly items: readonly ReviewListItemDto[]; readonly failures: readonly ReviewFailureDto[]; readonly next_cursor?: string | null; }
 export interface ReviewSnapshotDto {
   readonly handle: OpaqueHandle; readonly repository: OpaqueHandle;
   readonly detail: ReviewDetailDto; readonly capabilities: ForgeCapabilitiesDto;
@@ -70,6 +79,13 @@ export interface PageParams { readonly snapshot: string; readonly resource: Opaq
 export interface InlineCommentDto { readonly id: string; readonly author: UserDto; readonly body: string; readonly created_at: string; readonly file_path: string | null; readonly old_line: number | null; readonly new_line: number | null; readonly is_resolved: boolean; readonly replies: readonly InlineCommentDto[]; }
 export interface DiscussionDto { readonly id: string; readonly is_inline: boolean; readonly root_comment: InlineCommentDto; readonly is_resolved: boolean; readonly resolvable: boolean; }
 export interface DiscussionsResult { readonly discussions: readonly DiscussionDto[]; }
+export interface DiscussionsRevisionDto extends JsonObject { readonly discussion_count: number; }
+/**
+ * One page of a review's discussions snapshot. The sidecar keeps every page
+ * well inside the negotiated JSON value budget, so a review with thousands of
+ * threads arrives over several pages rather than as one rejected frame.
+ */
+export interface DiscussionsPage extends DiscussionsResult { readonly snapshot_id: string; readonly resource: OpaqueHandle; readonly revision: DiscussionsRevisionDto; readonly cursor: number; readonly next_cursor: number | null; }
 export interface CommitDto { readonly sha: string; readonly short_sha: string; readonly title: string; readonly message: string; readonly author: UserDto; readonly created_at: string | null; readonly web_url: string; }
 export interface CommitsResult { readonly commits: readonly CommitDto[]; }
 export interface PipelineDto { readonly id: number; readonly status: string; readonly ref: string; readonly sha: string; readonly web_url: string; readonly source: string; readonly created_at: string | null; readonly finished_at: string | null; readonly duration_seconds: number | null; }
@@ -94,6 +110,15 @@ export interface LocationParams { readonly location: JsonObject | null; }
 export interface AcceptedResult { readonly accepted: true; }
 
 export interface DesktopEvent { readonly sequence: number; readonly name: string; readonly data: JsonValue; }
+/** Whether the main process currently holds a live connection to the local service. */
+export type ServiceState = "connected" | "stopped";
+/** A service state change; `revision` only grows, so a stale snapshot can be ignored. */
+/** `notices` are this app run's service startup warnings, shown until dismissed. */
+export interface ServiceStatusDto {
+  readonly state: ServiceState;
+  readonly revision: number;
+  readonly notices: readonly string[];
+}
 export interface AssetDescriptor { readonly source: "core" | "plugin"; readonly asset_id: string; readonly plugin_id: string | null; readonly kind: string; readonly media_type: string; readonly byte_count: number; readonly sha256: string; readonly url: string; }
 export interface DesktopRead<T> { readonly requestToken: string; readonly result: Promise<T>; }
 
@@ -104,7 +129,8 @@ export interface DesktopBridge extends CIDesktopBridge, ReviewDesktopBridge, Wor
   getReview(review: OpaqueHandle): DesktopRead<ReviewSnapshotDto>;
   openDiff(params: OpenDiffParams): DesktopRead<DiffPage>;
   pageDiff(params: PageParams): DesktopRead<DiffPage>;
-  listDiscussions(review: OpaqueHandle): DesktopRead<DiscussionsResult>;
+  listDiscussions(review: OpaqueHandle): DesktopRead<DiscussionsPage>;
+  pageDiscussions(params: PageParams): DesktopRead<DiscussionsPage>;
   listCommits(review: OpaqueHandle): DesktopRead<CommitsResult>;
   listPipelines(params: ListPipelinesParams): DesktopRead<PipelinesResult>;
   listReviewPipelines(params: ListReviewPipelinesParams): DesktopRead<PipelinesResult>;
@@ -117,17 +143,21 @@ export interface DesktopBridge extends CIDesktopBridge, ReviewDesktopBridge, Wor
   listAssets(): DesktopRead<readonly AssetDescriptor[]>;
   cancelRead(requestToken: string): Promise<boolean>;
   onEvent(listener: (event: DesktopEvent) => void): () => void;
+  getServiceStatus(): Promise<ServiceStatusDto>;
+  onServiceStatus(listener: (status: ServiceStatusDto) => void): () => void;
   openExternal(url: string): Promise<boolean>;
 }
 
 export const IPC_CHANNELS = Object.freeze({
   discoverRepositories: "tongs:repositories.discover", openRepository: "tongs:repositories.open",
   listReviews: "tongs:reviews.list", getReview: "tongs:reviews.get", openDiff: "tongs:diff.open",
-  pageDiff: "tongs:diff.page", listDiscussions: "tongs:discussions.list", listCommits: "tongs:commits.list",
+  pageDiff: "tongs:diff.page", listDiscussions: "tongs:discussions.list",
+  pageDiscussions: "tongs:discussions.page", listCommits: "tongs:commits.list",
   listPipelines: "tongs:pipelines.list", listReviewPipelines: "tongs:review-pipelines.list", listJobs: "tongs:jobs.list",
   openLog: "tongs:logs.open", pageLog: "tongs:logs.page", listPlugins: "tongs:plugins.list",
   invokePlugin: "tongs:plugins.invoke", setLocation: "tongs:host.set-location", listAssets: "tongs:assets.list",
   cancelRead: "tongs:read.cancel", openExternal: "tongs:external.open", event: "tongs:event",
+  serviceStatus: "tongs:service.status", getServiceStatus: "tongs:service.status.get",
 } as const);
 
 /**

@@ -38,7 +38,7 @@ import {
   assertParams,
   assertResult,
 } from "./security.js";
-import type { SidecarTransport } from "./sidecar.js";
+import { ServiceStatusPublisher, type SidecarTransport } from "./sidecar.js";
 import { UTILITY_IPC_CHANNELS } from "../shared/utilities.js";
 import type { WorkspaceUtilities } from "./utilities.js";
 
@@ -60,6 +60,7 @@ const OPERATIONS = new Map<string, string>([
   [IPC_CHANNELS.openDiff, "diff.open"],
   [IPC_CHANNELS.pageDiff, "diff.page"],
   [IPC_CHANNELS.listDiscussions, "discussions.list"],
+  [IPC_CHANNELS.pageDiscussions, "discussions.page"],
   [IPC_CHANNELS.listCommits, "commits.list"],
   [IPC_CHANNELS.listPipelines, "pipelines.list"],
   [IPC_CHANNELS.listReviewPipelines, "review_pipelines.list"],
@@ -73,6 +74,7 @@ const OPERATIONS = new Map<string, string>([
 export class DesktopIpcController {
   private readonly bindings = new Map<string, Binding>();
   private eventListener: ((event: DesktopEvent) => void) | null = null;
+  private serviceStatus: ServiceStatusPublisher | null = null;
 
   constructor(
     private readonly window: BrowserWindow,
@@ -137,6 +139,17 @@ export class DesktopIpcController {
       }
     };
     this.transport.on("event", this.eventListener);
+    const serviceStatus = new ServiceStatusPublisher(this.transport, (status) => {
+      if (!this.window.isDestroyed()) {
+        this.window.webContents.send(IPC_CHANNELS.serviceStatus, status);
+      }
+    });
+    ipcMain.handle(IPC_CHANNELS.getServiceStatus, (event) => {
+      assertAuthorizedSender(event, this.window.webContents);
+      return serviceStatus.current;
+    });
+    serviceStatus.start();
+    this.serviceStatus = serviceStatus;
   }
 
   reset(): void {
@@ -153,6 +166,7 @@ export class DesktopIpcController {
       IPC_CHANNELS.setLocation,
       IPC_CHANNELS.cancelRead,
       IPC_CHANNELS.openExternal,
+      IPC_CHANNELS.getServiceStatus,
       ...Object.values(UTILITY_IPC_CHANNELS),
     ]) {
       ipcMain.removeHandler(channel);
@@ -161,6 +175,8 @@ export class DesktopIpcController {
       this.transport.off("event", this.eventListener);
     }
     this.eventListener = null;
+    this.serviceStatus?.dispose();
+    this.serviceStatus = null;
   }
 
   private async read(

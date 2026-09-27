@@ -7,17 +7,18 @@ import {
   type ReactNode,
 } from "react";
 
-import type {
-  DesktopRead,
-  DiscussionDto,
-  DiscussionsResult,
-} from "../../../shared/bridge.js";
+import type { DiscussionDto } from "../../../shared/bridge.js";
 import type { DiscussionDiffTarget } from "../../core/navigation.js";
 import {
   SafeMarkdown,
   safeMarkdownPresentationBytes,
 } from "../../core/safe-markdown.js";
 import { buffersFor, type InlineComposerController } from "./composer.js";
+import {
+  readAllDiscussions,
+  type DiscussionPagesBridge,
+  type DiscussionsRead,
+} from "./discussions.js";
 
 /**
  * The whole-review budget the discussion surfaces share. It lives here with
@@ -176,10 +177,7 @@ export function threadReference(thread: AnchoredThread): string {
     : `the discussion on ${where}`;
 }
 
-export interface DiscussionThreadBridge {
-  listDiscussions(review: string): DesktopRead<DiscussionsResult>;
-  cancelRead(requestToken: string): Promise<boolean>;
-}
+export type DiscussionThreadBridge = DiscussionPagesBridge;
 
 /**
  * Everything a diff row needs to place, expand and answer the published
@@ -310,7 +308,7 @@ export function useDiscussionThreads(
   }, []);
   useEffect(() => {
     let current = true;
-    let token: string | null = null;
+    let read: DiscussionsRead | null = null;
     setThreads([]);
     setLoadError(null);
     setExpandedIds(new Set<string>());
@@ -318,8 +316,7 @@ export function useDiscussionThreads(
     setNotice(null);
     setStaleIds(new Set<string>());
     try {
-      const read = bridge.listDiscussions(review);
-      token = read.requestToken;
+      read = readAllDiscussions(bridge, review);
       void read.result.then(
         (result) => {
           if (!current) return;
@@ -335,12 +332,7 @@ export function useDiscussionThreads(
     }
     return () => {
       current = false;
-      if (token === null) return;
-      try {
-        void bridge.cancelRead(token).catch(() => undefined);
-      } catch {
-        // A cancellation that cannot be delivered must not fail the unmount.
-      }
+      read?.cancel();
     };
   }, [bridge, reloadToken, review]);
 
@@ -399,23 +391,16 @@ export function useDiscussionThreads(
   }, [threads]);
 
   const refresh = useCallback(async (): Promise<boolean> => {
-    let token: string | null = null;
+    let read: DiscussionsRead | null = null;
     try {
-      const read = bridge.listDiscussions(review);
-      token = read.requestToken;
+      read = readAllDiscussions(bridge, review);
       const result = await read.result;
       if (live.current) setThreads(result.discussions);
       return true;
     } catch {
       return false;
     } finally {
-      if (!live.current && token !== null) {
-        try {
-          void bridge.cancelRead(token).catch(() => undefined);
-        } catch {
-          // Same as the mount read: a cancellation is best effort.
-        }
-      }
+      if (!live.current) read?.cancel();
     }
   }, [bridge, review]);
 

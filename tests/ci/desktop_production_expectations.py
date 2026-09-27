@@ -226,6 +226,29 @@ def _release_manifest_archive_name(transfer_root: Path) -> str:
     return name
 
 
+def transfer_attempt(arguments: argparse.Namespace) -> int:
+    """Return the run attempt that produced the transfer artifact.
+
+    The archive producer and its consumers can run in different attempts of one
+    workflow run: after "Re-run failed jobs" a consumer reruns alone while the
+    producer keeps its earlier successful attempt.  The consumer's own receipt
+    records ``--attempt``; the transfer it downloaded records the producer's
+    attempt, which the workflow passes as ``--transfer-attempt``.  Without it
+    both are the same attempt.  A producer attempt later than the consumer's
+    own is impossible and rejected.
+    """
+
+    produced = arguments.transfer_attempt
+    if produced is None:
+        return arguments.attempt
+    if not 1 <= produced <= arguments.attempt:
+        _fail(
+            f"the transfer attempt {produced} is outside this run's attempts "
+            f"1..{arguments.attempt}"
+        )
+    return produced
+
+
 def _transfer_flags(arguments: argparse.Namespace) -> list[str]:
     return [
         "--expected-transfer-repository",
@@ -241,7 +264,7 @@ def _transfer_flags(arguments: argparse.Namespace) -> list[str]:
         "--expected-transfer-run-id",
         arguments.run_id,
         "--expected-transfer-run-attempt",
-        str(arguments.attempt),
+        str(transfer_attempt(arguments)),
     ]
 
 
@@ -411,6 +434,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--attempt", required=True, type=int)
+    parser.add_argument("--transfer-attempt", type=int)
     parser.add_argument("--environment", required=True)
     parser.add_argument(
         "--provenance", required=True, choices=("hosted", "local", "controlled-fixture")

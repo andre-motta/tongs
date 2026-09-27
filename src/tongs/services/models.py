@@ -161,6 +161,11 @@ class ReviewQuery:
     state: MRState = MRState.OPEN
     per_page: int = 100
     hostnames: tuple[str, ...] | None = None
+    # When set, an All Open read fetches one page per repository instead of
+    # walking every page. ``cursor`` continues a repository-scoped paged read
+    # from the ``next_cursor`` a previous page returned.
+    paged: bool = False
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, ReviewScope) or not isinstance(
@@ -184,6 +189,37 @@ class ReviewQuery:
                 validate_hostname(hostname)
             if len(self.hostnames) != len(set(self.hostnames)):
                 raise ValueError("hostnames must not contain duplicates")
+        if not isinstance(self.paged, bool):
+            raise TypeError("paged must be a boolean")
+        if self.cursor is not None:
+            review_cursor_page(self.cursor)
+            if (
+                not self.paged
+                or self.repository is None
+                or self.scope != ReviewScope.ALL_OPEN
+            ):
+                raise ValueError(
+                    "a cursor needs a paged All Open read of one repository"
+                )
+
+
+MAX_REVIEW_PAGE = 10_000
+
+
+def review_cursor_page(cursor: str) -> int:
+    """Return the forge page a session review cursor names, or raise."""
+    if (
+        not isinstance(cursor, str)
+        or not 1 <= len(cursor) <= 5
+        or not cursor.isascii()
+        or not cursor.isdigit()
+        or cursor.startswith("0")
+    ):
+        raise ValueError("the review cursor is invalid")
+    page = int(cursor)
+    if not 2 <= page <= MAX_REVIEW_PAGE:
+        raise ValueError("the review cursor is invalid")
+    return page
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +244,9 @@ class ReviewPage:
 
     items: tuple[ReviewListItem, ...]
     failures: tuple[HostFailure, ...] = ()
+    # Set only for a paged read of one repository that has another page, or
+    # whose later page failed and can be read again.
+    next_cursor: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

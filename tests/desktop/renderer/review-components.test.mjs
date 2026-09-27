@@ -418,7 +418,7 @@ test("the Discussions jump list lists unresolved threads first and jumps to the 
     },
   };
   const bridge = reviewBridge(review, {
-    listDiscussions: () => read({ discussions: [resolved, discussion()] }),
+    listDiscussions: () => read(discussionsPage([resolved, discussion()])),
   });
   const view = renderFeature(bridge, review, {
     navigate: (route) => navigated.push(route),
@@ -462,7 +462,7 @@ test("the Discussions jump list lists unresolved threads first and jumps to the 
 test("the Discussions panel offers no composer, suggestion, reply or resolve control", async () => {
   const review = "review-discussion-no-writes";
   const bridge = reviewBridge(review, {
-    listDiscussions: () => read({ discussions: [discussion()] }),
+    listDiscussions: () => read(discussionsPage([discussion()])),
   });
   const view = renderFeature(bridge, review);
   await waitFor(() =>
@@ -573,7 +573,7 @@ test("a review-level note reads on Overview and never in the jump list", async (
   };
   assert.equal(discussionDiffTarget(note), null);
   const bridge = reviewBridge(review, {
-    listDiscussions: () => read({ discussions: [note, discussion()] }),
+    listDiscussions: () => read(discussionsPage([note, discussion()])),
   });
 
   const overview = renderOverview(bridge, review);
@@ -630,7 +630,7 @@ test("discussion roots and replies use shared safe Markdown without changing sou
     },
   };
   const bridge = reviewBridge(review, {
-    listDiscussions: () => read({ discussions: [markdownDiscussion] }),
+    listDiscussions: () => read(discussionsPage([markdownDiscussion])),
     openExternal: async (url) => {
       opened.push(url);
       return true;
@@ -696,7 +696,7 @@ test("discussion callsite stops rendering bodies after its aggregate budget", as
     },
   }));
   const bridge = reviewBridge(review, {
-    listDiscussions: () => read({ discussions }),
+    listDiscussions: () => read(discussionsPage(discussions)),
   });
   const view = renderFeature(bridge, review);
 
@@ -1020,7 +1020,7 @@ test("the Overview route puts one read of each kind the composer and the notes n
     },
     listDiscussions: () => {
       counts.discussions += 1;
-      return read({ discussions: [] });
+      return read(discussionsPage([]));
     },
     listReviewDrafts: () => {
       counts.drafts += 1;
@@ -1596,7 +1596,7 @@ function renderOverview(bridge, review, contextChanges = {}) {
 function reviewBridge(review, changes = {}) {
   return {
     getReview: () => read(snapshot(review)),
-    listDiscussions: () => read({ discussions: [] }),
+    listDiscussions: () => read(discussionsPage([])),
     getReviewMutationCapabilities: () =>
       read({ review, capabilities: capabilities() }),
     getReviewActionCapabilities: () =>
@@ -1789,4 +1789,9 @@ function discussion() {
       replies: [],
     },
   };
+}
+
+/** A first discussions page that holds every thread, as the sidecar sends it. */
+function discussionsPage(discussions) {
+  return { discussions, revision: { discussion_count: discussions.length } };
 }

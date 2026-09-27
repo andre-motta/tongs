@@ -9,16 +9,22 @@ from collections.abc import AsyncIterator
 from importlib.metadata import entry_points, version
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import pytest
 
 from tongs.config import Config
 from tongs.desktop import sidecar
-from tongs.desktop.protocol.messages import JsonObject
+from tongs.desktop.protocol.messages import JsonLimits, JsonObject
 from tongs.desktop.protocol.server import (
+    MAX_RECOVERY_NOTICE_CHARS,
+    MAX_RECOVERY_NOTICES,
     DesktopSidecarServer,
     RequestContext,
+    _encode_event_or_resync,
     _EventBuffer,
+    _QueuedEvent,
+    _recovery_notices,
 )
 from tongs.desktop.protocol.state import HandleKind
 from tongs.plugins.desktop import (
@@ -33,7 +39,15 @@ from tongs.plugins.desktop import (
 )
 from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.scanner.repo import ForgeType
-from tongs.services import JobRef, RepositoryRef, RepositorySnapshot, ServiceEvent
+from tongs.services import (
+    JobRef,
+    RepositoryRef,
+    RepositorySnapshot,
+    ReviewRef,
+    ServiceEvent,
+)
+from tongs.state.drafts import RecoveryWarning
+from tongs.state.drafts.models import RECOVERY_CORRUPT_ATTEMPT_MESSAGE
 
 _SOURCE_ROOT = Path(__file__).parents[2] / "src"
 
@@ -92,6 +106,8 @@ class _BlockingWriter(_QueueWriter):
 
 
 class _FakeSession:
+    recovery_warnings: tuple[object, ...] = ()
+
     def __init__(self) -> None:
         self.config = Config()
         self.started = False
@@ -176,6 +192,125 @@ async def test_unexpected_operation_logs_method_and_redacted_detail(
     assert "RuntimeError" in stderr
     assert "[REDACTED]" in stderr
     assert token not in stderr
+
+
+@pytest.mark.asyncio
+async def test_handshake_reports_skipped_recovery_attempt_on_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = _FakeSession()
+    attempt_id = UUID("11111111-2222-4333-8444-555555555555")
+    review = ReviewRef(RepositoryRef("github.com", "acme/widgets"), 12)
+    session.recovery_warnings = (RecoveryWarning(attempt_id, review=review),)
+    server = DesktopSidecarServer(
+        session=cast(object, session), plugin_registry=_registry()
+    )
+    reader = asyncio.StreamReader()
+    writer = _QueueWriter()
+    task = asyncio.create_task(server.run(reader, writer))
+    reader.feed_data(
+        _frame(
+            "handshake",
+            "handshake",
+            {
+                "protocol_major": 1,
+                "core_version": version("tongs"),
+                "capabilities": [],
+            },
+        )
+    )
+    response = await asyncio.wait_for(writer.frames.get(), 1)
+    reader.feed_eof()
+    await task
+
+    assert response["id"] == "handshake"
+    # The desktop shows the same text, naming the review to check on the forge.
+    expected = (
+        f"{RECOVERY_CORRUPT_ATTEMPT_MESSAGE} Review: github.com/acme/widgets #12. "
+        f"Attempt {attempt_id}."
+    )
+    assert response["result"]["recovery_warnings"] == [expected]  # type: ignore[index]
+    stderr = capsys.readouterr().err
+    assert "draft recovery warning" in stderr
+    assert expected in stderr
+
+
+def test_handshake_recovery_notices_are_bounded() -> None:
+    long_review = ReviewRef(RepositoryRef("github.com", "a/" + "b" * 990), 1)
+    warnings = tuple(
+        RecoveryWarning(None, review=long_review if index == 0 else None)
+        for index in range(MAX_RECOVERY_NOTICES + 5)
+    )
+
+    notices = _recovery_notices(warnings)
+
+    assert len(notices) == MAX_RECOVERY_NOTICES
+    assert all(isinstance(text, str) for text in notices)
+    assert len(cast(str, notices[0])) == MAX_RECOVERY_NOTICE_CHARS
+    assert cast(str, notices[0]).endswith("…")
+    assert notices[1] == RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+    assert _recovery_notices(()) == []
+
+
+def _js_length(text: str) -> int:
+    """Count UTF-16 code units, as the desktop shell's ``String.length`` does."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+@pytest.mark.parametrize("padding", [0, 1, 2, 3])
+def test_recovery_notice_bound_counts_utf16_units_for_astral_text(padding: int) -> None:
+    # Each astral character is one code point but two UTF-16 units. Near the
+    # limit the notice must fit the shell's bound and never split a pair.
+    path = "a/" + "b" * padding + "\U0001f600" * 500
+    review = ReviewRef(RepositoryRef("github.com", path), 1)
+
+    [notice] = _recovery_notices((RecoveryWarning(None, review=review),))
+
+    text = cast(str, notice)
+    assert len(text) < MAX_RECOVERY_NOTICE_CHARS
+    assert _js_length(text) <= MAX_RECOVERY_NOTICE_CHARS
+    assert _js_length(text) >= MAX_RECOVERY_NOTICE_CHARS - 1
+    assert text.endswith("…")
+    text.encode("utf-8")  # no lone surrogate
+
+
+def test_recovery_notice_at_the_utf16_bound_is_kept_whole() -> None:
+    prefix = RecoveryWarning(
+        None, review=ReviewRef(RepositoryRef("github.com", "a/b"), 1)
+    ).describe()
+    spare = MAX_RECOVERY_NOTICE_CHARS - _js_length(prefix)
+    path = "a/b" + "\U0001f600" * (spare // 2) + "c" * (spare % 2)
+    review = ReviewRef(RepositoryRef("github.com", path), 1)
+    text = RecoveryWarning(None, review=review).describe()
+    assert _js_length(text) == MAX_RECOVERY_NOTICE_CHARS
+
+    assert _recovery_notices((RecoveryWarning(None, review=review),)) == [text]
+
+
+@pytest.mark.asyncio
+async def test_handshake_without_recovery_warnings_sends_an_empty_list() -> None:
+    server = DesktopSidecarServer(
+        session=cast(object, _FakeSession()), plugin_registry=_registry()
+    )
+    reader = asyncio.StreamReader()
+    writer = _QueueWriter()
+    task = asyncio.create_task(server.run(reader, writer))
+    reader.feed_data(
+        _frame(
+            "handshake",
+            "handshake",
+            {
+                "protocol_major": 1,
+                "core_version": version("tongs"),
+                "capabilities": [],
+            },
+        )
+    )
+    response = await asyncio.wait_for(writer.frames.get(), 1)
+    reader.feed_eof()
+    await task
+
+    assert response["result"]["recovery_warnings"] == []  # type: ignore[index]
 
 
 @pytest.mark.asyncio
@@ -323,6 +458,45 @@ async def test_event_overflow_replaces_stale_events_with_resync_marker() -> None
     assert event is not None
     assert event.name == "protocol.resync_required"
     assert event.data == {"reason": "queue_overflow"}
+
+
+@pytest.mark.asyncio
+async def test_event_over_the_negotiated_budget_becomes_a_resync_marker() -> None:
+    buffer = _EventBuffer()
+    await buffer.set_limits(JsonLimits(values=1_024, depth=8))
+    await buffer.publish("service.changed", {"items": [0] * 2_000})
+
+    event = await buffer.get()
+    assert event is not None
+    assert event.name == "protocol.resync_required"
+    assert event.data == {"reason": "event_too_large"}
+    frame = json.loads(
+        _encode_event_or_resync(event, JsonLimits(values=1_024, depth=8))
+    )
+    assert frame["event"] == "protocol.resync_required"
+
+
+@pytest.mark.asyncio
+async def test_tighter_negotiated_budget_replaces_queued_events_with_resync() -> None:
+    buffer = _EventBuffer()
+    await buffer.publish("service.changed", {"items": [0] * 2_000})
+    await buffer.set_limits(JsonLimits(values=1_024, depth=8))
+
+    event = await buffer.get()
+    assert event is not None
+    assert event.name == "protocol.resync_required"
+    assert event.data == {"reason": "event_too_large"}
+
+
+def test_pump_encoding_replaces_an_over_budget_event_with_resync() -> None:
+    event = _QueuedEvent(7, "service.changed", {"items": [0] * 2_000}, None)
+    frame = json.loads(
+        _encode_event_or_resync(event, JsonLimits(values=1_024, depth=8))
+    )
+
+    assert frame["sequence"] == 7
+    assert frame["event"] == "protocol.resync_required"
+    assert frame["data"] == {"reason": "event_too_large"}
 
 
 @pytest.mark.asyncio

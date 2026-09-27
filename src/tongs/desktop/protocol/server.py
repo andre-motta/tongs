@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import os
+import secrets
 import sys
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -31,12 +33,18 @@ from tongs.desktop.protocol.ci_operations import (
 )
 from tongs.desktop.protocol.diff_projection import DiffLayout, flatten_diff
 from tongs.desktop.protocol.messages import (
+    DEFAULT_JSON_LIMITS,
     MAX_EVENT_FRAME_BYTES,
+    MAX_JSON_DEPTH,
+    MAX_JSON_ITEMS,
     MAX_PENDING_REQUESTS,
     MAX_QUEUED_EVENTS,
     MAX_REQUEST_FRAME_BYTES,
     MAX_RESPONSE_FRAME_BYTES,
+    MIN_JSON_DEPTH,
+    MIN_JSON_ITEMS,
     CancelFrame,
+    JsonLimits,
     JsonObject,
     JsonValue,
     ProtocolError,
@@ -95,6 +103,7 @@ from tongs.services import (
     RepositoryRef,
     RepositorySnapshot,
     ReviewListItem,
+    ReviewPage,
     ReviewQuery,
     ReviewRef,
     ReviewScope,
@@ -102,6 +111,13 @@ from tongs.services import (
     ServiceError,
     ServiceEvent,
 )
+from tongs.services.models import review_cursor_page
+from tongs.state.drafts.models import RecoveryWarning
+
+_DIFF_SNAPSHOT = "diff"
+_DISCUSSIONS_SNAPSHOT = "discussions"
+_LOG_SNAPSHOT = "log"
+_DISCUSSION_PAGE_ITEMS = 400
 
 SUPPORTED_CAPABILITIES = frozenset(
     {
@@ -111,6 +127,7 @@ SUPPORTED_CAPABILITIES = frozenset(
         "events",
         "opaque_handles",
         "paged_diffs",
+        "paged_discussions",
         "paged_logs",
         "plugins",
         REVIEW_CAPABILITY,
@@ -126,6 +143,7 @@ SUPPORTED_METHODS = (
     "diff.open",
     "diff.page",
     "discussions.list",
+    "discussions.page",
     "host.set_location",
     "jobs.list",
     "logs.open",
@@ -202,6 +220,27 @@ class _EventBuffer:
         self._condition = asyncio.Condition()
         self._sequence = 0
         self._closed = False
+        self._limits = DEFAULT_JSON_LIMITS
+
+    @property
+    def limits(self) -> JsonLimits:
+        return self._limits
+
+    async def set_limits(self, limits: JsonLimits) -> None:
+        """Apply the negotiated JSON budget to queued and future events.
+
+        A queued event that no longer fits the tighter budget is replaced by a
+        resync marker instead of reaching a client that would reject it.
+        """
+        async with self._condition:
+            self._limits = limits
+            for event in self._events:
+                try:
+                    encode_event(event.sequence, event.name, event.data, limits=limits)
+                except ProtocolError:
+                    self._replace_with_resync("event_too_large")
+                    self._condition.notify()
+                    return
 
     async def publish(
         self, name: str, data: object, *, replaceable_key: str | None = None
@@ -216,7 +255,9 @@ class _EventBuffer:
                             event.sequence, name, data, replaceable_key
                         )
                         try:
-                            encode_event(replacement.sequence, name, data)
+                            encode_event(
+                                replacement.sequence, name, data, limits=self._limits
+                            )
                         except ProtocolError:
                             self._replace_with_resync("event_too_large")
                         else:
@@ -226,7 +267,7 @@ class _EventBuffer:
             self._sequence += 1
             event = _QueuedEvent(self._sequence, name, data, replaceable_key)
             try:
-                encode_event(event.sequence, name, data)
+                encode_event(event.sequence, name, data, limits=self._limits)
             except ProtocolError:
                 self._replace_with_resync("event_too_large")
             else:
@@ -259,6 +300,24 @@ class _EventBuffer:
                 {"reason": reason},
                 "protocol.resync_required",
             )
+        )
+
+
+def _encode_event_or_resync(event: _QueuedEvent, limits: JsonLimits) -> bytes:
+    """Encode a queued event, or a resync marker in its place if it overflows.
+
+    The buffer already checks events when they are published, so this only
+    guards against a budget that changed afterwards; the client then refetches
+    instead of receiving a frame it would reject.
+    """
+    try:
+        return encode_event(event.sequence, event.name, event.data, limits=limits)
+    except ProtocolError:
+        return encode_event(
+            event.sequence,
+            "protocol.resync_required",
+            {"reason": "event_too_large"},
+            limits=limits,
         )
 
 
@@ -298,6 +357,7 @@ class DesktopSidecarServer:
             self._editor_exports or _UnavailableEditorExports()
         )
         self._handles = HandleRegistry()
+        self._review_cursors = _ReviewCursors()
         self._snapshots = SnapshotStore()
         self._assets = AssetCatalog()
         self._operations: dict[str, _Operation] = {}
@@ -308,6 +368,7 @@ class DesktopSidecarServer:
         self._event_task: asyncio.Task[None] | None = None
         self._service_event_task: asyncio.Task[None] | None = None
         self._handshaken = False
+        self._json_limits = DEFAULT_JSON_LIMITS
         self._stopping = False
         self._location: DesktopLocation | None = None
         self._install_read_operations()
@@ -398,6 +459,7 @@ class DesktopSidecarServer:
             "diff.open": self._diff_open,
             "diff.page": self._diff_page,
             "discussions.list": self._discussions_list,
+            "discussions.page": self._discussions_page,
             "host.set_location": self._set_location,
             "jobs.list": self._jobs_list,
             "logs.open": self._logs_open,
@@ -450,8 +512,12 @@ class DesktopSidecarServer:
             )
             return
         try:
-            requested = _parse_handshake(frame.params)
+            requested, client_limits = _parse_handshake(frame.params)
             await self._session.start()
+            recovery_warnings = tuple(
+                getattr(cast(object, self._session), "recovery_warnings", ())
+            )
+            _report_recovery_warnings(recovery_warnings)
             if self._plugin_registry is None:
                 config = cast(object, self._session.config)
                 plugin_config = getattr(config, "plugin_config", {})
@@ -460,6 +526,8 @@ class DesktopSidecarServer:
             await self._plugin_registry.start_all(self._facade_for_plugin)
             self._assets.stage_core(self._core_assets)
             self._assets.stage_plugins(self._plugin_registry)
+            self._json_limits = client_limits
+            await self._events.set_limits(client_limits)
             self._handshaken = True
             await self._write_result(
                 frame.request_id,
@@ -470,6 +538,7 @@ class DesktopSidecarServer:
                     "capabilities": sorted(SUPPORTED_CAPABILITIES),
                     "accepted_capabilities": sorted(requested),
                     "methods": [*sorted(self._operations), "shutdown"],
+                    "recovery_warnings": _recovery_notices(recovery_warnings),
                     "limits": {
                         "request_frame_bytes": MAX_REQUEST_FRAME_BYTES,
                         "response_frame_bytes": MAX_RESPONSE_FRAME_BYTES,
@@ -477,6 +546,8 @@ class DesktopSidecarServer:
                         "pending_requests": MAX_PENDING_REQUESTS,
                         "queued_events": MAX_QUEUED_EVENTS,
                         "asset_chunk_bytes": ASSET_CHUNK_BYTES,
+                        "json_values": self._json_limits.values,
+                        "json_depth": self._json_limits.depth,
                     },
                 },
             )
@@ -626,11 +697,77 @@ class DesktopSidecarServer:
     async def _reviews_list(
         self, params: JsonObject, _context: RequestContext
     ) -> object:
+        """List one page of reviews.
+
+        All Open reads one repository at a time, most recently updated first,
+        so a response holds at most ``per_page`` reviews. It returns
+        ``next_cursor`` when the forge has another page; passing it back as
+        ``cursor`` reads that page. An All Open read without a repository is
+        rejected: it could neither be paged nor stay inside the frame budget.
+        """
+        _require_params(
+            params,
+            allowed=frozenset({"scope", "repository", "state", "per_page", "cursor"}),
+            required=frozenset({"scope"}),
+        )
+        scope, state, repository, per_page = self._review_query_params(params)
+        if scope is ReviewScope.ALL_OPEN and repository is None:
+            raise ProtocolError(
+                ProtocolErrorCode.INVALID_PARAMS,
+                "An All Open review list needs a repository.",
+            )
+        repository_handle = (
+            cast(str, params["repository"]) if repository is not None else None
+        )
+        binding = (scope.value, state.value, per_page, repository_handle)
+        cursor = None
+        if params.get("cursor") is not None:
+            if repository is None or scope is not ReviewScope.ALL_OPEN:
+                raise ProtocolError(
+                    ProtocolErrorCode.INVALID_PARAMS,
+                    "The review list cursor is invalid.",
+                )
+            cursor = self._review_cursors.open(params["cursor"], binding)
+        page = await self._session.list_reviews(
+            ReviewQuery(
+                scope,
+                repository=repository,
+                state=state,
+                per_page=per_page,
+                paged=True,
+                cursor=cursor,
+            )
+        )
+        return {
+            "next_cursor": self._review_cursors.seal(page.next_cursor, binding)
+            if page.next_cursor is not None
+            else None,
+            **self._review_page_wire(page),
+        }
+
+    async def _reviews_all(
+        self, params: JsonObject, _context: RequestContext
+    ) -> object:
+        """Return every matching review at once, for in-process plugin reads.
+
+        A plugin read never crosses the frame budget itself, so it keeps the
+        whole-list shape plugins were written against: no cursor, and All Open
+        walks every forge page of each repository.
+        """
         _require_params(
             params,
             allowed=frozenset({"scope", "repository", "state", "per_page"}),
             required=frozenset({"scope"}),
         )
+        scope, state, repository, per_page = self._review_query_params(params)
+        page = await self._session.list_reviews(
+            ReviewQuery(scope, repository=repository, state=state, per_page=per_page)
+        )
+        return self._review_page_wire(page)
+
+    def _review_query_params(
+        self, params: JsonObject
+    ) -> tuple[ReviewScope, MRState, RepositoryRef | None, int]:
         try:
             scope = ReviewScope(_text(params, "scope", max_length=40))
             state = MRState(_optional_text(params, "state", "open", max_length=20))
@@ -645,9 +782,9 @@ class DesktopSidecarServer:
                 params["repository"], HandleKind.REPOSITORY, RepositoryRef
             )
         per_page = _optional_int(params, "per_page", 100, minimum=1, maximum=100)
-        page = await self._session.list_reviews(
-            ReviewQuery(scope, repository=repository, state=state, per_page=per_page)
-        )
+        return scope, state, repository, per_page
+
+    def _review_page_wire(self, page: ReviewPage) -> JsonObject:
         return {
             "items": [self._review_list_wire(item) for item in page.items],
             "failures": [
@@ -694,7 +831,11 @@ class DesktopSidecarServer:
         entries = flatten_diff(files, layout)
         revision = cast(JsonObject, to_json_value(raw.revision))
         snapshot_id = self._snapshots.create(
-            review_handle, revision, entries, projection=layout.value
+            review_handle,
+            revision,
+            entries,
+            projection=layout.value,
+            kind=_DIFF_SNAPSHOT,
         )
         return self._snapshot_page_wire(
             self._snapshots.page(
@@ -702,6 +843,7 @@ class DesktopSidecarServer:
                 review_handle,
                 0,
                 params.get("max_items", 400),
+                kind=_DIFF_SNAPSHOT,
             )
         )
 
@@ -717,20 +859,102 @@ class DesktopSidecarServer:
             params["resource"],
             params["cursor"],
             params.get("max_items", 400),
+            kind=_DIFF_SNAPSHOT,
         )
         return self._snapshot_page_wire(page)
 
     async def _discussions_list(
         self, params: JsonObject, _context: RequestContext
     ) -> object:
+        """Open a discussions snapshot and return its first page.
+
+        The threads of a large review exceed one frame's JSON value budget, so
+        they are retained like a diff and read page by page with
+        ``discussions.page``. Each page carries at most half the negotiated
+        value budget, which leaves ample room for the envelope; a single
+        thread larger than that fails only this request as too large. When
+        the first page already holds every thread, or fails, the snapshot is
+        released at once, so single-page reads never crowd the retention cap.
+        """
+        _require_params(
+            params,
+            allowed=frozenset({"review", "max_items"}),
+            required=frozenset({"review"}),
+        )
+        review_handle = _text(params, "review", max_length=100)
+        review = self._handles.resolve(review_handle, HandleKind.REVIEW, ReviewRef)
+        entries = await self._discussion_entries(review)
+        revision: JsonObject = {"discussion_count": len(entries)}
+        snapshot_id = self._snapshots.create(
+            review_handle, revision, entries, kind=_DISCUSSIONS_SNAPSHOT
+        )
+        try:
+            value = self._discussions_page_wire(
+                snapshot_id,
+                review_handle,
+                0,
+                params.get("max_items", _DISCUSSION_PAGE_ITEMS),
+            )
+        except BaseException:
+            self._snapshots.expire(snapshot_id)
+            raise
+        if value.get("next_cursor") is None:
+            self._snapshots.expire(snapshot_id)
+        return value
+
+    async def _discussions_page(
+        self, params: JsonObject, _context: RequestContext
+    ) -> object:
+        _require_params(
+            params,
+            allowed=frozenset({"snapshot", "resource", "cursor", "max_items"}),
+            required=frozenset({"snapshot", "resource", "cursor"}),
+        )
+        self._handles.resolve(params["resource"], HandleKind.REVIEW, ReviewRef)
+        value = self._discussions_page_wire(
+            params["snapshot"],
+            params["resource"],
+            params["cursor"],
+            params.get("max_items", _DISCUSSION_PAGE_ITEMS),
+        )
+        # The renderer never reads a finished snapshot again, so the last page
+        # releases it instead of letting it crowd diff and log snapshots.
+        if value.get("next_cursor") is None:
+            self._snapshots.expire(cast(str, value["snapshot_id"]))
+        return value
+
+    async def _discussions_all(
+        self, params: JsonObject, _context: RequestContext
+    ) -> object:
+        """Return every thread at once, for in-process plugin reads.
+
+        A plugin read never crosses the frame budget itself, so it keeps the
+        whole-list shape plugins were written against.
+        """
         review = self._review_param(params)
+        return {"discussions": list(await self._discussion_entries(review))}
+
+    async def _discussion_entries(self, review: ReviewRef) -> tuple[JsonObject, ...]:
         discussions = await self._session.get_discussions(review)
-        return {
-            "discussions": [
-                _discussion_wire(cast(JsonObject, to_json_value(discussion)))
-                for discussion in discussions
-            ]
-        }
+        return tuple(
+            _discussion_wire(cast(JsonObject, to_json_value(discussion)))
+            for discussion in discussions
+        )
+
+    def _discussions_page_wire(
+        self, snapshot_id: object, resource: object, cursor: object, max_items: object
+    ) -> JsonObject:
+        page = self._snapshots.page(
+            snapshot_id,
+            resource,
+            cursor,
+            max_items,
+            max_values=self._json_limits.values // 2,
+            kind=_DISCUSSIONS_SNAPSHOT,
+        )
+        value = self._snapshot_page_wire(page)
+        value["discussions"] = value.pop("entries")
+        return value
 
     async def _commits_list(
         self, params: JsonObject, _context: RequestContext
@@ -804,7 +1028,7 @@ class DesktopSidecarServer:
             "byte_count": len(encoded),
         }
         snapshot_id = self._snapshots.create(
-            job_handle, revision, _log_entries(encoded)
+            job_handle, revision, _log_entries(encoded), kind=_LOG_SNAPSHOT
         )
         return self._snapshot_page_wire(
             self._snapshots.page(
@@ -812,6 +1036,7 @@ class DesktopSidecarServer:
                 job_handle,
                 0,
                 params.get("max_items", 8),
+                kind=_LOG_SNAPSHOT,
             )
         )
 
@@ -828,6 +1053,7 @@ class DesktopSidecarServer:
                 params["resource"],
                 params["cursor"],
                 params.get("max_items", 8),
+                kind=_LOG_SNAPSHOT,
             )
         )
 
@@ -1016,7 +1242,11 @@ class DesktopSidecarServer:
             DesktopReadKind.JOBS: "jobs.list",
             DesktopReadKind.LOG: "logs.open",
         }[kind]
-        operation = self._operations[method]
+        whole_list_handlers = {
+            DesktopReadKind.REVIEWS: self._reviews_all,
+            DesktopReadKind.DISCUSSIONS: self._discussions_all,
+        }
+        handler = whole_list_handlers.get(kind, self._operations[method].handler)
         context = RequestContext(
             f"plugin-{id(cancellation):x}",
             cancellation,
@@ -1024,7 +1254,7 @@ class DesktopSidecarServer:
             dispatched=True,
         )
         task = asyncio.create_task(
-            operation.handler(cast(JsonObject, _thaw_json(params)), context)
+            handler(cast(JsonObject, _thaw_json(params)), context)
         )
         cancellation_task = asyncio.create_task(cancellation.wait())
         completed = False
@@ -1082,7 +1312,7 @@ class DesktopSidecarServer:
             if event is None:
                 return
             try:
-                frame = encode_event(event.sequence, event.name, event.data)
+                frame = _encode_event_or_resync(event, self._json_limits)
                 await self._write(frame)
             except (ProtocolError, BrokenPipeError, ConnectionError):
                 return
@@ -1116,10 +1346,14 @@ class DesktopSidecarServer:
         )
 
     async def _write_result(self, request_id: str, result: object) -> None:
-        await self._write(encode_response(request_id, result=result))
+        await self._write(
+            encode_response(request_id, result=result, limits=self._json_limits)
+        )
 
     async def _write_error(self, request_id: str | None, error: ProtocolError) -> None:
-        await self._write(encode_response(request_id, error=error))
+        await self._write(
+            encode_response(request_id, error=error, limits=self._json_limits)
+        )
 
     async def _write(self, frame: bytes) -> None:
         writer = self._writer
@@ -1278,10 +1512,12 @@ class _BoundPluginFacade:
         await self._server._publish_plugin_focus(self._plugin_id, target_id, frozen)
 
 
-def _parse_handshake(params: JsonObject) -> frozenset[str]:
+def _parse_handshake(params: JsonObject) -> tuple[frozenset[str], JsonLimits]:
     _require_params(
         params,
-        allowed=frozenset({"protocol_major", "core_version", "capabilities", "client"}),
+        allowed=frozenset(
+            {"protocol_major", "core_version", "capabilities", "client", "limits"}
+        ),
         required=frozenset({"protocol_major", "core_version", "capabilities"}),
     )
     major = params["protocol_major"]
@@ -1312,7 +1548,92 @@ def _parse_handshake(params: JsonObject) -> frozenset[str]:
         )
     if "client" in params:
         _text(params, "client", max_length=120)
-    return requested
+    return requested, _parse_handshake_limits(params.get("limits"))
+
+
+def _parse_handshake_limits(value: JsonValue | None) -> JsonLimits:
+    """Negotiate the JSON budget from the limits the client declares.
+
+    A client that declares no limits gets the sidecar defaults. Declared limits
+    below the protocol floor, or of the wrong shape, fail the handshake closed.
+    """
+    if value is None:
+        return DEFAULT_JSON_LIMITS
+    if not isinstance(value, dict) or set(value) != {"json_values", "json_depth"}:
+        raise ProtocolError(
+            ProtocolErrorCode.INVALID_PARAMS,
+            "Handshake limits must declare json_values and json_depth.",
+        )
+    values = value["json_values"]
+    depth = value["json_depth"]
+    if (
+        type(values) is not int
+        or type(depth) is not int
+        or values < MIN_JSON_ITEMS
+        or depth < MIN_JSON_DEPTH
+    ):
+        raise ProtocolError(
+            ProtocolErrorCode.UNSUPPORTED_PROTOCOL,
+            "The desktop client JSON limits are incompatible with this sidecar.",
+            details={
+                "min_json_values": MIN_JSON_ITEMS,
+                "min_json_depth": MIN_JSON_DEPTH,
+                "max_json_values": MAX_JSON_ITEMS,
+                "max_json_depth": MAX_JSON_DEPTH,
+            },
+        )
+    return DEFAULT_JSON_LIMITS.negotiate(values, depth)
+
+
+_REVIEW_CURSOR_PREFIX = "rc1"
+_REVIEW_CURSOR_MAX_LENGTH = 64
+
+
+class _ReviewCursors:
+    """Seal session review cursors so the renderer can only return real ones.
+
+    A cursor names the session's next page and carries a keyed digest over that
+    page and the query it belongs to (scope, state, page size and repository
+    handle). The key lives only in this server instance, so a cursor from a
+    different query, a previous service run or any hand-written value fails
+    validation instead of reaching the forge.
+    """
+
+    def __init__(self) -> None:
+        self._key = secrets.token_bytes(32)
+
+    def seal(self, cursor: str, binding: tuple[str, str, int, str | None]) -> str:
+        return f"{_REVIEW_CURSOR_PREFIX}.{cursor}.{self._digest(cursor, binding)}"
+
+    def open(self, value: object, binding: tuple[str, str, int, str | None]) -> str:
+        invalid = ProtocolError(
+            ProtocolErrorCode.INVALID_PARAMS,
+            "The review list cursor is invalid.",
+        )
+        if (
+            not isinstance(value, str)
+            or not 1 <= len(value) <= _REVIEW_CURSOR_MAX_LENGTH
+            or not value.isascii()
+        ):
+            raise invalid
+        parts = value.split(".")
+        if len(parts) != 3 or parts[0] != _REVIEW_CURSOR_PREFIX:
+            raise invalid
+        cursor, digest = parts[1], parts[2]
+        try:
+            review_cursor_page(cursor)
+        except ValueError:
+            raise invalid from None
+        if not hmac.compare_digest(digest, self._digest(cursor, binding)):
+            raise invalid
+        return cursor
+
+    def _digest(self, cursor: str, binding: tuple[str, str, int, str | None]) -> str:
+        scope, state, per_page, repository = binding
+        message = "\x1f".join(
+            ("reviews.list", scope, state, str(per_page), repository or "", cursor)
+        ).encode()
+        return hmac.new(self._key, message, hashlib.sha256).hexdigest()[:32]
 
 
 def _require_params(
@@ -1617,6 +1938,58 @@ def _consume_task(task: asyncio.Task[object]) -> None:
     if not task.cancelled():
         with suppress(BaseException):
             task.exception()
+
+
+#: Bounds of the handshake's ``recovery_warnings``, matched by the desktop shell.
+#: The text bound counts UTF-16 code units, as JavaScript's ``String.length``
+#: does, so both sides measure a notice the same way.
+MAX_RECOVERY_NOTICES = 20
+MAX_RECOVERY_NOTICE_CHARS = 1000
+
+
+def _recovery_notices(warnings: tuple[RecoveryWarning, ...]) -> list[JsonValue]:
+    """Describe startup recovery warnings for the desktop to show the user.
+
+    Each names the review to check on the forge. The list and each text are
+    bounded so a damaged store can never make the handshake too large.
+    """
+    notices: list[JsonValue] = []
+    for warning in warnings[:MAX_RECOVERY_NOTICES]:
+        notices.append(_truncate_utf16(warning.describe(), MAX_RECOVERY_NOTICE_CHARS))
+    return notices
+
+
+def _utf16_length(text: str) -> int:
+    """Return the length of ``text`` in UTF-16 code units, like JavaScript."""
+    return len(text) + sum(1 for char in text if ord(char) > 0xFFFF)
+
+
+def _truncate_utf16(text: str, limit: int) -> str:
+    """Cut ``text`` to at most ``limit`` UTF-16 code units, ending in an ellipsis.
+
+    The cut falls between code points, so it never splits a surrogate pair.
+    """
+    if _utf16_length(text) <= limit:
+        return text
+    budget = limit - 1
+    used = 0
+    end = 0
+    for char in text:
+        width = 2 if ord(char) > 0xFFFF else 1
+        if used + width > budget:
+            break
+        used += width
+        end += 1
+    return text[:end] + "…"
+
+
+def _report_recovery_warnings(warnings: tuple[RecoveryWarning, ...]) -> None:
+    """Write skipped submission attempts to the sidecar diagnostics stream."""
+    for warning in warnings:
+        print(
+            f"tongs desktop draft recovery warning: {warning.describe()}",
+            file=sys.stderr,
+        )
 
 
 def _core_version() -> str:

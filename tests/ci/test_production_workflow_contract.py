@@ -489,6 +489,44 @@ def test_every_download_is_keyed_on_its_owning_lane(ci: dict[str, Any]) -> None:
     assert seen == {check.check_id for check in REQUIRED_CHECKS}
 
 
+def test_job_results_are_judged_before_and_beside_any_downloaded_evidence(
+    ci: dict[str, Any],
+) -> None:
+    """An earlier attempt's evidence can never stand in for a failing lane.
+
+    Gate artifact names omit the attempt, so after a partial rerun the evidence
+    of a lane that uploaded and then failed may still be present.  The lane job
+    results, which are always the latest attempt's, are checked before any
+    download and again by the final verifier, and the final verifier bounds
+    every receipt's attempt by the aggregate's own.
+    """
+
+    steps = _gate_steps(ci)
+    job = ci["jobs"][GATE_JOB]
+    assert job["env"]["DESKTOP_GATE_RESULTS"] == "${{ toJSON(needs) }}"
+    assert "needs.desktop-production.outputs.job-results" in _flatten(
+        job["env"]["DESKTOP_PRODUCTION_RESULTS"]
+    )
+    aggregate = next(
+        index
+        for index, step in enumerate(steps)
+        if "verify_desktop_ci.py aggregate" in _flatten(step.get("run", ""))
+    )
+    downloads = [
+        index
+        for index, step in enumerate(steps)
+        if "download-artifact" in str(step.get("uses", ""))
+    ]
+    assert downloads and aggregate < min(downloads)
+    final = next(
+        _flatten(step["run"])
+        for step in steps
+        if "verify_desktop_production_gate.py" in str(step.get("run", ""))
+    )
+    assert '--attempt "$GITHUB_RUN_ATTEMPT"' in final
+    assert '--run-id "$GITHUB_RUN_ID"' in final
+
+
 def test_run_packaging_is_an_optional_boolean_defaulting_to_true(
     production: dict[str, Any],
 ) -> None:
@@ -623,7 +661,73 @@ def test_every_gate_artifact_is_uploaded_and_downloaded_under_one_name(
         )
         assert name in published, check.evidence_directory
         assert CHECKED_OUT_COMMIT in name, check.evidence_directory
-        assert "github.run_id" in name and "github.run_attempt" in name
+        # The name binds the run but not the attempt, so a partial rerun still
+        # finds the evidence of a lane that passed in an earlier attempt.
+        assert "github.run_id" in name, check.evidence_directory
+        assert "run_attempt" not in name, check.evidence_directory
+
+
+def _gate_uploads(workflow: dict[str, Any]) -> list[dict[str, Any]]:
+    uploads: list[dict[str, Any]] = []
+    for job in workflow["jobs"].values():
+        if not isinstance(job, dict):
+            continue
+        for step in job.get("steps") or []:
+            if "upload-artifact" not in str(step.get("uses", "")):
+                continue
+            if "/gate/" in _flatten(step["with"].get("path", "")):
+                uploads.append(step["with"])
+    return uploads
+
+
+def test_every_gate_upload_overwrites_the_evidence_of_an_earlier_attempt(
+    ci: dict[str, Any], production: dict[str, Any]
+) -> None:
+    """A rerun lane replaces its own evidence under the attempt-free name.
+
+    Without ``overwrite`` a lane that uploaded its evidence and then failed
+    could not upload again when it reran.
+    """
+
+    uploads = _gate_uploads(ci) + _gate_uploads(production)
+    directories = {
+        _flatten(upload["path"]).rsplit("/gate/", 1)[1] for upload in uploads
+    }
+    assert {"core-python-${{ matrix.python-version }}"} | {
+        check.evidence_directory
+        for check in REQUIRED_CHECKS
+        if not check.evidence_directory.startswith("core-python-")
+    } == directories
+    for upload in uploads:
+        assert upload.get("overwrite") is True, upload["name"]
+
+
+def test_transfer_consumers_bind_the_producer_attempt(
+    production: dict[str, Any],
+) -> None:
+    """A consumer rerun alone must expect the attempt that built the transfer.
+
+    The transfer artifact keeps the attempt in its name, and the archive job
+    publishes that attempt beside the name, so the archive lifecycle and SBOM
+    jobs never expect their own, later attempt from an earlier transfer.
+    """
+
+    archive = production["jobs"]["archive"]
+    assert archive["outputs"]["run-attempt"] == "${{ steps.names.outputs.run_attempt }}"
+    assert "GITHUB_RUN_ATTEMPT" in _step_output_source(
+        archive, "${{ steps.names.outputs.run_attempt }}"
+    )
+    for name in ("archive-evidence", "archive-sbom"):
+        runs = [
+            _flatten(step.get("run", ""))
+            for step in production["jobs"][name]["steps"]
+            if "desktop_production_expectations.py" in str(step.get("run", ""))
+        ]
+        assert len(runs) == 1, name
+        assert (
+            '--transfer-attempt "${{ needs.archive.outputs.run-attempt }}"' in runs[0]
+        ), name
+        assert '--attempt "$GITHUB_RUN_ATTEMPT"' in runs[0], name
 
 
 def test_the_archive_adapter_constants_anchor_the_gate_policy() -> None:
@@ -702,6 +806,14 @@ def test_every_action_in_every_workflow_is_sha_pinned() -> None:
 def test_every_new_upload_is_retry_safe_and_retained_for_fourteen_days(
     ci: dict[str, Any], production: dict[str, Any]
 ) -> None:
+    """Every upload binds the run and survives a rerun of its job.
+
+    Diagnostic and transfer artifacts carry the attempt in their names, so a
+    rerun uploads a new immutable artifact.  Gate evidence omits the attempt,
+    so the aggregate finds it in whichever attempt produced it, and overwrites
+    on a rerun instead.
+    """
+
     probe = _load(ROOT / ".github/workflows/desktop-podman-probe.yml")
     for workflow in (ci, production, probe):
         for job in workflow["jobs"].values():
@@ -713,9 +825,16 @@ def test_every_new_upload_is_retry_safe_and_retained_for_fourteen_days(
                 with_block = step["with"]
                 name = _step_output_source(job, _flatten(with_block["name"]))
                 assert "github.run_id" in name or "GITHUB_RUN_ID" in name, name
-                assert "github.run_attempt" in name or "GITHUB_RUN_ATTEMPT" in name, (
-                    name
+                per_attempt = (
+                    "github.run_attempt" in name or "GITHUB_RUN_ATTEMPT" in name
                 )
+                is_gate = "/gate/" in _flatten(with_block.get("path", ""))
+                if is_gate:
+                    assert not per_attempt, name
+                    assert with_block.get("overwrite") is True, name
+                else:
+                    assert per_attempt, name
+                    assert "overwrite" not in with_block, name
                 assert with_block["retention-days"] == 14, name
 
 

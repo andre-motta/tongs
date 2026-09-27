@@ -165,7 +165,20 @@ test("mounted app reconciles successful discovery without losing review work", a
   );
   assert.equal(title(), "Plugin dashboard");
   assert.ok(routeNotice() === null);
+
+  // The header follows the main-process service status, not only the probe.
+  await waitFor(() => assert.equal(serviceStatus(), "Local service connected"));
+  fixture.publishServiceStatus({ state: "stopped", revision: 1 });
+  await waitFor(() =>
+    assert.equal(serviceStatus(), "Local service not running"),
+  );
+  fixture.publishServiceStatus({ state: "connected", revision: 2 });
+  await waitFor(() => assert.equal(serviceStatus(), "Local service connected"));
 });
+
+function serviceStatus() {
+  return document.querySelector("#service-status")?.textContent ?? null;
+}
 
 function bridgeFixture() {
   let sequence = 0;
@@ -173,6 +186,7 @@ function bridgeFixture() {
   const discoveries = [[repositoryA(), repositoryB()]];
   const reviewReads = [];
   const writes = [];
+  const serviceListeners = new Set();
   const read = (value) => ({
     requestToken: `request-${++sequence}`,
     result:
@@ -191,7 +205,7 @@ function bridgeFixture() {
       });
     },
     getReview: () => read(reviewSnapshot()),
-    listDiscussions: () => read({ discussions: [] }),
+    listDiscussions: () => read(discussionsPage([])),
     getReviewMutationCapabilities: () =>
       read({ review: "review-a", capabilities: mutationCapabilities() }),
     getReviewActionCapabilities: () =>
@@ -232,9 +246,17 @@ function bridgeFixture() {
     setLocation: async () => ({ accepted: true }),
     cancelRead: async () => true,
     onEvent: () => () => {},
+    getServiceStatus: async () => ({ state: "connected", revision: 0 }),
+    onServiceStatus: (listener) => {
+      serviceListeners.add(listener);
+      return () => serviceListeners.delete(listener);
+    },
     openExternal: async () => true,
   };
-  return { bridge, discoveries, reviewReads, writes };
+  const publishServiceStatus = (status) => {
+    for (const listener of serviceListeners) listener(status);
+  };
+  return { bridge, discoveries, reviewReads, writes, publishServiceStatus };
 }
 
 function repositoryA(displayName = "Repo A") {
@@ -475,4 +497,9 @@ function routeNotice() {
   return [...document.querySelectorAll("main > .notice")].find((item) =>
     item.textContent.includes("selected repository"),
   ) ?? null;
+}
+
+/** A first discussions page that holds every thread, as the sidecar sends it. */
+function discussionsPage(discussions) {
+  return { discussions, revision: { discussion_count: discussions.length } };
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
@@ -138,12 +139,13 @@ class RepoListScreen(Screen):
         for repo in filtered:
             key = str(repo.path)
             self._repo_data[key] = repo
-            row = [
+            # Repository names and hosts are shown literally, never as markup.
+            row: list[str | Text] = [
                 forge_label(repo.forge_type),
-                repo.display_name,
+                Text(repo.display_name),
             ]
             if show_host:
-                row.append(repo.hostname or "")
+                row.append(Text(repo.hostname or ""))
             table.add_row(*row, key=key)
 
         filter_label = {
@@ -185,7 +187,7 @@ class RepoListScreen(Screen):
             try:
                 self.app.services.repository_ref(repo)
             except ServiceError as error:
-                self.notify(error.message, severity="warning")
+                self.notify(error.message, severity="warning", markup=False)
                 return
             from tongs.views.inbox import InboxScreen
 

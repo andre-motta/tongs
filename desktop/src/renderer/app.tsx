@@ -18,6 +18,11 @@ import {
   type InlineAnchorSelection,
 } from "./core/navigation.js";
 import { QueryCoordinator } from "./core/query.js";
+import {
+  ServiceNotices,
+  ServiceStatusLine,
+  ServiceStatusModel,
+} from "./core/service-status.js";
 import { createDiffFeature } from "./features/diff/index.js";
 import { createInboxFeature } from "./features/inbox/index.js";
 import {
@@ -46,6 +51,7 @@ const registry = new FeatureRegistry();
 const pluginsFeature = createPluginsFeature(bridge);
 const pluginLocations = new PluginLocationPublisher(bridge);
 const utilityController = new WorkspaceUtilityController();
+const serviceStatus = new ServiceStatusModel();
 registry.register(createInboxFeature());
 registry.register(createReviewOverviewFeature());
 registry.register(createCommitsFeature());
@@ -64,10 +70,6 @@ function App(): ReactNode {
   const [repositoryGeneration, setRepositoryGeneration] = useState(0);
   const [inlineAnchor, setInlineAnchor] =
     useState<InlineAnchorSelection | null>(null);
-  const [serviceStatus, setServiceStatus] = useState(
-    "Connecting to the local service…",
-  );
-  const [serviceClass, setServiceClass] = useState("service-status");
   const [routeNotice, setRouteNotice] = useState<string | null>(null);
   const plugins = usePluginSnapshot(pluginsFeature.runtime);
   useEffect(() => navigator.subscribe(setRoute), []);
@@ -80,8 +82,7 @@ function App(): ReactNode {
           event.name === "protocol.resync_required" ||
           event.name === "service.changed"
         ) {
-          setServiceStatus("Updates are available. Refresh the current view.");
-          setServiceClass("service-status service-status-warning");
+          serviceStatus.updatesAvailable();
         }
       }),
     [],
@@ -104,7 +105,7 @@ function App(): ReactNode {
     [],
   );
   useEffect(() => {
-    void publishNativeProbe(setServiceStatus, setServiceClass);
+    void publishNativeProbe(serviceStatus);
   }, []);
   const navigation = useCallback((next: AppRoute) => {
     setRouteNotice(null);
@@ -176,11 +177,10 @@ function App(): ReactNode {
               </button>
             );
           })}
-          <p id="service-status" className={serviceClass}>
-            {serviceStatus}
-          </p>
+          <ServiceStatusLine model={serviceStatus} bridge={bridge} />
         </div>
       </header>
+      <ServiceNotices model={serviceStatus} />
       <div className="app-layout">
         <RepositoryNavigation
           bridge={bridge}
@@ -254,10 +254,7 @@ class ErrorBoundary extends Component<
   }
 }
 
-async function publishNativeProbe(
-  setStatus: (value: string) => void,
-  setClass: (value: string) => void,
-): Promise<void> {
+async function publishNativeProbe(status: ServiceStatusModel): Promise<void> {
   try {
     const assets = await bridge.listAssets().result;
     const canvas = document.createElement("canvas");
@@ -272,15 +269,13 @@ async function publishNativeProbe(
       webglRenderer:
         gl && debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null,
     };
-    setStatus("Local service connected");
-    setClass("service-status service-status-ready");
+    status.probeSucceeded();
     await new Promise((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(resolve)),
     );
     document.documentElement.dataset.tongsProbe = JSON.stringify(probe);
   } catch {
-    setStatus("Local service unavailable");
-    setClass("service-status service-status-error");
+    status.probeFailed();
   }
 }
 

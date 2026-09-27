@@ -85,6 +85,7 @@ def _namespace(transfer_root: Path, tmp_path: Path, **overrides: object):
         "repository": "andre-motta/tongs",
         "run_id": "34274245440",
         "attempt": 1,
+        "transfer_attempt": None,
         "environment": "github-hosted-ubuntu-24.04",
         "provenance": "hosted",
         "check_id": "desktop-archive-lifecycle",
@@ -173,6 +174,55 @@ def test_archive_arguments_build_a_valid_expectation_object(
         transfer_run_attempt=parsed.expected_transfer_run_attempt,
     )
     expectations.validate()
+
+
+def test_the_transfer_attempt_defaults_to_the_consumer_attempt(
+    transfer_root: Path, tmp_path: Path
+) -> None:
+    argv = archive_evidence_argv(_namespace(transfer_root, tmp_path, attempt=2))
+    parsed = _parsed(archive_adapter(), argv)
+    assert parsed.attempt == 2
+    assert parsed.expected_transfer_run_attempt == 2
+
+
+@pytest.mark.parametrize("command", ["archive-evidence", "archive-sbom"])
+def test_a_consumer_rerun_alone_binds_the_producer_attempt(
+    transfer_root: Path, tmp_path: Path, command: str
+) -> None:
+    """After "Re-run failed jobs" only the consumer runs in attempt 2.
+
+    Its own receipt records attempt 2 while the transfer it downloaded was
+    produced, and records, attempt 1.
+    """
+
+    if command == "archive-evidence":
+        namespace = _namespace(transfer_root, tmp_path, attempt=2, transfer_attempt=1)
+        parsed = _parsed(archive_adapter(), archive_evidence_argv(namespace))
+    else:
+        receipt = tmp_path / "archive-receipt.json"
+        receipt.write_bytes(b'{"schema_version": 1}\n')
+        namespace = _namespace(
+            transfer_root,
+            tmp_path,
+            attempt=2,
+            transfer_attempt=1,
+            check_id="desktop-archive-sbom",
+            archive_receipt=receipt,
+        )
+        parsed = _parsed(sbom_adapter(), sbom_evidence_argv(namespace))
+    assert parsed.attempt == 2
+    assert parsed.expected_transfer_run_attempt == 1
+
+
+@pytest.mark.parametrize("transfer_attempt", [0, 3])
+def test_rejects_a_transfer_attempt_outside_this_run(
+    transfer_root: Path, tmp_path: Path, transfer_attempt: int
+) -> None:
+    namespace = _namespace(
+        transfer_root, tmp_path, attempt=2, transfer_attempt=transfer_attempt
+    )
+    with pytest.raises(ExpectationError, match="outside this run's attempts"):
+        archive_evidence_argv(namespace)
 
 
 def test_sbom_arguments_parse_with_the_adapter_parser(

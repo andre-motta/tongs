@@ -37,12 +37,13 @@ export function assertParams(method: string, value: unknown): asserts value is J
   const specs: Record<string, { required: readonly string[]; optional?: readonly string[] }> = {
     "repositories.discover": { required: [] },
     "repositories.open": { required: ["hostname", "project_path"] },
-    "reviews.list": { required: ["scope"], optional: ["repository", "state", "per_page"] },
+    "reviews.list": { required: ["scope"], optional: ["repository", "state", "per_page", "cursor"] },
     "reviews.get": { required: ["review"] }, "discussions.list": { required: ["review"] },
     "commits.list": { required: ["review"] }, "jobs.list": { required: ["pipeline"] },
     "diff.open": { required: ["review"], optional: ["layout", "max_items"] },
     "logs.open": { required: ["job"], optional: ["max_items"] },
     "diff.page": { required: ["snapshot", "resource", "cursor"], optional: ["max_items"] },
+    "discussions.page": { required: ["snapshot", "resource", "cursor"], optional: ["max_items"] },
     "logs.page": { required: ["snapshot", "resource", "cursor"], optional: ["max_items"] },
     "pipelines.list": { required: ["repository"], optional: ["per_page"] },
     "review_pipelines.list": { required: ["review"], optional: ["per_page"] },
@@ -55,7 +56,10 @@ export function assertParams(method: string, value: unknown): asserts value is J
   const allowed = new Set([...spec.required, ...(spec.optional ?? [])]);
   if (Object.keys(value).some((key) => !allowed.has(key)) || spec.required.some((key) => !Object.hasOwn(value, key))) throw new Error("Invalid desktop parameter fields");
   for (const [key, item] of Object.entries(value)) {
-    if (["per_page", "max_items", "cursor"].includes(key)) {
+    if (method === "reviews.list" && key === "cursor") {
+      // An opaque cursor the service sealed; the service rejects forged ones.
+      if (item !== null && (typeof item !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(item))) throw new Error("Invalid desktop cursor parameter");
+    } else if (["per_page", "max_items", "cursor"].includes(key)) {
       const maximum = key === "cursor" ? Number.MAX_SAFE_INTEGER : key === "per_page" ? 100 : 1000;
       if (!Number.isSafeInteger(item) || Number(item) < (key === "cursor" ? 0 : 1) || Number(item) > maximum) throw new Error("Invalid desktop numeric parameter");
     } else if (key === "params" || key === "location") {
@@ -93,7 +97,8 @@ function assertResultValue(method: string, value: unknown): asserts value is Jso
   if (method === "repositories.discover") return assertArrayField(value, "repositories", assertRepository);
   if (method === "repositories.open") return assertRepository(value);
   if (method === "reviews.list") {
-    assertKeys(value, ["items", "failures"]);
+    assertKeys(value, ["next_cursor", "items", "failures"]);
+    if (value.next_cursor !== null && (typeof value.next_cursor !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(value.next_cursor))) fail("next_cursor", "must be null or an opaque cursor of at most 64 characters");
     assertArray(value.items, (item) => { assertKeys(item, ["handle", "repository", "summary"]); text(item.handle); text(item.repository); assertReviewSummary(item.summary); });
     return assertArray(value.failures, (failure) => { assertKeys(failure, ["code", "message", "retryable", "repository"]); text(failure.code); text(failure.message); bool(failure.retryable); nullableText(failure.repository); });
   }
@@ -107,7 +112,7 @@ function assertResultValue(method: string, value: unknown): asserts value is Jso
   }
   if (method === "diff.open" || method === "diff.page") return assertSnapshot(value, assertDiffRow, assertRevision);
   if (method === "logs.open" || method === "logs.page") return assertSnapshot(value, (row) => { assertKeys(row, ["text"]); boundedText(row.text, 512 * 1024, "text"); }, (revision) => { assertKeys(revision, ["sha256", "byte_count"]); digest(revision.sha256, "sha256"); integer(revision.byte_count, 0, "byte_count"); });
-  if (method === "discussions.list") return assertArrayField(value, "discussions", assertDiscussion);
+  if (method === "discussions.list" || method === "discussions.page") return assertDiscussionsPage(value);
   if (method === "commits.list") return assertArrayField(value, "commits", assertCommit);
   if (method === "pipelines.list" || method === "review_pipelines.list") return assertArrayField(value, "pipelines", (item) => { assertKeys(item, ["handle", "value"]); text(item.handle); assertPipeline(item.value); });
   if (method === "jobs.list") return assertArrayField(value, "jobs", (item) => { assertKeys(item, ["handle", "value"]); text(item.handle); assertJob(item.value); });
@@ -195,6 +200,12 @@ function assertReviewDetail(value: unknown): void {
 }
 function assertSnapshot(value: unknown, entry: (item: unknown) => void, revision: (item: unknown) => void): void {
   assertKeys(value, ["snapshot_id", "resource", "revision", "cursor", "next_cursor", "entries"]); text(value.snapshot_id, MAX_TEXT, "snapshot_id"); text(value.resource, MAX_TEXT, "resource"); revision(value.revision); integer(value.cursor, 0, "cursor"); if (value.next_cursor !== null) integer(value.next_cursor, 0, "next_cursor"); assertArray(value.entries, entry);
+}
+function assertDiscussionsPage(value: unknown): void {
+  assertKeys(value, ["snapshot_id", "resource", "revision", "cursor", "next_cursor", "discussions"]); text(value.snapshot_id, MAX_TEXT, "snapshot_id"); text(value.resource, MAX_TEXT, "resource");
+  assertKeys(value.revision, ["discussion_count"]); integer(value.revision.discussion_count, 0, "discussion_count");
+  integer(value.cursor, 0, "cursor"); if (value.next_cursor !== null) { integer(value.next_cursor, 0, "next_cursor"); if (value.next_cursor <= value.cursor) fail("next_cursor", "must advance past the cursor"); }
+  assertArray(value.discussions, assertDiscussion);
 }
 function assertDiffRow(value: unknown): void {
   if (!isRecord(value) || typeof value.kind !== "string") throw new Error("Invalid diff row");

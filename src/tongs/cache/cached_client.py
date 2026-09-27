@@ -8,14 +8,16 @@ from datetime import datetime
 from typing import Any
 
 from tongs.cache.store import CacheStore
-from tongs.forges.base import ForgeClient
+from tongs.forges.base import ForgeClient, read_mr_page
 from tongs.forges.models import (
     CIStatus,
     ForgeMergeResult,
     ForgeMutationResult,
     MRDetail,
+    MRPage,
     MRState,
     MRSummary,
+    ReviewDecision,
     User,
 )
 
@@ -58,6 +60,10 @@ def _mr_summary_to_dict(mr: MRSummary) -> dict:
         "api_base": mr.forge_host.api_base,
     }
     d["author"] = asdict(mr.author)
+    d["labels"] = list(mr.labels)
+    d["review_decision"] = (
+        mr.review_decision.value if mr.review_decision is not None else None
+    )
     return d
 
 
@@ -84,6 +90,14 @@ def _dict_to_mr_summary(d: dict) -> MRSummary:
         ),
         created_at=_parse_datetime(d.get("created_at")),
         updated_at=_parse_datetime(d.get("updated_at")),
+        comment_count=d.get("comment_count", 0),
+        has_conflicts=d.get("has_conflicts", False),
+        labels=tuple(d.get("labels", ())),
+        review_decision=(
+            ReviewDecision(d["review_decision"]) if d.get("review_decision") else None
+        ),
+        additions=d.get("additions"),
+        deletions=d.get("deletions"),
     )
 
 
@@ -132,6 +146,44 @@ class CachedForgeClient:
         result = await self._inner.list_mrs(repo_path, state, per_page)
         await self._cache.put_json(
             key, [_mr_summary_to_dict(mr) for mr in result], self._mr_list_ttl
+        )
+        return result
+
+    async def list_mrs_page(
+        self,
+        repo_path: str,
+        state: str = "open",
+        page: int = 1,
+        per_page: int = 100,
+    ) -> MRPage:
+        """Cache the first page only, below the repository list prefix.
+
+        Offset pages are not stable over time: a review updated between two
+        reads moves up a page. A later page is therefore always read from the
+        forge, and reading one drops the cached first page, so the next read
+        of this repository never starts from a first page older than the
+        later pages already shown.
+        """
+        key = self._key(repo_path, "mrs", state, "page", per_page, 1)
+        if page != 1:
+            await self._cache.invalidate(key)
+            return await read_mr_page(self._inner, repo_path, state, page, per_page)
+        if any(key.startswith(prefix) for prefix in self._dirty_review_prefixes):
+            return await read_mr_page(self._inner, repo_path, state, page, per_page)
+        cached = await self._cache.get_json(key)
+        if isinstance(cached, dict) and isinstance(cached.get("items"), list):
+            return MRPage(
+                tuple(_dict_to_mr_summary(d) for d in cached["items"]),
+                has_next=bool(cached.get("has_next")),
+            )
+        result = await read_mr_page(self._inner, repo_path, state, page, per_page)
+        await self._cache.put_json(
+            key,
+            {
+                "items": [_mr_summary_to_dict(mr) for mr in result.items],
+                "has_next": result.has_next,
+            },
+            self._mr_list_ttl,
         )
         return result
 

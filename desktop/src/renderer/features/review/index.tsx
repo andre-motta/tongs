@@ -27,6 +27,7 @@ import {
   cachedWorkflow,
   subscribeWorkflow,
 } from "./composer.js";
+import { readAllDiscussions } from "./discussions.js";
 import { ReviewHeaderControls } from "./header.js";
 import {
   createReviewWorkflowState,
@@ -120,11 +121,9 @@ function ReviewWorkflow({
   );
   useEffect(() => {
     let current = true;
-    const reads = [
-      bridge.getReview(review),
-      bridge.listDiscussions(review),
-    ] as const;
-    void Promise.all([reads[0].result, reads[1].result] as const)
+    const detailRead = bridge.getReview(review);
+    const discussionsRead = readAllDiscussions(bridge, review);
+    void Promise.all([detailRead.result, discussionsRead.result] as const)
       .then(([detail, discussionResult]) => {
         if (!current) return;
         if (!detail.revision)
@@ -142,7 +141,8 @@ function ReviewWorkflow({
       .catch((reason: unknown) => current && setError(safeError(reason)));
     return () => {
       current = false;
-      for (const item of reads) void bridge.cancelRead(item.requestToken);
+      void bridge.cancelRead(detailRead.requestToken);
+      discussionsRead.cancel();
     };
   }, [bridge, review]);
 

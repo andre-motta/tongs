@@ -137,6 +137,8 @@ class _FixtureClient:
 
 
 class _FixtureSession:
+    recovery_warnings: tuple[object, ...] = ()
+
     def __init__(self, action_log: Path) -> None:
         self.config = Config(editor_command=os.environ.get("TONGS_EDITOR_COMMAND", ""))
         self._events: asyncio.Queue[ServiceEvent | None] = asyncio.Queue()

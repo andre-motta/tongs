@@ -8,6 +8,12 @@ deselected lane that still ran proves the wiring drifted and fails.  ``changes``
 must succeed unless the effective plan is the full graph and every lane
 succeeded, in which case the aggregate records that it fell back to the full
 graph.
+
+A partial rerun ("Re-run failed jobs") is judged the same way: each entry of
+``needs`` is that job's latest attempt, so a lane that passed in an earlier
+attempt reports ``success`` and a lane still failing reports ``failure``.  The
+aggregate runs this check before it downloads any evidence, so a lane's
+evidence left over from an earlier attempt never stands in for its result.
 """
 
 from __future__ import annotations

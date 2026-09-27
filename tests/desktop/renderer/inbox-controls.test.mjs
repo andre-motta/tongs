@@ -16,6 +16,7 @@ import { ReviewHeader } from "../../../desktop/dist/src/renderer/features/review
 import {
   filterAndSortRepositories,
   RepositoryNavigation,
+  repositoryMeta,
 } from "../../../desktop/dist/src/renderer/features/repositories/index.js";
 
 const desktopRequire = createRequire(
@@ -264,6 +265,44 @@ test("repository controls search display names and sort legacy hosts last", () =
       (item) => item.handle,
     ),
     ["gitlab", "github", "legacy"],
+  );
+});
+
+test("repository sidebar names each forge and keeps hosts as configured", async () => {
+  const bridge = baseBridge({
+    discoverRepositories: () =>
+      read({
+        repositories: [
+          repository("hub", "Hub", "github", "github.com"),
+          repository("lab", "Lab", "gitlab", "gitlab.com"),
+          repository("own", "Own", "gitlab", "GitLab.Example.com"),
+          repository("bare", "Bare", "github"),
+        ],
+      }),
+  });
+  const view = render(
+    React.createElement(RepositoryNavigation, {
+      bridge,
+      queries: new QueryCoordinator(bridge),
+      selected: null,
+      navigate: () => {},
+      onDiscovery: () => {},
+    }),
+  );
+  await view.findByText("Own");
+  const meta = (name) =>
+    view.getByText(name).closest("button").getAttribute("data-repository-meta");
+  assert.equal(meta("Hub"), "GitHub · github.com");
+  assert.equal(meta("Lab"), "GitLab · gitlab.com");
+  assert.equal(meta("Own"), "GitLab · GitLab.Example.com");
+  assert.equal(meta("Bare"), "GitHub");
+  assert.equal(
+    view.getByText("Hub").closest("button").getAttribute("title"),
+    "Hub · GitHub · github.com",
+  );
+  assert.equal(
+    repositoryMeta({ forge_type: "gitlab", hostname: "gitlab.example.com" }),
+    "GitLab · gitlab.example.com",
   );
 });
 

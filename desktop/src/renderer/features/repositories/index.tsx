@@ -23,6 +23,19 @@ interface Props {
   readonly pluginNavigation?: ReactNode;
 }
 
+const FORGE_NAMES: Readonly<Record<RepositoryDto["forge_type"], string>> = {
+  github: "GitHub",
+  gitlab: "GitLab",
+};
+
+/** Forge and host under a repository name, with hosts shown as configured. */
+export function repositoryMeta(
+  repository: Pick<RepositoryDto, "forge_type" | "hostname">,
+): string {
+  const forge = FORGE_NAMES[repository.forge_type];
+  return repository.hostname ? `${forge} · ${repository.hostname}` : forge;
+}
+
 export function RepositoryNavigation({
   bridge,
   queries,
@@ -155,9 +168,9 @@ export function RepositoryNavigation({
             className={`nav-item repository-choice ${selected?.handle === repository.handle ? "nav-item-active" : ""}`}
             data-forge={repository.forge_type}
             data-hostname={repository.hostname}
-            data-repository-meta={`${repository.forge_type}${repository.hostname ? ` · ${repository.hostname}` : ""}`}
+            data-repository-meta={repositoryMeta(repository)}
             aria-label={repository.display_name}
-            title={`${repository.display_name} · ${repository.forge_type}${repository.hostname ? ` · ${repository.hostname}` : ""}`}
+            title={`${repository.display_name} · ${repositoryMeta(repository)}`}
             onClick={() => navigate({ kind: "inbox", repository })}
           >
             <span>{repository.display_name}</span>

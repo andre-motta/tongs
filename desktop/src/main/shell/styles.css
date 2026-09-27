@@ -312,7 +312,6 @@ button {
   content: attr(data-repository-meta);
   color: var(--muted);
   font-size: 10px;
-  text-transform: capitalize;
 }
 .nav-item,
 .file-item {

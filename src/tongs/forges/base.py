@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 from tongs.forges.models import (
     Commit,
@@ -50,7 +51,7 @@ class ForgeClient(ABC):
         if page < 1 or per_page < 1:
             raise ValueError("page and per_page must be positive")
         everything = await self.list_mrs(repo_path, state=state, per_page=per_page)
-        ordered = sorted(everything, key=lambda item: item.updated_at, reverse=True)
+        ordered = sorted(everything, key=_newest_first_key, reverse=True)
         start = (page - 1) * per_page
         return MRPage(
             tuple(ordered[start : start + per_page]),
@@ -240,6 +241,18 @@ class ForgeClient(ABC):
     async def close(self) -> None:
         """Close the underlying HTTP client."""
         ...
+
+
+def _newest_first_key(item: MRSummary) -> tuple[bool, datetime]:
+    """Sort key for newest first that puts items without a time last.
+
+    A third-party client may leave ``updated_at`` unset; such items keep their
+    list order after every dated one instead of failing the whole page.
+    """
+    updated = getattr(item, "updated_at", None)
+    if isinstance(updated, datetime):
+        return True, updated
+    return False, datetime.min.replace(tzinfo=UTC)
 
 
 async def read_mr_page(

@@ -1646,17 +1646,23 @@ function SubmissionProgress({
             </Notice>
           )}
           <div className="review-workflow-row">
-            {progress.unknown_step_ids.length > 0 && (
+            {(progress.unknown_step_ids.length > 0 ||
+              progress.completed_step_ids.length > 0) && (
               <button
                 className="button"
                 disabled={pending}
-                onClick={() =>
+                onClick={() => {
+                  if (progress.unknown_step_ids.length === 0) {
+                    reconcile("retry_remaining");
+                    return;
+                  }
                   confirmation === "reconcile:retry_remaining"
                     ? reconcile("retry_remaining")
-                    : setConfirmation("reconcile:retry_remaining")
-                }
+                    : setConfirmation("reconcile:retry_remaining");
+                }}
               >
-                {confirmation === "reconcile:retry_remaining"
+                {progress.unknown_step_ids.length > 0 &&
+                confirmation === "reconcile:retry_remaining"
                   ? "Confirm possible repeat of remaining writes"
                   : "Retry only remaining steps"}
               </button>

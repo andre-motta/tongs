@@ -350,6 +350,37 @@ test("a zero-step interrupted attempt only offers returning to editing", async (
   assert.equal(view.queryByRole("button", { name: "Mark submitted" }), null);
 });
 
+test("a partial interrupted attempt can retry remaining steps without repeat warning", async () => {
+  const review = "review-drawer-partial-zero-unknown";
+  const attempt = {
+    ...submission(review, "unknown", 3),
+    completed_step_ids: ["verdict"],
+    unknown_step_ids: [],
+  };
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({ cursor: 0, next_cursor: null, drafts: [draft(review, 3, content())] }),
+      listReviewSubmissions: () =>
+        read({ cursor: 0, next_cursor: null, attempts: [attempt] }),
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
+  fireEvent.click(
+    await view.findByRole("button", {
+      name: "Recover unknown attempt with 1 confirmed step(s)",
+    }),
+  );
+
+  await view.findByText(/interrupted after 1 confirmed step/);
+  assert.ok(view.getByRole("button", { name: "Retry only remaining steps" }));
+  assert.ok(view.getByRole("button", { name: "Return draft to editing" }));
+  assert.equal(view.queryByText(/repeat an unconfirmed remote write/), null);
+  assert.equal(view.queryByRole("button", { name: "Mark submitted" }), null);
+});
+
+
 test("a durable attempt is recovered inside the drawer without replaying start", async () => {
   const review = "review-drawer-recovery";
   let starts = 0;

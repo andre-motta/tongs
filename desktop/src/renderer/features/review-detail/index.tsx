@@ -37,6 +37,7 @@ import {
   settleQuickIntent,
 } from "../review/state.js";
 import { ReviewHeaderControls, reportsQuick } from "../review/header.js";
+import { readAllDiscussions } from "../review/discussions.js";
 import type { SuggestionForge } from "../review/suggestion.js";
 import {
   DiscussionMarkdownBody,
@@ -144,7 +145,7 @@ function ReviewOverview({
   // review-level notes on this tab, so the read belongs on this tab, and it
   // is one read per visit here and one per visit there.
   const beginDiscussions = useCallback(
-    () => bridge.listDiscussions(review),
+    () => readAllDiscussions(bridge, review),
     [bridge, review],
   );
   const notes = useRetainedRead(

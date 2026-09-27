@@ -6,7 +6,10 @@ import {
   decodeReadFailure,
   encodeReadFailure,
 } from "../../../desktop/dist/src/shared/bridge.js";
-import { assertResult } from "../../../desktop/dist/src/main/security.js";
+import {
+  assertParams,
+  assertResult,
+} from "../../../desktop/dist/src/main/security.js";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -32,6 +35,11 @@ function comment(overrides) {
 
 function discussions(root) {
   return {
+    snapshot_id: "discussions-snapshot",
+    resource: "review-handle",
+    revision: { discussion_count: 1 },
+    cursor: 0,
+    next_cursor: null,
     discussions: [
       {
         id: "53f505e47aca",
@@ -92,6 +100,36 @@ test("a review-level note reads with no inline position", () => {
       assert.match(error.message, /"file_path" must be null or non-empty text/);
       return true;
     },
+  );
+});
+
+test("a discussions page carries its snapshot cursor across the read boundary", () => {
+  const page = { ...discussions({}), revision: { discussion_count: 1200 } };
+  assertResult("discussions.list", { ...page, next_cursor: 400 });
+  assertResult("discussions.page", { ...page, cursor: 800, next_cursor: null });
+  assertParams("discussions.page", {
+    snapshot: "discussions-snapshot",
+    resource: "review-handle",
+    cursor: 400,
+  });
+
+  // The unpaged 1.0.2 shape no longer passes: every answer is a page.
+  assert.throws(() =>
+    assertResult("discussions.list", { discussions: page.discussions }),
+  );
+  assert.throws(
+    () => assertResult("discussions.page", { ...page, cursor: 400, next_cursor: 400 }),
+    (error) => {
+      assert.match(error.message, /Invalid discussions\.page result/);
+      assert.match(error.message, /"next_cursor" must advance past the cursor/);
+      return true;
+    },
+  );
+  assert.throws(() =>
+    assertResult("discussions.page", { ...page, revision: { discussion_count: -1 } }),
+  );
+  assert.throws(() =>
+    assertParams("discussions.page", { snapshot: "s", resource: "r" }),
   );
 });
 

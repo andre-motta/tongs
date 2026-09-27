@@ -109,6 +109,11 @@ from tongs.services import (
     ServiceEvent,
 )
 
+_DIFF_SNAPSHOT = "diff"
+_DISCUSSIONS_SNAPSHOT = "discussions"
+_LOG_SNAPSHOT = "log"
+_DISCUSSION_PAGE_ITEMS = 400
+
 SUPPORTED_CAPABILITIES = frozenset(
     {
         "assets",
@@ -117,6 +122,7 @@ SUPPORTED_CAPABILITIES = frozenset(
         "events",
         "opaque_handles",
         "paged_diffs",
+        "paged_discussions",
         "paged_logs",
         "plugins",
         REVIEW_CAPABILITY,
@@ -132,6 +138,7 @@ SUPPORTED_METHODS = (
     "diff.open",
     "diff.page",
     "discussions.list",
+    "discussions.page",
     "host.set_location",
     "jobs.list",
     "logs.open",
@@ -405,6 +412,7 @@ class DesktopSidecarServer:
             "diff.open": self._diff_open,
             "diff.page": self._diff_page,
             "discussions.list": self._discussions_list,
+            "discussions.page": self._discussions_page,
             "host.set_location": self._set_location,
             "jobs.list": self._jobs_list,
             "logs.open": self._logs_open,
@@ -704,7 +712,11 @@ class DesktopSidecarServer:
         entries = flatten_diff(files, layout)
         revision = cast(JsonObject, to_json_value(raw.revision))
         snapshot_id = self._snapshots.create(
-            review_handle, revision, entries, projection=layout.value
+            review_handle,
+            revision,
+            entries,
+            projection=layout.value,
+            kind=_DIFF_SNAPSHOT,
         )
         return self._snapshot_page_wire(
             self._snapshots.page(
@@ -712,6 +724,7 @@ class DesktopSidecarServer:
                 review_handle,
                 0,
                 params.get("max_items", 400),
+                kind=_DIFF_SNAPSHOT,
             )
         )
 
@@ -727,20 +740,88 @@ class DesktopSidecarServer:
             params["resource"],
             params["cursor"],
             params.get("max_items", 400),
+            kind=_DIFF_SNAPSHOT,
         )
         return self._snapshot_page_wire(page)
 
     async def _discussions_list(
         self, params: JsonObject, _context: RequestContext
     ) -> object:
+        """Open a discussions snapshot and return its first page.
+
+        The threads of a large review exceed one frame's JSON value budget, so
+        they are retained like a diff and read page by page with
+        ``discussions.page``. Each page carries at most half the negotiated
+        value budget, which leaves ample room for the envelope; a single
+        thread larger than that fails only this request as too large.
+        """
+        _require_params(
+            params,
+            allowed=frozenset({"review", "max_items"}),
+            required=frozenset({"review"}),
+        )
+        review_handle = _text(params, "review", max_length=100)
+        review = self._handles.resolve(review_handle, HandleKind.REVIEW, ReviewRef)
+        entries = await self._discussion_entries(review)
+        revision: JsonObject = {"discussion_count": len(entries)}
+        snapshot_id = self._snapshots.create(
+            review_handle, revision, entries, kind=_DISCUSSIONS_SNAPSHOT
+        )
+        return self._discussions_page_wire(
+            snapshot_id,
+            review_handle,
+            0,
+            params.get("max_items", _DISCUSSION_PAGE_ITEMS),
+        )
+
+    async def _discussions_page(
+        self, params: JsonObject, _context: RequestContext
+    ) -> object:
+        _require_params(
+            params,
+            allowed=frozenset({"snapshot", "resource", "cursor", "max_items"}),
+            required=frozenset({"snapshot", "resource", "cursor"}),
+        )
+        self._handles.resolve(params["resource"], HandleKind.REVIEW, ReviewRef)
+        return self._discussions_page_wire(
+            params["snapshot"],
+            params["resource"],
+            params["cursor"],
+            params.get("max_items", _DISCUSSION_PAGE_ITEMS),
+        )
+
+    async def _discussions_all(
+        self, params: JsonObject, _context: RequestContext
+    ) -> object:
+        """Return every thread at once, for in-process plugin reads.
+
+        A plugin read never crosses the frame budget itself, so it keeps the
+        whole-list shape plugins were written against.
+        """
         review = self._review_param(params)
+        return {"discussions": list(await self._discussion_entries(review))}
+
+    async def _discussion_entries(self, review: ReviewRef) -> tuple[JsonObject, ...]:
         discussions = await self._session.get_discussions(review)
-        return {
-            "discussions": [
-                _discussion_wire(cast(JsonObject, to_json_value(discussion)))
-                for discussion in discussions
-            ]
-        }
+        return tuple(
+            _discussion_wire(cast(JsonObject, to_json_value(discussion)))
+            for discussion in discussions
+        )
+
+    def _discussions_page_wire(
+        self, snapshot_id: object, resource: object, cursor: object, max_items: object
+    ) -> JsonObject:
+        page = self._snapshots.page(
+            snapshot_id,
+            resource,
+            cursor,
+            max_items,
+            max_values=self._json_limits.values // 2,
+            kind=_DISCUSSIONS_SNAPSHOT,
+        )
+        value = self._snapshot_page_wire(page)
+        value["discussions"] = value.pop("entries")
+        return value
 
     async def _commits_list(
         self, params: JsonObject, _context: RequestContext
@@ -814,7 +895,7 @@ class DesktopSidecarServer:
             "byte_count": len(encoded),
         }
         snapshot_id = self._snapshots.create(
-            job_handle, revision, _log_entries(encoded)
+            job_handle, revision, _log_entries(encoded), kind=_LOG_SNAPSHOT
         )
         return self._snapshot_page_wire(
             self._snapshots.page(
@@ -822,6 +903,7 @@ class DesktopSidecarServer:
                 job_handle,
                 0,
                 params.get("max_items", 8),
+                kind=_LOG_SNAPSHOT,
             )
         )
 
@@ -838,6 +920,7 @@ class DesktopSidecarServer:
                 params["resource"],
                 params["cursor"],
                 params.get("max_items", 8),
+                kind=_LOG_SNAPSHOT,
             )
         )
 
@@ -1026,7 +1109,11 @@ class DesktopSidecarServer:
             DesktopReadKind.JOBS: "jobs.list",
             DesktopReadKind.LOG: "logs.open",
         }[kind]
-        operation = self._operations[method]
+        handler = (
+            self._discussions_all
+            if kind is DesktopReadKind.DISCUSSIONS
+            else self._operations[method].handler
+        )
         context = RequestContext(
             f"plugin-{id(cancellation):x}",
             cancellation,
@@ -1034,7 +1121,7 @@ class DesktopSidecarServer:
             dispatched=True,
         )
         task = asyncio.create_task(
-            operation.handler(cast(JsonObject, _thaw_json(params)), context)
+            handler(cast(JsonObject, _thaw_json(params)), context)
         )
         cancellation_task = asyncio.create_task(cancellation.wait())
         completed = False

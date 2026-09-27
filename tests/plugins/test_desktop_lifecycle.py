@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from collections.abc import Callable, Sequence
 from importlib.metadata import EntryPoint
 
@@ -528,12 +529,17 @@ async def test_start_timeout_signals_lifecycle_cancellation(
         host_version="1.0",
         start_timeout_seconds=0.01,
     )
+    providers = importlib.import_module("fixture_desktop_good").GoodProvider.instances
+    already_created = len(providers)
     registry.discover()
 
     await registry.start_all(lambda _plugin_id, _manifest: RecordingFacade())
 
     assert record(registry).state is DesktopPluginState.FAILED
     assert record(registry).error.code is DesktopPluginErrorCode.START_FAILED  # type: ignore[union-attr]
+    (provider,) = providers[already_created:]
+    assert provider.context is not None
+    assert provider.context.cancellation.cancelled
 
 
 @pytest.mark.asyncio

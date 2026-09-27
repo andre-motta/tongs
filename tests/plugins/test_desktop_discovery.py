@@ -7,13 +7,58 @@ from collections.abc import Callable, Sequence
 from importlib.metadata import EntryPoint, distributions
 from pathlib import Path
 
-from tongs.plugins.desktop import DesktopPluginErrorCode, DesktopPluginState
+from tongs.plugins.desktop import (
+    DesktopAsset,
+    DesktopAssetBundle,
+    DesktopAssetKind,
+    DesktopCallContext,
+    DesktopCompatibility,
+    DesktopModule,
+    DesktopPluginContext,
+    DesktopPluginErrorCode,
+    DesktopPluginManifest,
+    DesktopPluginState,
+    FrozenJsonObject,
+    JsonValue,
+)
 from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.plugins.registry import PluginRegistry
 
 
 def by_id(registry: DesktopPluginRegistry, plugin_id: str):
     return next(record for record in registry.plugins if record.plugin_id == plugin_id)
+
+
+class EscapingAssetProvider:
+    """A provider whose manifest only the registry's own validation rejects."""
+
+    def manifest(self) -> DesktopPluginManifest:
+        return DesktopPluginManifest(
+            plugin_id="escaping_asset",
+            title="Escaping asset",
+            version="1.0",
+            compatibility=DesktopCompatibility(1, None),
+            modules=(DesktopModule("review", "Review", "ui", "main"),),
+            asset_bundles=(
+                DesktopAssetBundle(
+                    "ui",
+                    "fixture_desktop_assets",
+                    "assets",
+                    (DesktopAsset("main", "../escape.mjs", DesktopAssetKind.MODULE),),
+                ),
+            ),
+        )
+
+    async def start(self, context: DesktopPluginContext) -> None:
+        raise AssertionError("an invalid manifest must never start")
+
+    async def call(
+        self, method: str, params: FrozenJsonObject, context: DesktopCallContext
+    ) -> JsonValue:
+        raise AssertionError("an invalid manifest must never be called")
+
+    async def stop(self) -> None:
+        return None
 
 
 def test_discovery_uses_companion_group_without_importing_disabled_or_legacy(
@@ -51,8 +96,18 @@ def test_tui_registry_never_loads_desktop_entry_point_group(
 def test_discovery_reports_safe_identity_import_manifest_and_compatibility_errors(
     installed_entry_point_source: Callable[[str], Sequence[EntryPoint]],
 ) -> None:
+    escaping = EntryPoint(
+        "escaping_asset",
+        f"{__name__}:EscapingAssetProvider",
+        "tongs.desktop_plugins",
+    )
+
+    def source(group: str) -> Sequence[EntryPoint]:
+        extra = (escaping,) if group == escaping.group else ()
+        return (*installed_entry_point_source(group), *extra)
+
     registry = DesktopPluginRegistry(
-        entry_point_source=installed_entry_point_source,
+        entry_point_source=source,
         host_version="0.1.dev3+candidate",
     )
 
@@ -67,6 +122,11 @@ def test_discovery_reports_safe_identity_import_manifest_and_compatibility_error
         by_id(registry, "bad_manifest").error.code
         is DesktopPluginErrorCode.INVALID_MANIFEST
     )  # type: ignore[union-attr]
+    escaping_record = by_id(registry, "escaping_asset")
+    assert escaping_record.state is DesktopPluginState.FAILED
+    assert escaping_record.error.code is DesktopPluginErrorCode.INVALID_MANIFEST  # type: ignore[union-attr]
+    # A manifest that fails validation is never published on the record.
+    assert escaping_record.manifest is None
     assert by_id(registry, "api2").state is DesktopPluginState.INCOMPATIBLE
     assert by_id(registry, "api2").error.code is DesktopPluginErrorCode.INCOMPATIBLE_API  # type: ignore[union-attr]
     assert (

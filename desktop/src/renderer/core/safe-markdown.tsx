@@ -20,7 +20,10 @@ const MAX_AST_DEPTH = 32;
 const MAX_PREVIEW_CODE_POINTS = 4096;
 const MAX_EXTERNAL_URL_LENGTH = 4096;
 const MAX_LINK_TEXT_LENGTH = 2048;
-const SCHEMELESS_HOST_TEXT = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?::\d+)?(?:[/?#]|$)/iu;
+// Unicode full stops that the URL host parser maps to "." (UTS 46).
+const HOST_LABEL_SEPARATOR = /[.\u3002\uFF0E\uFF61]/u;
+// A parsed top-level label that reads like a domain: letters, or punycode.
+const HOST_LIKE_TOP_LABEL = /^(?:[a-z]{2,}|xn--[a-z0-9-]+)$/u;
 
 // Theme tokens from the shell stylesheet; the renderer sets them through the
 // CSSOM, which the style-src 'self' policy permits.
@@ -269,12 +272,29 @@ export function linkTextNamesOtherOrigin(
       return false;
     }
   }
-  if (!SCHEMELESS_HOST_TEXT.test(trimmed)) return false;
+  return schemelessTextNamesOtherHost(trimmed, target);
+}
+
+// Link text without a scheme is parsed as an https URL so the host parser
+// applies IDNA mapping: homoglyphs become punycode, Unicode full stops become
+// dots, and ignorable characters are removed before the hosts are compared.
+function schemelessTextNamesOtherHost(text: string, target: URL): boolean {
+  const hostPart = text.split(/[/?#]/u, 1)[0] ?? "";
+  let parsed: URL;
   try {
-    return new URL(`https://${trimmed}`).host !== target.host;
+    parsed = new URL(`https://${text}`);
   } catch {
-    return false;
+    // Unparseable text that still reads like a dotted name gets the marker.
+    const textLabels = hostPart.split(HOST_LABEL_SEPARATOR);
+    return (
+      textLabels.length > 1 && /\p{L}/u.test(textLabels[textLabels.length - 1] ?? "")
+    );
   }
+  if (parsed.username !== "" || parsed.password !== "") return true;
+  const labels = parsed.hostname.split(".");
+  if (labels.length < 2) return false;
+  if (!HOST_LIKE_TOP_LABEL.test(labels[labels.length - 1] ?? "")) return false;
+  return parsed.host !== target.host;
 }
 
 function linkText(children: ReactNode): string {

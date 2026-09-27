@@ -274,6 +274,16 @@ test("compares link text to the destination by origin and host", () => {
     ["README.md", "https://github.com/", true],
     ["", "https://github.com/", false],
     ["https://a b", "https://github.com/", false],
+    ["g\u0456thub.com/org/repo", "https://evil.example/x", true],
+    ["github\u3002com/org/repo", "https://evil.example/x", true],
+    ["github.com\u200b/org", "https://evil.example/x", true],
+    ["github.c\u043em/org", "https://evil.example/x", true],
+    ["github\uFF0Ecom", "https://github.com/", false],
+    ["b\u00fccher.example/a", "https://xn--bcher-kva.example/a", false],
+    ["github.com@evil.example/x", "https://evil.example/x", true],
+    ["1.0.2", "https://github.com/", false],
+    ["e.g.", "https://github.com/", false],
+    ["github.com%/org", "https://evil.example/x", true],
   ];
   for (const [text, destination, expected] of cases) {
     assert.equal(

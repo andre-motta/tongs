@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from .probe import EXPECTED_PLUGIN_EVIDENCE, validate_plugin_evidence
+from .probe import (
+    EXPECTED_PLUGIN_EVIDENCE,
+    SMOKE_TESTS,
+    missing_smoke_tests,
+    smoke_tests_without_results,
+    validate_plugin_evidence,
+)
 from .verify_expected_failure import (
     EXPECTED_STEPS,
     FAILURE_MESSAGE,
@@ -17,6 +23,8 @@ from .verify_expected_failure import (
     main,
     verify_expected_failure,
 )
+
+REPOSITORY = Path(__file__).parents[2]
 
 
 def _write_junit(
@@ -61,25 +69,11 @@ def _valid_evidence(output_dir: Path) -> None:
             }
         )
     )
-    _write_junit(output_dir / "core-tests.junit.xml", tests=621)
-    _write_junit(output_dir / "backend-tests.junit.xml", tests=7)
     _write_junit(
         output_dir / "deliberate-failure.junit.xml",
         tests=1,
         failures=1,
         deliberate=True,
-    )
-    (output_dir / "plugin-discovery.json").write_text(
-        json.dumps(
-            {
-                "desktop_backend_statuses": {
-                    "sample-desktop": "ready",
-                    "sample-terminal": "terminal_only",
-                },
-                "terminal_discovery": ["sample-desktop", "sample-terminal"],
-                "terminal_only_command": "Sample terminal action",
-            }
-        )
     )
 
 
@@ -93,8 +87,7 @@ def test_accepts_only_the_intended_assertion_failure(tmp_path: Path) -> None:
 def test_rejects_setup_failure(tmp_path: Path) -> None:
     _valid_evidence(tmp_path)
     summary = json.loads((tmp_path / "summary.json").read_text())
-    summary["steps"] = summary["steps"][:1]
-    summary["steps"][0]["returncode"] = 1
+    summary["steps"] = [{"name": "build-core-wheel", "returncode": 1}]
     summary["failed_steps"] = ["build-core-wheel"]
     (tmp_path / "summary.json").write_text(json.dumps(summary))
 
@@ -117,8 +110,8 @@ def test_rejects_malformed_summary(tmp_path: Path) -> None:
 def test_rejects_unexpected_required_step_failure(tmp_path: Path) -> None:
     _valid_evidence(tmp_path)
     summary = json.loads((tmp_path / "summary.json").read_text())
-    summary["steps"][4]["returncode"] = 1
-    summary["failed_steps"] = ["core-tests", "deliberate-failure"]
+    summary["steps"].insert(0, {"name": "smoke-tests", "returncode": 1})
+    summary["failed_steps"] = ["smoke-tests", "deliberate-failure"]
     (tmp_path / "summary.json").write_text(json.dumps(summary))
 
     with pytest.raises(VerificationError, match="only deliberate-failure"):
@@ -128,7 +121,7 @@ def test_rejects_unexpected_required_step_failure(tmp_path: Path) -> None:
 def test_rejects_unexpected_step(tmp_path: Path) -> None:
     _valid_evidence(tmp_path)
     summary = json.loads((tmp_path / "summary.json").read_text())
-    summary["steps"].insert(7, {"name": "unexpected-setup", "returncode": 0})
+    summary["steps"].insert(0, {"name": "unexpected-setup", "returncode": 0})
     (tmp_path / "summary.json").write_text(json.dumps(summary))
 
     with pytest.raises(VerificationError, match="unexpected harness steps"):
@@ -189,7 +182,47 @@ def test_plugin_evidence_rejects_scalar_json() -> None:
 
 def test_plugin_evidence_rejects_wrong_status() -> None:
     evidence = json.loads(json.dumps(EXPECTED_PLUGIN_EVIDENCE))
-    evidence["desktop_backend_statuses"]["sample-terminal"] = "ready"
+    evidence["desktop_states"]["mcp"] = "discovered"
 
     with pytest.raises(ValueError, match="unexpected compatibility evidence"):
         validate_plugin_evidence(json.dumps(evidence))
+
+
+def test_every_smoke_test_path_exists() -> None:
+    assert missing_smoke_tests(REPOSITORY) == []
+
+
+def _write_smoke_junit(path: Path, classnames: list[str]) -> None:
+    suite = ET.Element("testsuite")
+    for classname in classnames:
+        ET.SubElement(suite, "testcase", {"classname": classname, "name": "t"})
+    ET.ElementTree(suite).write(path, encoding="unicode")
+
+
+def test_smoke_report_accepts_a_testcase_from_every_path(tmp_path: Path) -> None:
+    report = tmp_path / "smoke.junit.xml"
+    _write_smoke_junit(
+        report,
+        [
+            f"{path.removesuffix('.py').replace('/', '.')}.TestCase"
+            for path in SMOKE_TESTS
+        ],
+    )
+
+    assert smoke_tests_without_results(report) == []
+
+
+def test_smoke_report_names_a_path_that_ran_nothing(tmp_path: Path) -> None:
+    report = tmp_path / "smoke.junit.xml"
+    modules = [path.removesuffix(".py").replace("/", ".") for path in SMOKE_TESTS]
+    _write_smoke_junit(report, [*modules[1:], f"{modules[0]}_extra.TestCase"])
+
+    assert smoke_tests_without_results(report) == [SMOKE_TESTS[0]]
+
+
+def test_smoke_report_rejects_malformed_junit(tmp_path: Path) -> None:
+    report = tmp_path / "smoke.junit.xml"
+    report.write_text("not XML")
+
+    with pytest.raises(ValueError, match="smoke report is unreadable"):
+        smoke_tests_without_results(report)

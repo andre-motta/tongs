@@ -20,12 +20,17 @@ read-only, all capabilities are dropped, and `no-new-privileges` is enabled. No
 credentials are mounted. Build and test scratch data stays in a temporary
 filesystem, while reports and wheels go to the requested output directory.
 
-The probe builds and installs fresh core and reference-plugin wheels, checks
-`tongs --help`, runs the core suite (deselecting tests marked `needs_git`) and
-the existing `spikes/desktop` fixture backend tests, and
-checks installed plugin discovery from both directions. The TUI registry must
-retain the legacy terminal command, while the experimental desktop backend must
-report the opt-in plugin as ready and the legacy plugin as terminal-only.
+The probe builds and installs fresh core and `examples/desktop-plugin` wheels,
+checks `tongs --help`, and runs the installed-wheel smoke subset named by
+`SMOKE_TESTS` in `probe.py` (deselecting tests marked `needs_git`). The subset
+covers what the wheel must carry: entry points and the MCP dependency gate,
+desktop plugin discovery and resources, packaged schemas and desktop assets,
+the installed sidecar, the MCP server, config, and launcher resolution. The
+step fails if a listed path is missing or contributes no test. The hosted core
+lane runs the whole suite from the checkout. The probe then checks installed
+plugin discovery from both directions: the TUI registry must load the example's
+terminal command, and the desktop registry must report the example provider as
+discovered and the core `mcp` entry point as terminal-only.
 Test and runtime dependencies are provisioned in the harness image, then exposed
 to the clean wheel-install environment without downloading during container use.
 The image installs exactly Textual 4.0.0, the oldest release the core declares,
@@ -45,11 +50,13 @@ tests/containers/run-fedora-44.sh \
   --inject-failure
 ```
 
-That mode performs the normal checks, adds one clearly labelled failing pytest
-assertion, writes `deliberate-failure.junit.xml`, and must return nonzero. The
-probe workflow accepts the nonzero result only when `summary.json`, the required
-JUnit reports, and plugin discovery evidence prove all required steps passed and
-only the named deliberate assertion failed. Missing, malformed, skipped, or
+That mode skips the build, install and smoke steps, runs one clearly labelled
+failing pytest assertion, writes `deliberate-failure.junit.xml`, and must
+return nonzero. The success run already proves the installed product, so this
+run proves only that a failing step propagates through the container and
+`run-fedora-44.sh`. The probe workflow accepts the nonzero result only when
+`summary.json` and the JUnit report prove that `deliberate-failure` was the
+only step and only the named assertion failed. Missing, malformed, skipped, or
 unexpected results fail the workflow. It does not use `continue-on-error`.
 
 Remove the output directories and the local image after inspection:
@@ -59,9 +66,9 @@ rm -rf /tmp/tongs-fedora-44 /tmp/tongs-fedora-44-failure
 podman image rm localhost/tongs-fedora44-probe:issue-27
 ```
 
-This container proves Fedora 44 userspace, clean wheel installation, headless
-core behavior, and compatibility with the existing experimental fixture. It
+This container proves Fedora 44 userspace, clean wheel installation, installed
+resources and entry points, and discovery of the example desktop plugin. It
 does not prove a Fedora KDE session, the Fedora host kernel, physical GPU
-acceleration, native Wayland or XWayland behavior, a production desktop plugin
-contract, or installation of a production RPM. Native ARM64 and QEMU execution
-are outside this harness.
+acceleration, native Wayland or XWayland behavior, a running desktop plugin, or
+installation of a production RPM. Native ARM64 and QEMU execution are outside
+this harness.

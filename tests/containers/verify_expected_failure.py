@@ -10,16 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-EXPECTED_STEPS = (
-    "build-core-wheel",
-    "build-reference-plugin-wheel",
-    "install-wheels",
-    "cli-help",
-    "core-tests",
-    "backend-fixture-tests",
-    "installed-plugin-discovery",
-    "deliberate-failure",
-)
+EXPECTED_STEPS = ("deliberate-failure",)
 FAILURE_TEST_NAME = "test_deliberate_failure_propagates"
 FAILURE_MESSAGE = "intentional harness failure for issue 27"
 
@@ -70,14 +61,6 @@ def _junit(path: Path) -> tuple[JUnitCounts, ET.Element]:
     return counts, root
 
 
-def _verify_required_junit(output_dir: Path, filename: str) -> None:
-    counts, _ = _junit(output_dir / filename)
-    if counts.tests < 1 or any((counts.failures, counts.errors, counts.skipped)):
-        raise VerificationError(
-            f"required test report did not pass cleanly: {filename} {counts}"
-        )
-
-
 def _verify_deliberate_junit(output_dir: Path) -> None:
     filename = "deliberate-failure.junit.xml"
     counts, root = _junit(output_dir / filename)
@@ -95,20 +78,6 @@ def _verify_deliberate_junit(output_dir: Path) -> None:
     )
     if FAILURE_MESSAGE not in failure_text:
         raise VerificationError("deliberate failure message is unexpected")
-
-
-def _verify_plugins(output_dir: Path) -> None:
-    evidence = _load_json(output_dir / "plugin-discovery.json")
-    expected = {
-        "desktop_backend_statuses": {
-            "sample-desktop": "ready",
-            "sample-terminal": "terminal_only",
-        },
-        "terminal_discovery": ["sample-desktop", "sample-terminal"],
-        "terminal_only_command": "Sample terminal action",
-    }
-    if evidence != expected:
-        raise VerificationError("installed plugin discovery evidence is unexpected")
 
 
 def verify_expected_failure(output_dir: Path, actual_status: int) -> None:
@@ -137,13 +106,10 @@ def verify_expected_failure(output_dir: Path, actual_status: int) -> None:
     returncodes = tuple(step.get("returncode") for step in steps)
     if not all(type(returncode) is int for returncode in returncodes):
         raise VerificationError("malformed harness return codes")
-    if returncodes != (0, 0, 0, 0, 0, 0, 0, 1):
+    if returncodes != (1,):
         raise VerificationError(f"unexpected harness return codes: {returncodes}")
 
-    _verify_required_junit(output_dir, "core-tests.junit.xml")
-    _verify_required_junit(output_dir, "backend-tests.junit.xml")
     _verify_deliberate_junit(output_dir)
-    _verify_plugins(output_dir)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -160,9 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     except VerificationError as error:
         print(f"Expected-failure verification failed: {error}", file=sys.stderr)
         return 1
-    print(
-        "Deliberate failure evidence verified: required checks passed, assertion failed"
-    )
+    print("Deliberate failure evidence verified: only the named assertion failed")
     return 0
 
 

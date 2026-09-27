@@ -12,6 +12,7 @@ import sys
 import sysconfig
 import time
 import venv
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -20,13 +21,30 @@ CHECKOUT = Path("/checkout")
 OUTPUT = Path("/output")
 SOURCE = Path("/tmp/tongs-source")
 ENVIRONMENT = Path("/tmp/tongs-installed")
+EXAMPLE_PLUGIN = Path("examples/desktop-plugin")
+# Installed-wheel smoke subset, grouped by what it loads from the wheel:
+# entry points and the MCP dependency gate, the desktop entry-point group and
+# plugin resources, packaged schemas and desktop assets, the installed sidecar,
+# the MCP server import and host gate, config and platformdirs, and installed
+# launcher resolution. The hosted core lane runs the whole suite.
+SMOKE_TESTS = (
+    "tests/test_plugins/test_plugin_system.py",
+    "tests/plugins/test_desktop_discovery.py",
+    "tests/plugins/test_desktop_resources.py",
+    "tests/desktop/artifact_contract/test_schemas.py",
+    "tests/desktop/test_assets.py",
+    "tests/desktop/test_sidecar.py",
+    "tests/test_mcp/test_server.py",
+    "tests/test_config.py",
+    "tests/desktop/installer/test_launcher.py",
+)
 EXPECTED_PLUGIN_EVIDENCE = {
-    "desktop_backend_statuses": {
-        "sample-desktop": "ready",
-        "sample-terminal": "terminal_only",
+    "desktop_states": {
+        "example_dashboard": "discovered",
+        "mcp": "terminal_only",
     },
-    "terminal_discovery": ["sample-desktop", "sample-terminal"],
-    "terminal_only_command": "Sample terminal action",
+    "terminal_discovery": ["example_dashboard"],
+    "terminal_command": "Example dashboard (terminal)",
 }
 
 
@@ -137,6 +155,28 @@ def validate_plugin_evidence(raw: str) -> dict[str, object]:
     return evidence
 
 
+def missing_smoke_tests(source: Path) -> list[str]:
+    """Return the smoke test paths that are absent from the source copy."""
+    return [path for path in SMOKE_TESTS if not (source / path).is_file()]
+
+
+def smoke_tests_without_results(junit: Path) -> list[str]:
+    """Return the smoke test paths that contributed no testcase to a report."""
+    try:
+        root = ET.parse(junit).getroot()
+    except (OSError, ET.ParseError) as error:
+        raise ValueError(f"smoke report is unreadable: {junit.name}") from error
+    classnames = [case.attrib.get("classname", "") for case in root.iter("testcase")]
+    empty = []
+    for path in SMOKE_TESTS:
+        module = path.removesuffix(".py").replace("/", ".")
+        if not any(
+            name == module or name.startswith(f"{module}.") for name in classnames
+        ):
+            empty.append(path)
+    return empty
+
+
 def _expose_harness_dependencies(python: Path) -> None:
     completed = subprocess.run(
         [
@@ -158,34 +198,27 @@ def _expose_harness_dependencies(python: Path) -> None:
 def _installed_plugin_probe(python: Path) -> list[str]:
     script = """
 import json
-import sys
-from pathlib import Path
 
+from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.plugins.registry import PluginRegistry
-
-sys.path.insert(0, str(Path('/tmp/tongs-source/spikes/desktop')))
-from backend import Backend
 
 registry = PluginRegistry()
 registry.discover({'mcp': {'enabled': False}})
 plugins = {plugin.name: plugin for plugin in registry.plugins}
-assert {'sample-desktop', 'sample-terminal'} <= plugins.keys()
-terminal_commands = plugins['sample-terminal'].get_commands()
-assert terminal_commands and terminal_commands[0][0] == 'Sample terminal action'
+terminal_commands = plugins['example_dashboard'].get_commands()
 
 desktop_records = {
-    record['id']: record for record in Backend().invoke('list_plugins')
+    record.plugin_id: record for record in DesktopPluginRegistry().discover()
 }
-assert desktop_records['sample-desktop']['status'] == 'ready'
-assert desktop_records['sample-terminal']['status'] == 'terminal_only'
-assert desktop_records['sample-terminal']['modules'] == []
+dashboard = desktop_records['example_dashboard']
+assert dashboard.has_terminal_entry_point and dashboard.has_desktop_entry_point
+assert not desktop_records['mcp'].has_desktop_entry_point
 print(json.dumps({
-    'desktop_backend_statuses': {
-        name: desktop_records[name]['status']
-        for name in ('sample-desktop', 'sample-terminal')
+    'desktop_states': {
+        name: str(record.state) for name, record in desktop_records.items()
     },
     'terminal_discovery': sorted(plugins),
-    'terminal_only_command': terminal_commands[0][0],
+    'terminal_command': terminal_commands[0][0],
 }, sort_keys=True))
 """
     return [str(python), "-c", script]
@@ -207,6 +240,70 @@ def _deliberate_failure(python: Path) -> list[str]:
     ]
 
 
+def _summary(steps: list[StepResult], *, inject_failure: bool) -> int:
+    failed = [step.name for step in steps if step.returncode != 0]
+    summary = {
+        "expected_result": "failure" if inject_failure else "success",
+        "failed_steps": failed,
+        "result": "failed" if failed else "passed",
+        "steps": [asdict(step) for step in steps],
+    }
+    _write_json(OUTPUT / "summary.json", summary)
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 1 if failed else 0
+
+
+def _fail_step(result: StepResult, message: str) -> StepResult:
+    with (OUTPUT / result.stderr).open("a") as stderr:
+        print(message, file=stderr)
+    return replace(result, returncode=1)
+
+
+def _smoke_tests(python: Path) -> StepResult:
+    junit = OUTPUT / "smoke-tests.junit.xml"
+    missing = missing_smoke_tests(SOURCE)
+    result = _run(
+        "smoke-tests",
+        [
+            str(python),
+            "-m",
+            "pytest",
+            "-q",
+            "-m",
+            "not needs_git",
+            *(str(SOURCE / path) for path in SMOKE_TESTS if path not in missing),
+            f"--junitxml={junit}",
+        ],
+        cwd=Path("/tmp"),
+    )
+    if missing:
+        return _fail_step(result, f"Smoke test paths are missing: {missing}")
+    if result.returncode == 0:
+        try:
+            empty = smoke_tests_without_results(junit)
+        except ValueError as error:
+            return _fail_step(result, str(error))
+        if empty:
+            return _fail_step(result, f"Smoke test paths ran no tests: {empty}")
+    return result
+
+
+def _plugin_discovery(python: Path) -> StepResult:
+    result = _run(
+        "installed-plugin-discovery",
+        _installed_plugin_probe(python),
+        cwd=Path("/tmp"),
+    )
+    if result.returncode != 0:
+        return result
+    try:
+        evidence = validate_plugin_evidence((OUTPUT / result.stdout).read_text())
+    except (OSError, TypeError, ValueError) as error:
+        return _fail_step(result, f"Plugin evidence validation failed: {error}")
+    _write_json(OUTPUT / "plugin-discovery.json", evidence)
+    return result
+
+
 def main() -> int:
     inject_failure = sys.argv[1:] == ["--inject-failure"]
     if sys.argv[1:] not in ([], ["--inject-failure"]):
@@ -215,48 +312,49 @@ def main() -> int:
 
     OUTPUT.mkdir(parents=True, exist_ok=True)
     _write_json(OUTPUT / "environment.json", _environment())
-    _copy_source()
 
+    if inject_failure:
+        # The success run proves the installed product; this run proves only
+        # that a failing step leaves the container with a nonzero status.
+        steps = [
+            _run(
+                "deliberate-failure",
+                _deliberate_failure(Path(sys.executable)),
+                cwd=Path("/tmp"),
+            )
+        ]
+        return _summary(steps, inject_failure=True)
+
+    _copy_source()
     build_env = os.environ.copy()
     build_env["SETUPTOOLS_SCM_PRETEND_VERSION"] = "0.0.0+podman"
     build_env["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS"] = "0.0.0+podman"
     steps: list[StepResult] = []
 
-    steps.append(
-        _run(
-            "build-core-wheel",
-            [
-                sys.executable,
-                "-m",
-                "build",
-                "--wheel",
-                "--no-isolation",
-                "--outdir",
-                str(OUTPUT / "wheels"),
-                str(SOURCE),
-            ],
-            env=build_env,
+    for name, project, env in (
+        ("build-core-wheel", SOURCE, build_env),
+        ("build-example-plugin-wheel", SOURCE / EXAMPLE_PLUGIN, None),
+    ):
+        steps.append(
+            _run(
+                name,
+                [
+                    sys.executable,
+                    "-m",
+                    "build",
+                    "--wheel",
+                    "--no-isolation",
+                    "--outdir",
+                    str(OUTPUT / "wheels"),
+                    str(project),
+                ],
+                env=env,
+            )
         )
-    )
-    steps.append(
-        _run(
-            "build-reference-plugin-wheel",
-            [
-                sys.executable,
-                "-m",
-                "build",
-                "--wheel",
-                "--no-isolation",
-                "--outdir",
-                str(OUTPUT / "wheels"),
-                str(SOURCE / "spikes/desktop/reference-plugin"),
-            ],
-        )
-    )
 
+    python = ENVIRONMENT / "bin/python"
     if all(step.returncode == 0 for step in steps):
         venv.EnvBuilder(with_pip=True).create(ENVIRONMENT)
-        python = ENVIRONMENT / "bin/python"
         _expose_harness_dependencies(python)
         wheels = sorted((OUTPUT / "wheels").glob("*.whl"))
         steps.append(
@@ -273,82 +371,19 @@ def main() -> int:
                 ],
             )
         )
-    else:
-        python = ENVIRONMENT / "bin/python"
 
     if steps[-1].returncode == 0 and python.is_file():
-        steps.extend(
-            [
-                _run(
-                    "cli-help",
-                    [str(ENVIRONMENT / "bin/tongs"), "--help"],
-                    cwd=Path("/tmp"),
-                ),
-                _run(
-                    "core-tests",
-                    [
-                        str(python),
-                        "-m",
-                        "pytest",
-                        "-q",
-                        "-m",
-                        "not needs_git",
-                        str(SOURCE / "tests"),
-                        f"--junitxml={OUTPUT / 'core-tests.junit.xml'}",
-                    ],
-                    cwd=Path("/tmp"),
-                ),
-                _run(
-                    "backend-fixture-tests",
-                    [
-                        str(python),
-                        "-m",
-                        "pytest",
-                        "-q",
-                        str(SOURCE / "spikes/desktop/tests/test_backend.py"),
-                        f"--junitxml={OUTPUT / 'backend-tests.junit.xml'}",
-                    ],
-                    cwd=SOURCE / "spikes/desktop",
-                ),
-                _run(
-                    "installed-plugin-discovery",
-                    _installed_plugin_probe(python),
-                    cwd=Path("/tmp"),
-                ),
-            ]
-        )
-        plugin_result = steps[-1]
-        if plugin_result.returncode == 0:
-            try:
-                plugin_evidence = validate_plugin_evidence(
-                    (OUTPUT / plugin_result.stdout).read_text()
-                )
-            except (OSError, TypeError, ValueError) as error:
-                stderr_path = OUTPUT / plugin_result.stderr
-                with stderr_path.open("a") as stderr:
-                    print(f"Plugin evidence validation failed: {error}", file=stderr)
-                steps[-1] = replace(plugin_result, returncode=1)
-            else:
-                _write_json(OUTPUT / "plugin-discovery.json", plugin_evidence)
-        if inject_failure:
-            steps.append(
-                _run(
-                    "deliberate-failure",
-                    _deliberate_failure(python),
-                    cwd=Path("/tmp"),
-                )
+        steps.append(
+            _run(
+                "cli-help",
+                [str(ENVIRONMENT / "bin/tongs"), "--help"],
+                cwd=Path("/tmp"),
             )
+        )
+        steps.append(_smoke_tests(python))
+        steps.append(_plugin_discovery(python))
 
-    failed = [step.name for step in steps if step.returncode != 0]
-    summary = {
-        "expected_result": "failure" if inject_failure else "success",
-        "failed_steps": failed,
-        "result": "failed" if failed else "passed",
-        "steps": [asdict(step) for step in steps],
-    }
-    _write_json(OUTPUT / "summary.json", summary)
-    print(json.dumps(summary, indent=2, sort_keys=True))
-    return 1 if failed else 0
+    return _summary(steps, inject_failure=False)
 
 
 if __name__ == "__main__":

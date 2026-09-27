@@ -61,6 +61,7 @@ def test_builder_enforces_and_retains_fedora_rpm_signatures() -> None:
     assert "--setopt=localpkg_gpgcheck=True ./*.rpm" in containerfile
     assert "rpm-nevra.txt" in containerfile
     assert "rpm-signatures.txt" in runner
+    assert "rpm-qa.txt" in runner
 
 
 def _builder_rpm_lists() -> tuple[list[str], list[tuple[str, str]]]:

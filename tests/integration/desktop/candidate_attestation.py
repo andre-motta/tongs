@@ -137,6 +137,7 @@ _EVIDENCE_FILES: Final = frozenset(
         "evidence/electron-v44.2.0-linux-x64.zip",
         "evidence/inputs.env",
         "evidence/rpm-nevra.txt",
+        "evidence/rpm-qa.txt",
         "evidence/rpm-sha256-check.txt",
         "evidence/rpm-signatures.txt",
         "evidence/source.tar",

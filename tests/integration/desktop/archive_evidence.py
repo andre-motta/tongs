@@ -160,6 +160,7 @@ TRANSFER_FILE_BOUNDS: Final = {
     f"evidence/{ELECTRON_ARCHIVE_NAME}": MAX_LARGE_BYTES,
     "evidence/inputs.env": MAX_TEXT_BYTES,
     "evidence/rpm-nevra.txt": MAX_TEXT_BYTES,
+    "evidence/rpm-qa.txt": MAX_TEXT_BYTES,
     "evidence/rpm-sha256-check.txt": MAX_TEXT_BYTES,
     "evidence/rpm-signatures.txt": MAX_TEXT_BYTES,
     "evidence/source.tar": MAX_LARGE_BYTES,

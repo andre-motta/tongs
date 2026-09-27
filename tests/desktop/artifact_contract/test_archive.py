@@ -346,17 +346,17 @@ def test_inspector_bounds_pax_metadata_before_tarfile_interprets_it() -> None:
         compressed = _archive_with_extension(
             extension_type, _pax_record("comment", "x" * 2_048)
         )
-        with _raised(ArtifactContractErrorCode.LIMIT_EXCEEDED):
+        with _raised(ArtifactContractErrorCode.INVALID_ARCHIVE):
             inspect_archive(compressed, install.extraction_limits)
 
 
-def test_inspector_accepts_bounded_solaris_pax_metadata() -> None:
+def test_inspector_rejects_bounded_solaris_pax_metadata() -> None:
     install = parse_install_manifest(_fixture()[1])
     compressed = _archive_with_extension(
         tarfile.SOLARIS_XHDTYPE, _pax_record("comment", "synthetic")
     )
-    inspection = inspect_archive(compressed, install.extraction_limits)
-    assert inspection.install_document == _fixture()[1]
+    with _raised(ArtifactContractErrorCode.INVALID_ARCHIVE):
+        inspect_archive(compressed, install.extraction_limits)
 
 
 def test_inspector_rejects_nonzero_or_excessive_tar_end_padding() -> None:

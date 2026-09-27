@@ -167,3 +167,26 @@ def test_duplicate_normalized_resource_paths_are_rejected(
 
     with pytest.raises(ValueError, match="Duplicate normalized asset path"):
         validate_asset_resources(duplicate)
+
+
+def test_namespace_package_bundle_root_link_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    package_one = first / "namespace_asset_fixture"
+    package_two = second / "namespace_asset_fixture"
+    package_one.mkdir(parents=True)
+    package_two.mkdir(parents=True)
+    outside = tmp_path / "namespace_outside"
+    outside.mkdir()
+    (outside / "main.mjs").write_text("export {};", encoding="utf-8")
+    (package_one / "assets").symlink_to(outside, target_is_directory=True)
+    monkeypatch.syspath_prepend(str(first))
+    monkeypatch.syspath_prepend(str(second))
+    importlib.invalidate_caches()
+
+    with pytest.raises(ValueError, match="symlink"):
+        validate_asset_resources(resource_manifest("namespace_asset_fixture"))
+
+    sys.modules.pop("namespace_asset_fixture", None)

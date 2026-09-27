@@ -75,6 +75,8 @@ def inspect_archive(document: bytes, limits: ExtractionLimits) -> ArchiveInspect
         _preflight_archive_headers(document, limits)
         with tarfile.open(fileobj=io.BytesIO(document), mode="r:gz") as archive:
             for member in archive:
+                if member.pax_headers:
+                    _invalid_archive("Archive member contains PAX metadata")
                 if len(entries) >= limits.max_entries:
                     _limit("Archive entry count exceeds the declared limit")
                 path = member.name.rstrip("/") if member.isdir() else member.name
@@ -138,7 +140,6 @@ def _preflight_archive_headers(document: bytes, limits: ExtractionLimits) -> Non
     """Bound tar metadata before ``tarfile`` interprets extension headers."""
     physical_headers = 0
     logical_entries = 0
-    extension_bytes = 0
     maximum_extension_bytes = limits.max_entries * (limits.max_path_bytes + 1_024)
     maximum_physical_headers = limits.max_entries * 3 + 2
     maximum_expanded_bytes = (
@@ -175,12 +176,7 @@ def _preflight_archive_headers(document: bytes, limits: ExtractionLimits) -> Non
                 _invalid_archive("Archive header contains a negative size")
             entry_type = header[156:157]
             if entry_type in _TAR_EXTENSION_TYPES:
-                extension_bytes += size
-                if (
-                    size > limits.max_path_bytes + 1_024
-                    or extension_bytes > maximum_extension_bytes
-                ):
-                    _limit("Archive extension metadata exceeds declared limits")
+                _invalid_archive("Archive extension headers are unsupported")
             else:
                 logical_entries += 1
                 if logical_entries > limits.max_entries:

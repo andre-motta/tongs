@@ -124,7 +124,7 @@ def _build_tar_gzip(install_document: bytes, files: dict[str, bytes]) -> bytes:
     )
     tar_bytes = io.BytesIO()
     with tarfile.open(
-        fileobj=tar_bytes, mode="w", format=tarfile.PAX_FORMAT
+        fileobj=tar_bytes, mode="w", format=tarfile.USTAR_FORMAT
     ) as archive:
         for path in sorted(members):
             content, mode = members[path]

@@ -13,7 +13,6 @@ import re
 import secrets
 from dataclasses import dataclass
 from importlib.resources import files
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Protocol
 
@@ -23,6 +22,7 @@ from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.plugins.desktop_resources import (
     HOST_MAX_ASSET_FILE_BYTES,
     DesktopResolvedAsset,
+    validate_resource_containment,
 )
 
 ASSET_CHUNK_BYTES = 512 * 1024
@@ -258,8 +258,9 @@ def _read_declared_resource(
         package_root if root == "." else package_root.joinpath(*root.split("/"))
     )
     resource = resource_root.joinpath(*path.split("/"))
-    _validate_containment(package_root, resource_root)
-    _validate_containment(resource_root, resource)
+    root_parts = () if root == "." else tuple(root.split("/"))
+    validate_resource_containment(package_root, resource_root, root_parts)
+    validate_resource_containment(resource_root, resource, tuple(path.split("/")))
     if not resource.is_file():
         raise ValueError("Declared desktop asset is not a regular file")
     with resource.open("rb") as stream:
@@ -267,26 +268,6 @@ def _read_declared_resource(
     if len(content) > max_bytes:
         raise ValueError("Declared desktop asset exceeds its size limit")
     return content
-
-
-def _validate_containment(root: Traversable, resource: Traversable) -> None:
-    if not isinstance(root, Path) or not isinstance(resource, Path):
-        return
-    try:
-        relative = resource.relative_to(root)
-    except ValueError as error:
-        raise ValueError("Desktop asset escapes its declared package root") from error
-    current = root
-    for part in relative.parts:
-        current = current / part
-        if current.is_symlink():
-            raise ValueError("Desktop asset path contains a symlink")
-    resolved_root = root.resolve(strict=True)
-    resolved_resource = resource.resolve(strict=True)
-    try:
-        resolved_resource.relative_to(resolved_root)
-    except ValueError as error:
-        raise ValueError("Desktop asset escapes its declared package root") from error
 
 
 def _validate_package(value: str) -> None:

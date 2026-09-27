@@ -57,7 +57,8 @@ def validate_asset_resources(
             if bundle.root == "."
             else package_root.joinpath(*bundle.root.split("/"))
         )
-        _validate_containment(package_root, resource_root)
+        root_parts = () if bundle.root == "." else tuple(bundle.root.split("/"))
+        validate_resource_containment(package_root, resource_root, root_parts)
         if not resource_root.is_dir():
             raise ValueError(f"Asset bundle root does not exist: {bundle.id}")
 
@@ -72,7 +73,9 @@ def validate_asset_resources(
             normalized_paths.add(normalized)
 
             resource = resource_root.joinpath(*asset.path.split("/"))
-            _validate_containment(resource_root, resource)
+            validate_resource_containment(
+                resource_root, resource, tuple(asset.path.split("/"))
+            )
             if not resource.is_file():
                 raise ValueError(f"Declared asset is not a regular file: {asset.id}")
             file_limit = min(bundle.max_file_bytes, HOST_MAX_ASSET_FILE_BYTES)
@@ -107,24 +110,36 @@ def _bounded_size(resource: Traversable, limit: int) -> int:
     return size
 
 
-def _validate_containment(root: Traversable, resource: Traversable) -> None:
+def validate_resource_containment(
+    root: Traversable, resource: Traversable, relative_parts: tuple[str, ...]
+) -> None:
     """Reject filesystem symlinks and resources escaping the declared root."""
-    if not isinstance(root, Path) or not isinstance(resource, Path):
+    if not isinstance(resource, Path):
         # Non-filesystem Traversables are joined only from validated path parts.
         # They do not expose symlink traversal through the Traversable protocol.
         return
 
+    filesystem_root = root
+    if not isinstance(filesystem_root, Path):
+        filesystem_root = resource
+        for _part in relative_parts:
+            filesystem_root = filesystem_root.parent
+        if filesystem_root.name != root.name:
+            raise ValueError("Asset resource root cannot be validated")
+
     try:
-        relative = resource.relative_to(root)
+        relative = resource.relative_to(filesystem_root)
     except ValueError as error:
         raise ValueError("Asset resource escapes its declared package root") from error
-    current = root
+    if relative.parts != relative_parts:
+        raise ValueError("Asset resource escapes its declared package root")
+    current = filesystem_root
     for part in relative.parts:
         current = current / part
         if current.is_symlink():
             raise ValueError("Asset resource path contains a symlink")
 
-    root_resolved = root.resolve(strict=True)
+    root_resolved = filesystem_root.resolve(strict=True)
     resource_resolved = resource.resolve(strict=True)
     try:
         resource_resolved.relative_to(root_resolved)

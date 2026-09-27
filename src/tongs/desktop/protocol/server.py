@@ -460,7 +460,9 @@ class DesktopSidecarServer:
         try:
             requested, client_limits = _parse_handshake(frame.params)
             await self._session.start()
-            _report_recovery_warnings(self._session.recovery_warnings)
+            _report_recovery_warnings(
+                getattr(cast(object, self._session), "recovery_warnings", ())
+            )
             if self._plugin_registry is None:
                 config = cast(object, self._session.config)
                 plugin_config = getattr(config, "plugin_config", {})

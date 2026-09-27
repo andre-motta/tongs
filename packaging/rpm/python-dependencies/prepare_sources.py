@@ -62,10 +62,14 @@ def _download(source: dict[str, Any], output: Path) -> None:
                         )
                     dest.write(block)
             break
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 or attempt == 2:
+                raise
+            time.sleep(2**attempt)
         except transient_errors:
             if attempt == 2:
                 raise
-            time.sleep(0.25 * (attempt + 1))
+            time.sleep(2**attempt)
     if read_bytes != expected_bytes:
         raise RuntimeError(
             f"source size mismatch for {source['filename']}: {read_bytes} != {expected_bytes}"

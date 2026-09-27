@@ -168,6 +168,83 @@ def test_download_retries_transient_failure(
     assert output.read_bytes() == contents
 
 
+def test_download_retries_server_http_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contents = b"source"
+    attempts = 0
+    sleeps: list[int] = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.close()
+
+        def geturl(self) -> str:
+            return "https://files.pythonhosted.org/source.tar.gz"
+
+    def urlopen(*_args: object, **_kwargs: object) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise urllib.error.HTTPError(
+                "https://files.pythonhosted.org/source.tar.gz",
+                503,
+                "Service Unavailable",
+                {},
+                None,
+            )
+        return Response(contents)
+
+    monkeypatch.setattr(prepare_sources.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(prepare_sources.time, "sleep", sleeps.append)
+    output = tmp_path / "source.tar.gz"
+    prepare_sources._download(
+        {
+            "url": "https://files.pythonhosted.org/source.tar.gz",
+            "filename": output.name,
+            "bytes": len(contents),
+            "sha256": prepare_sources.hashlib.sha256(contents).hexdigest(),
+        },
+        output,
+    )
+
+    assert attempts == 3
+    assert sleeps == [1, 2]
+    assert output.read_bytes() == contents
+
+
+def test_download_does_not_retry_client_http_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+
+    def urlopen(*_args: object, **_kwargs: object) -> object:
+        nonlocal attempts
+        attempts += 1
+        raise urllib.error.HTTPError(
+            "https://files.pythonhosted.org/missing.tar.gz", 404, "Not Found", {}, None
+        )
+
+    monkeypatch.setattr(prepare_sources.urllib.request, "urlopen", urlopen)
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        prepare_sources._download(
+            {
+                "url": "https://files.pythonhosted.org/missing.tar.gz",
+                "filename": "missing.tar.gz",
+                "bytes": 1,
+                "sha256": "unused",
+            },
+            tmp_path / "missing.tar.gz",
+        )
+
+    assert exc_info.value.code == 404
+    assert attempts == 1
+
+
 def test_download_raises_last_transient_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

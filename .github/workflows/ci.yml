@@ -135,9 +135,9 @@ jobs:
       - name: Install Ruff
         run: python -m pip install ruff
       - name: Lint source and tests
-        run: ruff check src/ tests/ packaging/
+        run: ruff check src/ tests/ packaging/ scripts/release-evidence/
       - name: Check source and test formatting
-        run: ruff format --check src/ tests/ packaging/
+        run: ruff format --check src/ tests/ packaging/ scripts/release-evidence/
 
   core:
     name: Core and MCP (Python ${{ matrix.python-version }})

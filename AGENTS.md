@@ -133,7 +133,7 @@ site/                      # Astro + Starlight site and homepage; builds to site
   src/content/docs         # Committed symlink to ../../../docs
 
 tests/
-  desktop/                 # Python protocol/installer plus Electron, renderer, and native fixtures
+  desktop/                 # Python protocol/installer plus Electron, renderer, and native payload fixtures
   integration/desktop/     # Packaging, CI, artifact, and evidence integration checks
   plugins/                 # Desktop provider contract, lifecycle, discovery, and resources
   packaging/desktop/, packaging/rpm/  # Archive producer and Fedora RPM source checks
@@ -145,6 +145,7 @@ packaging/
   rpm/desktop/             # python-tongs and tongs-desktop SRPM sources and harness
   rpm/python-dependencies/ # Companion Python RPM specs and manifest
 scripts/                   # Repository maintenance and evidence helpers
+  release-evidence/native/ # Manual native Electron proofs and their fixtures; CI only lints them
 ```
 
 ## Subsystem Guides

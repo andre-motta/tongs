@@ -32,8 +32,8 @@ const evidenceRoot = path.resolve(
     path.join(sourceRoot, ".evidence", "issue-100"),
 );
 const pythonExecutable = path.join(sourceRoot, ".venv", "bin", "python");
-const fixtureSidecar = path.join(sourceRoot, "tests", "desktop", "native", "ci_fixture_sidecar.py");
-const editorFixture = path.join(sourceRoot, "tests", "desktop", "native", "editor_fixture.py");
+const fixtureSidecar = path.join(sourceRoot, "scripts", "release-evidence", "native", "ci_fixture_sidecar.py");
+const editorFixture = path.join(sourceRoot, "scripts", "release-evidence", "native", "editor_fixture.py");
 const editorEvidence = path.join(evidenceRoot, "editor-fixture.json");
 const exportRoot = path.join(evidenceRoot, "editor-exports");
 const desktopRoot = path.join(sourceRoot, "desktop");

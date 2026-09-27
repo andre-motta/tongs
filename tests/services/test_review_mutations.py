@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from tongs.cache.cached_client import CachedForgeClient
-from tongs.errors import AuthError, NetworkError
+from tongs.errors import AuthError, NetworkError, ValidationError
 from tongs.forges.models import (
     CIStatus,
     Discussion,
@@ -172,6 +172,24 @@ async def test_definite_auth_rejection_is_safe_and_repeatable() -> None:
         assert raised.value.code == ServiceErrorCode.AUTHENTICATION_FAILED
         assert "secret" not in str(raised.value)
     client.add_comment.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_validation_rejection_is_definite_and_repeatable() -> None:
+    client = _client(
+        add_comment=AsyncMock(side_effect=ValidationError("secret validation body"))
+    )
+    service, *_ = _service(client)
+    command = GeneralComment("validation-1", REF, "body")
+
+    for _ in range(2):
+        with pytest.raises(ServiceError) as raised:
+            await service.execute(command)
+        assert raised.value.code == ServiceErrorCode.INVALID_INPUT
+        assert raised.value.retryable is False
+        assert "secret" not in str(raised.value)
+    client.add_comment.assert_awaited_once()
+    client.invalidate_review_reads.assert_not_awaited()
 
 
 @pytest.mark.asyncio

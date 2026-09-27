@@ -13,6 +13,7 @@ from tongs.errors import (
     NetworkError,
     NotFoundError,
     RateLimitError,
+    ValidationError,
 )
 
 
@@ -97,6 +98,12 @@ def translate_error(
             ServiceErrorCode.CONFLICT,
             "The forge resource changed remotely or conflicts with this request. Refresh it and check for conflicts.",
             retryable=True,
+            details=details,
+        )
+    if isinstance(error, ValidationError):
+        return ServiceError(
+            ServiceErrorCode.INVALID_INPUT,
+            "The forge rejected this request as invalid.",
             details=details,
         )
     if isinstance(error, NetworkError):

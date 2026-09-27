@@ -17,6 +17,7 @@ from tongs.errors import (
     ForgePermissionError,
     NotFoundError,
     RateLimitError,
+    ValidationError,
 )
 from tongs.forges.base import ForgeClient
 from tongs.forges.models import Discussion, ForgeMutationResult, ReviewDecision
@@ -338,6 +339,7 @@ class ReviewMutationService:
             NotFoundError,
             ConflictError,
             RateLimitError,
+            ValidationError,
         ) as error:
             safe = translate_error(
                 error,

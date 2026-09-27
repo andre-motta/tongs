@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 import tongs.forges.github as github_module
-from tongs.errors import ConflictError, ForgeError
+from tongs.errors import ConflictError, ForgeError, ValidationError
 from tongs.forges.github import GitHubClient
 from tongs.forges.models import (
     ForgeHost,
@@ -345,6 +345,17 @@ class TestReviewMutationRoutes:
                 head_sha="captured-head",
             )
         assert json.loads(seen[0].content)["commit_id"] == "captured-head"
+
+    @pytest.mark.asyncio
+    async def test_approve_maps_422_to_validation_error(self):
+        client, http = _make_github_client(
+            lambda _: httpx.Response(422, json={"message": "cannot approve"})
+        )
+        async with http:
+            with pytest.raises(
+                ValidationError, match="GitHub does not allow self-approving PRs"
+            ):
+                await client.approve_mr("acme/repo", 10)
 
     @pytest.mark.asyncio
     async def test_thread_lookup_paginates_roots_and_reply_comments(self, monkeypatch):

@@ -13,6 +13,7 @@ from tongs.errors import (
     ConflictError,
     ForgeError,
     NetworkError,
+    ValidationError,
     redact_credentials,
 )
 from tongs.forges.base import ForgeClient
@@ -596,10 +597,8 @@ class GitHubClient(ForgeClient):
             return await self.submit_review(
                 repo_path, number, ReviewDecision.APPROVED, "", head_sha=head_sha
             )
-        except ForgeError as exc:
-            if "422" in str(exc):
-                raise ForgeError("GitHub does not allow self-approving PRs") from exc
-            raise
+        except ValidationError as exc:
+            raise ValidationError("GitHub does not allow self-approving PRs") from exc
 
     async def merge_mr(
         self,

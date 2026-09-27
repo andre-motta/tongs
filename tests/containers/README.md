@@ -28,6 +28,8 @@ retain the legacy terminal command, while the experimental desktop backend must
 report the opt-in plugin as ready and the legacy plugin as terminal-only.
 Test and runtime dependencies are provisioned in the harness image, then exposed
 to the clean wheel-install environment without downloading during container use.
+The image installs exactly Textual 4.0.0, the oldest release the core declares,
+so the core suite runs on that floor while other lanes use the newest release.
 
 `summary.json` records every command, duration, and exit status. JUnit XML files,
 stdout and stderr, Fedora and Python versions, installed dependency versions,

@@ -488,8 +488,9 @@ def test_textual_floor_is_the_oldest_release_the_terminal_app_passes_on() -> Non
 
     The terminal views use ``Content.from_markup`` with variables (Textual
     2.0), ``notify(markup=False)`` (3.1) and ``OptionList(compact=True)``
-    (3.2); the whole suite passes on Textual 4.0.0, python3-textual on
-    Fedora 44, so the RPM floor stays installable there.
+    (3.2); python3-textual on Fedora 44 is 4.0.0, so the RPM floor stays
+    installable there. The Fedora 44 probe installs exactly 4.0.0, so the core
+    suite runs on the floor itself and not only on the newest release.
     """
     pyproject = (ROOT / "pyproject.toml").read_text()
     release_inputs = (ROOT / "requirements" / "release.in").read_text()
@@ -511,4 +512,5 @@ def test_textual_floor_is_the_oldest_release_the_terminal_app_passes_on() -> Non
         "requirement": "python3dist(textual) >= 4",
         "import": "textual",
     } in dependencies["system_requirements"]
-    assert "textual\\>=4.0 \\" in probe
+    assert "        textual==4.0.0 \\\n" in probe
+    assert probe.count("textual") == 1

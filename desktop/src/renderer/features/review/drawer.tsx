@@ -805,6 +805,8 @@ export function ReviewDrawerMount({
   readonly openExternal: (url: string) => Promise<boolean>;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const needsAttention =
+    controller.workflow.draft.conflict !== null || controller.message !== null;
   const button = useRef<HTMLButtonElement | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
   // Closing drops whatever refusal is standing, so the next open is not
@@ -833,13 +835,16 @@ export function ReviewDrawerMount({
     <>
       <button
         ref={button}
-        className="button button-secondary review-drawer-toggle"
+        className={`button button-secondary review-drawer-toggle${needsAttention ? " review-drawer-toggle-error" : ""}`}
         aria-expanded={open}
-        aria-label={`Your review, ${controller.pendingCount} pending`}
+        aria-label={`Your review, ${controller.pendingCount} pending${needsAttention ? ", needs attention" : ""}`}
         onClick={() => (open ? close() : setOpen(true))}
       >
         Your review
-        <span className="badge review-drawer-badge">
+        <span
+          className={`badge review-drawer-badge${needsAttention ? " review-drawer-badge-error" : ""}`}
+          aria-hidden="true"
+        >
           {controller.pendingCount}
         </span>
       </button>

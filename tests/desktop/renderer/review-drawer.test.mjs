@@ -855,6 +855,13 @@ test("a failure raised while the drawer is shut is still there on reopen", async
   await waitFor(() =>
     assert.equal(view.container.querySelectorAll(".review-drawer").length, 0),
   );
+  await waitFor(() =>
+    assert.equal(
+      toggle.getAttribute("aria-label"),
+      "Your review, 0 pending, needs attention",
+    ),
+  );
+  assert.equal(toggle.classList.contains("review-drawer-toggle-error"), true);
   fireEvent.click(toggle);
   assert.equal(
     view.container.querySelectorAll(".review-drawer .notice-error").length,
@@ -870,6 +877,8 @@ test("a failure raised while the drawer is shut is still there on reopen", async
     view.container.querySelectorAll(".review-drawer .notice-error").length,
     0,
   );
+  assert.equal(toggle.getAttribute("aria-label"), "Your review, 0 pending");
+  assert.equal(toggle.classList.contains("review-drawer-toggle-error"), false);
 });
 
 /**

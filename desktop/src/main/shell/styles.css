@@ -1557,6 +1557,15 @@ button {
   margin-left: 0.4rem;
 }
 
+.review-drawer-toggle-error {
+  border-color: var(--danger);
+}
+
+.review-drawer-badge-error {
+  background: var(--danger);
+  color: white;
+}
+
 .review-drawer {
   position: fixed;
   top: 0;

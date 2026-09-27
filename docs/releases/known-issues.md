@@ -14,7 +14,6 @@ launch problems that have a workaround today.
 
 | Issue | Milestone | What you will see |
 |---|---|---|
-| [#228](https://github.com/andre-motta/tongs/issues/228) | v1.0.1 | Merge, Close, Reopen and Remove approval are reachable only from the Discussions tab. |
 | [#224](https://github.com/andre-motta/tongs/issues/224) | v1.1.0 | When the desktop app's Python process stops, the Retry button on a failed read does not restart it, so every retry fails. Relaunch the app instead. |
 | [#223](https://github.com/andre-motta/tongs/issues/223) | v1.1.0 | A large diff that is mostly additions renders as one block of green with no syntax color. |
 | [#177](https://github.com/andre-motta/tongs/issues/177) | v1.1.0 | In the pipelines and logs view, ++slash++ does not focus the log search box. Click the box to search. |

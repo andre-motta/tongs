@@ -724,8 +724,9 @@ test("quick verdict and merge cleanup require explicit confirmation with immutab
   cleanup();
 
   const view = renderFeature(bridge, review);
-  await view.findByRole("button", { name: "Merge" });
-  fireEvent.click(view.getByLabelText("Squash commits"));
+  // The header reads action support once the review's revision is known, so
+  // the merge options appear with the answer rather than with the button.
+  fireEvent.click(await view.findByLabelText("Squash commits"));
   fireEvent.click(view.getByLabelText("Delete source branch after merge"));
   fireEvent.click(view.getByRole("button", { name: "Merge" }));
   assert.equal(merges.length, 0);

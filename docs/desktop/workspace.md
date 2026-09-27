@@ -104,9 +104,13 @@ you.** and **You have no open merge requests.**
 
 The review header holds **← Reviews**, the review number and title, and
 **Open on forge**, which opens the review's forge URL in your external browser.
-On **Files changed** and **Discussions**, the header also carries the
-**Your review** button between the title and **Open on forge**. The other tabs
-hold no review state and do not show it.
+On **Overview**, **Files changed** and **Discussions** the header is the same:
+between the title and **Open on forge** it also carries the review lifecycle
+actions, **Merge**, **Close**, **Reopen** and **Remove approval**, followed by
+the **Your review** button. They appear once the review's current revision has
+loaded. **Commits** and **Pipelines** hold no review state and do not show
+them. In a narrow window the header wraps, so the controls move below the
+title instead of running off the edge.
 
 A review has five tabs:
 
@@ -118,8 +122,7 @@ A review has five tabs:
 - **Files changed** opens the code diff.
 - **Commits** lists commit subjects, short SHAs, authors and timestamps. An
   empty history shows **This review has no commits.**
-- **Discussions** lists the published threads that have a diff position, and
-  holds the review lifecycle actions.
+- **Discussions** lists the published threads that have a diff position.
 - **Pipelines** opens the CI view described [below](#inspect-pipelines-jobs-and-logs).
 
 [Reviewing on desktop](/desktop/reviewing/) covers **Files changed**,
@@ -225,7 +228,7 @@ The top application bar carries three built-in commands, plus any a plugin
 contributes.
 
 **Review workflow** appears while a review is open and sorts first. It moves the
-review to its **Discussions** tab, where the lifecycle actions live.
+review to its **Discussions** tab.
 
 **Copy URL** appears only while a review is open. It copies that review's URL to
 the clipboard, taken from the open review rather than from anything typed into

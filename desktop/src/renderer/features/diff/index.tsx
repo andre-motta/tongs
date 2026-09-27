@@ -39,14 +39,11 @@ import {
   type InlineComposerController,
 } from "../review/composer.js";
 import {
-  ReviewDrawerMount,
   peekPendingEdit,
   requestDrawerOpen,
-  requestPendingEdit,
   pendingEntryTarget,
   subscribePendingEdit,
   takePendingEdit,
-  useReviewDrawer,
 } from "../review/drawer.js";
 import {
   REVIEW_ROW_ATTRIBUTE,
@@ -76,6 +73,7 @@ import {
   type AnchoredThread,
   type DiscussionThreadSlot,
 } from "../review/thread.js";
+import { ReviewHeaderControls } from "../review/header.js";
 import { ReviewHeader } from "../review-detail/index.js";
 
 const MAX_DIFF_PAGES = 1000;
@@ -239,14 +237,14 @@ function DiffView({
         route={route}
         navigate={navigate}
         panels={panels}
-        drawer={
+        controls={
           loaded ? (
-            <DiffReviewDrawer
+            <ReviewHeaderControls
               bridge={bridge}
-              review={route.item.handle}
+              route={route}
+              navigate={navigate}
               forge={forge}
               revision={loaded.revision}
-              jumpTo={(target) => navigate({ ...route, diffTarget: target })}
             />
           ) : null
         }
@@ -309,51 +307,6 @@ function DiffView({
         />
       )}
     </>
-  );
-}
-
-/**
- * The review drawer as the Changes tab mounts it. It is a component of its own
- * because the controller needs a revision, and the revision is only known once
- * the diff has loaded. Jump reuses the discussion jump path exactly: the
- * drawer hands over the stored anchor's own path, side and line, and
- * `resolveDiscussionTarget` turns them into a selection the same way it does
- * for a discussion, so no new coordinate rule is introduced here.
- */
-function DiffReviewDrawer({
-  bridge,
-  review,
-  forge,
-  revision,
-  jumpTo,
-}: {
-  readonly bridge: DesktopBridge;
-  readonly review: string;
-  readonly forge: RepositoryDto["forge_type"] | null;
-  readonly revision: DiffPage["revision"];
-  readonly jumpTo: (target: DiscussionDiffTarget) => void;
-}): ReactNode {
-  const controller = useReviewDrawer(bridge, review, revision, forge);
-  const target = (entry: PendingDraftEntry): DiscussionDiffTarget | null => {
-    const anchored = pendingEntryTarget(entry);
-    return anchored
-      ? { discussionId: `pending:${entry.id}`, ...anchored }
-      : null;
-  };
-  return (
-    <ReviewDrawerMount
-      controller={controller}
-      openExternal={(url) => bridge.openExternal(url)}
-      jump={(entry) => {
-        const to = target(entry);
-        if (to) jumpTo(to);
-      }}
-      edit={(entry) => {
-        requestPendingEdit(review, entry.id);
-        const to = target(entry);
-        if (to) jumpTo(to);
-      }}
-    />
   );
 }
 

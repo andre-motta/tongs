@@ -71,16 +71,17 @@ import { SidecarTransport } from "../../../desktop/dist/src/main/sidecar.js";
  *   submit review"; each pending entry's body renders in
  *   `.review-drawer-entry-body`, general/reply entries grouped under
  *   "Review-level".
- * - MR-level actions (`features/review/index.tsx` `ActionButtons`), untouched
- *   by #181: "Merge" / "Close" / "Reopen" / "Remove approval" ->
- *   "Confirm {label}"; a rejected action reports through
- *   `role="alert"` inside `.review-workflow-shell` with the message from
+ * - MR-level actions (`features/review/header.tsx` `ReviewLifecycleActions`,
+ *   moved into the review page header on every tab by #228): "Merge" /
+ *   "Close" / "Reopen" / "Remove approval" -> "Confirm {label}"; a rejected
+ *   action reports through `role="alert"` inside `.review-header` with the
+ *   message from
  *   `desktop/src/shared/review.ts` `REVIEW_MUTATION_MESSAGES.conflict`, with
  *   the message "The forge refused this action: the review changed remotely or its branch conflicts with the target. Refresh, and check for merge
  *   conflicts."
- * - Uncertainty acknowledgment (`review-detail/index.tsx` and
- *   `features/review/index.tsx`, unchanged): button "I inspected the forge;
- *   acknowledge uncertainty".
+ * - Uncertainty acknowledgment (`review-detail/index.tsx` for comments and
+ *   verdicts, `features/review/header.tsx` for lifecycle actions): button "I
+ *   inspected the forge; acknowledge uncertainty".
  */
 
 protocol.registerSchemesAsPrivileged([
@@ -517,7 +518,7 @@ async function runProof() {
     await waitForFrames(3);
     const lightConflictNotice = await evaluate(`
       const alerts = [
-        ...document.querySelectorAll('.review-workflow-shell [role="alert"]'),
+        ...document.querySelectorAll('.review-header [role="alert"]'),
       ];
       if (alerts.length !== 1)
         throw new Error(

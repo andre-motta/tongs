@@ -101,7 +101,8 @@ several, the **Your review** drawer offers **Choose a preserved draft**. While a
 draft is active, the composers add general comments, selected lines and
 suggestions to it, and **Your review** tracks it, submits it or discards it.
 
-Open **Your review** from the header on **Files changed** or **Discussions**.
+Open **Your review** from the review header on **Overview**, **Files changed**
+or **Discussions**.
 Its count shows the pending comments, and the draft stays bound to the review
 revision it was created from.
 
@@ -167,22 +168,35 @@ If the stored draft was already submitted, or is held by a submission attempt
 elsewhere, keeping your text is refused with that reason. Both versions stay on
 screen so you can copy your text out.
 
-## Discussions and lifecycle actions
+## Discussions
 
 **Discussions** lists every published thread that has a diff position,
 unresolved threads first. Each has **Show in diff**, which opens it where it was
-written. The list does not take new comments; write in a composer instead.
+written. The list does not take new comments; write in a composer instead. An
+indicator names the active draft and its stored version. **Review workflow** in
+the application bar jumps to this tab.
 
-The same tab holds the review lifecycle actions: **Merge**, **Close**,
-**Reopen** and **Remove approval**. A merge offers **Squash commits** and
-**Delete source branch after merge**. An indicator names the active draft and
-its stored version. **Review workflow** in the application bar jumps to this
-tab.
+## Lifecycle actions
 
-:::note
-The lifecycle actions are only on **Discussions**, not on the other tabs. This
-is [known issue #228](/releases/known-issues/).
-:::
+The review lifecycle actions, **Merge**, **Close**, **Reopen** and **Remove
+approval**, sit in the review header next to **Your review**. The header is the
+same on **Overview**, **Files changed** and **Discussions**, so you can act on
+the review from whichever of those tabs you are reading; see
+[Read review details](/desktop/workspace/#read-review-details).
+
+- An action the forge does not permit for this review is disabled, and its
+  tooltip says it is unsupported. While support is still loading, or if it
+  could not be read, every action is disabled with that reason.
+- Each action takes two presses: the first changes the button to
+  **Confirm _action_**, and only the second sends it.
+- When merging is permitted, the header also offers **Squash commits** and
+  **Delete source branch after merge**. Changing either option withdraws a
+  pending **Confirm Merge**, so what you confirm is always what is on screen.
+- A refused action is reported in the header as an alert.
+- If the result is unknown, every action stays disabled until you choose
+  **Check retained receipt** or **I inspected the forge; acknowledge
+  uncertainty**. The unknown result follows you across the tabs, so an action
+  is never replayed by switching tabs.
 
 ## Keyboard
 

@@ -37,6 +37,7 @@ import {
   rejectQuickIntent,
   settleQuickIntent,
 } from "../review/state.js";
+import { ReviewHeaderControls, isActionCommand } from "../review/header.js";
 import type { SuggestionForge } from "../review/suggestion.js";
 import {
   DiscussionMarkdownBody,
@@ -47,19 +48,20 @@ export function ReviewHeader({
   route,
   navigate,
   panels,
-  drawer = null,
+  controls = null,
 }: {
   readonly route: Extract<AppRoute, { kind: "review" }>;
   readonly navigate: (route: AppRoute) => void;
   readonly panels: readonly ReviewPanelContribution[];
   /**
-   * The "Your review" button and its drawer, from whichever review surface
-   * holds the workflow controller. The header carries it because GitLab puts
-   * the review's own state in the top right of the review page, not inside one
-   * tab, but the header itself owns no review state and mounts no reads: a
-   * panel with no controller passes nothing and shows no button.
+   * The review page's own controls, `ReviewHeaderControls`: the lifecycle
+   * actions and the "Your review" button with its drawer. The header carries
+   * them because GitLab puts the review's own state and actions in the top of
+   * the review page, not inside one tab, but the header itself owns no review
+   * state and mounts no reads: each tab mounts the same controls once it knows
+   * the review's revision, and passes nothing until then.
    */
-  readonly drawer?: ReactNode;
+  readonly controls?: ReactNode;
 }): ReactNode {
   return (
     <>
@@ -74,7 +76,7 @@ export function ReviewHeader({
           <p className="eyebrow">Review #{route.item.summary.number}</p>
           <h1 className="view-title">{route.item.summary.title}</h1>
         </div>
-        {drawer}
+        {controls}
         <button
           className="button button-secondary"
           onClick={() =>
@@ -159,7 +161,22 @@ function ReviewOverview({
   const revision = state.value?.revision ?? null;
   return (
     <>
-      <ReviewHeader route={route} navigate={navigate} panels={panels} />
+      <ReviewHeader
+        route={route}
+        navigate={navigate}
+        panels={panels}
+        controls={
+          revision ? (
+            <ReviewHeaderControls
+              bridge={bridge}
+              route={route}
+              navigate={navigate}
+              forge={forge}
+              revision={revision}
+            />
+          ) : null
+        }
+      />
       <ReadRefreshButton state={state} label="review details" />
       {state.loading && !state.value && (
         <Notice kind="loading">Loading review details…</Notice>
@@ -407,6 +424,9 @@ function GeneralComposer({
   // a later remount empty it without the reader asking.
   const [composerEpoch, setComposerEpoch] = useState(0);
   const quick = workflow.quick;
+  // A lifecycle action (Merge, Close, Reopen, Remove approval) reports its own
+  // outcome in the page header, so this surface reports only what it sent.
+  const ownQuick = quick && !isActionCommand(quick.command) ? quick : null;
   const publishBody = useCallback((next: string): void => {
     setBody(next);
     // A verdict's standing lasts until the reader writes the next one.
@@ -474,21 +494,23 @@ function GeneralComposer({
           {VERDICT_SUBMITTED[submitted]}
         </div>
       )}
-      {quick?.message && (
+      {ownQuick?.message && (
         <div
-          className={`notice notice-${quick.status === "rejected" ? "error" : "warning"}`}
-          role={quick.status === "rejected" ? "alert" : "status"}
+          className={`notice notice-${ownQuick.status === "rejected" ? "error" : "warning"}`}
+          role={ownQuick.status === "rejected" ? "alert" : "status"}
         >
           {/* The composer already reports the sentence it was given, so it is
               not said twice; what is only here is the way out of an unknown
               result, which otherwise blocks every further write. */}
-          {quick.message !== controller.message && <span>{quick.message}</span>}
-          {quick.status === "unknown" && (
+          {ownQuick.message !== controller.message && (
+            <span>{ownQuick.message}</span>
+          )}
+          {ownQuick.status === "unknown" && (
             <button
               className="button button-secondary notice-action"
               onClick={() =>
                 apply((current) =>
-                  acknowledgeQuickUncertainty(current, quick.operationId),
+                  acknowledgeQuickUncertainty(current, ownQuick.operationId),
                 )
               }
             >
@@ -514,7 +536,7 @@ function GeneralComposer({
       ) : (
         <p className="review-workflow-thread-meta" role="status">
           The summary, the verdict, submission and recovery live in Your review,
-          on the Discussions tab.
+          at the top of the page.
         </p>
       )}
     </section>

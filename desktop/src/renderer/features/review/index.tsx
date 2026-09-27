@@ -15,11 +15,6 @@ import type {
   ReviewSnapshotDto,
 } from "../../../shared/bridge.js";
 import type {
-  ReviewAction,
-  ReviewActionCapabilitiesDto,
-  ReviewDesktopBridge,
-} from "../../../shared/review.js";
-import type {
   AppRoute,
   DiscussionDiffTarget,
   FeatureContribution,
@@ -30,30 +25,14 @@ import { ReviewHeader } from "../review-detail/index.js";
 import {
   cacheWorkflow,
   cachedWorkflow,
-  isUncertainError,
-  newOperationId,
-  reviewMutationError,
   subscribeWorkflow,
 } from "./composer.js";
-import type { PendingDraftEntry } from "./pending-card.js";
+import { ReviewHeaderControls } from "./header.js";
 import {
-  ReviewDrawerMount,
-  pendingEntryTarget,
-  requestPendingEdit,
-  useReviewDrawer,
-} from "./drawer.js";
-import {
-  acknowledgeQuickUncertainty,
-  beginQuickIntent,
   createReviewWorkflowState,
-  markQuickIntentUncertain,
   observeReviewRevision,
-  recoverQuickIntent,
-  rejectQuickIntent,
-  settleQuickIntent,
   type ReviewWorkflowState,
 } from "./state.js";
-import type { SuggestionForge } from "./suggestion.js";
 import {
   DiscussionMarkdownBody,
   allocateDiscussionMarkdown,
@@ -67,8 +46,6 @@ import {
 // which the diff surface now shares. They stay published from here because
 // this panel is where the rest of the app already reaches for them.
 export { allocateDiscussionMarkdown, discussionDiffTarget };
-
-interface ReviewFeatureBridge extends DesktopBridge, ReviewDesktopBridge {}
 
 export function createReviewFeature(
   bridge: DesktopBridge,
@@ -107,7 +84,7 @@ function ReviewWorkflow({
   context,
   route,
 }: {
-  readonly bridge: ReviewFeatureBridge;
+  readonly bridge: DesktopBridge;
   readonly context: FeatureContext;
   readonly route: Extract<AppRoute, { kind: "review" }>;
 }): ReactNode {
@@ -118,40 +95,20 @@ function ReviewWorkflow({
     )?.forge_type ?? null;
   const [snapshot, setSnapshot] = useState<ReviewSnapshotDto | null>(null);
   const [discussions, setDiscussions] = useState<readonly DiscussionDto[]>([]);
-  const [actionCapabilities, setActionCapabilities] =
-    useState<ReviewActionCapabilitiesDto | null>(null);
   const [workflow, setWorkflow] = useState<ReviewWorkflowState | null>(
     cachedWorkflow(review),
   );
   const workflowRef = useRef(workflow);
   const [error, setError] = useState<string | null>(null);
-  const [confirmation, setConfirmation] = useState<ReviewAction | null>(null);
-  const [mergeOptions, setMergeOptions] = useState({
-    squash: false,
-    cleanup: false,
-  });
   const openExternal = useCallback(
     (url: string) => bridge.openExternal(url),
     [bridge],
   );
-  const quickBlocked =
-    workflow?.quick?.status === "sending" || workflow?.quick?.status === "unknown";
-  const apply = useCallback(
-    (change: (current: ReviewWorkflowState) => ReviewWorkflowState): ReviewWorkflowState => {
-      const current = workflowRef.current;
-      if (!current) throw new Error("Review workflow is not ready");
-      const next = change(current);
-      workflowRef.current = next;
-      cacheWorkflow(review, next);
-      setWorkflow(next);
-      return next;
-    },
-    [review],
-  );
 
-  // The drawer writes the same workflow state this panel reads, and both are
-  // mounted here at once, so the panel adopts what the drawer publishes rather
-  // than rendering from a copy that stopped being true.
+  // The header's drawer and lifecycle actions write the same workflow state
+  // this panel reads, and all are mounted here at once, so the panel adopts
+  // what they publish rather than rendering from a copy that stopped being
+  // true.
   useEffect(
     () =>
       subscribeWorkflow(review, (next) => {
@@ -166,16 +123,14 @@ function ReviewWorkflow({
     const reads = [
       bridge.getReview(review),
       bridge.listDiscussions(review),
-      bridge.getReviewActionCapabilities(review),
     ] as const;
-    void Promise.all([reads[0].result, reads[1].result, reads[2].result] as const)
-      .then(([detail, discussionResult, actionResult]) => {
+    void Promise.all([reads[0].result, reads[1].result] as const)
+      .then(([detail, discussionResult]) => {
         if (!current) return;
         if (!detail.revision)
           throw new Error("The current review revision is unavailable.");
         setSnapshot(detail);
         setDiscussions(discussionResult.discussions);
-        setActionCapabilities(actionResult.capabilities);
         const cached = cachedWorkflow(review);
         const next = cached
           ? observeReviewRevision(cached, detail.revision)
@@ -191,134 +146,34 @@ function ReviewWorkflow({
     };
   }, [bridge, review]);
 
-  const runAction = async (action: ReviewAction): Promise<void> => {
-    if (!workflow) return;
-    if (confirmation !== action) {
-      setConfirmation(action);
-      return;
-    }
-    const operationId = newOperationId(action);
-    const params = {
-      operation_id: operationId,
-      review,
-      revision: workflow.displayed.revision,
-    };
-    apply((current) => beginQuickIntent(current, operationId, { action, ...params }));
-    setConfirmation(null);
-    try {
-      const receipt =
-        action === "merge"
-          ? await bridge.mergeReview({
-              ...params,
-              squash: mergeOptions.squash,
-              source_cleanup: mergeOptions.cleanup
-                ? { branch: route.item.summary.source_branch }
-                : null,
-            })
-          : action === "close"
-            ? await bridge.closeReview(params)
-            : action === "reopen"
-              ? await bridge.reopenReview(params)
-              : await bridge.unapproveReview(params);
-      apply((current) => settleQuickIntent(current, operationId, receipt));
-    } catch (reason) {
-      apply((current) =>
-        isUncertainError(reason)
-          ? markQuickIntentUncertain(current, operationId)
-          : rejectQuickIntent(current, operationId, reviewMutationError(reason)),
-      );
-    }
-  };
-
-  const recoverQuickAction = async (): Promise<void> => {
-    const quick = workflowRef.current?.quick;
-    if (!quick || quick.status !== "unknown" || !isActionCommand(quick.command))
-      return;
-    const read = bridge.getReviewActionReceipt({
-      operation_id: quick.operationId,
-      review,
-      revision: quick.command.revision,
-      action: quick.command.action,
-    });
-    try {
-      const result = await read.result;
-      const receipt = result.receipt;
-      if (receipt)
-        apply((current) => recoverQuickIntent(current, quick.operationId, receipt));
-      else
-        setError("No retained action receipt is available. Inspect the forge before acknowledging uncertainty.");
-    } catch (reason) {
-      setError(safeError(reason));
-    }
-  };
-
   return (
     <>
       <ReviewHeader
         route={route}
         navigate={context.navigate}
         panels={context.reviewPanels}
-        drawer={
+        controls={
           snapshot?.revision ? (
-            <PanelReviewDrawer
+            <ReviewHeaderControls
               bridge={bridge}
-              review={review}
+              route={route}
+              navigate={context.navigate}
               forge={forge}
               revision={snapshot.revision}
-              openDiffAt={(target) =>
-                context.navigate({ ...route, panel: "diff", diffTarget: target })
-              }
             />
           ) : null
         }
       />
       <section className="review-workflow-shell" aria-label="Review workflow">
-        <div className="review-workflow-toolbar">
-          {workflow?.draft.remote && (
-            <>
-              <strong>Draft review active</strong>
-              <span className="review-workflow-thread-meta">
-                Stored version {workflow.draft.remote.version}
-              </span>
-            </>
-          )}
-          <ActionButtons
-            capabilities={actionCapabilities}
-            confirmation={confirmation}
-            blocked={quickBlocked}
-            mergeOptions={mergeOptions}
-            setMergeOptions={(value) => {
-              setMergeOptions(value);
-              if (confirmation === "merge") setConfirmation(null);
-            }}
-            run={runAction}
-          />
-        </div>
-        {error && <Notice kind="error">{error}</Notice>}
-        {workflow?.quick?.message && (
-          <Notice kind={workflow.quick.status === "rejected" ? "error" : "warning"}>
-            <span>{workflow.quick.message}</span>
-            {workflow.quick.status === "unknown" && (
-              <span className="review-workflow-row">
-                {isActionCommand(workflow.quick.command) && (
-                  <button className="button button-secondary" onClick={() => void recoverQuickAction()}>
-                    Check retained receipt
-                  </button>
-                )}
-                <button
-                  className="button button-secondary"
-                  onClick={() =>
-                    apply((current) =>
-                      acknowledgeQuickUncertainty(current, workflow.quick!.operationId),
-                    )
-                  }
-                >
-                  I inspected the forge; acknowledge uncertainty
-                </button>
-              </span>
-            )}
-          </Notice>
+        {workflow?.draft.remote && (
+          <div className="review-workflow-toolbar">
+            <strong>Draft review active</strong>
+            <span className="review-workflow-thread-meta">
+              Stored version {workflow.draft.remote.version}
+            </span>
+          </div>
         )}
+        {error && <Notice kind="error">{error}</Notice>}
         <ThreadJumpList
           discussions={discussions}
           openExternal={openExternal}
@@ -338,8 +193,9 @@ function ReviewWorkflow({
  * Overview for a review-level comment, so this panel offers no composer, no
  * reply or resolve control, and no way to start a review: design 2.1 makes it
  * "no longer the place to write", and a review is started from the composer
- * that carries the first comment. The forge actions in the toolbar above act
- * on the review itself rather than on its contents, and stay here.
+ * that carries the first comment. The forge actions act on the review itself
+ * rather than on its contents, and live in the review page header, which is
+ * the same on every tab.
  *
  * The jump goes through `discussionDiffTarget` untouched, so the coordinates a
  * row resolves to are exactly the ones the diff route already resolves and
@@ -455,144 +311,8 @@ function ThreadJumpRow({
   );
 }
 
-/**
- * The review drawer as the Discussions panel mounts it. Jump and Edit send the
- * reader to the Changes tab over the existing discussion jump route, so the
- * coordinates a pending entry resolves to are the ones that route already
- * resolves and nothing new decides where a line is.
- */
-function PanelReviewDrawer({
-  bridge,
-  review,
-  forge,
-  revision,
-  openDiffAt,
-}: {
-  readonly bridge: ReviewFeatureBridge;
-  readonly review: string;
-  readonly forge: SuggestionForge | null;
-  readonly revision: ReviewRevisionDto;
-  readonly openDiffAt: (target: DiscussionDiffTarget) => void;
-}): ReactNode {
-  const controller = useReviewDrawer(bridge, review, revision, forge);
-  const target = (entry: PendingDraftEntry): DiscussionDiffTarget | null => {
-    const anchored = pendingEntryTarget(entry);
-    return anchored ? { discussionId: `pending:${entry.id}`, ...anchored } : null;
-  };
-  return (
-    <ReviewDrawerMount
-      controller={controller}
-      openExternal={(url) => bridge.openExternal(url)}
-      jump={(entry) => {
-        const to = target(entry);
-        if (to) openDiffAt(to);
-      }}
-      edit={(entry) => {
-        requestPendingEdit(review, entry.id);
-        const to = target(entry);
-        if (to) openDiffAt(to);
-      }}
-    />
-  );
-}
-
-function ActionButtons({
-  capabilities,
-  confirmation,
-  blocked,
-  mergeOptions,
-  setMergeOptions,
-  run,
-}: {
-  readonly capabilities: ReviewActionCapabilitiesDto | null;
-  readonly confirmation: ReviewAction | null;
-  readonly blocked: boolean;
-  readonly mergeOptions: { readonly squash: boolean; readonly cleanup: boolean };
-  readonly setMergeOptions: (value: { readonly squash: boolean; readonly cleanup: boolean }) => void;
-  readonly run: (action: ReviewAction) => Promise<void>;
-}): ReactNode {
-  return (
-    <div className="review-workflow-actions">
-      <div className="review-workflow-row">
-        {(["merge", "close", "reopen", "unapprove"] as const).map((action) => {
-          const supported = capabilities?.[action] === true;
-          return (
-            <button
-              key={action}
-              className="button button-secondary"
-              disabled={!supported || blocked}
-              title={
-                blocked
-                  ? "Resolve or acknowledge the previous action before another mutation."
-                  : supported
-                    ? undefined
-                    : `${label(action)} is unsupported for this review.`
-              }
-              onClick={() => void run(action)}
-            >
-              {confirmation === action ? `Confirm ${label(action)}` : label(action)}
-            </button>
-          );
-        })}
-      </div>
-      {capabilities?.merge && (
-        <div className="review-workflow-row">
-          <label>
-            <input
-              type="checkbox"
-              checked={mergeOptions.squash}
-              onChange={(event) =>
-                setMergeOptions({ ...mergeOptions, squash: event.target.checked })
-              }
-            />
-            Squash commits
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={mergeOptions.cleanup}
-              onChange={(event) =>
-                setMergeOptions({ ...mergeOptions, cleanup: event.target.checked })
-              }
-            />
-            Delete source branch after merge
-          </label>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Notice({ kind, children }: { readonly kind: string; readonly children: ReactNode }): ReactNode {
   return <div className={`notice notice-${kind}`} role={kind === "error" ? "alert" : "status"}>{children}</div>;
-}
-
-function isActionCommand(value: unknown): value is {
-  readonly action: ReviewAction;
-  readonly revision: ReviewRevisionDto;
-} {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "action" in value &&
-    (value.action === "merge" ||
-      value.action === "close" ||
-      value.action === "reopen" ||
-      value.action === "unapprove") &&
-    "revision" in value &&
-    value.revision !== null &&
-    typeof value.revision === "object"
-  );
-}
-
-function label(action: ReviewAction): string {
-  return action === "merge"
-    ? "Merge"
-    : action === "close"
-      ? "Close"
-      : action === "reopen"
-        ? "Reopen"
-        : "Remove approval";
 }
 
 function moveButtonFocus(event: KeyboardEvent<HTMLElement>): void {

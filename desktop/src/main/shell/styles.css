@@ -55,7 +55,6 @@
   justify-content: space-between;
 }
 
-.review-workflow-actions,
 .review-workflow-verdicts {
   display: grid;
   gap: 0.5rem;
@@ -348,8 +347,33 @@ button {
   gap: 20px;
   margin-bottom: 22px;
 }
+/*
+ * The review page header carries the review's own controls on every tab: the
+ * lifecycle actions, "Your review" and "Open on forge". It wraps instead of
+ * overflowing, so at a narrow width the controls move under the title rather
+ * than squeezing it to nothing or pushing past the window edge.
+ */
+.review-header {
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
 .review-heading {
-  flex: 1;
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.review-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+/* Merge options and the outcome of an action take a row of their own. */
+.review-header-details {
+  order: 1;
+  flex: 1 1 100%;
+  display: grid;
+  gap: 0.5rem;
   min-width: 0;
 }
 .header-actions {

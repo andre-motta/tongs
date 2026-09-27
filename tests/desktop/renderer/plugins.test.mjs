@@ -428,7 +428,7 @@ test("resource matching rejects remote, cross-plugin, and duplicate handles", as
           "alpha",
           "alpha-module",
           "module",
-          "https://example.invalid/main.mjs",
+          "https://example.invalid/assets/alpha-module",
         ),
         style,
         help,

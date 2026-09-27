@@ -133,6 +133,19 @@ test("c composes on the whole range and leaves the selection as the reader built
     "src/calc.py, Lines 10 to 11 (new)",
   );
 
+  // The composer opens under the last line of the range, not the line the
+  // reader clicked last.
+  const order = [
+    ...view.container.querySelectorAll(
+      '[aria-label^="Select new line"], .inline-composer',
+    ),
+  ].map((node) =>
+    node.classList.contains("inline-composer")
+      ? "composer"
+      : node.getAttribute("aria-label"),
+  );
+  assert.equal(order[order.indexOf("composer") - 1], "Select new line 11");
+
   fireEvent.change(view.getByLabelText("Inline review comment"), {
     target: { value: "Cover both lines" },
   });

@@ -182,6 +182,7 @@ def test_namespace_package_bundle_root_link_is_rejected(
     outside.mkdir()
     (outside / "main.mjs").write_text("export {};", encoding="utf-8")
     (package_one / "assets").symlink_to(outside, target_is_directory=True)
+    (package_two / "assets").mkdir()
     monkeypatch.syspath_prepend(str(first))
     monkeypatch.syspath_prepend(str(second))
     importlib.invalidate_caches()

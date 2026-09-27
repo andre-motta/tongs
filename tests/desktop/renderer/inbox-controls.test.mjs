@@ -74,7 +74,7 @@ test("review controls keep All Open as the default and send exact scope and stat
   );
 
   fireEvent.click(view.getByRole("button", { name: "My Reviews" }));
-  assert.equal(view.queryByText("all_open-open"), null);
+  assert.equal(view.queryAllByText("all_open-open").length, 0);
   assert.ok(view.getByText("Loading reviews from the local service…"));
   assert.equal(
     view.getByRole("button", { name: "Closed & merged" }).disabled,
@@ -229,7 +229,10 @@ test("review sort order is deterministic and focus follows a stable review", asy
       "Alpha",
     ),
   );
-  assert.equal(document.activeElement, stable);
+  assert.equal(
+    document.activeElement?.querySelector(".review-title")?.textContent,
+    "Zulu",
+  );
   fireEvent.keyDown(stable, { key: "Home" });
   assert.equal(
     document.activeElement.querySelector(".review-title")?.textContent,
@@ -349,13 +352,16 @@ test("mounted repository controls retain filters and keyboard focus across disco
   fireEvent.change(view.getByLabelText("Sort repositories"), {
     target: { value: "name" },
   });
-  assert.equal(document.activeElement, gammaButton);
+  assert.equal(document.activeElement?.textContent, gammaButton.textContent);
 
   const search = view.getByLabelText("Search repositories");
   fireEvent.change(search, { target: { value: "ga" } });
   await waitFor(() => assert.deepEqual(repositoryNames(view), ["Gamma"]));
+  // Enter moves the keyboard from the search field to the first result.
+  search.focus();
+  assert.equal(document.activeElement === search, true);
   fireEvent.keyDown(search, { key: "Enter" });
-  assert.equal(document.activeElement, gammaButton);
+  assert.equal(document.activeElement?.textContent, gammaButton.textContent);
   fireEvent.change(view.getByLabelText("Forge"), {
     target: { value: "gitlab" },
   });

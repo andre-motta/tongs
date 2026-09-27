@@ -125,7 +125,7 @@ test("plugin workspace mounts a usable module and renders help as inert text", a
   assert.ok(
     await view.findByText("<img src=x onerror=alert(1)>", { exact: true }),
   );
-  assert.equal(view.container.querySelector("img"), null);
+  assert.equal(view.container.querySelectorAll("img").length, 0);
   await feature.runtime.dispose();
 });
 

@@ -171,9 +171,9 @@ test("keeping my text re-saves it on top of the stored version", async () => {
     { expected: 2, body: "local unsaved text" },
   );
   await view.findByText("Stored version 3");
-  assert.equal(view.queryByLabelText("Stored draft text"), null);
+  assert.equal(view.queryAllByLabelText("Stored draft text").length, 0);
   assert.equal(view.getByLabelText("Summary").value, "local unsaved text");
-  assert.equal(view.queryByLabelText("My superseded draft text"), null);
+  assert.equal(view.queryAllByLabelText("My superseded draft text").length, 0);
   assert.equal(state.creates, 0);
 });
 
@@ -184,7 +184,7 @@ test("taking the stored version keeps my text reachable until I dismiss it", asy
     view.getByRole("button", { name: "Take the stored version and keep mine to copy" }),
   );
   await view.findByText("Stored version 2");
-  assert.equal(view.queryByLabelText("Stored draft text"), null);
+  assert.equal(view.queryAllByLabelText("Stored draft text").length, 0);
   assert.equal(view.getByLabelText("Summary").value, "TUI edit");
   assert.match(
     view.getByLabelText("My superseded draft text replaced by version 2").value,
@@ -456,7 +456,7 @@ test("the Discussions jump list lists unresolved threads first and jumps to the 
 
   const list = view.container.querySelector(".review-workflow-thread-list");
   fireEvent.keyDown(list, { key: "ArrowDown" });
-  assert.equal(document.activeElement, show);
+  assert.equal(document.activeElement === show, true);
 });
 
 test("the Discussions panel offers no composer, suggestion, reply or resolve control", async () => {
@@ -643,7 +643,7 @@ test("discussion roots and replies use shared safe Markdown without changing sou
     "H2",
   );
   assert.equal(view.container.querySelector("strong")?.textContent, "care");
-  assert.equal(view.container.querySelector("img, script"), null);
+  assert.equal(view.container.querySelectorAll("img, script").length, 0);
   assert.match(view.container.textContent, /\[Image: remote\]/);
   assert.match(view.container.textContent, /<script>bad\(\)<\/script>/);
   assert.equal(
@@ -770,7 +770,7 @@ test("known quick rejection renders one actionable alert", async () => {
   const message = "The forge refused this action: the review changed remotely or its branch conflicts with the target. Refresh, and check for merge conflicts.";
   assert.equal((await view.findAllByText(message)).length, 1);
   assert.equal(view.getAllByRole("alert").length, 1);
-  assert.equal(view.queryByText(/raw backend text/), null);
+  assert.equal(view.queryAllByText(/raw backend text/).length, 0);
 });
 
 test("draft comments are reviewable, editable, and deliberately removable", async () => {
@@ -1007,7 +1007,7 @@ test("durable recovery loads and binds the attempt draft instead of another cand
   assert.equal(loads[0].draft_id, otherId);
   assert.equal(view.getByLabelText("Summary").value, "matching recovered draft");
   await view.findByText(/Remote status is unknown/);
-  assert.equal(view.queryByDisplayValue("first draft"), null);
+  assert.equal(view.queryAllByDisplayValue("first draft").length, 0);
 });
 
 test("the Overview route puts one read of each kind the composer and the notes need", async () => {

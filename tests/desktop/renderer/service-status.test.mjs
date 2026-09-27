@@ -275,7 +275,7 @@ test("startup recovery warnings show as notices until dismissed", async () => {
   await act(async () => {
     fireEvent.click(document.querySelectorAll("#service-notices button")[0]);
   });
-  assert.equal(document.querySelector("#service-notices"), null);
+  assert.equal(document.querySelectorAll("#service-notices").length, 0);
   publisher.dispose();
   await transport.stop();
 });

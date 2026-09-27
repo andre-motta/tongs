@@ -405,6 +405,9 @@ export function listDiscoveredReviews(
   const inFlight = new Set<string>();
   const outcomes: ReviewListResult[] = [];
   let nextIndex = 0;
+  // Set when a read comes back cancelled without our signal firing, for
+  // example when the coordinator cancels every read on a cache clear.
+  let stopped = false;
   const aborted = (): boolean => signal?.aborted === true;
 
   const readRepository = async (index: number): Promise<void> => {
@@ -417,13 +420,14 @@ export function listDiscoveredReviews(
       inFlight.add(token);
       outcomes[index] = await read.result;
     } catch (error) {
+      if (serviceErrorOf(error)?.code === "request_cancelled") stopped = true;
       outcomes[index] = { items: [], failures: [repositoryFailure(handle, error)] };
     } finally {
       if (token !== null) inFlight.delete(token);
     }
   };
   const worker = async (): Promise<void> => {
-    while (!aborted() && nextIndex < handles.length) {
+    while (!aborted() && !stopped && nextIndex < handles.length) {
       const index = nextIndex;
       nextIndex += 1;
       await readRepository(index);
@@ -454,10 +458,20 @@ export function listDiscoveredReviews(
     void Promise.all(workers).then(() => {
       signal?.removeEventListener("abort", onAbort);
       if (aborted()) return;
-      resolve({
-        items: outcomes.flatMap((outcome) => outcome.items),
-        failures: outcomes.flatMap((outcome) => outcome.failures),
-      });
+      if (stopped) {
+        reject(cancelled());
+        return;
+      }
+      const items = outcomes.flatMap((outcome) => outcome.items);
+      const failures = outcomes.flatMap((outcome) => outcome.failures);
+      // Every repository failing usually means the service itself is down,
+      // so surface the error state rather than an empty list.
+      const first = failures[0];
+      if (items.length === 0 && first !== undefined && failures.length === handles.length) {
+        reject(new RendererReadError(first.code, first.message, first.retryable));
+        return;
+      }
+      resolve({ items, failures });
     });
   });
   return { requestTokens, result };

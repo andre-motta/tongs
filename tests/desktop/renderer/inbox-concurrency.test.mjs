@@ -50,8 +50,8 @@ test("All reviews loads every repository when there are more than the pending li
   assert.equal(bridge.refused, 0);
   assert.ok(bridge.peak <= DISCOVERED_REVIEW_CONCURRENCY);
   assert.equal(DISCOVERED_REVIEW_CONCURRENCY, 8);
-  assert.equal(view.queryByText(/repository read/), null);
-  assert.equal(view.queryByText("Too many desktop requests are pending."), null);
+  assert.equal(view.queryAllByText(/repository read/).length, 0);
+  assert.equal(view.queryAllByText("Too many desktop requests are pending.").length, 0);
   assert.equal(view.getByText("review-repo-99").textContent, "review-repo-99");
 });
 
@@ -73,7 +73,7 @@ test("one failing repository is reported while the others still render", async (
 
   await view.findByText("1 repository read failed. Available reviews are shown below.");
   assert.equal(view.container.querySelectorAll(".review-card").length, 4);
-  assert.equal(view.queryByText("review-repo-2"), null);
+  assert.equal(view.queryAllByText("review-repo-2").length, 0);
   assert.equal(view.getByText("review-repo-4").textContent, "review-repo-4");
 });
 
@@ -316,3 +316,56 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+test("a read cancelled from outside stops the queue and rejects as cancelled", async () => {
+  const pending = new Map();
+  const bridge = {
+    cancelRead: async () => true,
+    listReviews: (params) => {
+      let settle;
+      const promise = new Promise((resolve, reject) => {
+        settle = { resolve, reject };
+      });
+      pending.set(params.repository, settle);
+      return { requestToken: `token-${params.repository}`, result: promise };
+    },
+  };
+  const combined = listDiscoveredReviews(
+    bridge,
+    handles(20).map((handle) => ({ handle })),
+    "all_open",
+    "open",
+  );
+  const outcome = combined.result.then(
+    () => "resolved",
+    (error) => error.code,
+  );
+  await waitFor(() => assert.equal(pending.size, DISCOVERED_REVIEW_CONCURRENCY));
+  pending.get("repo-0").reject(
+    Object.assign(new Error("The read was cancelled."), {
+      code: "request_cancelled",
+      retryable: false,
+    }),
+  );
+  for (const [name, read] of pending) {
+    if (name !== "repo-0") read.resolve({ items: [], failures: [] });
+  }
+  assert.equal(await outcome, "request_cancelled");
+  assert.equal(pending.size, DISCOVERED_REVIEW_CONCURRENCY);
+});
+
+test("every repository failing rejects instead of showing an empty list", async () => {
+  const bridge = limitedBridge(() => {
+    throw new Error("controlled repository failure");
+  });
+  const outcome = await listDiscoveredReviews(
+    bridge.bridge,
+    handles(3).map((handle) => ({ handle })),
+    "all_open",
+    "open",
+  ).result.then(
+    () => "resolved",
+    (error) => error.code,
+  );
+  assert.equal(outcome, "read_failed");
+});

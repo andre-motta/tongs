@@ -799,7 +799,9 @@ class DesktopSidecarServer:
         they are retained like a diff and read page by page with
         ``discussions.page``. Each page carries at most half the negotiated
         value budget, which leaves ample room for the envelope; a single
-        thread larger than that fails only this request as too large.
+        thread larger than that fails only this request as too large. When
+        the first page already holds every thread, or fails, the snapshot is
+        released at once, so single-page reads never crowd the retention cap.
         """
         _require_params(
             params,
@@ -813,12 +815,19 @@ class DesktopSidecarServer:
         snapshot_id = self._snapshots.create(
             review_handle, revision, entries, kind=_DISCUSSIONS_SNAPSHOT
         )
-        return self._discussions_page_wire(
-            snapshot_id,
-            review_handle,
-            0,
-            params.get("max_items", _DISCUSSION_PAGE_ITEMS),
-        )
+        try:
+            value = self._discussions_page_wire(
+                snapshot_id,
+                review_handle,
+                0,
+                params.get("max_items", _DISCUSSION_PAGE_ITEMS),
+            )
+        except BaseException:
+            self._snapshots.expire(snapshot_id)
+            raise
+        if value.get("next_cursor") is None:
+            self._snapshots.expire(snapshot_id)
+        return value
 
     async def _discussions_page(
         self, params: JsonObject, _context: RequestContext

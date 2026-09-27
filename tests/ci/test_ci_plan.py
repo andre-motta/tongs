@@ -56,11 +56,13 @@ ZERO = "0" * 40
 DOCS = frozenset({"docs"})
 TUI = frozenset({"lint", "core"})
 CORE_READ_DOCS = frozenset({"docs", "core"})
+DESKTOP_READ_DOCS = frozenset({"docs", "desktop_fixtures", "desktop"})
 CORE_TESTS = frozenset({"lint", "core"})
 README = frozenset({"docs", "core"})
 SIDECAR = frozenset({"lint", "core", "desktop_fixtures", "desktop"})
 PACKAGING = SIDECAR | {"packaging"}
 SPIKES = frozenset({"desktop_fixtures"})
+FEDORA_REFERENCE_PLUGIN = frozenset({"desktop_fixtures", "fedora_podman"})
 
 
 def test_the_agreed_constants() -> None:
@@ -128,6 +130,10 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     (".github/PULL_REQUEST_TEMPLATE/feature.md", DOCS),
     (".github/FUNDING.yml", DOCS),
     (".github/linters/.markdownlint-cli2.yaml", CORE_READ_DOCS),
+    ("docs/desktop/troubleshooting.md", CORE_READ_DOCS),
+    ("docs/reference/keybindings.md", DESKTOP_READ_DOCS),
+    ("docs/desktop/workspace.md", DESKTOP_READ_DOCS),
+    ("docs/desktop/reviewing.md", DESKTOP_READ_DOCS),
     # README
     ("README.md", README),
     # TUI
@@ -190,6 +196,7 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     # SPIKES
     ("spikes/desktop/README.md", SPIKES),
     ("spikes/desktop/tests/test_backend.py", SPIKES),
+    ("spikes/desktop/reference-plugin/pyproject.toml", FEDORA_REFERENCE_PLUGIN),
     # FULL rules
     (".github/workflows/ci.yml", None),
     (".github/workflows/docs.yml", None),
@@ -298,9 +305,13 @@ def test_each_path_class(path: str, expected: frozenset[str] | None) -> None:
     assert "fedora_podman" not in lanes
 
 
-def test_only_full_paths_select_the_fedora_podman_probe() -> None:
-    for rule in RULES:
-        assert rule.full or "fedora_podman" not in close_lanes(rule.lanes), rule.name
+def test_only_the_reference_plugin_can_select_fedora_without_the_full_graph() -> None:
+    selecting = [
+        rule.name
+        for rule in RULES
+        if not rule.full and "fedora_podman" in close_lanes(rule.lanes)
+    ]
+    assert selecting == ["fedora-reference-plugin"]
 
 
 def test_packaging_is_selected_only_by_the_packaging_rule_or_the_full_graph() -> None:

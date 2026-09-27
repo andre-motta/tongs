@@ -198,8 +198,20 @@ RULES: tuple[Rule, ...] = (
             ".agents/ci/README.md",
             ".agents/testing/README.md",
             ".github/linters/**",
+            "docs/desktop/troubleshooting.md",
         ),
         lanes=frozenset({"docs", "core"}),
+    ),
+    # Documentation consumed by the desktop renderer tests. These pages need
+    # both the docs checks and the two desktop test lanes that read them.
+    Rule(
+        name="desktop-read-docs",
+        patterns=(
+            "docs/reference/keybindings.md",
+            "docs/desktop/workspace.md",
+            "docs/desktop/reviewing.md",
+        ),
+        lanes=frozenset({"docs", "desktop_fixtures", "desktop"}),
     ),
     # Terminal modules.  The sidecar never imports them.  By CTO decision they
     # run lint and core only: the desktop installed-core job also launches the
@@ -287,8 +299,14 @@ RULES: tuple[Rule, ...] = (
         ),
         lanes=frozenset({"lint", "core", "desktop_fixtures", "desktop", "packaging"}),
     ),
-    # The spike prototypes run only in the desktop fixture job.
+    # The spike prototypes run in the desktop fixture job. The reference
+    # plugin is also an input to the Fedora probe, so changes there select both.
     Rule(name="spikes", patterns=("spikes/**",), lanes=frozenset({"desktop_fixtures"})),
+    Rule(
+        name="fedora-reference-plugin",
+        patterns=("spikes/desktop/reference-plugin/**",),
+        lanes=frozenset({"fedora_podman"}),
+    ),
     Rule(
         name="ci-infrastructure",
         patterns=(

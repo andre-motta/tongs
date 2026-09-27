@@ -8,11 +8,17 @@ import {
 } from "react";
 import type {
   DesktopBridge,
+  ReviewFailureDto,
   ReviewListItemDto,
   ReviewListResult,
 } from "../../../shared/bridge.js";
 import type { AppRoute, FeatureContribution } from "../../core/navigation.js";
-import { formatDate, safeError } from "../../core/presentation.js";
+import {
+  formatDate,
+  RendererReadError,
+  safeError,
+  serviceErrorOf,
+} from "../../core/presentation.js";
 import type { CoordinatedRead } from "../../core/query.js";
 import { useRetainedRead } from "../../core/use-read.js";
 
@@ -286,28 +292,49 @@ function InboxResults({
   readonly releaseFocusTarget: () => void;
   readonly navigate: (route: AppRoute) => void;
 }): ReactNode {
-  const begin = useCallback(
-    () =>
-      repository
-        ? bridge.listReviews({
-            scope: reviewScope,
-            state: reviewState,
-            repository: repository.handle,
-          })
-        : listDiscoveredReviews(
-            bridge,
-            repositories,
-            reviewScope,
-            reviewState,
-          ),
-    [bridge, repositories, repository, reviewScope, reviewState],
-  );
+  // The combined read queues repositories it has not started yet, and the
+  // query coordinator can only cancel reads that already have a token, so the
+  // queue is stopped through this controller whenever the read is replaced,
+  // disabled or unmounted.
+  const discoveredRead = useRef<AbortController | null>(null);
+  const begin = useCallback(() => {
+    discoveredRead.current?.abort();
+    discoveredRead.current = null;
+    if (repository)
+      return bridge.listReviews({
+        scope: reviewScope,
+        state: reviewState,
+        repository: repository.handle,
+      });
+    const controller = new AbortController();
+    discoveredRead.current = controller;
+    return listDiscoveredReviews(
+      bridge,
+      repositories,
+      reviewScope,
+      reviewState,
+      controller.signal,
+    );
+  }, [bridge, repositories, repository, reviewScope, reviewState]);
+  const readDependencies = [
+    repository?.handle,
+    repositoryGeneration,
+    reviewScope,
+    reviewState,
+  ];
   const state = useRetainedRead(
     queries,
     `inbox:${repository?.handle ?? "all"}:${reviewScope}:${reviewState}`,
     begin,
-    [repository?.handle, repositoryGeneration, reviewScope, reviewState],
+    readDependencies,
     repositoriesReady,
+  );
+  useEffect(
+    () => () => {
+      discoveredRead.current?.abort();
+      discoveredRead.current = null;
+    },
+    [...readDependencies, repositoriesReady],
   );
   return (
     <>
@@ -350,27 +377,104 @@ function InboxResults({
   );
 }
 
+/**
+ * Most repository reads the combined inbox keeps in flight at once. The main
+ * process refuses a read once 64 requests are pending, so fanning out one read
+ * per discovered repository at once fails every tab for larger workspaces.
+ */
+export const DISCOVERED_REVIEW_CONCURRENCY = 8;
+
+/**
+ * Read one review list per discovered repository through a small pool and
+ * merge them in repository order. A repository whose read is refused or fails
+ * becomes one entry in `failures` instead of rejecting the whole list.
+ *
+ * `requestTokens` grows as reads start, so a coordinator cancelling this read
+ * reaches every read in flight at that moment. Aborting `signal` also cancels
+ * the reads in flight, starts none of the queued ones, and rejects the result.
+ */
 export function listDiscoveredReviews(
   bridge: DesktopBridge,
   repositories: readonly { readonly handle: string }[],
   scope: ReviewScope,
   state: "open" | "closed",
+  signal?: AbortSignal,
 ): CoordinatedRead<ReviewListResult> {
-  const reads = repositories.map((repository) =>
-    bridge.listReviews({
-      scope,
-      state,
-      repository: repository.handle,
-    }),
-  );
-  return {
-    requestTokens: reads.map((read) => read.requestToken),
-    result: Promise.all(reads.map((read) => read.result)).then((results) => ({
-      items: results
-        .flatMap((result) => result.items),
-      failures: results.flatMap((result) => result.failures),
-    })),
+  const handles = repositories.map((repository) => repository.handle);
+  const requestTokens: string[] = [];
+  const inFlight = new Set<string>();
+  const outcomes: ReviewListResult[] = [];
+  let nextIndex = 0;
+  const aborted = (): boolean => signal?.aborted === true;
+
+  const readRepository = async (index: number): Promise<void> => {
+    const handle = handles[index] as string;
+    let token: string | null = null;
+    try {
+      const read = bridge.listReviews({ scope, state, repository: handle });
+      token = read.requestToken;
+      requestTokens.push(token);
+      inFlight.add(token);
+      outcomes[index] = await read.result;
+    } catch (error) {
+      outcomes[index] = { items: [], failures: [repositoryFailure(handle, error)] };
+    } finally {
+      if (token !== null) inFlight.delete(token);
+    }
   };
+  const worker = async (): Promise<void> => {
+    while (!aborted() && nextIndex < handles.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await readRepository(index);
+    }
+  };
+
+  const result = new Promise<ReviewListResult>((resolve, reject) => {
+    const cancelled = (): RendererReadError =>
+      new RendererReadError(
+        "request_cancelled",
+        "The review list read was cancelled.",
+        false,
+      );
+    if (aborted()) {
+      reject(cancelled());
+      return;
+    }
+    const onAbort = (): void => {
+      for (const token of inFlight)
+        void bridge.cancelRead(token).catch(() => false);
+      reject(cancelled());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const workers = Array.from(
+      { length: Math.min(DISCOVERED_REVIEW_CONCURRENCY, handles.length) },
+      () => worker(),
+    );
+    void Promise.all(workers).then(() => {
+      signal?.removeEventListener("abort", onAbort);
+      if (aborted()) return;
+      resolve({
+        items: outcomes.flatMap((outcome) => outcome.items),
+        failures: outcomes.flatMap((outcome) => outcome.failures),
+      });
+    });
+  });
+  return { requestTokens, result };
+}
+
+function repositoryFailure(
+  repository: string,
+  error: unknown,
+): ReviewFailureDto {
+  const failure = serviceErrorOf(error);
+  return Object.freeze({
+    repository,
+    code: failure?.code ?? "read_failed",
+    message:
+      failure?.message ?? "The local service could not complete this read.",
+    retryable: failure?.retryable ?? true,
+  });
 }
 
 type FeatureParameters = Parameters<FeatureContribution["render"]>[0];

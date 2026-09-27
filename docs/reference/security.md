@@ -30,15 +30,13 @@ What follows from this:
   file. When a token comes from the keyring, the keyring owns it, not tongs.
 - Login, logout, and refresh remain the responsibility of the CLI or keyring that
   holds the credential.
-- From the release after 1.0.0, when a request gets a 401, tongs re-resolves
-  the token once through the same cascade and retries. For GitLab it first runs `glab auth status --hostname
+- When a request gets a 401, tongs re-resolves the token once through the same
+  cascade and retries. For GitLab it first runs `glab auth status --hostname
   <host>`, which makes glab refresh and save an expired OAuth token. A second
-  401 is reported as an authentication error. In 1.0.0, restart tongs after
-  rotating a token; see [known issues](/releases/known-issues/#credentials)
-  (#186).
+  401 is reported as an authentication error, so a rotated token is picked up
+  without restarting tongs.
 - CLI credential reads run without a shell, capture their output, and time out
-  after five seconds. From the release after 1.0.0, the GitLab refresh check
-  times out after fifteen.
+  after five seconds. The GitLab refresh check times out after fifteen.
 - Tokens live only in process memory and the outgoing `Authorization` header.
   `redact_credentials()` in `src/tongs/errors.py` strips known GitLab and GitHub
   token prefixes and generic `Bearer` and `PRIVATE-TOKEN` values before errors are
@@ -65,8 +63,9 @@ only if you would run its author's code directly.
 ## Desktop artifact verification
 
 :::note[Beta]
-The desktop app is a beta. The v1.0.0 GitHub Release carries its per-user
-archive with a release manifest and attestation, and unsigned Fedora RPMs.
+The desktop app is a beta. Each GitHub Release from v1.0.0 on carries its
+per-user archive with a release manifest and attestation, and unsigned Fedora
+RPMs.
 This section describes how `tongs desktop install` and `update` verify the archive. See
 [Install the desktop app](/desktop/installation/).
 :::

@@ -5,7 +5,7 @@ lead: "One window for your local repositories, their reviews, CI and installed p
 ---
 
 :::note[Beta]
-The desktop app is a beta. It is available on the v1.0.0 GitHub Release as a
+The desktop app is a beta. Each GitHub Release from v1.0.0 on carries it as a
 per-user archive with an attestation, and as unsigned RPMs. The terminal app
 remains the primary interface. See [Install the desktop app](/desktop/installation/).
 :::
@@ -166,8 +166,8 @@ line numbers, bounded row windows and a **Search log** field. Empty output shows
 **This job has no log output.**
 
 Type in **Search log**, or press ++slash++ anywhere in the Pipelines tab while no
-text field holds the keyboard. In 1.0.0, ++slash++ may not move the keyboard
-into the box ([#177](https://github.com/andre-motta/tongs/issues/177)); click
+text field holds the keyboard. ++slash++ may not move the keyboard into the
+box yet ([#177](https://github.com/andre-motta/tongs/issues/177)); click
 **Search log** instead. The log keeps all of its lines. Matching lines
 are highlighted in place as you type, the first match is selected, and the row
 window jumps to it.
@@ -184,10 +184,8 @@ match and restores the row window, and leaves keyboard focus where it is. The
 search keys act only on this view, so they are ignored while a dialog such as
 **Clear shared API cache?** is open.
 
-**Open log in editor**, bound to ++f2++ while the log is loaded (in 1.0.0
-++f2++ works only while a log control has focus,
-[#183](https://github.com/andre-motta/tongs/issues/183)), starts the
-configured graphical editor on a private, bounded export of the log. The
+**Open log in editor**, bound to ++f2++ while the log is loaded and no text
+field holds the keyboard, starts the configured graphical editor on a private, bounded export of the log. The
 control reads **Starting editor…** while the editor starts. Starting the editor
 process is reported separately from any confirmation that the editor read the
 file, and closing tongs does not stop the editor. The

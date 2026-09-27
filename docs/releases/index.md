@@ -10,6 +10,7 @@ and unsigned Fedora RPMs.
 
 | Version | Date | Notes |
 |---|---|---|
+| 1.0.1 | 2026-09-27 | [Release notes](/releases/v1.0.1/). First patch release: token refresh, pipeline refresh fixes, review actions on every desktop tab and inbox tabs for any number of repositories. |
 | 1.0.0 | 2026-09-10 | [Release notes](/releases/v1.0.0/). First stable release, split diffs, durable review drafts and the first desktop app beta. |
 
 ## Known issues
@@ -20,8 +21,8 @@ release, what you will see, and the milestone each fix is planned for.
 ## What comes next
 
 Planned work is tracked in the
-[milestones](https://github.com/andre-motta/tongs/milestones). v1.0.1 is the
-first patch release, and v1.1.0 collects the next round of improvements.
+[milestones](https://github.com/andre-motta/tongs/milestones). v1.1.0 collects
+the next round of improvements.
 
 ## Upgrade
 

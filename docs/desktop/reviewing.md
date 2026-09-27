@@ -5,7 +5,7 @@ lead: "Read the diff, write comments and suggestions, collect them in a durable 
 ---
 
 :::note[Beta]
-The desktop app is a beta. It is available on the v1.0.0 GitHub Release as a
+The desktop app is a beta. Each GitHub Release from v1.0.0 on carries it as a
 per-user archive with an attestation, and as unsigned RPMs. The terminal app
 remains the primary interface. See [Install the desktop app](/desktop/installation/).
 :::

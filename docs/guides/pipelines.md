@@ -37,11 +37,9 @@ log.
 
 :::note
 Pipelines load the first time you open the tab and stay in memory while the
-review is open. After a retry or cancel, the pipeline and job lists reload by
-themselves, and ++ctrl+r++ reloads the review with fresh pipeline data. In
-1.0.0 a job retry or cancel does not refresh the job list yet; this is a
-[known issue](/releases/known-issues/) planned for v1.0.1
-([#253](https://github.com/andre-motta/tongs/issues/253)).
+review is open. After a job retry or cancel, the job list you are on reloads
+by itself. ++ctrl+r++ reloads the review and refreshes the level of the
+Pipeline tab you are on: the pipeline list, a pipeline's jobs or a job log.
 :::
 
 ## Search a log

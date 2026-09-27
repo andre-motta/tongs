@@ -6,7 +6,7 @@ lead: The desktop app is an optional window over the same repositories, reviews 
 ---
 
 :::note[Beta]
-The desktop app is a beta. It is attached to the v1.0.0 GitHub Release as a
+The desktop app is a beta. Each GitHub Release from v1.0.0 on carries it as a
 per-user archive with its attestation, and as unsigned Fedora RPMs.
 :::
 
@@ -95,7 +95,7 @@ To install one exact release instead, name its version without the `v`
 prefix:
 
 ```console
-tongs desktop install --version 1.0.0
+tongs desktop install --version 1.0.1
 ```
 
 tongs remembers the newest release you have installed and refuses an older
@@ -148,7 +148,7 @@ with the source-built companion packages they depend on. Download all of them
 with the checksum file, check them, and install them together:
 
 ```console
-gh release download v1.0.0 --repo andre-motta/tongs --pattern '*.rpm' --pattern SHA256SUMS
+gh release download v1.0.1 --repo andre-motta/tongs --pattern '*.rpm' --pattern SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 sudo dnf install ./*.rpm
 ```

@@ -31,6 +31,10 @@ lane runs the whole suite from the checkout. The probe then checks installed
 plugin discovery from both directions: the TUI registry must load the example's
 terminal command, and the desktop registry must report the example provider as
 discovered and the core `mcp` entry point as terminal-only.
+Hosted CI runs the probe on every full-graph plan and on any pull request that
+changes the example plugin or a file named in `SMOKE_TESTS`; the `ci_plan.py`
+rule for those paths is kept equal to the probe's constants by
+`tests/ci/test_ci_plan_drift.py`.
 Test and runtime dependencies are provisioned in the harness image, then exposed
 to the clean wheel-install environment without downloading during container use.
 The image installs exactly Textual 4.0.0, the oldest release the core declares,

@@ -210,7 +210,6 @@ RULES: tuple[Rule, ...] = (
     Rule(
         name="docs-read-by-lint-tests",
         patterns=(
-            ".agents/ci/README.md",
             ".agents/testing/README.md",
             "docs/releases/v1.0.0.md",
         ),
@@ -821,30 +820,6 @@ def selected_checks(plan: Plan) -> frozenset[str]:
     return checks if plan.full else checks - FULL_PLAN_ONLY_CHECKS
 
 
-def render_table() -> str:
-    """A markdown lane table generated from :data:`RULES`."""
-
-    lines = [
-        "| Rule | Paths | Lanes |",
-        "| --- | --- | --- |",
-    ]
-    for rule in RULES:
-        patterns = ", ".join(f"`{pattern}`" for pattern in rule.patterns)
-        lanes = (
-            "full graph"
-            if rule.full
-            else ", ".join(lane for lane in LANES if lane in close_lanes(rule.lanes))
-        )
-        lines.append(f"| {rule.name} | {patterns} | {lanes} |")
-    lines.append("| (unmatched) | any other path | full graph |")
-    lines.append("")
-    lines.append(
-        "Matching rules add their lanes together, and a push to `main`, the "
-        f"`{FULL_LABEL}` label or any doubt about the diff selects the full graph."
-    )
-    return "\n".join(lines) + "\n"
-
-
 def _describe(error: BaseException) -> str:
     if isinstance(error, subprocess.CalledProcessError):
         command = " ".join(str(part) for part in error.cmd or ())
@@ -1124,7 +1099,6 @@ def _parser() -> argparse.ArgumentParser:
     explain.add_argument("--base", required=True)
     explain.add_argument("--head", default="HEAD")
     explain.add_argument("--label", action="append", default=[])
-    commands.add_parser("render-table", help="print the markdown lane table")
     return parser
 
 
@@ -1134,10 +1108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _compute(arguments)
     if arguments.command == "effective":
         return _effective(arguments)
-    if arguments.command == "explain":
-        return _explain(arguments)
-    sys.stdout.write(render_table())
-    return 0
+    return _explain(arguments)
 
 
 if __name__ == "__main__":

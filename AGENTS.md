@@ -168,9 +168,12 @@ The terminal application, shared services, GitHub and GitLab backends, cache,
 durable review drafts, MCP server, production Electron shell, bounded sidecar
 protocol, desktop provider host, installer, and artifact contracts are
 implemented in this tree. `.github/workflows/ci.yml` selects its lanes (docs,
-lint, core, the Fedora 44 Podman probe, desktop production evidence, and
-packaging) by the paths a pull request changes, using the rules
-in `tests/ci/ci_plan.py`. Any doubt fails closed to the full graph, as do rule
+lint with the CI harness suites, core, the Fedora 44 Podman probe, desktop
+production evidence, the desktop archive and SBOM, and the RPM lifecycle
+packaging) by the paths a pull request changes, using the rules in
+`tests/ci/ci_plan.py`. Core runs on Python 3.13 for a reduced pull request plan
+and on 3.12 and 3.13 for every full plan, and each test file runs in exactly one
+pre-merge job. Any doubt fails closed to the full graph, as do rule
 changes under `tests/ci/**`, the `ci:full` label, and every push to `main`.
 Preview a branch with `python tests/ci/ci_plan.py explain --base origin/main`.
 The single required check is the always-run `CI aggregate`, which recomputes
@@ -187,7 +190,7 @@ companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are man
 only (`workflow_dispatch`); the production gate's `rpm-lifecycle` and `archive` jobs
 prove the same source rebuild, companion closure, lifecycle and byte-identical
 rebuild against the receipt-bound fresh archive whenever the `packaging` lane
-is selected.
+is selected; a change under `desktop/src` runs the `archive` lane's jobs alone.
 
 `docs.yml` builds `site/` with `npm ci --prefix site` and
 `npm run build --prefix site` and deploys `site/dist` to GitHub Pages, but only

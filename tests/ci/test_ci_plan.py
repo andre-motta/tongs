@@ -41,7 +41,6 @@ from tests.ci.ci_plan import (
     explain_plan,
     full_plan,
     plan_mismatches,
-    render_table,
     selected_checks,
 )
 
@@ -91,8 +90,8 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     (".github/FUNDING.yml", DOCS),
     (".github/linters/.markdownlint-cli2.yaml", LINT_READ_DOCS),
     (".github/linters/package-lock.json", LINT_READ_DOCS),
-    # The lane guides embed the generated table, which a lint-job test reads
-    (".agents/ci/README.md", LINT_READ_DOCS),
+    # The lane guides no longer embed a generated table, so no test reads them
+    (".agents/ci/README.md", DOCS),
     # README
     ("README.md", README),
     # DOCUMENTATION READ BY TESTS, per the reading test's lane
@@ -1025,26 +1024,30 @@ def test_a_reduced_plan_publishes_the_newest_core_interpreter_only(
     assert json.loads(lines[-1].split("=", 1)[1]) == ["3.13"]
 
 
-def test_render_table_is_generated_from_the_rules(
-    capsys: pytest.CaptureFixture,
+def test_the_program_runs_standalone_with_the_standard_library(
+    tmp_path: Path,
 ) -> None:
-    table = render_table()
-    for rule in RULES:
-        assert f"| {rule.name} |" in table
-    assert "| (unmatched) | any other path | full graph |" in table
-    assert _main("render-table") == 0
-    assert capsys.readouterr().out == table
-
-
-def test_the_program_runs_standalone_with_the_standard_library() -> None:
+    output = tmp_path / "plan.json"
     completed = subprocess.run(
-        [sys.executable, "-I", str(PROGRAM), "render-table"],
+        [
+            sys.executable,
+            "-I",
+            str(PROGRAM),
+            "compute",
+            "--event-name",
+            "push",
+            "--checked-out",
+            MERGE,
+            "--output",
+            str(output),
+        ],
         capture_output=True,
         text=True,
         check=False,
+        cwd=tmp_path,
     )
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == render_table()
+    assert Plan.from_json(output.read_text()).full
 
 
 # No rule without the desktop lane may cover the sidecar's import closure.

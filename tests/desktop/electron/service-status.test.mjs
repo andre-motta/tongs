@@ -80,9 +80,32 @@ test("handshake recovery warnings reach the status as notices for that session",
   assert.deepEqual(publisher.current, { state: "connected", revision: 1, notices: [warning] });
   assert.deepEqual([...transport.serviceNotices], [warning]);
   await transport.stop();
-  // A stopped service shows no startup warnings of the session that ended.
-  assert.deepEqual(publisher.current, { state: "stopped", revision: 2, notices: [] });
+  // The warnings belong to the app run, so a stopped service keeps them.
+  assert.deepEqual(publisher.current, { state: "stopped", revision: 2, notices: [warning] });
   publisher.dispose();
+});
+
+test("notices accumulate across sessions of one app run without repeats", async () => {
+  const first = "Check github.com/acme/widgets #12.";
+  const second = "Check gitlab.example.com/group/app #3.";
+  const extras = { recovery_warnings: [first] };
+  const fake = harness({ handshakeExtras: extras });
+  const transport = transportFor(fake);
+  const { publisher } = record(transport);
+  await transport.start();
+  delete extras.recovery_warnings;
+  await transport.restart();
+  assert.deepEqual([...transport.serviceNotices], [first]);
+  extras.recovery_warnings = [second, first];
+  await transport.restart();
+  assert.deepEqual([...transport.serviceNotices], [first, second]);
+  assert.deepEqual(publisher.current.notices, [first, second]);
+  extras.recovery_warnings = Array.from({ length: 30 }, (_, index) => `Check #${index}.`);
+  await transport.restart();
+  assert.equal(transport.serviceNotices.length, 20);
+  assert.deepEqual(transport.serviceNotices.slice(0, 2), [first, second]);
+  publisher.dispose();
+  await transport.stop();
 });
 
 test("a handshake without recovery warnings has no notices", async () => {

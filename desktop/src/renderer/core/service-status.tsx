@@ -69,7 +69,9 @@ export class ServiceStatusModel {
       this.#updates = false;
     }
     this.#refresh();
-    this.#setNotices(statusNotices(status));
+    // Keep every notice already shown until the user dismisses it, even when
+    // a later report, such as a stopped service, carries none.
+    this.#setNotices([...new Set([...this.#notices, ...statusNotices(status)])]);
   }
 
   probeSucceeded(): void {

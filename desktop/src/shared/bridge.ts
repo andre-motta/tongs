@@ -113,7 +113,7 @@ export interface DesktopEvent { readonly sequence: number; readonly name: string
 /** Whether the main process currently holds a live connection to the local service. */
 export type ServiceState = "connected" | "stopped";
 /** A service state change; `revision` only grows, so a stale snapshot can be ignored. */
-/** `notices` are the current session's startup warnings, shown until dismissed. */
+/** `notices` are this app run's service startup warnings, shown until dismissed. */
 export interface ServiceStatusDto {
   readonly state: ServiceState;
   readonly revision: number;

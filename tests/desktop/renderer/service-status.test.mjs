@@ -280,14 +280,67 @@ test("startup recovery warnings show as notices until dismissed", async () => {
   await transport.stop();
 });
 
-test("a stopped service clears the notices and malformed notices are ignored", () => {
+test("a stopped service keeps the notices and malformed notices are ignored", () => {
   const model = new ServiceStatusModel();
   model.applyStatus({ state: "connected", revision: 1, notices: ["Check review 4."] });
   assert.deepEqual([...model.notices()], ["Check review 4."]);
   model.applyStatus({ state: "stopped", revision: 2, notices: [] });
-  assert.deepEqual([...model.notices()], []);
+  assert.deepEqual([...model.notices()], ["Check review 4."]);
   model.applyStatus({ state: "connected", revision: 3, notices: "Check review 4." });
-  assert.deepEqual([...model.notices()], []);
+  assert.deepEqual([...model.notices()], ["Check review 4."]);
   model.applyStatus({ state: "connected", revision: 4, notices: [7, "", "Check review 5."] });
+  assert.deepEqual([...model.notices()], ["Check review 4.", "Check review 5."]);
+  model.dismissNotice("Check review 4.");
+  model.applyStatus({ state: "connected", revision: 5, notices: ["Check review 4."] });
   assert.deepEqual([...model.notices()], ["Check review 5."]);
+});
+
+test("a recovery notice survives a service restart that reports nothing until dismissed", async () => {
+  const warning =
+    "Part of the review may already have posted. Review: github.com/acme/widgets #12.";
+  const extras = { recovery_warnings: [warning] };
+  const fake = harness({ handshakeExtras: extras });
+  const transport = transportFor(fake);
+  await transport.start();
+  const { bridge, publisher } = wire(transport);
+  const model = new ServiceStatusModel();
+  render(
+    React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(ServiceStatusLine, { model, bridge }),
+      React.createElement(ServiceNotices, { model }),
+    ),
+  );
+  await settle();
+  assert.deepEqual(noticeTexts(), [warning]);
+
+  // The store warns only once: the restarted service reports no warnings.
+  delete extras.recovery_warnings;
+  await act(async () => {
+    fake.children[0].finish(9, null);
+  });
+  await settle();
+  assert.equal(headerText(), SERVICE_STATUS_TEXT.stopped);
+  assert.deepEqual(noticeTexts(), [warning]);
+  await act(async () => {
+    await transport.restart();
+  });
+  await settle();
+  assert.equal(fake.children.length, 2);
+  assert.equal(headerText(), SERVICE_STATUS_TEXT.connected);
+  assert.deepEqual(noticeTexts(), [warning]);
+  assert.deepEqual(publisher.current.notices, [warning]);
+
+  // A renderer that starts after the restart still receives it.
+  const fresh = new ServiceStatusModel();
+  fresh.applyStatus(await bridge.getServiceStatus());
+  assert.deepEqual([...fresh.notices()], [warning]);
+
+  await act(async () => {
+    fireEvent.click(document.querySelectorAll("#service-notices button")[0]);
+  });
+  assert.equal(document.querySelectorAll("#service-notices").length, 0);
+  publisher.dispose();
+  await transport.stop();
 });

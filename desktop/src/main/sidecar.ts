@@ -142,8 +142,11 @@ export class SidecarTransport extends EventEmitter {
   }
 
   /**
-   * Startup warnings the current session's handshake reported, such as a
-   * review draft whose interrupted submission could not be read.
+   * Startup warnings every handshake of this app run reported, such as a
+   * review draft whose interrupted submission could not be read. The store
+   * warns about such a draft only once, so a later session that reports
+   * nothing must not erase the warning; the renderer hides each one when the
+   * user dismisses it.
    */
   get serviceNotices(): readonly string[] {
     return this.notices;
@@ -225,7 +228,6 @@ export class SidecarTransport extends EventEmitter {
     this.buffer = Buffer.alloc(0);
     this.lastEventSequence = 0;
     this.jsonLimits = DEFAULT_JSON_LIMITS;
-    this.notices = NO_NOTICES;
     this.generation += 1;
     const environment = { ...process.env };
     delete environment.PYTHONHOME;
@@ -268,7 +270,7 @@ export class SidecarTransport extends EventEmitter {
     try {
       const result = await handshake.result;
       this.jsonLimits = validateHandshake(result, this.launch.coreVersion);
-      this.notices = handshakeNotices(result);
+      this.notices = mergeNotices(this.notices, handshakeNotices(result));
     } catch (error) {
       await this.stop();
       throw error;
@@ -557,8 +559,12 @@ export class ServiceStatusPublisher {
   }
 
   get current(): ServiceStatusDto {
-    const notices = this.#state === "connected" ? [...this.source.serviceNotices] : [];
-    return { state: this.#state, revision: this.#revision, notices };
+    // Notices outlive a stopped session: they are this app run's warnings.
+    return {
+      state: this.#state,
+      revision: this.#revision,
+      notices: [...this.source.serviceNotices],
+    };
   }
 
   start(): void {
@@ -635,6 +641,16 @@ function handshakeNotices(value: JsonValue): readonly string[] {
     .slice(0, MAX_SERVICE_NOTICES)
     .map(truncateNotice);
   return notices.length === 0 ? NO_NOTICES : Object.freeze(notices);
+}
+
+/** Adds the new notices after the kept ones, without repeats, up to the bound. */
+function mergeNotices(
+  kept: readonly string[],
+  added: readonly string[],
+): readonly string[] {
+  if (added.length === 0) return kept;
+  const merged = [...new Set([...kept, ...added])].slice(0, MAX_SERVICE_NOTICES);
+  return merged.length === kept.length ? kept : Object.freeze(merged);
 }
 
 /**

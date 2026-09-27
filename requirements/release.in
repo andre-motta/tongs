@@ -1,0 +1,27 @@
+# Direct inputs of requirements/release.lock, the hash-locked environment of
+# the release jobs that hold a signing or publishing token.  Regenerate the
+# lock with the command at the top of requirements/release.lock.
+
+# The core runtime dependencies from pyproject.toml, installed from the lock
+# so that the editable install of tongs itself can run with --no-deps.
+aiosqlite>=0.20
+httpx>=0.27
+packaging>=24.0
+platformdirs>=4.0
+pyperclip>=1.8
+sigstore==4.5.0
+textual>=1.0
+
+# The SPDX generator in the signing job validates against the pinned schema.
+jsonschema>=4.18,<5
+
+# The build backend, so the editable install runs with --no-build-isolation
+# and never resolves an unpinned build requirement.  hatchling builds this
+# editable wheel with the editables package.
+editables
+hatch-vcs
+hatchling
+
+# The publish workflow builds the PyPI wheel and sdist from this lock with
+# python -m build --no-isolation, so no build requirement resolves fresh.
+build

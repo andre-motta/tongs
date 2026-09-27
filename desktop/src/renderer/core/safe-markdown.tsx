@@ -1,7 +1,11 @@
 import {
+  Children,
+  isValidElement,
   memo,
+  useId,
   useMemo,
   useState,
+  type CSSProperties,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -15,6 +19,67 @@ const MAX_AST_NODES = 4096;
 const MAX_AST_DEPTH = 32;
 const MAX_PREVIEW_CODE_POINTS = 4096;
 const MAX_EXTERNAL_URL_LENGTH = 4096;
+const MAX_LINK_TEXT_LENGTH = 2048;
+// Unicode full stops that the URL host parser maps to "." (UTS 46).
+const HOST_LABEL_SEPARATOR = /[.\u3002\uFF0E\uFF61]/u;
+// Link text without a scheme is a host candidate only when its top-level label
+// is one of these common web labels or a punycode (xn--) label, however many
+// labels it has. A port, path, query, or fragment after the name does not by
+// itself make it a host, so file names, file:line references, and dotted code
+// identifiers such as setup.py:42, README.md#install, vite.config.ts, and
+// foo.bar.baz stay unmarked. The list leaves out labels that double as common
+// file extensions, such as md, py, sh, ts, and rs. Text with an explicit
+// scheme is always parsed as a URL.
+const WEB_TOP_LABELS: ReadonlySet<string> = new Set([
+  "com",
+  "org",
+  "net",
+  "edu",
+  "gov",
+  "mil",
+  "int",
+  "io",
+  "dev",
+  "app",
+  "ai",
+  "co",
+  "me",
+  "info",
+  "biz",
+  "cloud",
+  "tech",
+  "xyz",
+  "site",
+  "online",
+  "page",
+  "us",
+  "uk",
+  "de",
+  "fr",
+  "eu",
+  "ca",
+  "au",
+  "jp",
+  "cn",
+  "ru",
+  "br",
+  "nl",
+  "ch",
+  "se",
+  "es",
+  "example",
+]);
+// Punctuation that commonly wraps a URL inside prose, such as "(github.com)".
+const WRAPPING_PUNCTUATION = /^[("'<[{]+|[)"'>\]},;:!?.]+$/gu;
+
+// Theme tokens from the shell stylesheet; the renderer sets them through the
+// CSSOM, which the style-src 'self' policy permits.
+const MISMATCHED_HOST_STYLE: CSSProperties = Object.freeze({
+  marginLeft: "5px",
+  fontSize: "12px",
+  color: "var(--warning)",
+  overflowWrap: "anywhere",
+});
 
 const ALLOWED_ELEMENTS = Object.freeze([
   "p",
@@ -164,6 +229,9 @@ function SafeExternalLink({
 }): ReactNode {
   const [opening, setOpening] = useState(false);
   const [failed, setFailed] = useState(false);
+  const descriptionId = useId();
+  const host = externalLinkHost(destination);
+  const mismatched = linkTextNamesOtherOrigin(linkText(children), destination);
   const activate = async (event: MouseEvent<HTMLButtonElement>): Promise<void> => {
     event.preventDefault();
     if (opening) return;
@@ -180,14 +248,30 @@ function SafeExternalLink({
   return (
     <>
       <button
+        aria-describedby={descriptionId}
         className="safe-markdown-link"
+        data-link-host={host}
         disabled={opening}
         onClick={(event) => void activate(event)}
         role="link"
+        title={destination}
         type="button"
       >
         {children}
       </button>
+      {mismatched ? (
+        <span
+          className="safe-markdown-link-host safe-markdown-link-host-mismatch"
+          id={descriptionId}
+          style={MISMATCHED_HOST_STYLE}
+        >
+          (opens {host})
+        </span>
+      ) : (
+        <span className="safe-markdown-link-host" hidden id={descriptionId}>
+          Opens {host}
+        </span>
+      )}
       {failed && (
         <span className="safe-markdown-link-error" role="status">
           Could not open link.
@@ -195,6 +279,110 @@ function SafeExternalLink({
       )}
     </>
   );
+}
+
+/** Returns the host shown for an admitted destination, in its ASCII form. */
+export function externalLinkHost(destination: string): string {
+  try {
+    return new URL(destination).host;
+  } catch {
+    return destination;
+  }
+}
+
+/**
+ * Reports whether link text reads as a URL or host naming a different host
+ * (hostname plus effective port) than the destination, so a spoofed forge
+ * address can be flagged before activation. The scheme is not compared, so
+ * http://github.com/x text for an https://github.com/x destination is not
+ * flagged. Text longer than the inspection limit fails closed and is flagged.
+ */
+export function linkTextNamesOtherOrigin(
+  text: string,
+  destination: string,
+): boolean {
+  let target: URL;
+  try {
+    target = new URL(destination);
+  } catch {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed.length > MAX_LINK_TEXT_LENGTH) return true;
+  // The text is flagged when any word, stripped of wrapping punctuation such as
+  // "(github.com)" or a trailing "github.com.", reads as a URL or host on a
+  // different host.
+  return trimmed
+    .split(/\s+/u)
+    .map((word) => word.replace(WRAPPING_PUNCTUATION, ""))
+    .some((word) => word.length > 0 && tokenNamesOtherHost(word, target));
+}
+
+function tokenNamesOtherHost(token: string, target: URL): boolean {
+  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(token)) {
+    try {
+      return new URL(token).host !== target.host;
+    } catch {
+      return false;
+    }
+  }
+  return schemelessTextNamesOtherHost(token, target);
+}
+
+// Link text without a scheme is parsed as an https URL so the host parser
+// applies IDNA mapping: homoglyphs become punycode, Unicode full stops become
+// dots, and ignorable characters are removed before the hosts are compared.
+function schemelessTextNamesOtherHost(text: string, target: URL): boolean {
+  const hostPart = text.split(/[/?#]/u, 1)[0] ?? "";
+  let parsed: URL;
+  try {
+    parsed = new URL(`https://${text}`);
+  } catch {
+    // Unparseable text still gets the marker when its top-level label, with
+    // any port or trailing symbols removed, reads like a web or non-ASCII one.
+    const labels = hostPart.replace(/:[^:]*$/u, "").split(HOST_LABEL_SEPARATOR);
+    if (labels.length < 2) return false;
+    const topLabel = /^[\p{L}\p{N}-]*/u.exec(
+      (labels[labels.length - 1] ?? "").normalize("NFKC").toLowerCase(),
+    )?.[0];
+    return (
+      topLabel !== undefined &&
+      (isWebTopLabel(topLabel) || /[^\x00-\x7f]/u.test(topLabel))
+    );
+  }
+  // Userinfo that itself reads like a dotted name, as in
+  // "github.com@evil.example", disguises the real host.
+  if (parsed.username.includes(".")) return true;
+  const labels = parsed.hostname.split(".");
+  if (labels.length < 2) return false;
+  if (!isWebTopLabel(labels[labels.length - 1] ?? "")) return false;
+  return parsed.host !== target.host;
+}
+
+function isWebTopLabel(label: string): boolean {
+  return WEB_TOP_LABELS.has(label) || /^xn--[a-z0-9-]+$/u.test(label);
+}
+
+function linkText(children: ReactNode): string {
+  let text = "";
+  const stack: ReactNode[] = [children];
+  while (stack.length > 0 && text.length <= MAX_LINK_TEXT_LENGTH) {
+    const node = stack.pop();
+    if (typeof node === "string" || typeof node === "number") {
+      text += String(node);
+    } else if (Array.isArray(node)) {
+      const items = Children.toArray(node as ReactNode);
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        stack.push(items[index]);
+      }
+    } else if (isValidElement<{ alt?: unknown; children?: ReactNode }>(node)) {
+      // An image inside a link renders its alt text as "[Image: <alt>]".
+      if (typeof node.props.alt === "string") text += ` ${node.props.alt} `;
+      stack.push(node.props.children);
+    }
+  }
+  return text;
 }
 
 function MarkdownFallback({

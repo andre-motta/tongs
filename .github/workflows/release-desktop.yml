@@ -316,19 +316,27 @@ jobs:
         with:
           name: desktop-candidate-input-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/tongs-desktop-candidate
-      - name: Install Sigstore 4.5, the SPDX validator, and the source verifier
-        # The deterministic SPDX generator validates against the pinned schema,
-        # so this job needs jsonschema.  It is named explicitly rather than
-        # pulled in with the whole dev extra, because a signing job holding
-        # id-token and attestations write should not also carry a test runner
-        # and a documentation theme.
+      - name: Install the hash-locked Sigstore 4.5, SPDX validator and build backend
+        # This job holds id-token and attestations write, so nothing it
+        # installs may resolve fresh from the index.  The lock pins every
+        # runtime import of the signing scripts (jsonschema for the SPDX
+        # generator, but no test runner or documentation theme), their whole
+        # closure and the build backend, each by hash and as a wheel only.
         run: >-
           "$CANDIDATE_PYTHON" -I -m pip install
           --isolated
           --disable-pip-version-check
+          --require-hashes
+          --only-binary=:all:
+          -r requirements/release.lock
+      - name: Install the source verifier without resolving anything
+        run: >-
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
+          --disable-pip-version-check
+          --no-deps
+          --no-build-isolation
           -e .
-          "jsonschema>=4.18,<5"
-          "sigstore==${SIGSTORE_VERSION}"
       - name: Require the isolated source-bound signing environment
         run: |
           "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
@@ -610,8 +618,9 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+    # GH_TOKEN is set only on the steps that call gh, so the installs and the
+    # release scripts that never reach the API do not see the write token.
     env:
-      GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ needs.candidate-archive.outputs.release-tag }}
     steps:
       - name: Check out the exact tagged source without persisted credentials
@@ -644,13 +653,24 @@ jobs:
           "python${PYTHON_VERSION}" -I -m venv "$RUNNER_TEMP/tongs-candidate-venv"
           printf 'CANDIDATE_PYTHON=%s/tongs-candidate-venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           printf 'PYTHONNOUSERSITE=1\n' >> "$GITHUB_ENV"
-      - name: Install Sigstore 4.5 and the source-built installer verifier
+      - name: Install the hash-locked Sigstore 4.5 and build backend
+        # This job holds contents write, so nothing it installs may resolve
+        # fresh from the index: the lock pins every package by hash.
         run: >-
           "$CANDIDATE_PYTHON" -I -m pip install
           --isolated
           --disable-pip-version-check
+          --require-hashes
+          --only-binary=:all:
+          -r requirements/release.lock
+      - name: Install the source-built installer verifier without resolving anything
+        run: >-
+          "$CANDIDATE_PYTHON" -I -m pip install
+          --isolated
+          --disable-pip-version-check
+          --no-deps
+          --no-build-isolation
           -e .
-          "sigstore==${SIGSTORE_VERSION}"
       - name: Require the isolated source-bound verification environment
         run: |
           "$CANDIDATE_PYTHON" -I - "$RUNNER_TEMP/tongs-candidate-venv" "$GITHUB_WORKSPACE" <<'PY'
@@ -701,6 +721,8 @@ jobs:
           --notes "$RELEASE_NOTES"
           --report "$RELEASE_EVIDENCE/release-verification.json"
       - name: Refuse to touch a release that already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           "$CANDIDATE_PYTHON" -I
           tests/integration/desktop/release_publication.py require-absent
@@ -708,6 +730,8 @@ jobs:
       - name: Create the release as a draft with every verified asset
         # A draft can still be deleted if an upload fails part way; a
         # published release is immutable and cannot be repaired.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$RELEASE_TAG"
           --repo "$GITHUB_REPOSITORY"
@@ -717,6 +741,8 @@ jobs:
           --notes-file "$RELEASE_NOTES"
           "$RELEASE_ASSETS"/*
       - name: Require the draft to carry exactly the assembled assets
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           "$CANDIDATE_PYTHON" -I
           tests/integration/desktop/release_publication.py verify-published
@@ -725,12 +751,16 @@ jobs:
           --expect-draft
           --report "$RELEASE_EVIDENCE/draft-release.json"
       - name: Publish the release as the latest stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           gh release edit "$RELEASE_TAG"
           --repo "$GITHUB_REPOSITORY"
           --draft=false
           --latest
       - name: Require the published release to be immutable and complete
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           "$CANDIDATE_PYTHON" -I
           tests/integration/desktop/release_publication.py verify-published

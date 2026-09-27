@@ -18,20 +18,31 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: pip install build
+      # The wheel and sdist built here are what the publish job uploads, so
+      # the build frontend and backend come from the hash lock, and the build
+      # runs without isolation so pip never resolves a fresh build backend.
+      - name: Install the hash-locked build frontend and backend
+        run: >-
+          python -I -m pip install
+          --isolated
+          --disable-pip-version-check
+          --require-hashes
+          --only-binary=:all:
+          -r requirements/release.lock
 
       - name: Build package
-        run: python -m build
+        run: python -I -m build --no-isolation
 
       - name: Assert the built version equals the tag before anything is uploaded
         env:
@@ -99,6 +110,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
+    timeout-minutes: 10
     permissions:
       id-token: write
     steps:

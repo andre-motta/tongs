@@ -60,10 +60,17 @@ INSTALL_PROVIDES: dict[str, frozenset[str]] = {
     "python -m pip install -e .": CORE_MODULES,
     '"$TRANSFER_PYTHON" -I -m pip install --isolated '
     "--disable-pip-version-check -e .": CORE_MODULES,
+    # The release jobs holding a signing or publishing token install the
+    # hash-locked closure first, which provides everything but tongs itself,
+    # and then tongs alone without resolving anything.
     '"$CANDIDATE_PYTHON" -I -m pip install --isolated '
-    "--disable-pip-version-check -e . "
-    '"jsonschema>=4.18,<5" "sigstore==${SIGSTORE_VERSION}"': CORE_MODULES
+    "--disable-pip-version-check --require-hashes --only-binary=:all: "
+    "-r requirements/release.lock": (CORE_MODULES - frozenset({"tongs"}))
     | frozenset({"jsonschema"}),
+    '"$CANDIDATE_PYTHON" -I -m pip install --isolated '
+    "--disable-pip-version-check --no-deps --no-build-isolation -e .": frozenset(
+        {"tongs"}
+    ),
     '"$CANDIDATE_PYTHON" -I -m pip install --isolated '
     "--disable-pip-version-check -e . "
     '"sigstore==${SIGSTORE_VERSION}"': CORE_MODULES,

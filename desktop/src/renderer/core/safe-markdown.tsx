@@ -1,7 +1,11 @@
 import {
+  Children,
+  isValidElement,
   memo,
+  useId,
   useMemo,
   useState,
+  type CSSProperties,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -15,6 +19,17 @@ const MAX_AST_NODES = 4096;
 const MAX_AST_DEPTH = 32;
 const MAX_PREVIEW_CODE_POINTS = 4096;
 const MAX_EXTERNAL_URL_LENGTH = 4096;
+const MAX_LINK_TEXT_LENGTH = 2048;
+const SCHEMELESS_HOST_TEXT = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?::\d+)?(?:[/?#]|$)/iu;
+
+// Theme tokens from the shell stylesheet; the renderer sets them through the
+// CSSOM, which the style-src 'self' policy permits.
+const MISMATCHED_HOST_STYLE: CSSProperties = Object.freeze({
+  marginLeft: "5px",
+  fontSize: "12px",
+  color: "var(--warning)",
+  overflowWrap: "anywhere",
+});
 
 const ALLOWED_ELEMENTS = Object.freeze([
   "p",
@@ -164,6 +179,9 @@ function SafeExternalLink({
 }): ReactNode {
   const [opening, setOpening] = useState(false);
   const [failed, setFailed] = useState(false);
+  const descriptionId = useId();
+  const host = externalLinkHost(destination);
+  const mismatched = linkTextNamesOtherOrigin(linkText(children), destination);
   const activate = async (event: MouseEvent<HTMLButtonElement>): Promise<void> => {
     event.preventDefault();
     if (opening) return;
@@ -180,14 +198,30 @@ function SafeExternalLink({
   return (
     <>
       <button
+        aria-describedby={descriptionId}
         className="safe-markdown-link"
+        data-link-host={host}
         disabled={opening}
         onClick={(event) => void activate(event)}
         role="link"
+        title={destination}
         type="button"
       >
         {children}
       </button>
+      {mismatched ? (
+        <span
+          className="safe-markdown-link-host safe-markdown-link-host-mismatch"
+          id={descriptionId}
+          style={MISMATCHED_HOST_STYLE}
+        >
+          (opens {host})
+        </span>
+      ) : (
+        <span className="safe-markdown-link-host" hidden id={descriptionId}>
+          Opens {host}
+        </span>
+      )}
       {failed && (
         <span className="safe-markdown-link-error" role="status">
           Could not open link.
@@ -195,6 +229,71 @@ function SafeExternalLink({
       )}
     </>
   );
+}
+
+/** Returns the host shown for an admitted destination, in its ASCII form. */
+export function externalLinkHost(destination: string): string {
+  try {
+    return new URL(destination).host;
+  } catch {
+    return destination;
+  }
+}
+
+/**
+ * Reports whether link text reads as a URL on a different origin than the
+ * destination, so a spoofed forge address can be flagged before activation.
+ */
+export function linkTextNamesOtherOrigin(
+  text: string,
+  destination: string,
+): boolean {
+  const trimmed = text.trim();
+  if (
+    trimmed.length === 0 ||
+    trimmed.length > MAX_LINK_TEXT_LENGTH ||
+    /\s/u.test(trimmed)
+  ) {
+    return false;
+  }
+  let target: URL;
+  try {
+    target = new URL(destination);
+  } catch {
+    return false;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)) {
+    try {
+      return new URL(trimmed).origin !== target.origin;
+    } catch {
+      return false;
+    }
+  }
+  if (!SCHEMELESS_HOST_TEXT.test(trimmed)) return false;
+  try {
+    return new URL(`https://${trimmed}`).host !== target.host;
+  } catch {
+    return false;
+  }
+}
+
+function linkText(children: ReactNode): string {
+  let text = "";
+  const stack: ReactNode[] = [children];
+  while (stack.length > 0 && text.length <= MAX_LINK_TEXT_LENGTH) {
+    const node = stack.pop();
+    if (typeof node === "string" || typeof node === "number") {
+      text += String(node);
+    } else if (Array.isArray(node)) {
+      const items = Children.toArray(node as ReactNode);
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        stack.push(items[index]);
+      }
+    } else if (isValidElement<{ children?: ReactNode }>(node)) {
+      stack.push(node.props.children);
+    }
+  }
+  return text;
 }
 
 function MarkdownFallback({

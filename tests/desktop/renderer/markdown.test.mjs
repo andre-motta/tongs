@@ -5,6 +5,8 @@ import test, { afterEach } from "node:test";
 import {
   SafeMarkdown,
   admitMarkdownExternalUrl,
+  externalLinkHost,
+  linkTextNamesOtherOrigin,
   safeMarkdownPresentationBytes,
 } from "../../../desktop/dist/src/renderer/core/safe-markdown.js";
 
@@ -171,6 +173,115 @@ test("opens an admitted link only on activation and reports bridge refusal", asy
     "Could not open link.",
   );
   assert.equal(view.container.querySelector("a[href]"), null);
+});
+
+test("exposes every link destination as a title and a described host", () => {
+  const view = renderMarkdown("[docs](https://Docs.Example.com:8443/guide?q=1)");
+  const link = view.getByRole("link", { name: "docs" });
+  assert.equal(link.getAttribute("title"), "https://docs.example.com:8443/guide?q=1");
+  assert.equal(link.getAttribute("data-link-host"), "docs.example.com:8443");
+  const describedBy = link.getAttribute("aria-describedby") ?? "";
+  assert.notEqual(describedBy, "");
+  const description = view.container.ownerDocument.getElementById(describedBy);
+  assert.equal(description?.textContent, "Opens docs.example.com:8443");
+  assert.equal(description?.hasAttribute("hidden"), true);
+  assert.equal(view.container.textContent.includes("(opens"), false);
+});
+
+test("shows the real host beside link text that names a different URL", async () => {
+  const calls = [];
+  const view = renderMarkdown(
+    [
+      "[https://github.com/org/repo](https://evil.example/phish)",
+      "[github.com/org/repo](https://evil.example/other)",
+      "[**https://gitlab.com/x**](https://xn--gthub-cta.com/y)",
+      "[https://github.com/org/repo](https://github.com/org/repo/pulls)",
+      "[see the pipeline](https://gitlab.com/org/repo/-/pipelines)",
+    ].join("\n\n"),
+    async (url) => {
+      calls.push(url);
+      return true;
+    },
+  );
+  const links = view.getAllByRole("link");
+  assert.equal(links.length, 5);
+  const described = links.map((link) => {
+    const id = link.getAttribute("aria-describedby") ?? "";
+    const element = view.container.ownerDocument.getElementById(id);
+    return {
+      name: link.textContent,
+      title: link.getAttribute("title"),
+      description: element?.textContent ?? "",
+      hidden: element?.hasAttribute("hidden") ?? null,
+    };
+  });
+  assert.deepEqual(described, [
+    {
+      name: "https://github.com/org/repo",
+      title: "https://evil.example/phish",
+      description: "(opens evil.example)",
+      hidden: false,
+    },
+    {
+      name: "github.com/org/repo",
+      title: "https://evil.example/other",
+      description: "(opens evil.example)",
+      hidden: false,
+    },
+    {
+      name: "https://gitlab.com/x",
+      title: "https://xn--gthub-cta.com/y",
+      description: "(opens xn--gthub-cta.com)",
+      hidden: false,
+    },
+    {
+      name: "https://github.com/org/repo",
+      title: "https://github.com/org/repo/pulls",
+      description: "Opens github.com",
+      hidden: true,
+    },
+    {
+      name: "see the pipeline",
+      title: "https://gitlab.com/org/repo/-/pipelines",
+      description: "Opens gitlab.com",
+      hidden: true,
+    },
+  ]);
+  assert.equal(
+    view.container.querySelectorAll(".safe-markdown-link-host-mismatch").length,
+    3,
+  );
+  assert.deepEqual(calls, []);
+
+  fireEvent.click(links[0]);
+  await waitFor(() => assert.deepEqual(calls, ["https://evil.example/phish"]));
+});
+
+test("compares link text to the destination by origin and host", () => {
+  assert.equal(externalLinkHost("https://example.com/a"), "example.com");
+  assert.equal(externalLinkHost("https://b\u00fccher.example/"), "xn--bcher-kva.example");
+  const cases = [
+    ["https://github.com/a", "https://github.com/b", false],
+    ["HTTPS://GitHub.com/a", "https://github.com/b", false],
+    ["https://github.com:444/a", "https://github.com/a", true],
+    ["http://github.com/a", "https://github.com/a", true],
+    ["https://github.com.evil.example/a", "https://github.com/a", true],
+    ["github.com", "https://github.com/", false],
+    ["github.com/a", "https://gitlab.com/a", true],
+    ["  https://evil.example  ", "https://github.com/", true],
+    ["click here", "https://evil.example/", false],
+    ["v1.0.2", "https://github.com/", false],
+    ["README.md", "https://github.com/", true],
+    ["", "https://github.com/", false],
+    ["https://a b", "https://github.com/", false],
+  ];
+  for (const [text, destination, expected] of cases) {
+    assert.equal(
+      linkTextNamesOtherOrigin(text, destination),
+      expected,
+      `${text} -> ${destination}`,
+    );
+  }
 });
 
 test("uses bounded plain-text fallbacks without parsing truncated Markdown", () => {

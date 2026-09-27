@@ -186,7 +186,8 @@ def test_namespace_package_bundle_root_link_is_rejected(
     monkeypatch.syspath_prepend(str(second))
     importlib.invalidate_caches()
 
-    with pytest.raises(ValueError, match="symlink"):
-        validate_asset_resources(resource_manifest("namespace_asset_fixture"))
-
-    sys.modules.pop("namespace_asset_fixture", None)
+    try:
+        with pytest.raises(ValueError, match="symlink"):
+            validate_asset_resources(resource_manifest("namespace_asset_fixture"))
+    finally:
+        sys.modules.pop("namespace_asset_fixture", None)

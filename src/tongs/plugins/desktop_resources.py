@@ -73,8 +73,10 @@ def validate_asset_resources(
             normalized_paths.add(normalized)
 
             resource = resource_root.joinpath(*asset.path.split("/"))
+            asset_parts = tuple(asset.path.split("/"))
+            validate_resource_containment(resource_root, resource, asset_parts)
             validate_resource_containment(
-                resource_root, resource, tuple(asset.path.split("/"))
+                package_root, resource, root_parts + asset_parts
             )
             if not resource.is_file():
                 raise ValueError(f"Declared asset is not a regular file: {asset.id}")

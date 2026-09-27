@@ -259,8 +259,10 @@ def _read_declared_resource(
     )
     resource = resource_root.joinpath(*path.split("/"))
     root_parts = () if root == "." else tuple(root.split("/"))
+    path_parts = tuple(path.split("/"))
     validate_resource_containment(package_root, resource_root, root_parts)
-    validate_resource_containment(resource_root, resource, tuple(path.split("/")))
+    validate_resource_containment(resource_root, resource, path_parts)
+    validate_resource_containment(package_root, resource, root_parts + path_parts)
     if not resource.is_file():
         raise ValueError("Declared desktop asset is not a regular file")
     with resource.open("rb") as stream:

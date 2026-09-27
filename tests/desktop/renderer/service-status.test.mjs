@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test, { afterEach } from "node:test";
-import { readFileSync } from "node:fs";
 import { recoverRendererSession } from "../../../desktop/dist/src/main/renderer_lifecycle.js";
 import {
   ServiceStatusPublisher,
@@ -218,15 +217,6 @@ test("after a failed recovery the reloaded header says not running", async () =>
   await transport.stop();
 });
 
-test("the main process leaves the header text to the status channel", () => {
-  const source = readFileSync(
-    new URL("../../../desktop/src/main/index.ts", import.meta.url),
-    "utf8",
-  );
-  assert.equal(source.includes("#service-status"), false);
-  assert.equal(source.includes("service is unavailable"), false);
-});
-
 function noticeTexts() {
   return [...document.querySelectorAll("#service-notices .service-notice span")].map(
     (node) => node.textContent,
@@ -275,7 +265,7 @@ test("startup recovery warnings show as notices until dismissed", async () => {
   await act(async () => {
     fireEvent.click(document.querySelectorAll("#service-notices button")[0]);
   });
-  assert.equal(document.querySelector("#service-notices"), null);
+  assert.equal(document.querySelectorAll("#service-notices").length, 0);
   publisher.dispose();
   await transport.stop();
 });

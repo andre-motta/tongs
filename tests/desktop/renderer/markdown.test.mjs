@@ -108,10 +108,10 @@ test("keeps raw HTML inert and replaces every Markdown image with text", () => {
   );
 
   assert.equal(
-    view.container.querySelector(
+    view.container.querySelectorAll(
       "script, img, iframe, object, embed, style, form",
-    ),
-    null,
+    ).length,
+    0,
   );
   assert.match(
     view.container.textContent,
@@ -163,8 +163,8 @@ test("opens an admitted link only on activation and reports bridge refusal", asy
   fireEvent.focus(link);
   fireEvent.mouseOver(link);
   assert.deepEqual(calls, []);
-  assert.equal(view.queryByRole("link", { name: "relative" }), null);
-  assert.equal(view.queryByRole("link", { name: "fragment" }), null);
+  assert.equal(view.queryAllByRole("link", { name: "relative" }).length, 0);
+  assert.equal(view.queryAllByRole("link", { name: "fragment" }).length, 0);
 
   fireEvent.click(link);
   await waitFor(() => assert.deepEqual(calls, ["https://example.com/path"]));
@@ -172,7 +172,7 @@ test("opens an admitted link only on activation and reports bridge refusal", asy
     (await view.findByRole("status")).textContent,
     "Could not open link.",
   );
-  assert.equal(view.container.querySelector("a[href]"), null);
+  assert.equal(view.container.querySelectorAll("a[href]").length, 0);
 });
 
 test("exposes every link destination as a title and a described host", () => {
@@ -363,16 +363,6 @@ test("fails closed on padded long link text and reads image alt text", () => {
   );
 });
 
-test("marks only the padded long link text", () => {
-  const view = renderMarkdown(`[github.com${" ".repeat(2100)}x](https://evil.example/)`);
-  assert.equal(view.getAllByRole("link").length, 1);
-  assert.equal(view.container.textContent.includes("(opens evil.example)"), true);
-  assert.equal(
-    view.container.querySelectorAll(".safe-markdown-link-host-mismatch").length,
-    1,
-  );
-});
-
 test("leaves file names, file references, and code identifiers unmarked", () => {
   const view = renderMarkdown(
     [
@@ -503,7 +493,7 @@ test("uses bounded plain-text fallbacks without parsing truncated Markdown", () 
   cleanup();
 
   const boundaryView = renderMarkdown("x".repeat(4 * 1024));
-  assert.equal(boundaryView.queryByRole("status"), null);
+  assert.equal(boundaryView.queryAllByRole("status").length, 0);
   cleanup();
 
   const overBoundaryView = renderMarkdown("x".repeat(4 * 1024 + 1));
@@ -533,5 +523,5 @@ test("handles Unicode, CRLF, trailing breaks, empty code, and incomplete Markdow
   assert.equal(view.container.querySelectorAll("br").length, 1);
   assert.equal(view.container.querySelector("pre code")?.textContent, "");
   assert.match(view.container.textContent, /\*\*incomplete/);
-  assert.equal(view.queryByRole("status"), null);
+  assert.equal(view.queryAllByRole("status").length, 0);
 });

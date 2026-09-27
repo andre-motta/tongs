@@ -72,15 +72,18 @@ test("initial All reviews waits for local discovery before scoped reads", async 
     },
   });
   const feature = createInboxFeature();
+  // Discovery has already reported a repository but has not finished, so
+  // only the readiness flag can hold the scoped read back.
   const waiting = {
     ...featureContext(bridge),
-    repositories: [],
+    repositories: [repository()],
     repositoriesReady: false,
     repositoryGeneration: 0,
   };
   const view = render(
     feature.render(waiting, { kind: "inbox", repository: null }),
   );
+  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(reads, 0);
   assert.ok(view.getByText("Waiting for local repository discovery…"));
   const ready = {
@@ -193,7 +196,7 @@ test("every sandbox diff shape renders from the captured wire page", async () =>
       paths,
       key,
     );
-    assert.equal(view.container.querySelector(".notice-error"), null, key);
+    assert.equal(view.container.querySelectorAll(".notice-error").length, 0, key);
     for (const [file, badge] of Object.entries(badges)) {
       fireEvent.click(
         files().find((node) => node.textContent?.startsWith(file)),
@@ -300,8 +303,8 @@ test("diff anchor selection keeps full immutable identity across layouts", async
   );
   assert.equal(observed.snapshotId, "snapshot-split");
   assert.equal(
-    view.container.querySelector(".line-no_newline[tabindex]"),
-    null,
+    view.container.querySelectorAll(".line-no_newline[tabindex]").length,
+    0,
   );
 });
 
@@ -501,7 +504,7 @@ test("overview renders its real description through restricted Markdown", async 
     "Rendered description",
   );
   assert.equal(view.container.querySelector("table strong")?.textContent, "yes");
-  assert.equal(view.container.querySelector("img"), null);
+  assert.equal(view.container.querySelectorAll("img").length, 0);
   assert.match(view.container.textContent, /\[Image: remote\]/);
   assert.deepEqual(opened, []);
   fireEvent.click(view.getByRole("link", { name: "Docs" }));

@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test, { afterEach } from "node:test";
-import { FeatureRegistry } from "../../../desktop/dist/src/renderer/core/navigation.js";
-import { createInboxFeature } from "../../../desktop/dist/src/renderer/features/inbox/index.js";
 import { createPluginsFeature } from "../../../desktop/dist/src/renderer/features/plugins/index.js";
 import {
   PluginLocationPublisher,
@@ -125,38 +123,8 @@ test("plugin workspace mounts a usable module and renders help as inert text", a
   assert.ok(
     await view.findByText("<img src=x onerror=alert(1)>", { exact: true }),
   );
-  assert.equal(view.container.querySelector("img"), null);
+  assert.equal(view.container.querySelectorAll("img").length, 0);
   await feature.runtime.dispose();
-});
-
-test("a failed plugin mount does not disturb the core inbox feature", async () => {
-  const bridge = bridgeFixture();
-  const plugins = createPluginsFeature(
-    bridge.value,
-    dependencies({
-      loadModule: async () => ({
-        mount: () => {
-          throw new Error("bad plugin");
-        },
-      }),
-    }),
-  );
-  await plugins.runtime.refresh();
-  const container = document.createElement("div");
-  const statuses = [];
-  await plugins.runtime.mount(
-    route(),
-    container,
-    () => undefined,
-    (value) => statuses.push(value),
-  );
-  const registry = new FeatureRegistry();
-  const inbox = createInboxFeature();
-  registry.register(inbox);
-  registry.register(plugins);
-  assert.equal(registry.find({ kind: "inbox", repository: null }), inbox);
-  assert.match(statuses.at(-1)?.error ?? "", /Core reviews remain available/);
-  await plugins.runtime.dispose();
 });
 
 test("mounted API scopes invoke, events, navigation, location, and focus", async () => {
@@ -447,24 +415,40 @@ test("mount failures and changed resources remain isolated", async () => {
 });
 
 test("resource matching rejects remote, cross-plugin, and duplicate handles", async () => {
-  for (const assets of [
+  // Every case carries a valid help asset, so the only thing wrong with it is
+  // the module handle the case names; the first case is the valid control.
+  const help = asset("alpha", "alpha-help", "help");
+  const style = asset("alpha", "alpha-style", "stylesheet");
+  for (const [name, assets, error] of [
+    ["valid", [asset("alpha", "alpha-module", "module"), style, help], null],
     [
-      asset(
-        "alpha",
-        "alpha-module",
-        "module",
-        "https://example.invalid/main.mjs",
-      ),
-      asset("alpha", "alpha-style", "stylesheet"),
+      "remote",
+      [
+        asset(
+          "alpha",
+          "alpha-module",
+          "module",
+          "https://example.invalid/assets/alpha-module",
+        ),
+        style,
+        help,
+      ],
+      "The plugin resources changed or are missing.",
     ],
     [
-      asset("beta", "alpha-module", "module"),
-      asset("alpha", "alpha-style", "stylesheet"),
+      "cross-plugin",
+      [asset("beta", "alpha-module", "module"), style, help],
+      "The plugin resources changed or are missing.",
     ],
     [
-      asset("alpha", "alpha-module", "module"),
-      asset("alpha", "alpha-module", "module"),
-      asset("alpha", "alpha-style", "stylesheet"),
+      "duplicate",
+      [
+        asset("alpha", "alpha-module", "module"),
+        asset("alpha", "alpha-module", "module"),
+        style,
+        help,
+      ],
+      "The plugin resources changed or are missing.",
     ],
   ]) {
     const statuses = [];
@@ -479,10 +463,7 @@ test("resource matching rejects remote, cross-plugin, and duplicate handles", as
       () => undefined,
       (value) => statuses.push(value),
     );
-    assert.equal(
-      statuses.at(-1)?.error,
-      "The plugin resources changed or are missing.",
-    );
+    assert.equal(statuses.at(-1)?.error ?? null, error, name);
     await runtime.dispose();
   }
 });

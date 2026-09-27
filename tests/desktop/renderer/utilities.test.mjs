@@ -114,7 +114,7 @@ test("Clear Cache cancel avoids reads while an attempted clear invalidates them"
   );
 
   fireEvent.click(view.getByRole("button", { name: "Cancel" }));
-  assert.equal(view.queryByRole("alertdialog"), null);
+  assert.equal(view.queryAllByRole("alertdialog").length, 0);
   assert.equal(calls.clears, 0);
   clear.run(value, reviewRoute);
   fireEvent.click(await view.findByRole("button", { name: "Clear cache" }));

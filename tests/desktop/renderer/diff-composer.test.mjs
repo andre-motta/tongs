@@ -34,7 +34,7 @@ test("the gutter affordance opens one in-diff composer under its own row", async
   const review = "review-composer-open";
   const view = renderDiff(diffBridge(review), review);
   await view.findByRole("button", { name: "Comment on new line 11" });
-  assert.equal(view.queryByLabelText("Inline comment composer"), null);
+  assert.equal(view.queryAllByLabelText("Inline comment composer").length, 0);
   fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
   await view.findByLabelText("Inline comment composer");
   assert.equal(view.container.querySelectorAll(".inline-composer").length, 1);
@@ -65,8 +65,8 @@ test("the gutter affordance opens one in-diff composer under its own row", async
     view.getByRole("button", { name: "Add comment now" }).disabled,
     true,
   );
-  assert.equal(view.queryByRole("button", { name: "Add to review" }), null);
-  assert.equal(view.queryByText(/Review in progress/), null);
+  assert.equal(view.queryAllByRole("button", { name: "Add to review" }).length, 0);
+  assert.equal(view.queryAllByText(/Review in progress/).length, 0);
   fireEvent.change(view.getByLabelText("Inline review comment"), {
     target: { value: "Guard the zero divisor" },
   });
@@ -124,7 +124,7 @@ test("the keyboard opens the composer, takes focus, closes on Escape, and fires 
     "Inline review comment",
   );
   fireEvent.keyDown(document.activeElement, { key: "Escape" });
-  assert.equal(view.queryByLabelText("Inline comment composer"), null);
+  assert.equal(view.queryAllByLabelText("Inline comment composer").length, 0);
 
   // Escape also closes it from the row that owns it.
   fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
@@ -139,7 +139,7 @@ test("the keyboard opens the composer, takes focus, closes on Escape, and fires 
     "Select new line 11",
   );
   fireEvent.keyDown(document.activeElement, { key: "Escape" });
-  assert.equal(view.queryByLabelText("Inline comment composer"), null);
+  assert.equal(view.queryAllByLabelText("Inline comment composer").length, 0);
 
   fireEvent.keyDown(lines[1], { key: "c" });
   const editor = await view.findByLabelText("Inline review comment");
@@ -197,7 +197,10 @@ test("Start a review saves an inline entry for the row and then offers Add to re
   fireEvent.click(view.getByRole("button", { name: "Comment on old line 12" }));
   await view.findByLabelText("Inline comment composer");
   assert.equal(view.getByText("Review in progress, 1 pending").tagName.toLowerCase(), "span");
-  assert.equal(view.queryByRole("button", { name: "Start a review" }), null);
+  assert.equal(
+    view.queryAllByRole("button", { name: "Start a review" }).length,
+    0,
+  );
   assert.equal(
     view.getByRole("button", { name: "Add to review" }).disabled,
     true,
@@ -349,7 +352,10 @@ test("a durable pending review is visible before the first press and is adopted,
     view.getByText("Review in progress, 1 pending").textContent,
     "Review in progress, 1 pending",
   );
-  assert.equal(view.queryByRole("button", { name: "Start a review" }), null);
+  assert.equal(
+    view.queryAllByRole("button", { name: "Start a review" }).length,
+    0,
+  );
   fireEvent.change(await view.findByLabelText("Inline review comment"), {
     target: { value: "Guard the zero divisor" },
   });
@@ -436,7 +442,10 @@ test("a pending review bound to an earlier revision refuses in its own words", a
   await view.findByText(
     "The pending review is bound to an earlier revision. Migrate it in Your review before adding inline feedback.",
   );
-  assert.equal(view.queryByRole("button", { name: "Start a review" }), null);
+  assert.equal(
+    view.queryAllByRole("button", { name: "Start a review" }).length,
+    0,
+  );
   assert.equal(
     view.getByRole("button", { name: "Add to review" }).disabled,
     true,
@@ -550,7 +559,7 @@ test("Cancel and Esc close the composer and keep the text on that anchor alone",
     target: { value: "Kept through cancel" },
   });
   fireEvent.click(view.getByRole("button", { name: "Cancel" }));
-  assert.equal(view.queryByLabelText("Inline comment composer"), null);
+  assert.equal(view.queryAllByLabelText("Inline comment composer").length, 0);
 
   fireEvent.click(view.getByRole("button", { name: "Comment on new line 11" }));
   assert.equal(
@@ -560,7 +569,7 @@ test("Cancel and Esc close the composer and keep the text on that anchor alone",
   fireEvent.keyDown(view.getByLabelText("Inline review comment"), {
     key: "Escape",
   });
-  assert.equal(view.queryByLabelText("Inline comment composer"), null);
+  assert.equal(view.queryAllByLabelText("Inline comment composer").length, 0);
 
   fireEvent.click(view.getByRole("button", { name: "Comment on old line 12" }));
   assert.equal((await view.findByLabelText("Inline review comment")).value, "");
@@ -724,7 +733,7 @@ test("a range refuses both writes when the forge has no multiline capability", a
   fireEvent.change(view.getByLabelText("Inline review comment"), {
     target: { value: "One line" },
   });
-  assert.equal(view.queryByText(refusal), null);
+  assert.equal(view.queryAllByText(refusal).length, 0);
   assert.equal(
     view.getByRole("button", { name: "Start a review" }).disabled,
     false,
@@ -878,7 +887,7 @@ test("the Preview toggle renders the typed Markdown and hands focus back", async
     view.getByRole("button", { name: "Preview" }).getAttribute("aria-pressed"),
     "true",
   );
-  assert.equal(view.queryByLabelText("Inline review comment"), null);
+  assert.equal(view.queryAllByLabelText("Inline review comment").length, 0);
   assert.equal(
     view.getByLabelText("Comment preview").textContent,
     "Nothing to preview yet.",
@@ -1129,8 +1138,14 @@ test("Edit round-trips the body and replaces the entry instead of appending", as
   );
   // The edit replaces a body; it never recaptures an anchor, so the suggestion
   // rules and the quick path are not offered here.
-  assert.equal(view.queryByRole("button", { name: "Insert suggestion" }), null);
-  assert.equal(view.queryByRole("button", { name: "Add comment now" }), null);
+  assert.equal(
+    view.queryAllByRole("button", { name: "Insert suggestion" }).length,
+    0,
+  );
+  assert.equal(
+    view.queryAllByRole("button", { name: "Add comment now" }).length,
+    0,
+  );
   // The card gives way to the composer rather than being shown twice.
   assert.equal(view.container.querySelectorAll(".pending-card").length, 0);
 
@@ -1186,7 +1201,10 @@ test("Delete saves the draft without the entry", async () => {
   await waitFor(() =>
     assert.equal(view.container.querySelectorAll(".pending-card").length, 1),
   );
-  assert.equal(view.queryByLabelText("Pending review comment on new line 11"), null);
+  assert.equal(
+    view.queryAllByLabelText("Pending review comment on new line 11").length,
+    0,
+  );
   assert.equal(view.getByText("1 pending").textContent, "1 pending");
 });
 
@@ -1219,8 +1237,8 @@ test("a stale entry keeps its ribbon and offers no Edit", async () => {
   );
   assert.equal(card.className.includes("pending-card-stale"), true);
   assert.equal(
-    view.queryByRole("button", { name: "Edit pending comment on new line 11" }),
-    null,
+    view.queryAllByRole("button", { name: "Edit pending comment on new line 11" }).length,
+    0,
   );
   assert.ok(view.getByRole("button", { name: "Delete pending comment on new line 11" }));
   // Nothing is written just by rendering a stale entry.

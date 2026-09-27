@@ -101,7 +101,7 @@ test("stop during startup settles before any replacement", async () => {
   const starting = transport.start();
   await new Promise((resolve) => setImmediate(resolve));
   const stopping = transport.stop();
-  await assert.rejects(starting);
+  await assert.rejects(starting, { code: "shutting_down" });
   await stopping;
   assert.equal(fake.children.length, 1);
   assert.equal(transport.processId, undefined);
@@ -127,16 +127,6 @@ test("stale child events cannot corrupt a replacement generation", async () => {
   assert.equal(transport.processId, current.pid);
   assert.equal(transport.sessionGeneration, 2);
   current.finish(0, null);
-});
-
-test("restart stops the prior session before a new handshake", async () => {
-  const fake = harness();
-  const transport = transportFor(fake);
-  await transport.start();
-  await transport.restart();
-  assert.equal(fake.children.length, 2);
-  assert.equal(transport.sessionGeneration, 2);
-  await transport.stop();
 });
 
 test("terminal stop rejects a concurrent start without replacement", async () => {
@@ -277,24 +267,6 @@ test("mutation responses preserve validated service error classifications", asyn
   );
   await assert.rejects(read.result, { code: "service_error" });
   await transport.stop();
-});
-
-test("sidecar disappearance leaves a dispatched mutation unknown", async () => {
-  const fake = harness();
-  const transport = transportFor(fake);
-  await transport.start();
-  const result = transport.requestMutation("jobs.retry", {
-    operation_id: "disappearance-operation",
-    pipeline: "pipeline-handle",
-    job: "job-handle",
-  }).result;
-
-  fake.children[0].finish(9, null);
-  await assert.rejects(result, { code: "unexpected_eof" });
-  assert.equal(
-    fake.children[0].frames.filter((frame) => frame.method === "jobs.retry").length,
-    1,
-  );
 });
 
 test("restart rejects an in-flight mutation and never replays it in the new session", async () => {

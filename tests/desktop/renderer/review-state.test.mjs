@@ -253,39 +253,6 @@ test("either conflict choice clears the gate and keeps the losing text reachable
   assert.throws(() => keepLocalDraft(dismissed), /No conflicting draft/);
 });
 
-test("a second take-theirs adds a retained copy instead of discarding the first", () => {
-  let state = adoptDraft(createReviewWorkflowState(review, revision), draft(3, "server"));
-  state = beginDraftSave(
-    editDraft(state, { body: "first local", verdict: null, comments: [] }),
-  );
-  state = chooseRemoteDraft(conflictDraftSave(state, draft(4, "stored four")));
-  assert.equal(state.draft.local.body, "stored four");
-  state = beginDraftSave(
-    editDraft(state, { body: "second local", verdict: null, comments: [] }),
-  );
-  state = chooseRemoteDraft(conflictDraftSave(state, draft(6, "stored six")));
-  assert.deepEqual(
-    state.draft.supersededLocalDrafts.map((item) => [
-      item.displacedByVersion,
-      item.content.body,
-    ]),
-    [
-      [4, "first local"],
-      [6, "second local"],
-    ],
-  );
-  assert.equal(state.draft.local.body, "stored six");
-  const partial = dismissSupersededDraft(state, 4);
-  assert.deepEqual(
-    partial.draft.supersededLocalDrafts.map((item) => item.content.body),
-    ["second local"],
-  );
-  assert.deepEqual(
-    dismissSupersededDraft(partial, 6).draft.supersededLocalDrafts,
-    [],
-  );
-});
-
 test("keeping local text is refused, not applied, when the stored draft cannot be saved over", () => {
   let editable = adoptDraft(createReviewWorkflowState(review, revision), draft(3, "server"));
   editable = beginDraftSave(

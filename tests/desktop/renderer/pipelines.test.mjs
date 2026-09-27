@@ -46,8 +46,8 @@ test("initial pipeline failure does not claim that the review has no pipelines",
     /The local service could not complete this read: safe (pipeline|job) failure/,
   );
   assert.equal(
-    view.queryByText("No pipelines are available for this review."),
-    null,
+    view.queryAllByText("No pipelines are available for this review.").length,
+    0,
   );
 });
 
@@ -67,7 +67,7 @@ test("initial job failure does not claim that the pipeline has no jobs", async (
   await view.findByText(
     /The local service could not complete this read: safe (pipeline|job) failure/,
   );
-  assert.equal(view.queryByText("This pipeline has no jobs."), null);
+  assert.equal(view.queryAllByText("This pipeline has no jobs.").length, 0);
 });
 
 test("failed pipeline refresh preserves an empty state from a successful read", async () => {
@@ -122,7 +122,7 @@ test("pipeline panel renders hierarchy, inert paged logs, search, and keyboard s
   const view = renderFeature(bridge);
 
   await view.findByText("build-201");
-  assert.equal(view.container.querySelector("script"), null);
+  assert.equal(view.container.querySelectorAll("script").length, 0);
   assert.ok(await view.findByText("<script>alert(1)</script>"));
   assert.deepEqual(
     [...view.container.querySelectorAll(".ci-log-lines code")].map(
@@ -145,7 +145,7 @@ test("pipeline panel renders hierarchy, inert paged logs, search, and keyboard s
   });
   search.blur();
   fireEvent.keyDown(document.body, { key: "/" });
-  assert.equal(document.activeElement, search);
+  assert.equal(document.activeElement === search, true);
 
   const pipelines = view.getByRole("navigation", { name: "Review pipelines" });
   const first = view.getByRole("button", { name: /Pipeline #101/ });
@@ -370,7 +370,7 @@ test("rapid pipeline switching discards late job and log reads", async () => {
   late.resolve({ jobs: [job(201)] });
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(view.queryByText("build-201"), null);
+  assert.equal(view.queryAllByText("build-201").length, 0);
   assert.ok(cancelled.includes("late-jobs"));
 });
 
@@ -430,6 +430,23 @@ test("log reconstruction enforces identity, revision, line, and text bounds", as
     loadLogPages("job", inconsistent, new QueryCoordinator(inconsistent)),
     (error) => error.code === "invalid_response",
   );
+
+  // A log that changes between pages is refused, whether its digest or its
+  // length is what moved.
+  for (const revision of [
+    { sha256: "other-hash", byte_count: 99 },
+    { sha256: "hash", byte_count: 100 },
+  ]) {
+    const changed = {
+      cancelRead: async () => true,
+      openLog: () => read(logPage("job", 0, 1, "a\n")),
+      pageLog: () => read({ ...logPage("job", 1, null, "b\n"), revision }),
+    };
+    await assert.rejects(
+      loadLogPages("job", changed, new QueryCoordinator(changed)),
+      (error) => error.code === "revision_changed",
+    );
+  }
 });
 
 test("known pre-dispatch failures and ambiguous transport failures stay distinct", () => {

@@ -4,6 +4,7 @@ import importlib.util
 import io
 import subprocess
 import tarfile
+import urllib.error
 from pathlib import Path
 from types import ModuleType
 
@@ -125,6 +126,71 @@ def test_download_accepts_same_https_host() -> None:
         "https://files.pythonhosted.org/source.tar.gz",
         "https://files.pythonhosted.org/redirected/source.tar.gz",
     )
+
+
+def test_download_retries_transient_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contents = b"source"
+    attempts = 0
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.close()
+
+        def geturl(self) -> str:
+            return "https://files.pythonhosted.org/source.tar.gz"
+
+    def urlopen(*_args: object, **_kwargs: object) -> Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionResetError("reset")
+        return Response(contents)
+
+    monkeypatch.setattr(prepare_sources.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(prepare_sources.time, "sleep", lambda _seconds: None)
+    output = tmp_path / "source.tar.gz"
+    prepare_sources._download(
+        {
+            "url": "https://files.pythonhosted.org/source.tar.gz",
+            "filename": output.name,
+            "bytes": len(contents),
+            "sha256": prepare_sources.hashlib.sha256(contents).hexdigest(),
+        },
+        output,
+    )
+
+    assert attempts == 2
+    assert output.read_bytes() == contents
+
+
+def test_download_raises_last_transient_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    errors = [urllib.error.URLError(f"failure-{attempt}") for attempt in range(3)]
+
+    def urlopen(*_args: object, **_kwargs: object) -> object:
+        raise errors.pop(0)
+
+    monkeypatch.setattr(prepare_sources.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(prepare_sources.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(urllib.error.URLError, match="failure-2"):
+        prepare_sources._download(
+            {
+                "url": "https://files.pythonhosted.org/source.tar.gz",
+                "filename": "source.tar.gz",
+                "bytes": 1,
+                "sha256": "unused",
+            },
+            tmp_path / "source.tar.gz",
+        )
+
+    assert errors == []
 
 
 def test_cargo_package_identity_excludes_temporary_path_id() -> None:

@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -37,19 +40,32 @@ def _download(source: dict[str, Any], output: Path) -> None:
         source["url"], headers={"User-Agent": "tongs-issue-85-source-preparer/1"}
     )
     expected_bytes = source["bytes"]
-    read_bytes = 0
-    with (
-        urllib.request.urlopen(request, timeout=60) as response,
-        output.open("wb") as dest,
-    ):
-        _validate_download_url(source["url"], response.geturl())
-        while block := response.read(1024 * 1024):
-            read_bytes += len(block)
-            if read_bytes > expected_bytes:
-                raise RuntimeError(
-                    f"source exceeds declared size: {source['filename']}"
-                )
-            dest.write(block)
+    transient_errors = (
+        urllib.error.URLError,
+        ConnectionResetError,
+        TimeoutError,
+        http.client.IncompleteRead,
+    )
+    for attempt in range(3):
+        try:
+            read_bytes = 0
+            with (
+                urllib.request.urlopen(request, timeout=60) as response,
+                output.open("wb") as dest,
+            ):
+                _validate_download_url(source["url"], response.geturl())
+                while block := response.read(1024 * 1024):
+                    read_bytes += len(block)
+                    if read_bytes > expected_bytes:
+                        raise RuntimeError(
+                            f"source exceeds declared size: {source['filename']}"
+                        )
+                    dest.write(block)
+            break
+        except transient_errors:
+            if attempt == 2:
+                raise
+            time.sleep(0.25 * (attempt + 1))
     if read_bytes != expected_bytes:
         raise RuntimeError(
             f"source size mismatch for {source['filename']}: {read_bytes} != {expected_bytes}"

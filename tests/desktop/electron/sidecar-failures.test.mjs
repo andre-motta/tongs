@@ -552,6 +552,30 @@ test("over-budget response fails only its request and other reads survive", asyn
   await transport.stop();
 });
 
+test("over-budget mutation response rejects as outcome unknown", async () => {
+  const fake = harness();
+  const transport = transportFor(fake);
+  await transport.start();
+  const crashes = watchCrashes(transport);
+  const mutation = transport.requestMutation("pipelines.retry", {
+    operation_id: "oversized-operation",
+    pipeline: "pipeline-handle",
+  });
+  respondTo(fake.children[0], mutation.requestId, {
+    result: { receipts: new Array(MAX_JSON_ITEMS).fill(0) },
+  });
+  const failure = await mutation.result.then(
+    () => null,
+    (error) => ({ code: error.code, message: error.message, retryable: error.retryable }),
+  );
+  assert.equal(failure?.code, "invalid_response");
+  assert.equal(failure?.retryable, false);
+  assert.match(String(failure?.message), /outcome is unknown/);
+  assert.match(String(failure?.message), /Refresh before retrying/);
+  assert.equal(crashes.length, 0);
+  await transport.stop();
+});
+
 test("response exactly at the value budget is delivered", async () => {
   const fake = harness();
   const transport = transportFor(fake);

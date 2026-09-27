@@ -427,6 +427,18 @@ export class SidecarTransport extends EventEmitter {
     if (!pending) return true;
     clearTimeout(pending.timer);
     this.pending.delete(value.id);
+    if (!pending.read) {
+      // The mutation may have run before its answer overflowed, so its
+      // outcome is unknown and a blind retry could repeat the write.
+      pending.reject(
+        new SidecarError(
+          "invalid_response",
+          "The action's result was too large to read, so its outcome is unknown. Refresh before retrying.",
+          false,
+        ),
+      );
+      return true;
+    }
     pending.reject(
       new SidecarError(
         RESPONSE_TOO_LARGE,

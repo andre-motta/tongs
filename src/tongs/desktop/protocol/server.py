@@ -216,6 +216,27 @@ class _EventBuffer:
         self._condition = asyncio.Condition()
         self._sequence = 0
         self._closed = False
+        self._limits = DEFAULT_JSON_LIMITS
+
+    @property
+    def limits(self) -> JsonLimits:
+        return self._limits
+
+    async def set_limits(self, limits: JsonLimits) -> None:
+        """Apply the negotiated JSON budget to queued and future events.
+
+        A queued event that no longer fits the tighter budget is replaced by a
+        resync marker instead of reaching a client that would reject it.
+        """
+        async with self._condition:
+            self._limits = limits
+            for event in self._events:
+                try:
+                    encode_event(event.sequence, event.name, event.data, limits=limits)
+                except ProtocolError:
+                    self._replace_with_resync("event_too_large")
+                    self._condition.notify()
+                    return
 
     async def publish(
         self, name: str, data: object, *, replaceable_key: str | None = None
@@ -230,7 +251,9 @@ class _EventBuffer:
                             event.sequence, name, data, replaceable_key
                         )
                         try:
-                            encode_event(replacement.sequence, name, data)
+                            encode_event(
+                                replacement.sequence, name, data, limits=self._limits
+                            )
                         except ProtocolError:
                             self._replace_with_resync("event_too_large")
                         else:
@@ -240,7 +263,7 @@ class _EventBuffer:
             self._sequence += 1
             event = _QueuedEvent(self._sequence, name, data, replaceable_key)
             try:
-                encode_event(event.sequence, name, data)
+                encode_event(event.sequence, name, data, limits=self._limits)
             except ProtocolError:
                 self._replace_with_resync("event_too_large")
             else:
@@ -273,6 +296,24 @@ class _EventBuffer:
                 {"reason": reason},
                 "protocol.resync_required",
             )
+        )
+
+
+def _encode_event_or_resync(event: _QueuedEvent, limits: JsonLimits) -> bytes:
+    """Encode a queued event, or a resync marker in its place if it overflows.
+
+    The buffer already checks events when they are published, so this only
+    guards against a budget that changed afterwards; the client then refetches
+    instead of receiving a frame it would reject.
+    """
+    try:
+        return encode_event(event.sequence, event.name, event.data, limits=limits)
+    except ProtocolError:
+        return encode_event(
+            event.sequence,
+            "protocol.resync_required",
+            {"reason": "event_too_large"},
+            limits=limits,
         )
 
 
@@ -480,6 +521,7 @@ class DesktopSidecarServer:
             self._assets.stage_core(self._core_assets)
             self._assets.stage_plugins(self._plugin_registry)
             self._json_limits = client_limits
+            await self._events.set_limits(client_limits)
             self._handshaken = True
             await self._write_result(
                 frame.request_id,
@@ -1183,7 +1225,7 @@ class DesktopSidecarServer:
             if event is None:
                 return
             try:
-                frame = encode_event(event.sequence, event.name, event.data)
+                frame = _encode_event_or_resync(event, self._json_limits)
                 await self._write(frame)
             except (ProtocolError, BrokenPipeError, ConnectionError):
                 return

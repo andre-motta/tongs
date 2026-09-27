@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { lstat, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -88,37 +88,25 @@ test("copy URL resolves an admitted review and writes only its validated HTTPS U
   assert.equal(clipboard.values.length, 2);
 });
 
-test("clipboard failure is reported without exposing or changing the URL", async (t) => {
-  const { root, transport } = await fixture(t);
-  const clipboard = { writeText() { throw new Error("clipboard unavailable"); } };
-  const utility = new WorkspaceUtilities(transport, clipboard, root, () => { throw new Error("unused"); });
+for (const [shape, writeText] of [
+  ["a throwing", () => { throw new Error("clipboard unavailable"); }],
+  ["an asynchronously rejecting", async () => { throw new Error("asynchronous clipboard unavailable"); }],
+]) {
+  test(`${shape} clipboard is reported as a failure without exposing or changing the URL`, async (t) => {
+    const { root, transport } = await fixture(t);
+    const utility = new WorkspaceUtilities(transport, { writeText }, root, () => {
+      throw new Error("unused");
+    });
 
-  const result = await utility.copyReviewUrl("review-handle");
+    const result = await utility.copyReviewUrl("review-handle");
 
-  assert.equal(result.outcome, "failed");
-  assert.match(result.message, /clipboard access/);
-  assert.deepEqual(transport.reads, [["utilities.review_url", { review: "review-handle" }]]);
-});
-
-test("asynchronous clipboard failure cannot be reported as copied", async (t) => {
-  const { root, transport } = await fixture(t);
-  const clipboard = {
-    async writeText() {
-      throw new Error("asynchronous clipboard unavailable");
-    },
-  };
-  const utility = new WorkspaceUtilities(transport, clipboard, root, () => {
-    throw new Error("unused");
+    assert.equal(result.outcome, "failed");
+    assert.match(result.message, /clipboard access/);
+    assert.deepEqual(transport.reads, [
+      ["utilities.review_url", { review: "review-handle" }],
+    ]);
   });
-
-  const result = await utility.copyReviewUrl("review-handle");
-
-  assert.equal(result.outcome, "failed");
-  assert.match(result.message, /clipboard access/);
-  assert.deepEqual(transport.reads, [
-    ["utilities.review_url", { review: "review-handle" }],
-  ]);
-});
+}
 
 test("clear cache has no renderer-selected target", async (t) => {
   const { utility, transport } = await fixture(t);
@@ -265,6 +253,8 @@ test("missing editor executable has an actionable failure and cleans the export"
 test("editor root rejects a symlink without requesting a reservation", async (t) => {
   const { root, parent, transport } = await fixture(t);
   const symlinkRoot = path.join(parent, "link-root");
+  // The target is a real private directory, so only the symlink check can refuse it.
+  await mkdir(root, { mode: 0o700 });
   await symlink(root, symlinkRoot);
   const guarded = new WorkspaceUtilities(transport, { writeText() {} }, symlinkRoot, () => { throw new Error("must not launch"); });
   assert.equal((await guarded.openJobLogInEditor("job-handle")).outcome, "failed");

@@ -14,6 +14,10 @@ test("launcher accepts only exact absolute interpreter and safe cwd", async () =
   assert.equal(value.pythonExecutable, executable); assert.equal(value.safeCwd, root);
   assert.deepEqual([...SIDECAR_ARGUMENTS], ["-E", "-P", "-m", "tongs.desktop.sidecar"]);
   assert.throws(() => parseLaunchArguments(["--tongs-python-executable=python", "--tongs-core-version=1", `--tongs-safe-cwd=${root}`]));
+  // A relative path that does resolve to an executable is still refused, so the
+  // interpreter can never be picked up from the working directory or PATH.
+  const relative = path.relative(process.cwd(), executable);
+  assert.throws(() => parseLaunchArguments([`--tongs-python-executable=${relative}`, "--tongs-core-version=1", `--tongs-safe-cwd=${root}`]), /must be an absolute path/);
   assert.throws(() => parseLaunchArguments([`--tongs-python-executable=${executable}`, "--tongs-core-version=1", `--tongs-safe-cwd=${root}`, "--tongs-core-version=2"]));
   assert.doesNotThrow(() => parseLaunchArguments([`--tongs-python-executable=${executable}`, "--tongs-core-version=1", `--tongs-safe-cwd=${root}`, "--tongs-smoke-report=/tmp/report.json", "--tongs-smoke-review-number=69"]));
 });
@@ -23,6 +27,8 @@ test("runtime parameter boundary rejects unknown, malformed, and oversized value
   assertParams("diff.open", { review: "review", layout: "split", max_items: 1000 });
   assert.throws(() => assertParams("diff.open", { review: "review", layout: "sideways" }));
   assert.throws(() => assertParams("reviews.list", { scope: "all_open", surprise: true }));
+  assert.throws(() => assertParams("reviews.list", { scope: "all_open", surprise: "text" }), /Invalid desktop parameter fields/);
+  assert.throws(() => assertParams("diff.open", { layout: "split" }), /Invalid desktop parameter fields/);
   assert.throws(() => assertParams("diff.page", { snapshot: "s", resource: "r", cursor: -1 }));
   assert.throws(() => assertParams("reviews.list", { scope: "all_open", per_page: 101 }));
   assert.throws(() => assertParams("reviews.list", { scope: "everything" }));
@@ -181,7 +187,11 @@ test("plugin help CSP admits only the trusted application origin", () => {
       codeCache: true,
     },
   });
-  assert.match(CONTENT_SECURITY_POLICY, /connect-src 'self'/); assert.doesNotMatch(CONTENT_SECURITY_POLICY, /connect-src https?:/);
+  assert.deepEqual(CONTENT_SECURITY_POLICY.split("; "), [
+    "default-src 'none'", "script-src 'self'", "style-src 'self'",
+    "img-src 'self' data:", "font-src 'self'", "connect-src 'self'",
+    "object-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
+  ]);
   assert.equal(isAllowedAppUrl("tongs://app/assets/opaque"), true); assert.equal(isAllowedAppUrl("https://app/assets/opaque"), false); assert.equal(isAllowedAppUrl("tongs://remote/assets/opaque"), false);
 });
 

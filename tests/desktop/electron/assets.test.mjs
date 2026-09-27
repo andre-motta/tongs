@@ -22,6 +22,16 @@ test("catalog exposes fixed URLs and verifies streamed bytes", async () => {
   const served = await catalog.response(descriptors[0].url); assert.equal(await served.text(), bytes.toString()); assert.equal(served.headers.get("x-content-type-options"), "nosniff");
   assert.equal((await catalog.response("tongs://app/%2e%2e/secret")).status, 404); assert.equal((await catalog.response("https://app/index.html")).status, 404);
 });
+test("catalog refuses streamed bytes whose digest differs from the descriptor", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tongs-assets-"));
+  const bytes = Buffer.from("export const safe = true;", "utf8");
+  const tampered = Buffer.from("export const safe = 1234;", "utf8");
+  assert.equal(tampered.length, bytes.length);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const catalog = new AssetCatalog(new FakeTransport(tampered, { sha256: digest }), root);
+  const [descriptor] = await catalog.refresh();
+  await assert.rejects(catalog.response(descriptor.url), /Asset integrity check failed/);
+});
 test("catalog rejects wrong MIME", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tongs-assets-")); const transport = new FakeTransport(Buffer.from("x"));
   transport.requestRead = () => ({ requestId: "1", result: Promise.resolve({ assets: [{ handle: "x", source: "plugin", asset_id: "x", plugin_id: "p", kind: "module", media_type: "text/html", byte_count: 1, sha256: "0".repeat(64) }] }) });

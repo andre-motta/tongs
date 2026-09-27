@@ -31,12 +31,18 @@ from tongs.desktop.protocol.ci_operations import (
 )
 from tongs.desktop.protocol.diff_projection import DiffLayout, flatten_diff
 from tongs.desktop.protocol.messages import (
+    DEFAULT_JSON_LIMITS,
     MAX_EVENT_FRAME_BYTES,
+    MAX_JSON_DEPTH,
+    MAX_JSON_ITEMS,
     MAX_PENDING_REQUESTS,
     MAX_QUEUED_EVENTS,
     MAX_REQUEST_FRAME_BYTES,
     MAX_RESPONSE_FRAME_BYTES,
+    MIN_JSON_DEPTH,
+    MIN_JSON_ITEMS,
     CancelFrame,
+    JsonLimits,
     JsonObject,
     JsonValue,
     ProtocolError,
@@ -308,6 +314,7 @@ class DesktopSidecarServer:
         self._event_task: asyncio.Task[None] | None = None
         self._service_event_task: asyncio.Task[None] | None = None
         self._handshaken = False
+        self._json_limits = DEFAULT_JSON_LIMITS
         self._stopping = False
         self._location: DesktopLocation | None = None
         self._install_read_operations()
@@ -450,7 +457,7 @@ class DesktopSidecarServer:
             )
             return
         try:
-            requested = _parse_handshake(frame.params)
+            requested, client_limits = _parse_handshake(frame.params)
             await self._session.start()
             if self._plugin_registry is None:
                 config = cast(object, self._session.config)
@@ -460,6 +467,7 @@ class DesktopSidecarServer:
             await self._plugin_registry.start_all(self._facade_for_plugin)
             self._assets.stage_core(self._core_assets)
             self._assets.stage_plugins(self._plugin_registry)
+            self._json_limits = client_limits
             self._handshaken = True
             await self._write_result(
                 frame.request_id,
@@ -477,6 +485,8 @@ class DesktopSidecarServer:
                         "pending_requests": MAX_PENDING_REQUESTS,
                         "queued_events": MAX_QUEUED_EVENTS,
                         "asset_chunk_bytes": ASSET_CHUNK_BYTES,
+                        "json_values": self._json_limits.values,
+                        "json_depth": self._json_limits.depth,
                     },
                 },
             )
@@ -1116,10 +1126,14 @@ class DesktopSidecarServer:
         )
 
     async def _write_result(self, request_id: str, result: object) -> None:
-        await self._write(encode_response(request_id, result=result))
+        await self._write(
+            encode_response(request_id, result=result, limits=self._json_limits)
+        )
 
     async def _write_error(self, request_id: str | None, error: ProtocolError) -> None:
-        await self._write(encode_response(request_id, error=error))
+        await self._write(
+            encode_response(request_id, error=error, limits=self._json_limits)
+        )
 
     async def _write(self, frame: bytes) -> None:
         writer = self._writer
@@ -1278,10 +1292,12 @@ class _BoundPluginFacade:
         await self._server._publish_plugin_focus(self._plugin_id, target_id, frozen)
 
 
-def _parse_handshake(params: JsonObject) -> frozenset[str]:
+def _parse_handshake(params: JsonObject) -> tuple[frozenset[str], JsonLimits]:
     _require_params(
         params,
-        allowed=frozenset({"protocol_major", "core_version", "capabilities", "client"}),
+        allowed=frozenset(
+            {"protocol_major", "core_version", "capabilities", "client", "limits"}
+        ),
         required=frozenset({"protocol_major", "core_version", "capabilities"}),
     )
     major = params["protocol_major"]
@@ -1312,7 +1328,41 @@ def _parse_handshake(params: JsonObject) -> frozenset[str]:
         )
     if "client" in params:
         _text(params, "client", max_length=120)
-    return requested
+    return requested, _parse_handshake_limits(params.get("limits"))
+
+
+def _parse_handshake_limits(value: JsonValue | None) -> JsonLimits:
+    """Negotiate the JSON budget from the limits the client declares.
+
+    A client that declares no limits gets the sidecar defaults. Declared limits
+    below the protocol floor, or of the wrong shape, fail the handshake closed.
+    """
+    if value is None:
+        return DEFAULT_JSON_LIMITS
+    if not isinstance(value, dict) or set(value) != {"json_values", "json_depth"}:
+        raise ProtocolError(
+            ProtocolErrorCode.INVALID_PARAMS,
+            "Handshake limits must declare json_values and json_depth.",
+        )
+    values = value["json_values"]
+    depth = value["json_depth"]
+    if (
+        type(values) is not int
+        or type(depth) is not int
+        or values < MIN_JSON_ITEMS
+        or depth < MIN_JSON_DEPTH
+    ):
+        raise ProtocolError(
+            ProtocolErrorCode.UNSUPPORTED_PROTOCOL,
+            "The desktop client JSON limits are incompatible with this sidecar.",
+            details={
+                "min_json_values": MIN_JSON_ITEMS,
+                "min_json_depth": MIN_JSON_DEPTH,
+                "max_json_values": MAX_JSON_ITEMS,
+                "max_json_depth": MAX_JSON_DEPTH,
+            },
+        )
+    return DEFAULT_JSON_LIMITS.negotiate(values, depth)
 
 
 def _require_params(

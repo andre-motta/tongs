@@ -9,6 +9,14 @@ export const REQUIRED_CAPABILITIES = Object.freeze([
   "workspace_utilities",
 ] as const);
 
+/**
+ * Protocol error code for a response that exceeds the negotiated byte, JSON
+ * value-count, or JSON depth budget. The sidecar sends it in place of the
+ * oversized result, and the main process raises it when a frame still
+ * overflows, so only that one request fails and the service stays up.
+ */
+export const RESPONSE_TOO_LARGE = "response_too_large" as const;
+
 export type JsonScalar = string | number | boolean | null;
 export type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };

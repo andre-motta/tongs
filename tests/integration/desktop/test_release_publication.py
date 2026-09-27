@@ -389,12 +389,20 @@ def test_verify_rejects_tampered_assets_and_checksums(tmp_path: Path) -> None:
     assets = _assemble(tmp_path)
     verifier = _verifier_for(tmp_path, produced)
 
+    # An RPM has no manifest entry, so SHA256SUMS is its only binding.
+    rpm = next(path for path in sorted(assets.iterdir()) if path.suffix == ".rpm")
+    rpm_bytes = rpm.read_bytes()
+    rpm.write_bytes(bytes(byte ^ 0xFF for byte in rpm_bytes))
+    with pytest.raises(
+        publication.ReleasePublicationError, match="disagrees with SHA256SUMS"
+    ):
+        _verify(tmp_path, assets, verifier)
+    rpm.write_bytes(rpm_bytes)
+
+    # A same-length archive with rebound checksums differs only by digest.
     archive = assets / publication.archive_name_for(VERSION)
     original = archive.read_bytes()
-    archive.write_bytes(original + b"\n")
-    with pytest.raises(publication.ReleasePublicationError, match="disagrees with"):
-        _verify(tmp_path, assets, verifier)
-
+    archive.write_bytes(bytes(byte ^ 0xFF for byte in original))
     _rewrite_checksums(assets)
     with pytest.raises(
         publication.ReleasePublicationError, match="disagrees with the release manifest"
@@ -603,29 +611,18 @@ def _published(assets_dir: Path, **overrides: Any) -> dict[str, Any]:
     return release
 
 
-def test_verify_published_confirms_an_immutable_release_with_every_asset(
-    tmp_path: Path,
-) -> None:
-    _write_producer_output(tmp_path)
-    assets = _assemble(tmp_path)
-    tag = publication.ReleaseTag.parse(TAG)
-    document = json.dumps(_published(assets))
-
-    report = publication.verify_published_release(
-        tag, assets, expect_draft=False, gh=lambda _: (0, document, "")
-    )
-    assert report["result"] == "pass"
-    assert report["immutable"] is True
-    assert report["assets"] == sorted(entry.name for entry in assets.iterdir())
-
-
 def test_verify_published_reads_the_final_release_by_tag(tmp_path: Path) -> None:
     _write_producer_output(tmp_path)
     assets = _assemble(tmp_path)
     tag = publication.ReleaseTag.parse(TAG)
     gh = FakeGh([], by_tag=(0, json.dumps(_published(assets)), ""))
-    publication.verify_published_release(tag, assets, expect_draft=False, gh=gh)
+    report = publication.verify_published_release(
+        tag, assets, expect_draft=False, gh=gh
+    )
     assert gh.calls == [["api", BY_TAG]]
+    assert report["result"] == "pass"
+    assert report["immutable"] is True
+    assert report["assets"] == sorted(entry.name for entry in assets.iterdir())
 
 
 def test_verify_draft_finds_the_draft_by_listing_when_by_tag_404s(

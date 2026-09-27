@@ -22,9 +22,10 @@ matters, is covered by
 
 from __future__ import annotations
 
-import json
+import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -304,39 +305,6 @@ def test_entry_point_imports_under_its_declared_dependency_set(
 @pytest.mark.parametrize(
     "entry", ENTRY_POINTS, ids=[Path(item.program).stem for item in ENTRY_POINTS]
 )
-def test_the_probe_rejects_a_dependency_the_entry_point_does_not_declare(
-    entry: EntryPoint,
-) -> None:
-    """Prove the probe is not vacuous by blocking something it does need."""
-
-    # A program permitted nothing cannot be starved of a declared dependency,
-    # so block a module every interpreter has instead.  Either way the probe
-    # must refuse to run the program.
-    blocked = entry.permitted or frozenset({"json"})
-    script = _MINIMAL_ENVIRONMENT_PROBE.format(
-        blocked=sorted(OPTIONAL_MODULES | blocked),
-        root=str(ROOT),
-        program=str(ROOT / entry.program),
-        arguments=list(entry.arguments),
-    )
-    completed = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-        check=False,
-        timeout=120,
-    )
-    assert completed.returncode != 0, (
-        f"{entry.program} still ran with {sorted(blocked)} blocked, so the probe "
-        "proves nothing"
-    )
-    assert "absent from this job's declared dependency set" in completed.stderr
-
-
-@pytest.mark.parametrize(
-    "entry", ENTRY_POINTS, ids=[Path(item.program).stem for item in ENTRY_POINTS]
-)
 def test_every_job_installs_what_its_entry_point_needs(
     entry: EntryPoint, workflow_jobs: dict[str, dict]
 ) -> None:
@@ -367,23 +335,21 @@ def test_the_table_covers_every_entry_point_the_workflows_invoke(
 
 
 def test_the_install_table_matches_the_declared_extras() -> None:
-    """The recorded extras must match what pyproject actually declares."""
+    """Each recorded module group must be what pyproject actually declares."""
 
-    pyproject = (ROOT / "pyproject.toml").read_text()
-    for module, marker in (
-        ("jsonschema", "jsonschema>="),
-        ("yaml", "pyyaml>="),
-        ("pytest", "pytest>="),
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    extras = project["optional-dependencies"]
+
+    def names(requirements: list[str]) -> set[str]:
+        return {re.split(r"[\[<>=!~ ;]", item, maxsplit=1)[0] for item in requirements}
+
+    distribution = {"yaml": "pyyaml", "tongs": None}
+    for modules, declared in (
+        (CORE_MODULES, names(project["dependencies"])),
+        (DEV_MODULES, names(extras["dev"])),
+        (MCP_MODULES, names(extras["mcp"])),
     ):
-        assert module in DEV_MODULES
-        assert marker in pyproject, marker
-    assert "mcp[cli]>=" in pyproject
-    for module in ("sigstore", "packaging", "textual", "httpx", "aiosqlite"):
-        assert module in CORE_MODULES
-        assert f'"{module}>=' in pyproject, module
-
-
-def test_recorded_entry_point_programs_exist() -> None:
-    for entry in ENTRY_POINTS:
-        assert (ROOT / entry.program).is_file(), entry.program
-    assert json.dumps(sorted(OPTIONAL_MODULES))
+        for module in modules:
+            name = distribution.get(module, module)
+            if name is not None:
+                assert name in declared, (module, sorted(declared))

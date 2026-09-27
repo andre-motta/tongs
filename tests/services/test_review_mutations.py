@@ -193,6 +193,29 @@ async def test_validation_rejection_is_definite_and_repeatable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejected_review_verdict_is_invalid_input_without_invalidation() -> None:
+    client = _client(
+        submit_review=AsyncMock(side_effect=ValidationError("self approval rejected"))
+    )
+    service, *_ = _service(client, forge=ForgeType.GITHUB)
+    command = ReviewVerdict(
+        "verdict-rejected",
+        REF,
+        REVISION,
+        ReviewDecision.APPROVED,
+        "ship",
+    )
+
+    with pytest.raises(ServiceError) as raised:
+        await service.execute(command)
+
+    assert raised.value.code == ServiceErrorCode.INVALID_INPUT
+    assert raised.value.retryable is False
+    client.submit_review.assert_awaited_once()
+    client.invalidate_review_reads.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_transport_failure_after_dispatch_is_unknown_and_not_replayed() -> None:
     client = _client(add_comment=AsyncMock(side_effect=NetworkError("timeout")))
     service, *_rest, emitter = _service(client)

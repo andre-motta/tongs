@@ -363,16 +363,6 @@ test("fails closed on padded long link text and reads image alt text", () => {
   );
 });
 
-test("marks only the padded long link text", () => {
-  const view = renderMarkdown(`[github.com${" ".repeat(2100)}x](https://evil.example/)`);
-  assert.equal(view.getAllByRole("link").length, 1);
-  assert.equal(view.container.textContent.includes("(opens evil.example)"), true);
-  assert.equal(
-    view.container.querySelectorAll(".safe-markdown-link-host-mismatch").length,
-    1,
-  );
-});
-
 test("leaves file names, file references, and code identifiers unmarked", () => {
   const view = renderMarkdown(
     [

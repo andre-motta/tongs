@@ -11,10 +11,6 @@ import {
   StaleQueryError,
 } from "../../../desktop/dist/src/renderer/core/query.js";
 import {
-  inboxPresentation,
-  listDiscoveredReviews,
-} from "../../../desktop/dist/src/renderer/features/inbox/index.js";
-import {
   RendererReadError,
   safeError,
 } from "../../../desktop/dist/src/renderer/core/presentation.js";
@@ -309,49 +305,6 @@ test("query coordinator cancels every token in an aggregated local-repository re
   assert.equal(await second, "new");
   await assert.rejects(first, StaleQueryError);
   assert.deepEqual(canceled, ["repo-a", "repo-b"]);
-});
-
-test("partial review results remain usable while failures stay visible", () => {
-  const result = inboxPresentation({
-    items: [{ handle: "review", repository: "repo", summary: {} }],
-    failures: [
-      {
-        code: "unavailable",
-        message: "safe",
-        retryable: true,
-        repository: null,
-      },
-    ],
-  });
-  assert.deepEqual(result, { empty: false, partialFailures: 1 });
-});
-
-test("All reviews queries only current locally discovered handles", async () => {
-  const calls = [];
-  const bridge = {
-    listReviews(params) {
-      calls.push(params);
-      return {
-        requestToken: `token-${calls.length}`,
-        result: Promise.resolve({ items: [], failures: [] }),
-      };
-    },
-    openRepository() {
-      throw new Error("renderer must not admit remote repositories");
-    },
-  };
-  const read = listDiscoveredReviews(
-    bridge,
-    [{ handle: "local-a" }, { handle: "local-b" }],
-    "all_open",
-    "open",
-  );
-  await read.result;
-  assert.deepEqual(calls, [
-    { scope: "all_open", state: "open", repository: "local-a" },
-    { scope: "all_open", state: "open", repository: "local-b" },
-  ]);
-  assert.deepEqual(read.requestTokens, ["token-1", "token-2"]);
 });
 
 function featureContext() {

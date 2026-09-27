@@ -430,6 +430,23 @@ test("log reconstruction enforces identity, revision, line, and text bounds", as
     loadLogPages("job", inconsistent, new QueryCoordinator(inconsistent)),
     (error) => error.code === "invalid_response",
   );
+
+  // A log that changes between pages is refused, whether its digest or its
+  // length is what moved.
+  for (const revision of [
+    { sha256: "other-hash", byte_count: 99 },
+    { sha256: "hash", byte_count: 100 },
+  ]) {
+    const changed = {
+      cancelRead: async () => true,
+      openLog: () => read(logPage("job", 0, 1, "a\n")),
+      pageLog: () => read({ ...logPage("job", 1, null, "b\n"), revision }),
+    };
+    await assert.rejects(
+      loadLogPages("job", changed, new QueryCoordinator(changed)),
+      (error) => error.code === "revision_changed",
+    );
+  }
 });
 
 test("known pre-dispatch failures and ambiguous transport failures stay distinct", () => {

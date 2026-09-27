@@ -72,15 +72,18 @@ test("initial All reviews waits for local discovery before scoped reads", async 
     },
   });
   const feature = createInboxFeature();
+  // Discovery has already reported a repository but has not finished, so
+  // only the readiness flag can hold the scoped read back.
   const waiting = {
     ...featureContext(bridge),
-    repositories: [],
+    repositories: [repository()],
     repositoriesReady: false,
     repositoryGeneration: 0,
   };
   const view = render(
     feature.render(waiting, { kind: "inbox", repository: null }),
   );
+  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(reads, 0);
   assert.ok(view.getByText("Waiting for local repository discovery…"));
   const ready = {

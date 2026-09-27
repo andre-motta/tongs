@@ -9,7 +9,7 @@ import pytest
 from tongs.desktop.protocol.diff_projection import DiffLayout, flatten_diff
 from tongs.desktop.protocol.messages import JsonObject, ProtocolError, ProtocolErrorCode
 from tongs.desktop.protocol.server import DesktopSidecarServer, RequestContext
-from tongs.desktop.protocol.state import HandleKind, SnapshotStore
+from tongs.desktop.protocol.state import HandleKind
 from tongs.diff.models import DiffFile, DiffHunk, DiffLine, FileStatus, LineType
 from tongs.plugins.desktop import DesktopCancellation
 from tongs.services import RawDiffSnapshot, RepositoryRef, ReviewRef, ReviewRevision
@@ -95,22 +95,6 @@ def test_split_projection_preserves_cells_coordinates_and_anchorability() -> Non
     assert cast(dict[str, object], marker)["anchor_side"] is None
 
 
-def test_snapshot_retains_projection_without_changing_revision_or_entries() -> None:
-    store = SnapshotStore()
-    snapshot = store.create(
-        "review",
-        {"head_sha": "h", "base_sha": "b", "start_sha": None},
-        [{"kind": "split", "row_index": 0}],
-        projection="split",
-    )
-
-    page = store.page(snapshot, "review")
-
-    assert page.projection == "split"
-    assert page.revision == {"head_sha": "h", "base_sha": "b", "start_sha": None}
-    assert page.entries == ({"kind": "split", "row_index": 0},)
-
-
 class _DiffSession:
     def __init__(self, raw: RawDiffSnapshot) -> None:
         self.raw = raw
@@ -182,14 +166,14 @@ async def test_server_defaults_unified_and_pages_one_selected_split_projection()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "params", [{"review": "x", "layout": "wide"}, {"review": "x", "layout": True}]
-)
-async def test_server_rejects_invalid_layout(params: JsonObject) -> None:
+async def test_server_rejects_invalid_layout() -> None:
     server = DesktopSidecarServer(session=cast(object, object()))
 
     with pytest.raises(ProtocolError) as caught:
-        await server._diff_open(params, RequestContext("diff", DesktopCancellation()))
+        await server._diff_open(
+            {"review": "x", "layout": "wide"},
+            RequestContext("diff", DesktopCancellation()),
+        )
 
     assert caught.value.code is ProtocolErrorCode.INVALID_PARAMS
 

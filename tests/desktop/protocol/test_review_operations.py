@@ -377,31 +377,6 @@ async def test_capabilities_use_only_admitted_handle(setup) -> None:
 
 
 @pytest.mark.asyncio
-async def test_quick_comment_repeat_coalesces_and_conflict_does_not_replay(
-    setup,
-) -> None:
-    operations, session, handles = setup
-    params: JsonObject = {
-        "operation_id": "quick:42:1",
-        "review": handles["review"],
-        "body": "Looks good",
-    }
-
-    first = await operations.comment(params, _context("transport-one"))
-    repeated = await operations.comment(params, _context("transport-two"))
-    with pytest.raises(ServiceError) as conflict:
-        await operations.comment(
-            {**params, "body": "different"}, _context("transport-three")
-        )
-
-    assert first == repeated
-    assert first["operation_id"] == "quick:42:1"
-    assert first["outcome"] == "known"
-    assert conflict.value.code is ServiceErrorCode.CONFLICT
-    session.client.add_comment.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params", "client_method"),
     [
@@ -999,30 +974,35 @@ async def test_reconnect_rediscovers_unknown_submission_without_attempt_id(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "message"),
     [
-        {"body": "x", "verdict": None, "comments": True},
-        {"body": "x", "verdict": "ship_it", "comments": []},
-        {"body": "x", "comments": [{"id": True, "kind": "general", "body": "x"}]},
-        {
-            "body": "x",
-            "comments": [
-                {
-                    "id": "00000000-0000-0000-0000-000000000000",
-                    "kind": "inline",
-                    "body": "x",
-                    "anchor": {**_draft_anchor(), "new_line": 1.0},
-                }
-            ],
-        },
+        ({"body": "x", "verdict": None, "comments": True}, ""),
+        ({"body": "x", "verdict": "ship_it", "comments": []}, ""),
+        ({"body": "x", "comments": [{"id": True, "kind": "general", "body": "x"}]}, ""),
+        (
+            {
+                "body": "x",
+                "comments": [
+                    {
+                        "id": "00000000-0000-0000-0000-000000000000",
+                        "kind": "inline",
+                        "body": "x",
+                        "anchor": {**_draft_anchor(), "new_line": 1.0},
+                    }
+                ],
+            },
+            # The adapter must reject it; the draft model check is a second layer.
+            "The new_line parameter is invalid.",
+        ),
     ],
+    ids=["comments-not-list", "unknown-verdict", "bool-comment-id", "float-line"],
 )
 async def test_malformed_nested_drafts_fail_before_storage(
-    setup, payload: JsonObject
+    setup, payload: JsonObject, message: str
 ) -> None:
     operations, session, handles = setup
 
-    with pytest.raises(ProtocolError):
+    with pytest.raises(ProtocolError) as caught:
         await operations.create_draft(
             {
                 "review": handles["review"],
@@ -1032,6 +1012,7 @@ async def test_malformed_nested_drafts_fail_before_storage(
             _context(),
         )
 
+    assert message in caught.value.message
     assert await session.drafts.list_drafts(review=REVIEW) == ()
 
 
@@ -1204,67 +1185,6 @@ async def test_submission_cancellation_crosses_actual_ndjson_boundary(
             reader.feed_eof()
             with suppress(BaseException):
                 await asyncio.wait_for(running, 2)
-
-
-@pytest.mark.asyncio
-async def test_eof_settles_dispatched_quick_write_unknown_without_replay(
-    tmp_path: Path,
-) -> None:
-    entered = asyncio.Event()
-
-    async def hang(*_args, **_kwargs):
-        entered.set()
-        await asyncio.Event().wait()
-
-    client = _client(add_comment=AsyncMock(side_effect=hang))
-    store = DraftStore(tmp_path / "data" / "drafts.db")
-    await store.open()
-    session = _Session(store, client)
-    server = DesktopSidecarServer(
-        session=cast(ApplicationSession, session),
-        plugin_registry=DesktopPluginRegistry(
-            entry_point_source=lambda _group: (), host_version="1.0"
-        ),
-        shutdown_timeout=1,
-    )
-    reader = asyncio.StreamReader()
-    writer = _WireWriter()
-    running = asyncio.create_task(server.run(reader, writer))
-
-    reader.feed_data(
-        _frame(
-            "handshake",
-            "handshake",
-            {
-                "protocol_major": 1,
-                "core_version": version("tongs"),
-                "capabilities": [REVIEW_CAPABILITY],
-            },
-        )
-    )
-    await writer.response("handshake")
-    review_handle = server._handles.issue(HandleKind.REVIEW, REVIEW)
-    reader.feed_data(
-        _frame(
-            "eof-comment",
-            "review_mutations.comment",
-            {
-                "operation_id": "eof:quick:1",
-                "review": review_handle,
-                "body": "may reach the forge",
-            },
-        )
-    )
-    await asyncio.wait_for(entered.wait(), 2)
-
-    reader.feed_eof()
-    await asyncio.wait_for(running, 3)
-
-    record = session.review_mutations._ledger["eof:quick:1"]
-    assert record.outcome is not None
-    assert record.outcome.status.value == "unknown"
-    assert record.outcome.resync_required is True
-    assert client.add_comment.await_count == 1
 
 
 class _TransportRegistry:

@@ -477,6 +477,7 @@ class TestGitHubLifecycleActions:
             data["head"]["repo"]["full_name"] = "someone/fork"
         elif unsafe == "default":
             data["head"]["ref"] = "main"
+            data["base"]["ref"] = "release"
         else:
             data["head"]["ref"] = "release"
             data["base"]["ref"] = "release"
@@ -584,6 +585,7 @@ class TestGitHubLifecycleActions:
             [
                 {"id": 55, "number": 10, "state": "closed"},
                 {"id": 55, "number": 10, "state": "open"},
+                {"id": 55, "number": 10, "state": "open"},
             ]
         )
         client, http = _make_github_client(
@@ -592,6 +594,8 @@ class TestGitHubLifecycleActions:
         async with http:
             closed = await client.close_mr("acme/repo", 10)
             reopened = await client.reopen_mr("acme/repo", 10)
+            with pytest.raises(ValueError, match="state response"):
+                await client.close_mr("acme/repo", 10)
 
         assert closed.remote_id == "55"
         assert reopened.remote_id == "55"

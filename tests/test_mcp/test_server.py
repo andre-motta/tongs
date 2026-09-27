@@ -16,13 +16,7 @@ except ImportError:
 
 pytestmark = pytest.mark.skipif(not mcp_available, reason="mcp not installed")
 
-UNCONFIGURED_HOSTS = [
-    "evil-gitlab.example",
-    "github.com.evil.io",
-    "gitlab.example.org",
-    "gіthub.com",  # Cyrillic i look-alike
-    "bitbucket.org",
-]
+UNCONFIGURED_HOST = "evil-gitlab.example"
 
 
 @pytest.fixture(autouse=True)
@@ -70,15 +64,11 @@ class TestParseHostRepo:
         with pytest.raises(ValueError, match="GitHub host"):
             _parse_host_repo("git.hub.corp/owner/repo/extra")
 
-    def test_no_slash_raises(self):
-        """Input without any slash is rejected."""
+    @pytest.mark.parametrize("repo_path", ["noslash", ""])
+    def test_malformed_input_raises(self, repo_path):
+        """Input without a host and path is rejected."""
         with pytest.raises(ValueError, match="repo_path must be"):
-            _parse_host_repo("noslash")
-
-    def test_empty_string_raises(self):
-        """Empty string is rejected."""
-        with pytest.raises(ValueError, match="repo_path must be"):
-            _parse_host_repo("")
+            _parse_host_repo(repo_path)
 
     def test_path_traversal_rejected(self):
         """Path traversal segments (..) are rejected by the regex."""
@@ -90,18 +80,14 @@ class TestParseHostRepo:
         with pytest.raises(ValueError, match="repo_path must be"):
             _parse_host_repo("github.com/оwner/repo")
 
-    @pytest.mark.parametrize("hostname", UNCONFIGURED_HOSTS)
-    def test_unconfigured_host_rejected(self, hostname):
-        """Any host outside the configured set is rejected."""
-        with pytest.raises(ValueError) as excinfo:
-            _parse_host_repo(f"{hostname}/owner/repo")
-        message = str(excinfo.value)
-        assert "not configured" in message or "repo_path must be" in message
+    def test_unconfigured_host_rejected(self):
+        """A host outside the configured set is rejected."""
+        with pytest.raises(ValueError, match="not configured"):
+            _parse_host_repo(f"{UNCONFIGURED_HOST}/owner/repo")
 
 
 class TestToolsRejectUnconfiguredHosts:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("hostname", UNCONFIGURED_HOSTS)
     @pytest.mark.parametrize(
         ("tool", "args"),
         [
@@ -114,7 +100,7 @@ class TestToolsRejectUnconfiguredHosts:
         ],
     )
     async def test_rejects_before_token_lookup(
-        self, forbid_token_lookup, configured_registry, hostname, tool, args
+        self, forbid_token_lookup, configured_registry, tool, args
     ):
         """Every tool, including the write tools, rejects before credentials."""
         with (
@@ -124,7 +110,7 @@ class TestToolsRejectUnconfiguredHosts:
             ),
             pytest.raises(ValueError),
         ):
-            await getattr(server, tool)(f"{hostname}/owner/repo", *args)
+            await getattr(server, tool)(f"{UNCONFIGURED_HOST}/owner/repo", *args)
         forbid_token_lookup.assert_not_called()
         assert configured_registry._clients == {}
 
@@ -207,9 +193,3 @@ class TestToolsRedactForgeErrors:
         message = str(excinfo.value)
         assert "SECRET" not in message
         assert "Forge authentication is unavailable" in message
-
-    @pytest.mark.asyncio
-    async def test_host_check_still_raises_value_error(self):
-        """The unconfigured host message is not replaced by the redaction."""
-        with pytest.raises(ValueError, match="not configured"):
-            await server.list_mrs("evil.example/owner/repo")

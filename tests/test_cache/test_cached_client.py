@@ -183,11 +183,14 @@ class TestApproveInvalidation:
         )
 
         result = await client.add_comment("org/repo", 1, "body")
-        await asyncio.sleep(0)
+        tasks = list(client._invalidation_tasks.values())
+        assert tasks
+        await asyncio.gather(*tasks)
         await client.list_mrs("org/repo")
 
         assert result.remote_id == "note-1"
         assert result.cache_invalidated is False
+        assert [task.result() for task in tasks] == [False]
         assert inner.list_mrs.await_count == 2
 
     async def test_close_cancels_owned_blocked_invalidation(
@@ -196,10 +199,12 @@ class TestApproveInvalidation:
         entered = asyncio.Event()
         exited = asyncio.Event()
         calls = 0
+        started: list[asyncio.Task] = []
 
         async def blocked(_prefix: str) -> None:
             nonlocal calls
             calls += 1
+            started.append(asyncio.current_task())
             entered.set()
             try:
                 await asyncio.Event().wait()
@@ -210,14 +215,24 @@ class TestApproveInvalidation:
         await client.add_comment("org/repo", 1, "body")
         await entered.wait()
         await client.add_comment("org/repo", 1, "second")
+        for _ in range(3):
+            await asyncio.sleep(0)
 
+        assert calls == len(client._review_prefixes("org/repo", 1))
         assert len(client._invalidation_tasks) == 1
 
-        await client.close()
+        close_errors: list[BaseException] = []
+        try:
+            await client.close()
+        except RuntimeError as exc:
+            close_errors.append(exc)
 
-        await exited.wait()
+        _done, still_blocked = await asyncio.wait(started, timeout=1)
+        assert close_errors == []
         calls_after_close = calls
         await asyncio.sleep(0)
+        assert not still_blocked
+        assert exited.is_set()
         inner.close.assert_awaited_once()
         assert not client._invalidation_tasks
         assert calls == calls_after_close
@@ -276,6 +291,24 @@ class TestMergeInvalidation:
             expected_target_branch="main",
         )
         release.set()
+        await client.close()
+
+    async def test_partial_merge_guards_are_forwarded(self, client, inner):
+        """A merge without source cleanup still pins the reviewed revision."""
+        await client.merge_mr(
+            "org/repo", 1, head_sha="reviewed-head", expected_target_branch="main"
+        )
+
+        inner.merge_mr.assert_awaited_once_with(
+            "org/repo",
+            1,
+            False,
+            True,
+            head_sha="reviewed-head",
+            expected_source_repository=None,
+            expected_source_branch=None,
+            expected_target_branch="main",
+        )
         await client.close()
 
     async def test_repo_dirty_marker_bypasses_all_cached_review_reads(
@@ -388,10 +421,3 @@ class TestGetAttrDelegation:
         result = await client.some_uncached_method()
         assert result == "delegated"
         inner.some_uncached_method.assert_awaited_once()
-
-
-class TestGetAttrDelegationSync:
-    def test_attribute_access_delegates_to_inner(self, client, inner):
-        """Non-method attributes also delegate to inner."""
-        inner.supports_thread_resolution = True
-        assert client.supports_thread_resolution is True

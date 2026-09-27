@@ -7,12 +7,16 @@ inputs from their sources instead of restating them:
 * the archive producer's ``_SOURCE_INPUTS``, loaded from the producer itself;
 * the programs the production jobs run, from ``ENTRY_POINTS`` and from the
   paths the job steps name in ``desktop-production.yml``;
-* the repository files those packaging programs import and name, by loading
-  them in a subprocess;
-* the repository files the desktop jobs' pytest targets import, by collecting
-  them in a subprocess;
+* the repository files those archive and packaging programs import and name,
+  by loading them in a subprocess;
+* the repository files the desktop and core jobs' pytest targets import, by
+  collecting them in a subprocess;
 * the tongs modules the installed-core job's audited TUI launch loads, by
   starting the ``tongs`` console entry point headless in a subprocess;
+* the documentation the tests read, from the path literals in tests/, mapped
+  to the lane of the job that runs the reading test;
+* the files the Fedora Podman probe reads, from ``probe.py`` itself;
+* the Python files the lint job checks, from its ``ruff check`` command;
 * every tracked file, which must match an explicit rule unless it is on the
   allowlist below with a reason.
 
@@ -24,6 +28,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -34,12 +39,20 @@ from types import ModuleType
 import pytest
 import yaml
 
-from tests.ci.ci_plan import LANE_PRODUCTION_JOBS, RULES, classify_paths
+from tests.ci.ci_plan import (
+    LANE_PRODUCTION_JOBS,
+    RULES,
+    classify_paths,
+    pattern_matches,
+)
+from tests.ci.test_lane_test_ownership import job_lane, pre_merge_owners
 from tests.ci.test_production_entry_points import ENTRY_POINTS
 
 ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE_PRODUCER = ROOT / "scripts/build_desktop_archive.py"
 PRODUCTION_WORKFLOW = ROOT / ".github/workflows/desktop-production.yml"
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+FEDORA_PROBE = ROOT / "tests/containers/probe.py"
 PRODUCTION_PREFIX = "desktop-production.yml:"
 #: The job runs ``pip install ./examples/desktop-plugin``, so collection of
 #: its tests needs the example package importable.
@@ -55,7 +68,30 @@ SYNTHETIC_CHILD = "ci-plan-drift-synthetic-child.txt"
 #: mapped to the reason.  Every entry must be tracked and actually unmatched.
 UNMATCHED_ALLOWLIST: dict[str, str] = {}
 
-PACKAGING_JOBS = frozenset(
+#: Archive source input paths, as rule patterns, that select the archive lane
+#: without the packaging lane (the RPM lifecycle), each with the ruling that
+#: allows it.  Every other archive source input path, including Electron main
+#: and preload source and the shell page, must select packaging.
+ARCHIVE_ONLY_SOURCE_PATTERNS: dict[str, str] = {
+    "desktop/src/renderer/**": (
+        "CTO decision 9, 2026-09-27: renderer source runs the archive and SBOM "
+        "jobs, not the RPM lifecycle or Podman"
+    ),
+    "desktop/src/shared/**": (
+        "CTO decision 9, 2026-09-27: shared bridge contracts run the archive and "
+        "SBOM jobs, not the RPM lifecycle or Podman"
+    ),
+    "desktop/src/main/shell/*.css": (
+        "CTO decision 19 as amended, 2026-09-27: the shell stylesheet runs the "
+        "archive and SBOM jobs; the shell page and all other main and preload "
+        "source run the RPM lifecycle"
+    ),
+}
+
+ARCHIVE_JOBS = frozenset(
+    PRODUCTION_PREFIX + job for job in LANE_PRODUCTION_JOBS["archive"]
+)
+RPM_JOBS = frozenset(
     PRODUCTION_PREFIX + job for job in LANE_PRODUCTION_JOBS["packaging"]
 )
 #: ``source-identity`` only reads git metadata, so it has no path inputs.
@@ -151,16 +187,49 @@ def _source_inputs() -> list[str]:
     return [Path(entry).as_posix() for entry in producer._SOURCE_INPUTS]
 
 
-@pytest.mark.needs_git
-def test_every_archive_source_input_selects_packaging() -> None:
-    inputs = _source_inputs()
-    assert "src/tongs/__init__.py" in inputs
+def _source_input_paths(entries: list[str]) -> dict[str, str]:
     paths: dict[str, str] = {}
-    for entry in inputs:
+    for entry in entries:
         expanded = _expand(entry)
         assert expanded, f"_SOURCE_INPUTS names {entry}, which is not tracked"
         paths.update(dict.fromkeys(expanded, f"_SOURCE_INPUTS {entry}"))
-    assert _offenders(paths, "packaging") == []
+    return paths
+
+
+@pytest.mark.needs_git
+def test_every_archive_source_input_selects_archive() -> None:
+    inputs = _source_inputs()
+    assert "src/tongs/__init__.py" in inputs
+    assert _offenders(_source_input_paths(inputs), "archive") == []
+
+
+def _archive_only(path: str) -> bool:
+    return any(
+        pattern_matches(pattern, path) for pattern in ARCHIVE_ONLY_SOURCE_PATTERNS
+    )
+
+
+@pytest.mark.needs_git
+def test_every_archive_source_input_selects_packaging_unless_ruled() -> None:
+    paths = _source_input_paths(_source_inputs())
+    exempt = {path: source for path, source in paths.items() if _archive_only(path)}
+    ruled = {path: source for path, source in paths.items() if path not in exempt}
+    for pattern, ruling in ARCHIVE_ONLY_SOURCE_PATTERNS.items():
+        assert ruling, pattern
+        assert any(pattern_matches(pattern, path) for path in exempt), (
+            f"{pattern} no longer names an archive source input"
+        )
+    assert _offenders(exempt, "archive") == []
+    assert _offenders(exempt, "desktop") == []
+    # The rulings reach no further than the paths they name: main and preload
+    # source and the shell page keep the RPM lifecycle.
+    for witness in (
+        "desktop/src/main/index.ts",
+        "desktop/src/main/shell/index.html",
+        "desktop/src/preload/index.cts",
+    ):
+        assert witness in ruled, witness
+    assert _offenders(ruled, "packaging") == []
 
 
 # (2) The programs the production jobs run, and what they read.
@@ -176,14 +245,19 @@ def production_jobs() -> dict[str, dict]:
     }
 
 
-def test_every_packaging_entry_point_selects_packaging() -> None:
+@pytest.mark.parametrize(
+    ("jobs", "lane"), [(ARCHIVE_JOBS, "archive"), (RPM_JOBS, "packaging")]
+)
+def test_every_archive_and_packaging_entry_point_selects_its_lane(
+    jobs: frozenset[str], lane: str
+) -> None:
     paths = {
-        entry.program: f"ENTRY_POINTS {sorted(set(entry.jobs) & PACKAGING_JOBS)}"
+        entry.program: f"ENTRY_POINTS {sorted(set(entry.jobs) & jobs)}"
         for entry in ENTRY_POINTS
-        if set(entry.jobs) & PACKAGING_JOBS
+        if set(entry.jobs) & jobs
     }
-    assert paths, "no ENTRY_POINTS program runs in a packaging job"
-    assert _offenders(paths, "packaging") == []
+    assert paths, f"no ENTRY_POINTS program runs in a {lane} job"
+    assert _offenders(paths, lane) == []
 
 
 def test_every_desktop_entry_point_selects_desktop() -> None:
@@ -227,7 +301,8 @@ def _named_paths(job: dict) -> list[str]:
 
 @pytest.mark.needs_git
 @pytest.mark.parametrize(
-    ("jobs", "lane"), [(PACKAGING_JOBS, "packaging"), (DESKTOP_JOBS, "desktop")]
+    ("jobs", "lane"),
+    [(ARCHIVE_JOBS, "archive"), (RPM_JOBS, "packaging"), (DESKTOP_JOBS, "desktop")],
 )
 def test_every_path_a_lane_job_names_selects_its_lane(
     production_jobs: dict[str, dict], jobs: frozenset[str], lane: str
@@ -286,27 +361,46 @@ print(json.dumps({"files": sorted(files), "named": sorted(named)}))
 )
 
 
-def _packaging_programs() -> list[str]:
-    programs = {
-        entry.program for entry in ENTRY_POINTS if set(entry.jobs) & PACKAGING_JOBS
-    }
+def _lane_programs(jobs: frozenset[str]) -> list[str]:
+    programs = {entry.program for entry in ENTRY_POINTS if set(entry.jobs) & jobs}
     # desktop_production_expectations.py loads its adapters lazily per
-    # subcommand, so name them from its own constants.
-    expectations = _load_by_path(
-        "ci_plan_drift_expectations",
-        ROOT / "tests/ci/desktop_production_expectations.py",
-    )
-    for name in dir(expectations):
-        value = getattr(expectations, name)
-        if name.endswith("_PROGRAM") and isinstance(value, str):
-            programs.add(value)
+    # subcommand, so name them from its own constants.  Only the archive-lane
+    # jobs run it.
+    if "tests/ci/desktop_production_expectations.py" in programs:
+        expectations = _load_by_path(
+            "ci_plan_drift_expectations",
+            ROOT / "tests/ci/desktop_production_expectations.py",
+        )
+        for name in dir(expectations):
+            value = getattr(expectations, name)
+            if name.endswith("_PROGRAM") and isinstance(value, str):
+                programs.add(value)
     return sorted(program for program in programs if program.endswith(".py"))
 
 
 @pytest.mark.needs_git
-def test_everything_the_packaging_programs_import_or_name_selects_packaging() -> None:
-    programs = _packaging_programs()
-    assert "scripts/build_desktop_sbom.py" in programs
+@pytest.mark.parametrize(
+    ("jobs", "lane", "witness", "loaded"),
+    [
+        (
+            ARCHIVE_JOBS,
+            "archive",
+            "scripts/build_desktop_sbom.py",
+            "src/tongs/desktop/artifact_contract/__init__.py",
+        ),
+        (
+            RPM_JOBS,
+            "packaging",
+            "tests/integration/desktop/rpm_payload_contract.py",
+            "packaging/rpm/desktop/package_contract.py",
+        ),
+    ],
+)
+def test_everything_the_archive_and_packaging_programs_import_or_name_selects_it(
+    jobs: frozenset[str], lane: str, witness: str, loaded: str
+) -> None:
+    programs = _lane_programs(jobs)
+    assert witness in programs
     completed = subprocess.run(
         [sys.executable, "-c", _LOAD_PROBE, str(ROOT), json.dumps(programs)],
         capture_output=True,
@@ -316,14 +410,14 @@ def test_everything_the_packaging_programs_import_or_name_selects_packaging() ->
         timeout=300,
     )
     report = json.loads(completed.stdout)
-    assert "src/tongs/desktop/artifact_contract/__init__.py" in report["files"]
+    assert loaded in report["files"]
     paths = {path: "imported" for path in report["files"]}
     for value in report["named"]:
         if value.startswith(("/", ".")) or "/" not in value:
             continue
         for path in _expand(value.rstrip("/")):
             paths.setdefault(path, "named by a module constant")
-    assert _offenders(paths, "packaging") == []
+    assert _offenders(paths, lane) == []
 
 
 _COLLECT_PROBE = (
@@ -342,60 +436,137 @@ with contextlib.redirect_stdout(output):
 if status != 0:
     sys.stderr.write(output.getvalue())
     raise SystemExit(f"collection failed with {status}")
-files = set()
+files, named = set(), set()
 for name, module in list(sys.modules.items()):
     file = getattr(module, "__file__", None)
-    if file and (relative := checkout_path(name, file)) is not None:
-        files.add(relative)
-print(json.dumps(sorted(files)))
+    if not file or (relative := checkout_path(name, file)) is None:
+        continue
+    files.add(relative)
+    if relative.startswith("src/"):
+        continue
+    # Module-level path constants of the loaded test modules and helpers, such
+    # as a fixture root, name repository files the suites read at run time.
+    for value in vars(module).values():
+        if not isinstance(value, pathlib.PurePath):
+            continue
+        path = pathlib.Path(value)
+        path = (path if path.is_absolute() else root / path).resolve()
+        if path != root and path.is_relative_to(root) and path.exists():
+            named.add(path.relative_to(root).as_posix())
+print(json.dumps({"files": sorted(files), "named": sorted(named)}))
 """
 )
 
 
-def _pytest_targets(job: dict) -> list[str]:
-    targets = []
+def _pytest_invocations(job: dict) -> list[list[str]]:
+    """The arguments of every pytest command a job runs, one list per command.
+
+    Paths and ``--ignore`` options are kept; report options, verbosity and
+    shell continuations are dropped, and shell globs are expanded.
+    """
+
+    invocations = []
     for step in job["steps"]:
-        words = (step.get("run") or "").split()
+        words = (step.get("run") or "").replace("\\\n", " ").split()
         if "pytest" not in words:
             continue
+        arguments = []
         for word in words[words.index("pytest") + 1 :]:
-            if word.startswith("-") or "$" in word or word == "\\":
+            if word.startswith("--ignore="):
+                arguments.append(word)
+            elif word.startswith("-") or "$" in word or word == "\\":
                 continue
-            targets.append(word)
-    return targets
+            elif any(character in word for character in "*?["):
+                arguments.extend(
+                    sorted(
+                        path.relative_to(ROOT).as_posix() for path in ROOT.glob(word)
+                    )
+                )
+            else:
+                arguments.append(word)
+        invocations.append(arguments)
+    return invocations
+
+
+def _collected_reads(invocations: list[list[str]]) -> tuple[list[str], list[str]]:
+    """The repository files the suites import, and the repository paths their
+    non-tongs modules name in module-level path constants."""
+
+    imported: set[str] = set()
+    named: set[str] = set()
+    for arguments in invocations:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _COLLECT_PROBE,
+                str(ROOT),
+                str(EXAMPLE_PLUGIN_SOURCE),
+                json.dumps(arguments),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            check=False,
+            timeout=300,
+        )
+        assert completed.returncode == 0, completed.stderr
+        report = json.loads(completed.stdout)
+        imported.update(report["files"])
+        named.update(report["named"])
+    return sorted(imported), sorted(named)
+
+
+def _read_paths(imported: list[str], named: list[str], source: str) -> dict[str, str]:
+    """Every tracked file a suite imports or reaches through a path constant.
+
+    A named directory that holds an imported module is a code root (a
+    ``sys.path`` entry or a source tree a test walks), not a fixture root, so
+    it is skipped; the modules it holds are already checked as imports.
+    """
+
+    paths = dict.fromkeys(imported, f"imported by {source}")
+    for constant in named:
+        if any(module.startswith(constant + "/") for module in imported):
+            continue
+        for path in _expand(constant):
+            paths.setdefault(path, f"named by a path constant in {source}")
+    return paths
 
 
 def test_everything_the_desktop_suites_import_selects_desktop(
     production_jobs: dict[str, dict],
 ) -> None:
-    targets = sorted(
-        {
-            target
-            for label in DESKTOP_JOBS
-            for target in _pytest_targets(production_jobs[label])
-        }
-    )
-    assert "tests/plugins" in targets
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            _COLLECT_PROBE,
-            str(ROOT),
-            str(EXAMPLE_PLUGIN_SOURCE),
-            json.dumps(targets),
-        ],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-        check=False,
-        timeout=300,
-    )
-    assert completed.returncode == 0, completed.stderr
-    imported = json.loads(completed.stdout)
-    assert "src/tongs/tui_services.py" in imported
-    paths = {path: "imported by a desktop suite" for path in imported}
+    invocations = [
+        arguments
+        for label in sorted(DESKTOP_JOBS)
+        for arguments in _pytest_invocations(production_jobs[label])
+    ]
+    targets = {word for arguments in invocations for word in arguments}
+    assert "examples/desktop-plugin/tests" in targets
+    assert "tests/packaging" in targets
+    imported, named = _collected_reads(invocations)
+    assert "tests/desktop/native/native_payload_launcher.py" in imported
+    # The native payload suite builds its archive from the reference builder's
+    # fixture roots, so the derivation must see them.
+    assert "tests/desktop/artifact_contract/fixtures" in named
+    paths = _read_paths(imported, named, "a desktop suite")
     assert _offenders(paths, "desktop") == []
+
+
+def test_everything_the_core_suites_import_selects_core() -> None:
+    """The core job runs a positive path list, so a helper that only core
+    suites import must still select core when it lives outside their rules."""
+
+    core = yaml.safe_load(CI_WORKFLOW.read_text())["jobs"]["core"]
+    invocations = _pytest_invocations(core)
+    targets = {word for arguments in invocations for word in arguments}
+    assert "tests/integration/desktop/test_draft_process_acceptance.py" in targets
+    imported, named = _collected_reads(invocations)
+    assert "src/tongs/tui_services.py" in imported
+    assert "tests/desktop/artifact_contract/fixtures" in named
+    paths = _read_paths(imported, named, "a core suite")
+    assert _offenders(paths, "core") == []
 
 
 # The installed-core job launches the installed ``tongs`` TUI under an audit
@@ -507,7 +678,171 @@ def test_every_shared_module_the_installed_core_startup_loads_selects_desktop() 
     assert _offenders(paths, "desktop") == []
 
 
-# (3) Every tracked path matches an explicit rule.
+# (3) Documentation the tests read, and what the Fedora probe and lint read.
+
+#: Where the documentation that tests read lives.  A string literal in a test
+#: that names a tracked file under one of these roots is a documentation read.
+DOCUMENTATION_ROOTS = ("docs/", ".agents/")
+#: Files whose literals are classifier samples or the rule table itself, not
+#: reads: ci_plan.py holds the patterns, and the two classifier suites feed
+#: sample paths to it.
+CLASSIFIER_SAMPLE_FILES = frozenset(
+    {
+        "tests/ci/ci_plan.py",
+        "tests/ci/test_ci_plan.py",
+        "tests/ci/test_ci_plan_drift.py",
+    }
+)
+#: The rules that exist only to route documentation to its readers' lanes.
+DOCUMENTATION_READ_RULES = (
+    "docs-read-by-lint-tests",
+    "docs-read-by-core-tests",
+    "docs-read-by-desktop-tests",
+)
+_JS_STRING = re.compile(r"""(["'`])((?:docs|\.agents)/[^"'`$\s]+)\1""")
+
+
+def _python_literals(text: str) -> set[str]:
+    return {
+        node.value
+        for node in ast.walk(ast.parse(text))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+def _documentation_reads(path: str) -> set[str]:
+    """Tracked documentation files a test file names in a string literal."""
+
+    text = (ROOT / path).read_text(encoding="utf-8")
+    if path.endswith(".py"):
+        literals = _python_literals(text)
+    else:
+        literals = {match.group(2) for match in _JS_STRING.finditer(text)}
+    return {
+        literal
+        for literal in literals
+        if literal.startswith(DOCUMENTATION_ROOTS) and literal in TRACKED
+    }
+
+
+def _tracked_test_sources() -> list[str]:
+    return sorted(
+        path
+        for path in TRACKED
+        if path.startswith(("tests/", "examples/"))
+        and path.endswith((".py", ".mjs"))
+        and path not in CLASSIFIER_SAMPLE_FILES
+    )
+
+
+@pytest.mark.needs_git
+def test_every_document_a_test_reads_selects_the_lane_of_its_reader() -> None:
+    """A documentation edit must run the tests that read that document.
+
+    The reader's lane comes from the job that runs it before merge.  A support
+    module with no owner of its own (a helper a test imports) maps through the
+    tests that live beside it.
+    """
+
+    owners = pre_merge_owners()
+    reads: dict[str, set[str]] = {}
+    for source in _tracked_test_sources():
+        for document in _documentation_reads(source):
+            owner = owners.get(source)
+            if owner is None:
+                siblings = {
+                    label
+                    for path, label in owners.items()
+                    if Path(path).parent == Path(source).parent
+                }
+                assert len(siblings) == 1, f"{source} reads {document}, owner unknown"
+                (owner,) = siblings
+            reads.setdefault(document, set()).add(job_lane(owner))
+    # The known readers, so a broken derivation cannot pass by finding nothing.
+    assert reads.get("docs/desktop/troubleshooting.md") == {"core"}
+    assert reads.get("docs/reference/keybindings.md") == {"desktop"}
+    assert reads.get("docs/releases/v1.0.0.md") == {"lint"}
+    offenders = [
+        f"{document} (read in {sorted(lanes)}) -> {sorted(classify_paths([document])[0])}"
+        for document, lanes in sorted(reads.items())
+        if not lanes <= classify_paths([document])[0]
+    ]
+    assert offenders == []
+    # Every routing entry is still read by a test, so the rules cannot go
+    # stale and keep selecting lanes for a document nobody reads.
+    routed = {
+        pattern
+        for rule in RULES
+        if rule.name in DOCUMENTATION_READ_RULES
+        for pattern in rule.patterns
+    }
+    assert routed == set(reads)
+    for rule in RULES:
+        if rule.name in DOCUMENTATION_READ_RULES:
+            lanes = {lane for document in rule.patterns for lane in reads[document]}
+            assert rule.lanes == {"docs"} | lanes, rule.name
+
+
+def _load_fedora_probe() -> ModuleType:
+    return _load_by_path("ci_plan_drift_fedora_probe", FEDORA_PROBE)
+
+
+@pytest.mark.needs_git
+def test_the_fedora_probe_inputs_rule_is_what_the_probe_reads() -> None:
+    """The probe builds the example plugin wheel and runs SMOKE_TESTS from the
+    source copy, so the example plugin, those files and every repository file
+    they load or name through a fixture root select the probe, and every
+    pattern of the rule is still one of those reads."""
+
+    probe = _load_fedora_probe()
+    imported, named = _collected_reads([list(probe.SMOKE_TESTS)])
+    # The installed wheel provides tongs itself; the source rules cover src/.
+    imported = [path for path in imported if not path.startswith("src/")]
+    assert set(probe.SMOKE_TESTS) <= set(imported)
+    assert "tests/plugins/conftest.py" in imported
+    for fixture_root in (
+        "tests/desktop/artifact_contract/fixtures",
+        "tests/fixtures/desktop_plugins",
+    ):
+        assert fixture_root in named, fixture_root
+    paths = _read_paths(imported, named, "the Fedora smoke subset")
+    paths = {
+        path: source for path, source in paths.items() if not path.startswith("src/")
+    }
+    example = probe.EXAMPLE_PLUGIN.as_posix()
+    paths.update(dict.fromkeys(_expand(example), "the example plugin wheel build"))
+    assert _offenders(paths, "fedora_podman") == []
+    (rule,) = [rule for rule in RULES if rule.name == "fedora-probe-inputs"]
+    stale = [
+        pattern
+        for pattern in rule.patterns
+        if not any(pattern_matches(pattern, path) for path in paths)
+    ]
+    assert stale == []
+
+
+def _ruff_check_paths() -> list[str]:
+    lint = yaml.safe_load(CI_WORKFLOW.read_text())["jobs"]["lint-and-format"]
+    for step in lint["steps"]:
+        words = (step.get("run") or "").split()
+        if words[:2] == ["ruff", "check"]:
+            return [word.rstrip("/") for word in words[2:] if not word.startswith("-")]
+    raise AssertionError("the lint job runs no ruff check")
+
+
+@pytest.mark.needs_git
+def test_every_python_file_the_lint_job_checks_selects_lint() -> None:
+    roots = _ruff_check_paths()
+    assert "src" in roots and "tests" in roots
+    paths = {
+        path: "ruff check"
+        for path in TRACKED
+        if path.endswith(".py") and any(path.startswith(root + "/") for root in roots)
+    }
+    assert _offenders(paths, "lint") == []
+
+
+# (4) Every tracked path matches an explicit rule.
 
 
 @pytest.mark.needs_git

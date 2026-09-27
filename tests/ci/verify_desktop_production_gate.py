@@ -138,10 +138,10 @@ REQUIRED_CI_JOBS: frozenset[str] = frozenset(CI_PLAN.LANE_CI_JOBS.values()) | {
     CI_PLAN.CHANGES_JOB
 }
 
-#: Jobs of the called production workflow, owned by the desktop and packaging
-#: lanes.  The reusable workflow reports one aggregated result to its caller,
-#: so the consumer must inspect this inner set separately or a skipped inner
-#: job would be invisible.
+#: Jobs of the called production workflow, owned by the desktop, archive and
+#: packaging lanes.  The reusable workflow reports one aggregated result to its
+#: caller, so the consumer must inspect this inner set separately or a skipped
+#: inner job would be invisible.
 REQUIRED_PRODUCTION_JOBS: frozenset[str] = frozenset(
     job for jobs in CI_PLAN.LANE_PRODUCTION_JOBS.values() for job in jobs
 )
@@ -189,7 +189,6 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
             "exact-lock-shell-build",
             "production-shell-and-renderer-tap",
             "plugin-example-compatibility",
-            "draft-and-process-acceptance",
         ),
         workflow="desktop-production",
         job="desktop-tap",
@@ -201,11 +200,7 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
             ExpectedReport(
                 "reports/plugin-example.junit.xml",
                 PYTEST_JUNIT,
-            ),
-            ExpectedReport(
-                "reports/draft-process.junit.xml",
-                PYTEST_JUNIT,
-                "tests.integration.desktop.test_draft_process_acceptance",
+                "examples.desktop-plugin.tests.",
             ),
         ),
     ),
@@ -279,7 +274,11 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
     ),
     RequiredCheck(
         check_id="desktop-native-payload-fixture",
-        stages=("verifier-fixture-structure",),
+        stages=(
+            "verifier-fixture-structure",
+            "integration-contract-suite",
+            "packaging-contract-suite",
+        ),
         workflow="desktop-production",
         job="native-payload",
         evidence_directory="desktop-native-payload-fixture",
@@ -290,6 +289,16 @@ REQUIRED_CHECKS: tuple[RequiredCheck, ...] = (
                 "reports/native-payload.junit.xml",
                 PYTEST_JUNIT,
                 "tests.integration.desktop.test_native_payload_acceptance",
+            ),
+            ExpectedReport(
+                "reports/integration-contracts.junit.xml",
+                PYTEST_JUNIT,
+                "tests.integration.desktop.",
+            ),
+            ExpectedReport(
+                "reports/packaging-contracts.junit.xml",
+                PYTEST_JUNIT,
+                "tests.packaging.",
             ),
         ),
     ),

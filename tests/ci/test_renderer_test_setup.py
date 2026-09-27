@@ -116,9 +116,10 @@ def test_every_workflow_renderer_run_loads_the_setup() -> None:
         assert _imports_setup(step["run"]), name
 
 
-def test_the_ci_fixture_lane_runs_renderer_tests_through_npm_test() -> None:
-    """The desktop fixture lane reaches the renderer tests only through the
-    ``npm test`` script checked above, so it inherits the setup import."""
+def test_ci_yml_runs_no_second_copy_of_the_renderer_tests() -> None:
+    """The desktop production TAP job is the single workflow run of the
+    Electron and renderer tests, checked above; ordinary CI runs neither
+    ``npm test`` nor ``node --test`` for the desktop package."""
 
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     runs = [
@@ -126,8 +127,9 @@ def test_the_ci_fixture_lane_runs_renderer_tests_through_npm_test() -> None:
         for job in workflow["jobs"].values()
         for step in job.get("steps") or []
     ]
-    assert any("npm test --prefix desktop" in run for run in runs)
-    assert not any("node --test" in run and "desktop" in run for run in runs)
+    assert runs
+    assert not any("npm test" in run and "desktop" in run for run in runs)
+    assert not any("node --test" in run for run in runs)
 
 
 def test_documented_renderer_runs_load_the_setup() -> None:

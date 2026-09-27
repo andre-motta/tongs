@@ -47,25 +47,30 @@ LANES: tuple[str, ...] = (
     "docs",
     "lint",
     "core",
-    "desktop_fixtures",
     "fedora_podman",
     "desktop",
+    "archive",
     "packaging",
 )
 ALL_LANES: frozenset[str] = frozenset(LANES)
 FULL_LABEL = "ci:full"
 PLAN_VERSION = 1
 
-#: A lane that cannot run without another.  Packaging jobs run inside the
-#: called desktop production workflow, so selecting them selects desktop.
-LANE_IMPLIES: dict[str, frozenset[str]] = {"packaging": frozenset({"desktop"})}
+#: A lane that cannot run without another.  The archive and packaging jobs run
+#: inside the called desktop production workflow, and the RPM lifecycle
+#: consumes the fresh archive, so packaging selects archive and archive selects
+#: desktop.
+LANE_IMPLIES: dict[str, frozenset[str]] = {
+    "packaging": frozenset({"archive"}),
+    "archive": frozenset({"desktop"}),
+}
 
-#: The ``ci.yml`` job that owns each lane.  Packaging has no job of its own.
+#: The ``ci.yml`` job that owns each lane.  Archive and packaging have no job
+#: of their own.
 LANE_CI_JOBS: dict[str, str] = {
     "docs": "docs",
     "lint": "lint-and-format",
     "core": "core",
-    "desktop_fixtures": "desktop-fixtures",
     "fedora_podman": "fedora-podman",
     "desktop": "desktop-production",
 }
@@ -77,12 +82,12 @@ LANE_PRODUCTION_JOBS: dict[str, frozenset[str]] = {
     "desktop": frozenset(
         {"source-identity", "desktop-tap", "installed-core", "native-payload"}
     ),
-    "packaging": frozenset(
-        {"archive", "archive-evidence", "archive-sbom", "rpm-lifecycle"}
-    ),
+    "archive": frozenset({"archive", "archive-evidence", "archive-sbom"}),
+    "packaging": frozenset({"rpm-lifecycle"}),
 }
 
-#: Receipt-bearing gate checks each lane publishes.
+#: Receipt-bearing gate checks each lane publishes.  Core runs Python 3.12 and
+#: 3.13 on every plan, so both of its receipts are always required.
 LANE_CHECKS: dict[str, frozenset[str]] = {
     "core": frozenset({"core-python-3.12", "core-python-3.13"}),
     "desktop": frozenset(
@@ -92,13 +97,8 @@ LANE_CHECKS: dict[str, frozenset[str]] = {
             "desktop-native-payload-fixture",
         }
     ),
-    "packaging": frozenset(
-        {
-            "desktop-archive-lifecycle",
-            "desktop-archive-sbom",
-            "desktop-rpm-lifecycle",
-        }
-    ),
+    "archive": frozenset({"desktop-archive-lifecycle", "desktop-archive-sbom"}),
+    "packaging": frozenset({"desktop-rpm-lifecycle"}),
 }
 
 #: Every result GitHub reports for a job.
@@ -190,21 +190,44 @@ RULES: tuple[Rule, ...] = (
     ),
     # The wheel's readme, so the core lane builds it as well as the docs lane.
     Rule(name="readme", patterns=("README.md",), lanes=frozenset({"docs", "core"})),
-    # Files that core-lane tests read (the generated lane tables and the pinned
-    # markdown linter), so editing them runs those tests as well as the docs lane.
+    # Documentation that tests read, each selecting the lane whose job runs the
+    # reading test.  test_ci_plan_drift.py derives these paths from the string
+    # literals in tests/ and fails when a rule here is missing or stale.  The
+    # tests/ci suites run in the lint job.
     Rule(
-        name="core-read-docs",
+        name="docs-read-by-lint-tests",
         patterns=(
-            ".agents/ci/README.md",
             ".agents/testing/README.md",
-            ".github/linters/**",
+            "docs/releases/v1.0.0.md",
         ),
+        lanes=frozenset({"docs", "lint"}),
+    ),
+    Rule(
+        name="docs-read-by-core-tests",
+        patterns=("docs/desktop/troubleshooting.md",),
         lanes=frozenset({"docs", "core"}),
     ),
-    # Terminal modules.  The sidecar never imports them.  By CTO decision they
-    # run lint and core only: the desktop installed-core job also launches the
-    # installed TUI, so a TUI change that breaks that launch surfaces on the
-    # full-graph push to main (or before merge with the ci:full label).
+    Rule(
+        name="docs-read-by-desktop-tests",
+        patterns=(
+            "docs/desktop/reviewing.md",
+            "docs/desktop/workspace.md",
+            "docs/reference/keybindings.md",
+        ),
+        lanes=frozenset({"docs", "desktop"}),
+    ),
+    # The pinned Markdown linter, whose pins tests/ci/test_docs_lane_contract.py
+    # reads in the lint job.
+    Rule(
+        name="markdown-linter",
+        patterns=(".github/linters/**",),
+        lanes=frozenset({"docs", "lint"}),
+    ),
+    # Terminal modules and the terminal plugin API.  The sidecar never imports
+    # them.  By CTO decision they run lint and core only: the desktop
+    # installed-core job also launches the installed TUI, so a TUI change that
+    # breaks that launch surfaces on the full-graph push to main (or before
+    # merge with the ci:full label).
     Rule(
         name="tui",
         patterns=(
@@ -215,11 +238,15 @@ RULES: tuple[Rule, ...] = (
             "src/tongs/commands.py",
             "src/tongs/helpers.py",
             "src/tongs/__main__.py",
+            "src/tongs/plugins/base.py",
+            "src/tongs/plugins/context.py",
+            "src/tongs/plugins/registry.py",
         ),
         lanes=frozenset({"lint", "core"}),
     ),
-    # The suites only the core lane runs.  None of them is imported by a
-    # desktop job's tests, which test_ci_plan_drift.py keeps honest.
+    # The suites only the core job runs, and the helpers only they import.
+    # test_lane_test_ownership.py proves the core job runs exactly these test
+    # files and test_ci_plan_drift.py that no desktop suite imports them.
     Rule(
         name="core-tests",
         patterns=(
@@ -232,14 +259,53 @@ RULES: tuple[Rule, ...] = (
             "tests/test_scanner/**",
             "tests/test_views/**",
             "tests/test_widgets/**",
+            "tests/services/**",
+            "tests/state/**",
+            "tests/plugins/**",
+            "tests/desktop/test_*.py",
+            "tests/desktop/artifact_contract/**",
+            "tests/desktop/installer/*.py",
+            "tests/desktop/protocol/**",
+            "tests/integration/__init__.py",
+            "tests/integration/desktop/__init__.py",
+            "tests/integration/desktop/draft_acceptance_sidecar.py",
+            "tests/integration/desktop/test_draft_process_acceptance.py",
         ),
         lanes=frozenset({"lint", "core"}),
     ),
+    # Suites and fixtures the desktop production jobs run: the TAP job's
+    # Electron and renderer files, the native payload fixtures, and the
+    # contract-test job (native-payload) that owns tests/integration and
+    # tests/packaging.
+    Rule(
+        name="desktop-tests",
+        patterns=(
+            "tests/desktop/electron/**",
+            "tests/desktop/renderer/**",
+            "tests/desktop/native/**",
+            "tests/integration/**",
+            "tests/packaging/**",
+        ),
+        lanes=frozenset({"lint", "desktop"}),
+    ),
+    # Fixtures that both a core suite and a desktop suite read: the native
+    # payload suite builds its archive from the reference builder's fixture
+    # roots.
+    Rule(
+        name="shared-test-fixtures",
+        patterns=(
+            "tests/__init__.py",
+            "tests/fixtures/**",
+            "tests/desktop/fixtures/**",
+            "tests/desktop/artifact_contract/__init__.py",
+            "tests/desktop/artifact_contract/reference_builder.py",
+            "tests/desktop/artifact_contract/fixtures/**",
+        ),
+        lanes=frozenset({"lint", "core", "desktop"}),
+    ),
     # Everything the desktop sidecar reaches, including forge clients it loads
-    # at run time, plus the suites and fixtures the desktop jobs run.  The
-    # ``tui_services`` adapter is here because the desktop TAP job's draft
-    # acceptance test imports it.  None of this is read by the archive, SBOM
-    # or RPM jobs except through the packaging rule below.
+    # at run time.  The ``tui_services`` adapter is here because the core draft
+    # acceptance test and the installed-core launch both load it.
     Rule(
         name="sidecar",
         patterns=(
@@ -249,21 +315,99 @@ RULES: tuple[Rule, ...] = (
             "src/tongs/diff/**",
             "src/tongs/errors.py",
             "src/tongs/forges/**",
-            "src/tongs/plugins/**",
+            "src/tongs/plugins/__init__.py",
+            "src/tongs/plugins/desktop.py",
+            "src/tongs/plugins/desktop_registry.py",
+            "src/tongs/plugins/desktop_resources.py",
             "src/tongs/scanner/**",
             "src/tongs/services/**",
             "src/tongs/state/**",
             "src/tongs/tui_services.py",
-            "tests/__init__.py",
-            "tests/desktop/**",
-            "tests/fixtures/**",
-            "tests/integration/**",
-            "tests/plugins/**",
-            "tests/services/**",
-            "tests/state/**",
-            "examples/desktop-plugin/**",
         ),
-        lanes=frozenset({"lint", "core", "desktop_fixtures", "desktop"}),
+        lanes=frozenset({"lint", "core", "desktop"}),
+    ),
+    # The example desktop plugin: the desktop TAP job installs it and runs its
+    # tests, and the lint job checks its Python and runs the ownership test
+    # that proves a job runs each of its test files.
+    Rule(
+        name="example-plugin",
+        patterns=("examples/desktop-plugin/**",),
+        lanes=frozenset({"lint", "desktop"}),
+    ),
+    # What the Fedora Podman probe reads beyond the full-graph roots: it builds
+    # the example plugin wheel and runs the installed-wheel smoke subset named
+    # by SMOKE_TESTS in tests/containers/probe.py, with the packages,
+    # conftest, helpers and fixture roots that subset loads.
+    # test_ci_plan_drift.py derives that set from the probe's own constants
+    # and fails when an entry here is missing or stale.
+    Rule(
+        name="fedora-probe-inputs",
+        patterns=(
+            "examples/desktop-plugin/**",
+            "tests/__init__.py",
+            "tests/test_plugins/__init__.py",
+            "tests/test_plugins/test_plugin_system.py",
+            "tests/plugins/conftest.py",
+            "tests/plugins/test_desktop_discovery.py",
+            "tests/plugins/test_desktop_resources.py",
+            "tests/fixtures/desktop_plugins/**",
+            "tests/desktop/artifact_contract/__init__.py",
+            "tests/desktop/artifact_contract/reference_builder.py",
+            "tests/desktop/artifact_contract/test_schemas.py",
+            "tests/desktop/artifact_contract/fixtures/**",
+            "tests/desktop/test_assets.py",
+            "tests/desktop/test_sidecar.py",
+            "tests/test_mcp/__init__.py",
+            "tests/test_mcp/test_server.py",
+            "tests/test_config.py",
+            "tests/desktop/installer/__init__.py",
+            "tests/desktop/installer/test_launcher.py",
+            "tests/test_tui_mr_services.py",
+            "tests/test_tui_review_mode.py",
+            "tests/test_tui_session.py",
+            "tests/test_views/__init__.py",
+            "tests/test_views/test_forge_text_literal.py",
+            "tests/test_views/test_pipeline_log_search.py",
+            "tests/test_views/test_repo_list_search.py",
+            "tests/test_widgets/__init__.py",
+            "tests/test_widgets/test_diff_panel.py",
+            "tests/test_widgets/test_mr_table.py",
+            "tests/test_widgets/test_pipeline_panel.py",
+            "tests/test_widgets/test_split_diff.py",
+        ),
+        lanes=frozenset({"fedora_podman"}),
+    ),
+    # Renderer, shared and renderer stylesheet source (CTO decisions 9 and 19):
+    # the desktop jobs plus the archive and SBOM jobs, without the RPM
+    # lifecycle or the Podman probe.  Every other archive source input keeps
+    # the packaging lane, and a desktop/src path no rule names selects the full
+    # graph.
+    Rule(
+        name="desktop-source",
+        patterns=(
+            "desktop/src/renderer/**",
+            "desktop/src/shared/**",
+            "desktop/src/main/shell/*.css",
+        ),
+        lanes=frozenset({"lint", "core", "desktop", "archive"}),
+    ),
+    # Electron main and preload source and the shell page (CTO decision 19):
+    # the RPM lifecycle launches the packaged app, so a broken main process,
+    # preload bridge, CSP meta or script tag surfaces only there.
+    Rule(
+        name="desktop-main",
+        patterns=(
+            "desktop/src/main/*",
+            "desktop/src/main/shell/index.html",
+            "desktop/src/preload/**",
+        ),
+        lanes=frozenset({"lint", "core", "desktop", "packaging"}),
+    ),
+    # The SPDX schema the archive-sbom job validates against.
+    Rule(
+        name="sbom-schema",
+        patterns=("tests/packaging/desktop/sbom/schema/**",),
+        lanes=frozenset({"archive"}),
     ),
     # The archive producer's _SOURCE_INPUTS outside the full-graph roots, the
     # programs the archive, archive-evidence, archive-sbom and rpm-lifecycle
@@ -283,12 +427,9 @@ RULES: tuple[Rule, ...] = (
             "tests/integration/desktop/rpm_payload_contract.py",
             "tests/integration/desktop/sbom_evidence.py",
             "tests/desktop/installer/fixtures/**",
-            "tests/packaging/**",
         ),
-        lanes=frozenset({"lint", "core", "desktop_fixtures", "desktop", "packaging"}),
+        lanes=frozenset({"lint", "core", "desktop", "packaging"}),
     ),
-    # The spike prototypes run only in the desktop fixture job.
-    Rule(name="spikes", patterns=("spikes/**",), lanes=frozenset({"desktop_fixtures"})),
     # Manual native evidence tooling.  Lint checks it and core runs
     # tests/desktop/test_release_evidence_fixture.py against its Python fixture.
     Rule(
@@ -306,16 +447,23 @@ RULES: tuple[Rule, ...] = (
         ),
         full=True,
     ),
-    # Build and packaging inputs.  These are the only paths, with the CI
-    # infrastructure above, that select the Fedora Podman probe.  Hatchling
-    # reads .gitignore to choose the files a wheel or sdist ships.
+    # Build and packaging inputs.  These, with the CI infrastructure above, are
+    # the full-graph roots.  The desktop manifests, lock, build script, config
+    # and assets are archive source inputs that also feed the RPM lifecycle;
+    # desktop/src has its own rules above.  Hatchling reads .gitignore to choose
+    # the files a wheel or sdist ships.
     Rule(
         name="build-configuration",
         patterns=(
             "pyproject.toml",
             "requirements/**",
             "packaging/**",
-            "desktop/**",
+            "desktop/assets/**",
+            "desktop/scripts/**",
+            "desktop/package.json",
+            "desktop/package-lock.json",
+            "desktop/tsconfig.json",
+            "desktop/.gitignore",
             ".gitignore",
         ),
         full=True,
@@ -689,30 +837,6 @@ def selected_checks(plan: Plan) -> frozenset[str]:
     )
 
 
-def render_table() -> str:
-    """A markdown lane table generated from :data:`RULES`."""
-
-    lines = [
-        "| Rule | Paths | Lanes |",
-        "| --- | --- | --- |",
-    ]
-    for rule in RULES:
-        patterns = ", ".join(f"`{pattern}`" for pattern in rule.patterns)
-        lanes = (
-            "full graph"
-            if rule.full
-            else ", ".join(lane for lane in LANES if lane in close_lanes(rule.lanes))
-        )
-        lines.append(f"| {rule.name} | {patterns} | {lanes} |")
-    lines.append("| (unmatched) | any other path | full graph |")
-    lines.append("")
-    lines.append(
-        "Matching rules add their lanes together, and a push to `main`, the "
-        f"`{FULL_LABEL}` label or any doubt about the diff selects the full graph."
-    )
-    return "\n".join(lines) + "\n"
-
-
 def _describe(error: BaseException) -> str:
     if isinstance(error, subprocess.CalledProcessError):
         command = " ".join(str(part) for part in error.cmd or ())
@@ -950,6 +1074,13 @@ def _explain(arguments: argparse.Namespace) -> int:
         | {job for lane, job in LANE_CI_JOBS.items() if lane in plan.lanes}
     )
     print("ci.yml jobs that run: " + ", ".join(jobs))
+    production = sorted(
+        job
+        for lane, lane_jobs in LANE_PRODUCTION_JOBS.items()
+        if lane in plan.lanes
+        for job in lane_jobs
+    )
+    print("desktop-production jobs that run: " + (", ".join(production) or "none"))
     print("Reasons:")
     for reason in plan.reasons:
         print(f"  {reason}")
@@ -980,7 +1111,6 @@ def _parser() -> argparse.ArgumentParser:
     explain.add_argument("--base", required=True)
     explain.add_argument("--head", default="HEAD")
     explain.add_argument("--label", action="append", default=[])
-    commands.add_parser("render-table", help="print the markdown lane table")
     return parser
 
 
@@ -990,10 +1120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _compute(arguments)
     if arguments.command == "effective":
         return _effective(arguments)
-    if arguments.command == "explain":
-        return _explain(arguments)
-    sys.stdout.write(render_table())
-    return 0
+    return _explain(arguments)
 
 
 if __name__ == "__main__":

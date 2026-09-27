@@ -16,8 +16,8 @@ pytest tests/ --ignore=tests/test_mcp -v
 pytest tests/test_mcp -v --junitxml="/tmp/tongs-mcp-$$.junit.xml"
 python tests/ci/verify_desktop_ci.py mcp-report \
   --path "/tmp/tongs-mcp-$$.junit.xml"
-ruff check src/ tests/ packaging/
-ruff format --check src/ tests/ packaging/
+ruff check src/ tests/ packaging/ scripts/release-evidence/ examples/
+ruff format --check src/ tests/ packaging/ scripts/release-evidence/ examples/
 ```
 
 The MCP extra is required so MCP tests execute rather than skip on import. The
@@ -25,6 +25,20 @@ The MCP extra is required so MCP tests execute rather than skip on import. The
 report; CI writes to `"$RUNNER_TEMP/reports/mcp.junit.xml"`, which is private to each job's runner, for the same
 reason. Use a focused path during development, then run the checks appropriate to
 the changed source.
+
+Locally one `pytest tests/` run covers every Python suite. In CI each test file
+has exactly one pre-merge home, which `tests/ci/test_lane_test_ownership.py`
+derives from the workflows and enforces:
+
+| Suites | Job |
+|---|---|
+| `tests/ci`, `tests/containers` | `Lint, format and CI harness tests` (`lint`) |
+| `tests/test_*.py`, `tests/test_*/`, `tests/desktop` (Python), `tests/plugins`, `tests/services`, `tests/state`, the draft and process acceptance test | `Core and MCP` (`core`) |
+| the other `tests/integration` suites and `tests/packaging` | the native payload job of `Desktop production evidence` (`desktop`) |
+| `tests/desktop/electron`, `tests/desktop/renderer`, `examples/desktop-plugin/tests` | the desktop TAP job of `Desktop production evidence` (`desktop`) |
+
+The Fedora 44 Podman probe reruns a small installed-wheel smoke subset on
+purpose; every file in it also has one of the homes above.
 
 ## Desktop and other suites
 
@@ -38,21 +52,9 @@ TONGS_TEST_PYTHON="$(command -v python)" npm test --prefix desktop
 
 `npm run build --prefix desktop` prepares assets, runs TypeScript checking, and
 creates build output. The test command repeats that build before the Electron
-and renderer test suites. The historical comparison fixtures have separate checks:
-
-```bash
-PYTHONPATH=spikes/desktop pytest spikes/desktop/tests/test_backend.py -v
-npm ci --prefix spikes/desktop/frontend
-npm test --prefix spikes/desktop/frontend
-npm run build --prefix spikes/desktop/frontend
-pytest spikes/desktop/electron/test/test_launcher.py -v
-npm ci --prefix spikes/desktop/electron
-TONGS_DESKTOP_PYTHON="$(command -v python)" \
-  npm test --prefix spikes/desktop/electron
-```
-
-Install `./spikes/desktop/reference-plugin` in the same Python environment before
-running fixture tests that discover it. The installable production provider example has focused Python and prebuilt ESM
+and renderer test suites. Run it under the
+[bounded local Node procedure](../testing/README.md#bounded-local-node-procedure).
+The installable production provider example has focused Python and prebuilt ESM
 checks:
 
 ```bash
@@ -96,37 +98,45 @@ Its lanes are selected by the paths a change touches. The first job, `Plan CI
 lanes`, runs `tests/ci/ci_plan.py compute` on the checked-out synthetic merge
 commit, classifies the paths it changes relative to its first parent, and
 publishes one output per lane; each lane job runs only when its lane is
-selected. `tests/ci/ci_plan.py` is the single source of that policy, and the
-table below is generated from it:
+selected. `tests/ci/ci_plan.py` is the single source of that policy: its
+`RULES` table maps path patterns to lanes, and matching rules add their lanes
+together. Read the rules there, or ask the program what a branch would run:
 
-<!-- ci-lanes:begin -->
-| Rule | Paths | Lanes |
-| --- | --- | --- |
-| docs | `docs/**`, `site/**`, `.agents/**`, `*.md`, `.github/ISSUE_TEMPLATE/**`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/PULL_REQUEST_TEMPLATE/**`, `.github/FUNDING.yml`, `.github/linters/**` | docs |
-| readme | `README.md` | docs, core |
-| core-read-docs | `.agents/ci/README.md`, `.agents/testing/README.md`, `.github/linters/**` | docs, core |
-| tui | `src/tongs/views/**`, `src/tongs/widgets/**`, `src/tongs/mcp/**`, `src/tongs/app.py`, `src/tongs/commands.py`, `src/tongs/helpers.py`, `src/tongs/__main__.py` | lint, core |
-| core-tests | `tests/test_*.py`, `tests/test_cache/**`, `tests/test_diff/**`, `tests/test_forges/**`, `tests/test_mcp/**`, `tests/test_plugins/**`, `tests/test_scanner/**`, `tests/test_views/**`, `tests/test_widgets/**` | lint, core |
-| sidecar | `src/tongs/cache/**`, `src/tongs/config.py`, `src/tongs/desktop/**`, `src/tongs/diff/**`, `src/tongs/errors.py`, `src/tongs/forges/**`, `src/tongs/plugins/**`, `src/tongs/scanner/**`, `src/tongs/services/**`, `src/tongs/state/**`, `src/tongs/tui_services.py`, `tests/__init__.py`, `tests/desktop/**`, `tests/fixtures/**`, `tests/integration/**`, `tests/plugins/**`, `tests/services/**`, `tests/state/**`, `examples/desktop-plugin/**` | lint, core, desktop_fixtures, desktop |
-| packaging | `LICENSE`, `scripts/build_desktop_archive.py`, `scripts/build_desktop_sbom.py`, `src/tongs/__init__.py`, `src/tongs/desktop/artifact_contract/**`, `src/tongs/desktop/installer/**`, `tests/integration/desktop/archive_evidence.py`, `tests/integration/desktop/candidate_attestation.py`, `tests/integration/desktop/rpm_payload_contract.py`, `tests/integration/desktop/sbom_evidence.py`, `tests/desktop/installer/fixtures/**`, `tests/packaging/**` | lint, core, desktop_fixtures, desktop, packaging |
-| spikes | `spikes/**` | desktop_fixtures |
-| release-evidence | `scripts/release-evidence/**` | lint, core |
-| ci-infrastructure | `.github/workflows/**`, `.github/scripts/**`, `tests/ci/**`, `tests/containers/**` | full graph |
-| build-configuration | `pyproject.toml`, `requirements/**`, `packaging/**`, `desktop/**`, `.gitignore` | full graph |
-| (unmatched) | any other path | full graph |
+```bash
+python tests/ci/ci_plan.py explain --base origin/main
+```
 
-Matching rules add their lanes together, and a push to `main`, the `ci:full` label or any doubt about the diff selects the full graph.
-<!-- ci-lanes:end -->
+In outline, documentation selects `docs`, plus the lane of any test that reads
+the document; terminal modules and core-only suites select `lint` and `core`;
+the shared sidecar modules select `lint`, `core` and `desktop`; the renderer,
+shared and shell stylesheet source under `desktop/src` adds `archive`; the
+Electron main and preload source, the shell page and the other archive and RPM
+inputs select `packaging`; and the files the Fedora probe reads (the example
+plugin and its smoke subset) add `fedora_podman`. The CI infrastructure, the
+build configuration and any path no rule matches select the full graph.
+`tests/ci/test_ci_plan_drift.py` derives what each job reads from its source
+and fails when a rule no longer covers it.
 
-| Lane | `ci.yml` job |
+| Lane | Job |
 |---|---|
-| `docs` | `Docs build`: the Astro + Starlight site build (`npm run build --prefix site`), the CNAME and repository-only record checks, and the pinned Markdown linter |
-| `lint` | `Lint and format`: Ruff over `src/`, `tests/` and `packaging/` |
-| `core` | `Core and MCP` on Python 3.12 and 3.13 |
-| `desktop_fixtures` | `Desktop fixture checks`: the spike fixtures and the production Electron shell suite |
-| `fedora_podman` | `Fedora 44 Podman` probe |
-| `desktop` | `Desktop production evidence`: source identity, the production shell, installed core and native payload |
-| `packaging` | the archive, archive evidence, SBOM and RPM lifecycle jobs of `Desktop production evidence` (implies `desktop`) |
+| `docs` | `ci.yml` `Docs build`: the Astro + Starlight site build (`npm run build --prefix site`), the CNAME and repository-only record checks, and the pinned Markdown linter |
+| `lint` | `ci.yml` `Lint, format and CI harness tests`: Ruff over `src/`, `tests/`, `packaging/`, `scripts/release-evidence/` and `examples/`, then the `tests/ci` and `tests/containers` suites, whose report must show no skip |
+| `core` | `ci.yml` `Core and MCP`: the core suites listed above, on Python 3.12 and 3.13 on every plan |
+| `fedora_podman` | `ci.yml` `Fedora 44 Podman` probe |
+| `desktop` | `Desktop production evidence`: source identity, the production shell and renderer TAP, installed core, and the native payload job with the integration and packaging contract suites |
+| `archive` | the archive, archive evidence and archive SBOM jobs of `Desktop production evidence` (implies `desktop`) |
+| `packaging` | the RPM lifecycle job of `Desktop production evidence` (implies `archive`) |
+
+A change under `desktop/src/renderer`, `desktop/src/shared` or to a stylesheet
+in `desktop/src/main/shell` runs the archive and SBOM jobs but not the RPM
+lifecycle or the Podman probe. Electron main and preload source and
+`desktop/src/main/shell/index.html` also run the RPM lifecycle, because only
+its launch of the packaged app catches a broken main process, preload bridge,
+CSP meta or script tag. Any other path under `desktop/src` runs the full
+graph. The desktop manifests, lock, build script, TypeScript configuration
+and assets are build configuration and run everything. Core always runs Python
+3.12 and 3.13, and the aggregate requires both receipts whenever core is
+selected.
 
 The plan fails closed. Any doubt selects the full graph and records why: an
 event other than `pull_request`, a checkout that is not the expected two-parent
@@ -150,7 +160,8 @@ python tests/ci/ci_plan.py explain --base origin/main --label ci:full
 ```
 
 It diffs `HEAD` against its merge base with `--base` and prints the changed
-paths, the lanes, the `ci.yml` jobs that would run, and the reasons.
+paths, the lanes, the `ci.yml` and `Desktop production evidence` jobs that
+would run, the core interpreters, and the reasons.
 
 The single required check is the always-run `CI aggregate` (job
 `desktop-pr-gate`). It recomputes the plan itself, unions it with the planning
@@ -170,8 +181,9 @@ One more workflow runs on pull requests:
 companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are manual
 only (`workflow_dispatch`); the production gate's `rpm-lifecycle` and `archive` jobs
 prove the same source rebuild, companion closure, lifecycle and byte-identical
-rebuild against the receipt-bound fresh archive on every pull request that
-selects the `packaging` lane.
+rebuild against the receipt-bound fresh archive on every run that selects the
+`packaging` lane, and the `archive` jobs alone run whenever the `archive` lane
+is selected.
 
 `docs.yml` runs that build on Node 22 and deploys `site/dist` to GitHub Pages,
 but only on a push to `main` or a manual `workflow_dispatch`. It also checks
@@ -219,7 +231,7 @@ documentation toolchain is pinned by `site/package-lock.json`, which `npm ci`
 installs exactly, and every direct dependency in `site/package.json`, Astro and
 Starlight included, is an exact version rather than a range; a test in the same
 module enforces both. Other tools a workflow installs ad hoc, such as
-`ruff` and the `build` used for desktop fixture wheels, are not yet pinned and
+`ruff` and the `build` the installed-core job uses, are not yet pinned and
 are tracked by #162.
 
 Jobs that hold a signing or write token install nothing that resolves fresh.

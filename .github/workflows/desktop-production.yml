@@ -3,10 +3,12 @@ name: Desktop production evidence
 # Reusable production stages for the CI aggregate.
 #
 # Ordinary CI calls this workflow whenever its lane plan (tests/ci/ci_plan.py)
-# selects the desktop lane, and sets run_packaging when the plan also selects
-# the packaging lane.  With run_packaging false, exactly the archive,
-# archive-evidence, archive-sbom and rpm-lifecycle jobs skip; the aggregate
-# accepts that skip only when its own effective plan deselected packaging.
+# selects the desktop lane.  It sets run_archive when the plan also selects the
+# archive lane and run_packaging when it selects the packaging lane, which
+# always carries archive with it.  With run_archive false, exactly the archive,
+# archive-evidence and archive-sbom jobs skip; with run_packaging false,
+# exactly the rpm-lifecycle job skips.  The aggregate accepts each skip only
+# when its own effective plan deselected that lane.
 # Every job checks out one exact revision, verifies HEAD and its tree, and
 # publishes one issue #110 receipt whose identity the caller-owned aggregate
 # validates independently.
@@ -27,8 +29,13 @@ on:
         description: Exact revision every job must check out and bind
         required: true
         type: string
+      run_archive:
+        description: Run the archive, archive lifecycle and archive SBOM jobs
+        required: false
+        default: true
+        type: boolean
       run_packaging:
-        description: Run the archive, SBOM and RPM lifecycle packaging jobs
+        description: Run the RPM lifecycle job, which needs the archive jobs
         required: false
         default: true
         type: boolean
@@ -45,8 +52,13 @@ on:
         description: Exact revision every job must check out and bind
         required: true
         type: string
+      run_archive:
+        description: Run the archive, archive lifecycle and archive SBOM jobs
+        required: false
+        default: true
+        type: boolean
       run_packaging:
-        description: Run the archive, SBOM and RPM lifecycle packaging jobs
+        description: Run the RPM lifecycle job, which needs the archive jobs
         required: false
         default: true
         type: boolean
@@ -122,7 +134,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   desktop-tap:
-    name: Production desktop TAP, plugin and draft process reports
+    name: Production desktop TAP and plugin example reports
     needs: [source-identity]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -160,8 +172,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/reports"
           # The production sidecar transport rejects a relative interpreter, so
-          # this must be the absolute path rather than the bare name, matching
-          # the desktop fixture job in ci.yml.
+          # this must be the absolute path rather than the bare name.
           interpreter=$(command -v python)
           case "$interpreter" in
             /*) ;;
@@ -176,6 +187,7 @@ jobs:
           --test-reporter-destination="$RUNNER_TEMP/reports/desktop-shell.tap"
           ../tests/desktop/electron/*.test.mjs
           ../tests/desktop/renderer/*.test.mjs
+          ../examples/desktop-plugin/tests/test_*.mjs
       - name: Show the failing cases when the TAP run fails
         if: ${{ failure() }}
         run: |
@@ -202,14 +214,12 @@ jobs:
           path: ${{ runner.temp }}/reports
           if-no-files-found: warn
           retention-days: 14
-      - name: Run the plugin example and desktop plugin contract tests
+      # The desktop plugin contract suite (tests/plugins) and the draft and
+      # process acceptance test run once, in the core job.
+      - name: Run the plugin example tests
         run: >-
-          pytest examples/desktop-plugin/tests tests/plugins -v
+          pytest examples/desktop-plugin/tests -v
           --junitxml="$RUNNER_TEMP/reports/plugin-example.junit.xml"
-      - name: Run the draft and process acceptance tests
-        run: >-
-          pytest tests/integration/desktop/test_draft_process_acceptance.py -v
-          --junitxml="$RUNNER_TEMP/reports/draft-process.junit.xml"
       - name: Describe the staged evidence for this check
         run: |
           set -euo pipefail
@@ -223,7 +233,7 @@ jobs:
               "pull_request_base": "${{ needs.source-identity.outputs.pull-request-base }}"
             },
             "scope": {
-              "covered": "production-electron-renderer-plugin-and-draft-process-reports",
+              "covered": "production-electron-renderer-and-plugin-example-reports",
               "excluded": [
                 "hardware-gpu-function",
                 "installed-payload-bytes",
@@ -242,12 +252,6 @@ jobs:
                 "kind": "report",
                 "path": "reports/plugin-example.junit.xml",
                 "source": "$RUNNER_TEMP/reports/plugin-example.junit.xml",
-                "format": "pytest-junit"
-              },
-              {
-                "kind": "report",
-                "path": "reports/draft-process.junit.xml",
-                "source": "$RUNNER_TEMP/reports/draft-process.junit.xml",
                 "format": "pytest-junit"
               },
               {
@@ -270,11 +274,6 @@ jobs:
               {
                 "name": "plugin-example-compatibility",
                 "evidence": ["reports/plugin-example.junit.xml"],
-                "observation": {}
-              },
-              {
-                "name": "draft-and-process-acceptance",
-                "evidence": ["reports/draft-process.junit.xml"],
                 "observation": {}
               }
             ],
@@ -313,7 +312,7 @@ jobs:
 
   archive:
     name: Reproducible archive and unsigned transfer
-    if: ${{ inputs.run_packaging }}
+    if: ${{ inputs.run_archive }}
     needs: [source-identity]
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -425,7 +424,7 @@ jobs:
 
   archive-evidence:
     name: Archive lifecycle receipt
-    if: ${{ inputs.run_packaging }}
+    if: ${{ inputs.run_archive }}
     needs: [source-identity, archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -640,7 +639,7 @@ jobs:
 
   archive-sbom:
     name: Archive SBOM receipt
-    if: ${{ inputs.run_packaging }}
+    if: ${{ inputs.run_archive }}
     needs: [source-identity, archive, archive-evidence]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -1009,8 +1008,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # Also the single pre-merge home of the integration and packaging contract
+  # suites (tests/integration and tests/packaging), which need only the core
+  # and development dependencies.
   native-payload:
-    name: Native payload verifier fixture checks
+    name: Native payload verifier fixture and contract suites
     needs: [source-identity]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -1035,6 +1037,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/reports"
           pytest tests/integration/desktop/test_native_payload_acceptance.py -v \
             --junitxml="$RUNNER_TEMP/reports/native-payload.junit.xml"
+      - name: Run the integration contract suite
+        run: >-
+          pytest tests/integration/desktop -v
+          --ignore=tests/integration/desktop/test_native_payload_acceptance.py
+          --ignore=tests/integration/desktop/test_draft_process_acceptance.py
+          --junitxml="$RUNNER_TEMP/reports/integration-contracts.junit.xml"
+      - name: Run the packaging contract suite
+        run: >-
+          pytest tests/packaging -v
+          --junitxml="$RUNNER_TEMP/reports/packaging-contracts.junit.xml"
       - name: Describe the staged evidence for this check
         run: |
           set -euo pipefail
@@ -1048,7 +1060,7 @@ jobs:
               "pull_request_base": "${{ needs.source-identity.outputs.pull-request-base }}"
             },
             "scope": {
-              "covered": "native-payload-verifier-structure-on-controlled-fixtures",
+              "covered": "native-payload-verifier-structure-and-integration-and-packaging-contract-suites",
               "excluded": [
                 "hardware-gpu-function",
                 "installed-payload-observation",
@@ -1062,6 +1074,18 @@ jobs:
                 "path": "reports/native-payload.junit.xml",
                 "source": "$RUNNER_TEMP/reports/native-payload.junit.xml",
                 "format": "pytest-junit"
+              },
+              {
+                "kind": "report",
+                "path": "reports/integration-contracts.junit.xml",
+                "source": "$RUNNER_TEMP/reports/integration-contracts.junit.xml",
+                "format": "pytest-junit"
+              },
+              {
+                "kind": "report",
+                "path": "reports/packaging-contracts.junit.xml",
+                "source": "$RUNNER_TEMP/reports/packaging-contracts.junit.xml",
+                "format": "pytest-junit"
               }
             ],
             "stages": [
@@ -1073,6 +1097,16 @@ jobs:
                   "gpu_gate_owner": "issue-55",
                   "runner": "headless-hosted"
                 }
+              },
+              {
+                "name": "integration-contract-suite",
+                "evidence": ["reports/integration-contracts.junit.xml"],
+                "observation": {}
+              },
+              {
+                "name": "packaging-contract-suite",
+                "evidence": ["reports/packaging-contracts.junit.xml"],
+                "observation": {}
               }
             ],
             "equalities": [],

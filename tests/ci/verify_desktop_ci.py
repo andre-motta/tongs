@@ -1,4 +1,4 @@
-"""Verify the aggregate's lane results and reject skipped MCP test reports.
+"""Verify the aggregate's lane results and reject skipped pytest reports.
 
 The ``aggregate`` command reads the effective lane plan the aggregate job wrote
 and the ``toJSON(needs)`` results of ordinary CI.  The needed job set must be
@@ -14,6 +14,11 @@ A partial rerun ("Re-run failed jobs") is judged the same way: each entry of
 attempt reports ``success`` and a lane still failing reports ``failure``.  The
 aggregate runs this check before it downloads any evidence, so a lane's
 evidence left over from an earlier attempt never stands in for its result.
+
+The ``mcp-report`` and ``junit-report`` commands read a pytest JUnit report
+that carries no receipt (the MCP step, and the lint job's CI and container
+suites) and require at least one test, only test cases under the named
+packages, and no failure, error or skip.
 """
 
 from __future__ import annotations
@@ -139,28 +144,40 @@ def fallback_note(raw_results: str, plan: Any) -> str | None:
     return None
 
 
+#: The package every MCP test case's ``classname`` starts with.
+MCP_CLASSNAME_PREFIX = "tests.test_mcp."
+
+
 def _integer_attribute(suite: ET.Element, attribute: str, path: Path) -> int:
     try:
         value = int(suite.attrib[attribute])
     except (KeyError, ValueError) as error:
         raise VerificationError(
-            f"MCP JUnit has an invalid {attribute!r} counter: {path}"
+            f"JUnit report has an invalid {attribute!r} counter: {path}"
         ) from error
     if value < 0:
         raise VerificationError(
-            f"MCP JUnit has a negative {attribute!r} counter: {path}"
+            f"JUnit report has a negative {attribute!r} counter: {path}"
         )
     return value
 
 
-def verify_mcp_junit(path: Path) -> None:
-    """Require a well-formed JUnit report with tests and no non-passing outcomes."""
+def verify_pytest_junit(path: Path, prefixes: tuple[str, ...], label: str) -> None:
+    """Require a well-formed JUnit report whose tests all pass under ``prefixes``.
+
+    Every test case's ``classname`` must start with one of ``prefixes``, so a
+    report from another suite cannot stand in, and the report must hold at
+    least one test and no failure, error or skip.
+    """
+
+    if not prefixes or not all(prefixes):
+        raise VerificationError(f"{label} JUnit check names no classname prefix")
     try:
         root = ET.parse(path).getroot()
     except OSError as error:
-        raise VerificationError(f"MCP JUnit report is missing: {path}") from error
+        raise VerificationError(f"{label} JUnit report is missing: {path}") from error
     except ET.ParseError as error:
-        raise VerificationError(f"MCP JUnit report is malformed: {path}") from error
+        raise VerificationError(f"{label} JUnit report is malformed: {path}") from error
 
     if root.tag == "testsuite":
         suites = [root]
@@ -169,7 +186,7 @@ def verify_mcp_junit(path: Path) -> None:
     else:
         suites = []
     if not suites:
-        raise VerificationError(f"MCP JUnit contains no test suites: {path}")
+        raise VerificationError(f"{label} JUnit contains no test suites: {path}")
 
     declared = {
         attribute: sum(_integer_attribute(suite, attribute, path) for suite in suites)
@@ -184,18 +201,30 @@ def verify_mcp_junit(path: Path) -> None:
     }
     if declared != observed:
         raise VerificationError(
-            f"MCP JUnit counters do not match test cases: declared={declared}, "
+            f"{label} JUnit counters do not match test cases: declared={declared}, "
             f"observed={observed}"
         )
     if observed["tests"] < 1:
-        raise VerificationError("MCP JUnit contains no tests")
-    if any(
-        not testcase.attrib.get("classname", "").startswith("tests.test_mcp.")
-        for testcase in testcases
-    ):
-        raise VerificationError("MCP JUnit contains a testcase outside tests/test_mcp")
+        raise VerificationError(f"{label} JUnit contains no tests")
+    outside = sorted(
+        {
+            testcase.attrib.get("classname", "")
+            for testcase in testcases
+            if not testcase.attrib.get("classname", "").startswith(prefixes)
+        }
+    )
+    if outside:
+        raise VerificationError(
+            f"{label} JUnit contains a testcase outside {list(prefixes)}: {outside[:5]}"
+        )
     if any(observed[name] for name in ("failures", "errors", "skipped")):
-        raise VerificationError(f"MCP tests did not pass without skips: {observed}")
+        raise VerificationError(f"{label} tests did not pass without skips: {observed}")
+
+
+def verify_mcp_junit(path: Path) -> None:
+    """Require the MCP report to pass without skips inside tests/test_mcp."""
+
+    verify_pytest_junit(path, (MCP_CLASSNAME_PREFIX,), "MCP")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -205,6 +234,16 @@ def _parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--plan", required=True, type=Path)
     mcp_report = commands.add_parser("mcp-report", help="verify an MCP JUnit report")
     mcp_report.add_argument("--path", required=True, type=Path)
+    junit_report = commands.add_parser(
+        "junit-report", help="verify a pytest JUnit report under named packages"
+    )
+    junit_report.add_argument("--path", required=True, type=Path)
+    junit_report.add_argument(
+        "--prefix",
+        required=True,
+        action="append",
+        help="a classname prefix every test case must start with (repeatable)",
+    )
     return parser
 
 
@@ -221,8 +260,10 @@ def main(argv: list[str] | None = None) -> int:
             selected = ", ".join(lane for lane in CI_PLAN.LANES if lane in plan.lanes)
             graph = "full graph" if plan.full else "reduced graph"
             print(f"Effective plan: {graph}; selected lanes: {selected or 'none'}")
-        else:
+        elif args.command == "mcp-report":
             verify_mcp_junit(args.path)
+        else:
+            verify_pytest_junit(args.path, tuple(args.prefix), "pytest")
     except VerificationError as error:
         print(f"CI verification failed: {error}", file=sys.stderr)
         return 1

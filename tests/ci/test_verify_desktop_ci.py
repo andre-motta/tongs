@@ -15,6 +15,7 @@ from tests.ci.verify_desktop_ci import (
     main,
     verify_aggregate_results,
     verify_mcp_junit,
+    verify_pytest_junit,
 )
 
 COMMIT = "1" * 40
@@ -33,7 +34,8 @@ def _plan(*lanes: str) -> object:
 
 DOCS_ONLY = _plan("docs")
 TUI_ONLY = _plan("lint", "core")
-DESKTOP_WITHOUT_PACKAGING = _plan("lint", "core", "desktop_fixtures", "desktop")
+DESKTOP_WITHOUT_PACKAGING = _plan("lint", "core", "desktop")
+DESKTOP_SOURCE = _plan("lint", "core", "desktop", "archive")
 
 
 def _results(plan: object, **overrides: str | None) -> dict[str, object]:
@@ -65,8 +67,8 @@ def _write_junit(
 
 @pytest.mark.parametrize(
     "plan",
-    [FULL, DOCS_ONLY, DESKTOP_WITHOUT_PACKAGING],
-    ids=["full", "docs", "desktop-without-packaging"],
+    [FULL, DOCS_ONLY, DESKTOP_WITHOUT_PACKAGING, DESKTOP_SOURCE],
+    ids=["full", "docs", "desktop-without-packaging", "desktop-source"],
 )
 def test_aggregate_accepts_the_results_its_plan_selects(plan: object) -> None:
     verify_aggregate_results(json.dumps(_results(plan)), plan)
@@ -147,8 +149,8 @@ def test_no_fallback_is_recorded_when_changes_succeeded() -> None:
 
 def test_aggregate_rejects_missing_or_unexpected_jobs() -> None:
     missing = _results(FULL)
-    missing.pop("desktop-fixtures")
-    with pytest.raises(VerificationError, match="desktop-fixtures"):
+    missing.pop("fedora-podman")
+    with pytest.raises(VerificationError, match="fedora-podman"):
         verify_aggregate_results(json.dumps(missing), FULL)
 
     unexpected = _results(FULL)
@@ -279,5 +281,39 @@ def test_mcp_report_rejects_a_non_mcp_testcase(tmp_path: Path) -> None:
     report.write_text(
         report.read_text().replace("tests.test_mcp.", "tests.test_cache.")
     )
-    with pytest.raises(VerificationError, match="outside tests/test_mcp"):
+    with pytest.raises(VerificationError, match="outside"):
         verify_mcp_junit(report)
+
+
+def test_junit_report_accepts_every_named_package_and_rejects_others(
+    tmp_path: Path,
+) -> None:
+    """The lint job's harness report must come from tests/ci or tests/containers."""
+
+    report = tmp_path / "harness.xml"
+    report.write_text(
+        '<testsuites><testsuite name="pytest" tests="2" failures="0" errors="0" '
+        'skipped="0"><testcase classname="tests.ci.test_ci_plan" name="a"/>'
+        '<testcase classname="tests.containers.test_verify_expected_failure" '
+        'name="b"/></testsuite></testsuites>'
+    )
+    verify_pytest_junit(report, ("tests.ci.", "tests.containers."), "harness")
+    with pytest.raises(VerificationError, match="outside"):
+        verify_pytest_junit(report, ("tests.ci.",), "harness")
+    with pytest.raises(VerificationError, match="no classname prefix"):
+        verify_pytest_junit(report, (), "harness")
+    assert (
+        main(
+            [
+                "junit-report",
+                "--path",
+                str(report),
+                "--prefix",
+                "tests.ci.",
+                "--prefix",
+                "tests.containers.",
+            ]
+        )
+        == 0
+    )
+    assert main(["junit-report", "--path", str(report), "--prefix", "tests.ci."]) == 1

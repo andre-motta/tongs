@@ -165,7 +165,8 @@ glab auth login --hostname gitlab.example.com
 gh auth login --hostname github.corp.com
 ```
 
-A `~/.netrc` entry, or a token in the system keyring, also works. For the
+A `~/.netrc` entry whose `machine` names the host, or a token in the system
+keyring, also works. For the
 keyring, install tongs with the `keyring` extra (see
 [Install and sign in](/getting-started/#optional-extras)), then store the token
 under the service name `tongs`:

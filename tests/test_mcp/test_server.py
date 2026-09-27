@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from tongs.errors import AuthError, NetworkError
 from tongs.forges.registry import ForgeRegistry
 
 mcp_available = True
@@ -141,3 +142,74 @@ class TestToolsRejectUnconfiguredHosts:
         list_mrs.assert_awaited_once()
         assert list_mrs.await_args.args[0] == "group/sub/app"
         await configured_registry.close_all()
+
+
+TOOL_CALLS = [
+    ("list_mrs", {}),
+    ("get_mr", {"number": 1}),
+    ("get_mr_diff", {"number": 1}),
+    ("post_comment", {"number": 1, "body": "hi"}),
+    ("approve_mr", {"number": 1}),
+    ("list_pipelines", {"number": 1}),
+]
+
+
+class TestToolsRedactForgeErrors:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("tool", "args"), TOOL_CALLS)
+    async def test_forge_error_text_never_reaches_client(self, tool, args):
+        """Every tool replaces forge error text with a fixed message."""
+        secret = "https://user:zqSECRETzq@git.lab.corp token zqSECRETzq"
+        with (
+            patch(
+                "tongs.forges.registry.resolve_token",
+                side_effect=AuthError(secret),
+            ),
+            pytest.raises(server.ToolError) as excinfo,
+        ):
+            await getattr(server, tool)("git.lab.corp/group/app", **args)
+        message = str(excinfo.value)
+        assert "SECRET" not in message
+        assert message == f"{tool} failed: Forge authentication is unavailable."
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is True
+
+    @pytest.mark.asyncio
+    async def test_request_error_is_redacted(self, configured_registry):
+        with (
+            patch("tongs.forges.registry.resolve_token", return_value="tok"),
+            patch(
+                "tongs.forges.gitlab.GitLabClient.list_mrs",
+                side_effect=NetworkError("connect to zqSECRETzq failed"),
+            ),
+            pytest.raises(server.ToolError) as excinfo,
+        ):
+            await server.list_mrs("git.lab.corp/group/app")
+        assert "SECRET" not in str(excinfo.value)
+        assert "could not be reached" in str(excinfo.value)
+        await configured_registry.close_all()
+
+    @pytest.mark.asyncio
+    async def test_malformed_netrc_through_mcp_call(self, tmp_path):
+        """A malformed .netrc reaches an MCP client without its contents."""
+        netrc_file = tmp_path / ".netrc"
+        netrc_file.write_text("machine git.lab.corp login x zqSECRETzq-value\n")
+        netrc_file.chmod(0o600)
+        with (
+            patch("tongs.forges.auth.Path.home", return_value=tmp_path),
+            patch("tongs.forges.auth._token_from_cli", return_value=None),
+            patch("tongs.forges.auth._token_from_keyring", return_value=None),
+            pytest.raises(server.ToolError) as excinfo,
+        ):
+            await server.mcp.call_tool(
+                "list_mrs", {"repo_path": "git.lab.corp/group/app"}
+            )
+        message = str(excinfo.value)
+        assert "SECRET" not in message
+        assert "Forge authentication is unavailable" in message
+
+    @pytest.mark.asyncio
+    async def test_host_check_still_raises_value_error(self):
+        """The unconfigured host message is not replaced by the redaction."""
+        with pytest.raises(ValueError, match="not configured"):
+            await server.list_mrs("evil.example/owner/repo")

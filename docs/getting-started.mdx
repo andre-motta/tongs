@@ -142,8 +142,9 @@ glab auth login --hostname gitlab.example.com
 
 ### Fallback: .netrc
 
-Without a CLI login, tongs reads the `password` field of the matching
-`~/.netrc` entry:
+Without a CLI login, tongs reads the `password` field of the `~/.netrc` entry
+whose `machine` names the host. Each forge host needs its own `machine` entry;
+tongs ignores the `default` entry:
 
 ```text title="~/.netrc"
 machine github.com

@@ -16,9 +16,12 @@ needs it, in this order (`resolve_token()` in `src/tongs/forges/auth.py`):
 1. The forge CLI credential store: `gh auth token` for GitHub, or
    `glab config get token --host <host>` for GitLab. Enterprise GitHub hosts add
    `--hostname`.
-2. `~/.netrc` (`_netrc` on Windows). On POSIX systems tongs refuses the file and
-   raises an error if any group or other read or write bit is set. `0600`
-   satisfies this.
+2. `~/.netrc` (`_netrc` on Windows). Only a `machine` entry that names the
+   host is used. tongs never reads the `default` entry, which usually belongs
+   to another service. On POSIX systems tongs refuses the file and raises an
+   error if any group or other read or write bit is set. `0600` satisfies
+   this. If the file cannot be parsed, the error names the file and line but
+   never quotes its contents.
 3. The optional system keyring, looked up under service name `tongs` and the
    hostname. This requires the `keyring` package; if it is not installed, or the
    backend fails, the step is skipped rather than fatal.
@@ -39,8 +42,10 @@ What follows from this:
   after five seconds. The GitLab refresh check times out after fifteen.
 - Tokens live only in process memory and the outgoing `Authorization` header.
   `redact_credentials()` in `src/tongs/errors.py` strips known GitLab and GitHub
-  token prefixes and generic `Bearer` and `PRIVATE-TOKEN` values before errors are
-  logged or displayed.
+  token prefixes, generic `Bearer` and `PRIVATE-TOKEN` values, and the
+  `user:password@` part of URLs before errors are logged or displayed.
+- `tongs-mcp` never returns forge error text to the MCP client. A failed forge
+  call reports a fixed message such as "Forge authentication is unavailable."
 
 ## Plugins are trusted code
 

@@ -34,7 +34,9 @@ provides `/usr/bin/tongs-mcp`. Install it together with `python3-tongs` using
 Sign in to your forges first, as described in
 [Install and sign in](/getting-started/). The server resolves a token for each
 host the same way the terminal app does: the `gh` or `glab` credential store,
-then `~/.netrc`, then the system keyring.
+then a `~/.netrc` entry whose `machine` names the host, then the system
+keyring. When a forge call fails, the tool returns a fixed message such as
+"Forge authentication is unavailable." and never the underlying error text.
 
 ## Connect a client
 

@@ -1,5 +1,7 @@
 """Structured error hierarchy for forge operations."""
 
+from __future__ import annotations
+
 import re
 
 
@@ -45,14 +47,18 @@ class ConfigError(ForgeError):
 
 _TOKEN_PATTERNS = re.compile(
     r"("
-    r"glpat-|gldt-|glcbt-\d*_?|glptt-|glft-|glsoat-|glimt-|gloas-"
-    r"|ghp_|gho_|ghs_|ghu_|github_pat_"
+    r"glpat-|gldt-|glcbt-\d*_?|glptt-|glft-|glsoat-|glimt-|gloas-|glrt-"
+    r"|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_"
     r"|Bearer\s+"
     r"|PRIVATE-TOKEN:\s*"
     r")[A-Za-z0-9_.\-]+"
 )
 
+# The userinfo part of a URL (``scheme://user:password@host``).
+_URL_USERINFO = re.compile(r"(://)[^/?#@\s]+@")
+
 
 def redact_credentials(text: str) -> str:
-    """Redact known token patterns from text."""
+    """Redact known token patterns and URL userinfo from text."""
+    text = _URL_USERINFO.sub(r"\1[REDACTED]@", text)
     return _TOKEN_PATTERNS.sub(r"\1[REDACTED]", text)

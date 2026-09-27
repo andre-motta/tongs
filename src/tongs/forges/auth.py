@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tongs.errors import AuthError
+from tongs.errors import AuthError, redact_credentials
 from tongs.scanner.repo import ForgeType
 
 log = logging.getLogger(__name__)
@@ -67,7 +67,9 @@ def refresh_token(hostname: str, forge_type: ForgeType) -> str | None:
     try:
         return resolve_token(hostname, forge_type)
     except AuthError as e:
-        log.debug("Token refresh for %s failed: %s", hostname, e)
+        log.debug(
+            "Token refresh for %s failed: %s", hostname, redact_credentials(str(e))
+        )
         return None
 
 
@@ -126,9 +128,19 @@ def _token_from_netrc(hostname: str) -> str | None:
     try:
         nrc = netrc.netrc(str(netrc_path))
     except netrc.NetrcParseError as e:
-        raise AuthError(f"Failed to parse ~/.netrc: {e}") from e
+        # The parser quotes the offending token, which can be the secret
+        # itself, so name only the file and line and drop the original error.
+        raise AuthError(
+            f"Failed to parse ~/{netrc_path.name} near line {e.lineno}; "
+            "check its syntax"
+        ) from None
 
-    auth = nrc.authenticators(hostname)
+    # Only a ``machine`` entry naming this host counts. ``authenticators``
+    # would fall back to the ``default`` entry, which usually belongs to an
+    # unrelated service, and send its password to the forge.
+    if hostname == "default":
+        return None
+    auth = nrc.hosts.get(hostname)
     if auth is None:
         return None
 

@@ -6,7 +6,11 @@
 
 1. GitLab `glab config get token --host <host>` or GitHub `gh auth token`
    (`--hostname` for enterprise)
-2. `.netrc`, with owner-only permissions required on POSIX
+2. `.netrc`, with owner-only permissions required on POSIX. Only a `machine`
+   entry that names the host is used (`nrc.hosts.get(hostname)`); the
+   `default` entry is never read, because it usually belongs to another
+   service. A parse error names the file and line only and is raised
+   `from None`, because the stdlib message quotes the offending token.
 3. optional system keyring lookup under service `tongs` and the hostname
 4. a forge-specific `AuthError`
 
@@ -18,9 +22,16 @@ cache keys or values, protocol frames, renderer state, plugin manifests, logs,
 command arguments, or user-visible errors.
 
 `src/tongs/errors.py:redact_credentials()` removes known GitLab/GitHub token
-prefixes and generic Bearer or `PRIVATE-TOKEN` values. All new error paths that
-can contain remote or subprocess output must redact before logging or display.
-Do not log raw HTTP headers.
+prefixes (including `ghr_` and `glrt-`), generic Bearer or `PRIVATE-TOKEN`
+values, and URL userinfo (`://user:pass@` becomes `://[REDACTED]@`). All new
+error paths that can contain remote or subprocess output must redact before
+logging or display. Do not log raw HTTP headers.
+
+`tongs-mcp` returns no forge error text to its client. Every tool runs inside
+`_redacted_forge_errors`, which turns any `ForgeError` into a fixed message
+from `services.errors.translate_error` and raises it `from None`. The
+host-admission `ValueError` from `_parse_host_repo` is not a `ForgeError` and
+keeps its own message.
 
 ## Host and URL admission
 

@@ -89,6 +89,24 @@ class TestRedactCredentials:
         result = redact_credentials("https://x-token:ghp_secret123@github.com/org/repo")
         assert "secret123" not in result
 
+    def test_github_refresh_token(self):
+        assert redact_credentials("ghr_abc123DEF456") == "ghr_[REDACTED]"
+
+    def test_gitlab_runner_token(self):
+        assert redact_credentials("glrt-abc123_DEF-456") == "glrt-[REDACTED]"
+
+    def test_url_userinfo(self):
+        result = redact_credentials("fetch https://user:secret@host/org/repo failed")
+        assert result == "fetch https://[REDACTED]@host/org/repo failed"
+
+    def test_url_userinfo_without_password(self):
+        result = redact_credentials("ssh://oauth2-secret@gitlab.example/x")
+        assert result == "ssh://[REDACTED]@gitlab.example/x"
+
+    def test_at_sign_in_path_or_query_not_mangled(self):
+        text = "https://host/users/@me?by=a@b.c"
+        assert redact_credentials(text) == text
+
     def test_prefix_alone_not_mangled(self):
         assert redact_credentials("glpat-") == "glpat-"
 

@@ -1,5 +1,6 @@
 """Tests for auth token resolution."""
 
+import logging
 import subprocess
 import sys
 from unittest.mock import patch
@@ -37,6 +38,44 @@ class TestTokenFromNetrc:
         netrc_file.chmod(0o600)
         with patch("tongs.forges.auth.Path.home", return_value=tmp_path):
             assert _token_from_netrc("gitlab.com") is None
+
+    def test_ignores_default_entry(self, tmp_path):
+        """A default entry belongs to another service and is never sent."""
+        netrc_file = tmp_path / ".netrc"
+        netrc_file.write_text("default\n  login ftpuser\n  password ftp-secret\n")
+        netrc_file.chmod(0o600)
+        with patch("tongs.forges.auth.Path.home", return_value=tmp_path):
+            assert _token_from_netrc("gitlab.com") is None
+            assert _token_from_netrc("default") is None
+
+    def test_machine_entry_wins_over_default(self, tmp_path):
+        netrc_file = tmp_path / ".netrc"
+        netrc_file.write_text(
+            "machine gitlab.com\n  login __token__\n  password glpat-host\n"
+            "default\n  login ftpuser\n  password ftp-secret\n"
+        )
+        netrc_file.chmod(0o600)
+        with patch("tongs.forges.auth.Path.home", return_value=tmp_path):
+            assert _token_from_netrc("gitlab.com") == "glpat-host"
+            assert _token_from_netrc("github.com") is None
+
+    def test_parse_error_does_not_quote_the_secret(self, tmp_path):
+        """A missing password keyword makes the parser quote the token."""
+        netrc_file = tmp_path / ".netrc"
+        netrc_file.write_text(
+            "machine gitlab.com\n  login __token__\n  zqSECRETzq-value\n"
+        )
+        netrc_file.chmod(0o600)
+        with (
+            patch("tongs.forges.auth.Path.home", return_value=tmp_path),
+            pytest.raises(AuthError) as excinfo,
+        ):
+            _token_from_netrc("gitlab.com")
+        message = str(excinfo.value)
+        assert "SECRET" not in message
+        assert "near line" in message
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is True
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions only")
     def test_rejects_wrong_permissions(self, tmp_path):
@@ -218,3 +257,30 @@ class TestRefreshToken:
             ),
         ):
             assert refresh_token("gitlab.com", ForgeType.GITLAB) is None
+
+    def test_parse_error_is_not_logged_verbatim(self, tmp_path, caplog):
+        """A malformed .netrc during refresh logs no token text."""
+        netrc_file = tmp_path / ".netrc"
+        netrc_file.write_text("machine github.com login x zqSECRETzq-value\n")
+        netrc_file.chmod(0o600)
+        with (
+            patch("tongs.forges.auth.Path.home", return_value=tmp_path),
+            patch("tongs.forges.auth._token_from_cli", return_value=None),
+            patch("tongs.forges.auth._token_from_keyring", return_value=None),
+            caplog.at_level(logging.DEBUG, logger="tongs.forges.auth"),
+        ):
+            assert refresh_token("github.com", ForgeType.GITHUB) is None
+        assert "Failed to parse" in caplog.text
+        assert "SECRET" not in caplog.text
+
+    def test_refresh_log_is_redacted(self, caplog):
+        with (
+            patch(
+                "tongs.forges.auth.resolve_token",
+                side_effect=AuthError("bad token ghp_abcdef123456"),
+            ),
+            caplog.at_level(logging.DEBUG, logger="tongs.forges.auth"),
+        ):
+            assert refresh_token("github.com", ForgeType.GITHUB) is None
+        assert "abcdef123456" not in caplog.text
+        assert "ghp_[REDACTED]" in caplog.text

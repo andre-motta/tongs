@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test, { afterEach } from "node:test";
-import { ServiceStatusPublisher } from "../../../desktop/dist/src/main/sidecar.js";
+import { readFileSync } from "node:fs";
+import { recoverRendererSession } from "../../../desktop/dist/src/main/renderer_lifecycle.js";
+import {
+  ServiceStatusPublisher,
+  SidecarTransport,
+} from "../../../desktop/dist/src/main/sidecar.js";
 import {
   SERVICE_STATUS_TEXT,
   ServiceStatusLine,
   ServiceStatusModel,
 } from "../../../desktop/dist/src/renderer/core/service-status.js";
-import { harness, transportFor } from "../electron/fake-sidecar.mjs";
+import { harness, launch, transportFor } from "../electron/fake-sidecar.mjs";
 
 const desktopRequire = createRequire(
   new URL("../../../desktop/package.json", import.meta.url),
@@ -154,4 +159,69 @@ test("malformed status reports are ignored", () => {
   model.applyStatus({ state: "stopped", revision: -1 });
   model.applyStatus(null);
   assert.equal(model.view.text, SERVICE_STATUS_TEXT.connecting);
+});
+
+test("after a failed recovery the reloaded header says not running", async () => {
+  const fake = harness({ autoHandshake: false });
+  // Every service started after the first exits before its handshake.
+  const spawn = (...args) => {
+    const child = fake.spawn(...args);
+    if (fake.children.length > 1) queueMicrotask(() => child.finish(1, null));
+    return child;
+  };
+  const transport = new SidecarTransport(launch, 1_000, 1_000, 1_000, spawn);
+  const started = transport.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.respond(fake.children[0]);
+  await started;
+  const { bridge, publisher } = wire(transport);
+  render(
+    React.createElement(ServiceStatusLine, { model: new ServiceStatusModel(), bridge }),
+  );
+  await settle();
+  assert.equal(headerText(), "Local service connected");
+
+  const steps = [];
+  let recovered;
+  await act(async () => {
+    recovered = await recoverRendererSession({
+      resetBindings: () => steps.push("reset"),
+      restartSidecar: async () => {
+        steps.push("restart");
+        await transport.restart();
+      },
+      refreshAssets: async () => steps.push("assets"),
+      // A reload replaces the document, so the header mounts again from the
+      // main-process state.
+      loadDocument: async () => {
+        steps.push("load");
+        cleanup();
+        render(
+          React.createElement(ServiceStatusLine, {
+            model: new ServiceStatusModel(),
+            bridge,
+          }),
+        );
+      },
+      showFailure: async () => steps.push("failure"),
+    });
+  });
+  await settle();
+  assert.equal(recovered, false);
+  assert.deepEqual(steps, ["reset", "restart", "load", "failure"]);
+  assert.equal(transport.serviceState, "stopped");
+  assert.equal(headerText(), "Local service not running");
+  assert.equal(headerClass(), "service-status service-status-error");
+  assert.equal(document.querySelectorAll("#service-status").length, 1);
+  publisher.dispose();
+  await transport.stop();
+});
+
+test("the main process leaves the header text to the status channel", () => {
+  const source = readFileSync(
+    new URL("../../../desktop/src/main/index.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal(source.includes("#service-status"), false);
+  assert.equal(source.includes("service is unavailable"), false);
 });

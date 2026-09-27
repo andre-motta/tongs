@@ -108,12 +108,10 @@ async function run(): Promise<void> {
         await owner.loadURL(APP_DOCUMENT);
       }
     },
-    showFailure: async () => {
-      if (window !== owner || owner.isDestroyed()) return;
-      await owner.webContents.executeJavaScript(
-        "document.querySelector('#service-status').textContent = 'The local Tongs service is unavailable.'",
-      );
-    },
+    // The header's service line has one writer: the renderer's status model,
+    // fed by the main-process status channel. A failed restart leaves the
+    // transport stopped, so the reloaded document already reports it.
+    showFailure: async () => undefined,
   });
   window.setMenu(null);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));

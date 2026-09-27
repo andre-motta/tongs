@@ -545,7 +545,7 @@ class PipelinePanel(Widget, can_focus=True):
             fd, tmp_path = tempfile.mkstemp(suffix=".log", prefix=f"tongs-{job_name}-")
             os.chmod(tmp_path, 0o600)
             with os.fdopen(fd, "w") as f:
-                f.write(self._job_log_text)
+                f.write(Text.from_ansi(self._job_log_text).plain)
             with self.app.suspend():
                 subprocess.run([*shlex.split(editor_cmd), tmp_path], check=False)
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.

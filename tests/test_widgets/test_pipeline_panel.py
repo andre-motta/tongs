@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from rich.style import Style
+from textual.app import App, ComposeResult
 
 from tongs.forges.models import CIStatus, Pipeline, PipelineJob
 from tongs.helpers import ci_icon_markup, ci_icon_text, format_duration, relative_time
@@ -14,9 +18,38 @@ from tongs.widgets.pipeline_panel import (
     CancelPipelineRequested,
     LoadJobLogRequested,
     LoadJobsRequested,
+    PipelinePanel,
     RetryJobRequested,
     RetryPipelineRequested,
 )
+
+class PipelinePanelApp(App[None]):
+    def compose(self) -> ComposeResult:
+        yield PipelinePanel(id="pipeline-panel")
+
+
+@pytest.mark.asyncio
+async def test_editor_export_strips_ansi_sequences(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = PipelinePanelApp()
+    exported: list[str] = []
+
+    def capture(command: list[str], *, check: bool) -> None:
+        assert check is False
+        exported.append(Path(command[-1]).read_text())
+
+    monkeypatch.setenv("EDITOR", "editor")
+    monkeypatch.setattr(app, "suspend", lambda: nullcontext())
+    monkeypatch.setattr("tongs.widgets.pipeline_panel.subprocess.run", capture)
+
+    async with app.run_test():
+        panel = app.query_one("#pipeline-panel", PipelinePanel)
+        panel._view_level = 2
+        panel._job_log_text = "\x1b[31mfailed\x1b[0m\nplain"
+        panel.action_open_in_editor()
+
+    assert exported == ["failed\nplain"]
+    assert "\x1b" not in exported[0]
+
 
 # ===================================================================
 # format_duration

@@ -23,13 +23,16 @@ from tongs.widgets.pipeline_panel import (
     RetryPipelineRequested,
 )
 
+
 class PipelinePanelApp(App[None]):
     def compose(self) -> ComposeResult:
         yield PipelinePanel(id="pipeline-panel")
 
 
 @pytest.mark.asyncio
-async def test_editor_export_strips_ansi_sequences(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_editor_export_strips_ansi_sequences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = PipelinePanelApp()
     exported: list[str] = []
 

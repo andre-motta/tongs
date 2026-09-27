@@ -8,7 +8,9 @@ input. Branch and manual runs build the unpublished candidate version `0.5.0`; a
 produced the beta desktop archive attached to the 1.0.0 release.
 
 `BUILD_ENVIRONMENT.md` and `Containerfile.build` define the reproducible hosted
-builder. The package hashes are retained independently of Fedora mirror URLs.
+builder. The complete builder RPM closure is pinned by NEVRA in `builder-rpms.nevra` and
+by SHA-256 in `builder-rpms.sha256`, independently of Fedora mirror URLs, and is
+installed with every repository disabled.
 
 The pinned Electron input is the official
 `electron-v44.2.0-linux-x64.zip` payload. Its upstream SHA-256 and the exact

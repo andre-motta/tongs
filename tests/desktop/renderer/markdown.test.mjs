@@ -257,6 +257,36 @@ test("shows the real host beside link text that names a different URL", async ()
   await waitFor(() => assert.deepEqual(calls, ["https://evil.example/phish"]));
 });
 
+test("shows the real host beside lookalike link text without a scheme", () => {
+  const view = renderMarkdown(
+    [
+      "[git\u00adhub.com/org/repo](https://evil.example/x)",
+      "[g\u0456thub.com/org](https://evil.example/y)",
+      "[github\u3002com/x](https://evil.example/z)",
+    ].join("\n\n"),
+  );
+  const links = view.getAllByRole("link");
+  assert.equal(links.length, 3);
+  const described = links.map((link) => {
+    const id = link.getAttribute("aria-describedby") ?? "";
+    const element = view.container.ownerDocument.getElementById(id);
+    return {
+      title: link.getAttribute("title"),
+      description: element?.textContent ?? "",
+      hidden: element?.hasAttribute("hidden") ?? null,
+    };
+  });
+  assert.deepEqual(described, [
+    { title: "https://evil.example/x", description: "(opens evil.example)", hidden: false },
+    { title: "https://evil.example/y", description: "(opens evil.example)", hidden: false },
+    { title: "https://evil.example/z", description: "(opens evil.example)", hidden: false },
+  ]);
+  assert.equal(
+    view.container.querySelectorAll(".safe-markdown-link-host-mismatch").length,
+    3,
+  );
+});
+
 test("compares link text to the destination by origin and host", () => {
   assert.equal(externalLinkHost("https://example.com/a"), "example.com");
   assert.equal(externalLinkHost("https://b\u00fccher.example/"), "xn--bcher-kva.example");
@@ -274,6 +304,8 @@ test("compares link text to the destination by origin and host", () => {
     ["README.md", "https://github.com/", true],
     ["", "https://github.com/", false],
     ["https://a b", "https://github.com/", false],
+    ["git\u00adhub.com/org", "https://evil.example/x", true],
+    ["git\u00adhub.com/org", "https://github.com/org", false],
     ["g\u0456thub.com/org/repo", "https://evil.example/x", true],
     ["github\u3002com/org/repo", "https://evil.example/x", true],
     ["github.com\u200b/org", "https://evil.example/x", true],

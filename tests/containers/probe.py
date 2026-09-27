@@ -26,7 +26,9 @@ EXAMPLE_PLUGIN = Path("examples/desktop-plugin")
 # entry points and the MCP dependency gate, the desktop entry-point group and
 # plugin resources, packaged schemas and desktop assets, the installed sidecar,
 # the MCP server import and host gate, config and platformdirs, and installed
-# launcher resolution. The hosted core lane runs the whole suite.
+# launcher resolution. The Textual suites run too, so the TUI is exercised on
+# the declared Textual floor that the image pins. The hosted core lane runs the
+# whole suite.
 SMOKE_TESTS = (
     "tests/test_plugins/test_plugin_system.py",
     "tests/plugins/test_desktop_discovery.py",
@@ -37,6 +39,16 @@ SMOKE_TESTS = (
     "tests/test_mcp/test_server.py",
     "tests/test_config.py",
     "tests/desktop/installer/test_launcher.py",
+    "tests/test_tui_mr_services.py",
+    "tests/test_tui_review_mode.py",
+    "tests/test_tui_session.py",
+    "tests/test_views/test_forge_text_literal.py",
+    "tests/test_views/test_pipeline_log_search.py",
+    "tests/test_views/test_repo_list_search.py",
+    "tests/test_widgets/test_diff_panel.py",
+    "tests/test_widgets/test_mr_table.py",
+    "tests/test_widgets/test_pipeline_panel.py",
+    "tests/test_widgets/test_split_diff.py",
 )
 EXPECTED_PLUGIN_EVIDENCE = {
     "desktop_states": {

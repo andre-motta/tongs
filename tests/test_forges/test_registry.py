@@ -64,6 +64,7 @@ class TestForgeRegistry:
             "github.com.evil.io",
             "mygithub.example",
             "bitbucket.org",
+            "gіthub.com",  # Cyrillic i look-alike
         ],
     )
     def test_unconfigured_host_is_not_mapped_by_substring(self, hostname):

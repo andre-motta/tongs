@@ -50,8 +50,10 @@ from tongs.services.review_submission import (
 )
 from tongs.state.drafts import (
     DiffSide,
+    DraftConflictError,
     DraftContent,
     DraftState,
+    DraftStateError,
     DraftStore,
     DraftStoreError,
     DraftVerdict,
@@ -995,3 +997,35 @@ async def test_concurrent_explicit_resume_advances_rejected_step_once(
     recovered = await store.get_attempt(paused.attempt_id)
     assert len(recovered.retry_authorizations) == 1
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_second_start_during_submission_is_refused_and_posts_once(
+    tmp_path: Path,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_comment(*_args: object) -> ForgeMutationResult:
+        entered.set()
+        await release.wait()
+        return ForgeMutationResult("known", "known")
+
+    client = _client(add_comment=AsyncMock(side_effect=blocked_comment))
+    store, service, _, _, draft = await _services(
+        tmp_path / "drafts.db",
+        _content(GeneralDraftComment(uuid4(), "comment")),
+        client=client,
+    )
+    first = asyncio.create_task(service.start(draft.id, draft.version))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # A second start must be refused at once, never join the attempt in flight.
+        with pytest.raises((DraftConflictError, DraftStateError)):
+            await asyncio.wait_for(service.start(draft.id, draft.version), 5)
+    finally:
+        release.set()
+        submitted = await first
+        await store.close()
+    assert submitted.outcome is SubmissionOutcome.SUBMITTED
+    assert client.add_comment.await_count == 1

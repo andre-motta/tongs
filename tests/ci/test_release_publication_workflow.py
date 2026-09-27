@@ -327,6 +327,15 @@ def test_every_candidate_interpreter_is_isolated_from_the_runner(
         assert "assert tongs_path.is_relative_to(workspace)" in script, name
         calls = re.findall(r'"\$CANDIDATE_PYTHON"\s+(\S+)', script)
         assert calls and set(calls) == {"-I"}, name
+        # The release programs run only through the isolated candidate venv.
+        for program in re.findall(
+            r"(\S+)\s+-I\s+tests/integration/desktop/"
+            r"(?:candidate_attestation|release_publication)\.py|"
+            r"(?<![\w/])(tests/integration/desktop/"
+            r"(?:candidate_attestation|release_publication)\.py)",
+            script,
+        ):
+            assert program[0] == '"$CANDIDATE_PYTHON"', (name, program)
         installs = re.findall(r'"\$CANDIDATE_PYTHON" -I -m pip install([^\n]*)', script)
         assert installs, name
         for arguments in installs:

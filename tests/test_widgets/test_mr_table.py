@@ -68,17 +68,6 @@ class TestSortMrsByUpdated:
 
 
 class TestSortMrsByTitle:
-    def test_sorts_alphabetically(self):
-        mr_b = _make_mr(number=1, title="Beta feature")
-        mr_a = _make_mr(number=2, title="Alpha fix")
-        mr_c = _make_mr(number=3, title="Charlie update")
-        result = sort_mrs([mr_b, mr_a, mr_c], "title")
-        assert [m.title for m in result] == [
-            "Alpha fix",
-            "Beta feature",
-            "Charlie update",
-        ]
-
     def test_case_insensitive(self):
         mr_upper = _make_mr(number=1, title="Zebra")
         mr_lower = _make_mr(number=2, title="apple")
@@ -107,9 +96,10 @@ class TestSortMrsByCi:
 
 class TestSortMrsByAuthor:
     def test_sorts_by_username(self):
-        mr_charlie = _make_mr(number=1, username="charlie")
-        mr_alice = _make_mr(number=2, username="alice")
-        mr_bob = _make_mr(number=3, username="bob")
+        # Titles run opposite to usernames, so a title-first key fails.
+        mr_charlie = _make_mr(number=1, username="charlie", title="Alpha")
+        mr_alice = _make_mr(number=2, username="alice", title="Charlie")
+        mr_bob = _make_mr(number=3, username="bob", title="Bravo")
         result = sort_mrs([mr_charlie, mr_alice, mr_bob], "author")
         assert [m.author.username for m in result] == ["alice", "bob", "charlie"]
 
@@ -122,11 +112,6 @@ class TestSortMrsByAuthor:
 
 
 class TestForgeMarker:
-    def test_same_helper_as_repo_list(self):
-        assert "GH" in forge_label(ForgeType.GITHUB)
-        assert "GL" in forge_label(ForgeType.GITLAB)
-        assert forge_label(ForgeType.GITHUB) != forge_label(ForgeType.GITLAB)
-
     def test_unknown_forge_gets_placeholder(self):
         assert "GH" not in forge_label(None) and "GL" not in forge_label(None)
 

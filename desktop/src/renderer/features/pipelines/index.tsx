@@ -684,17 +684,34 @@ function LogPanel({
       setEditorOpening(false);
     }
   }, [bridge, job.handle, loaded]);
+  useEffect(() => {
+    const owner = document;
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (
+        event.key !== "F2" ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.defaultPrevented ||
+        loaded === null ||
+        editorOpening
+      )
+        return;
+      const target = event.target as Node | null;
+      const region = owner.querySelector(".ci-page");
+      if (target === null) return;
+      if (target !== owner.body && !(region?.contains(target) ?? false)) return;
+      if (owner.querySelector('[aria-modal="true"]') !== null) return;
+      if (isTextEntry(owner.activeElement as HTMLElement | null)) return;
+      event.preventDefault();
+      void openInEditor();
+    };
+    owner.addEventListener("keydown", onKeyDown);
+    return () => owner.removeEventListener("keydown", onKeyDown);
+  }, [editorOpening, loaded, openInEditor]);
 
   return (
-    <section
-      className="ci-log"
-      aria-label={`Log for ${job.value.name}`}
-      onKeyDown={(event) => {
-        if (event.key !== "F2" || loaded === null || editorOpening) return;
-        event.preventDefault();
-        void openInEditor();
-      }}
-    >
+    <section className="ci-log" aria-label={`Log for ${job.value.name}`}>
       <div className="ci-section-heading">
         <h3>Log · {job.value.name}</h3>
         <div className="ci-actions">

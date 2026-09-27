@@ -35,7 +35,10 @@ Object.assign(globalThis, {
 const { act, cleanup, fireEvent, render, waitFor } = desktopRequire(
   "@testing-library/react",
 );
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  editorOpens = 0;
+});
 
 const LOG_LINES = 700;
 const MATCH_LINES = [5, 205, 405, 605];
@@ -46,6 +49,15 @@ const LOG_TEXT = `${[...Array(LOG_LINES).keys()]
   .join("\n")}\n`;
 const SEARCH = "INPUT.ci-log-search";
 const BODY = "BODY";
+let editorOpens = 0;
+
+test("F2 opens the loaded log when focus is on the document body", async () => {
+  await openLog();
+
+  assert.equal(focused(), BODY);
+  assert.equal(fireEvent.keyDown(document.body, { key: "F2" }), false);
+  await waitFor(() => assert.equal(editorOpens, 1));
+});
 
 test("slash focuses the log search when nothing in the view holds focus", async () => {
   const view = await openLog();
@@ -357,10 +369,13 @@ function logBridge(varySnapshot) {
       }),
     getCIReceipt: () => read({ receipt: null }),
     openExternal: async () => true,
-    openJobLogInEditor: async () => ({
-      outcome: "started",
-      message: "Editor started.",
-    }),
+    openJobLogInEditor: async () => {
+      editorOpens += 1;
+      return {
+        outcome: "started",
+        message: "Editor started.",
+      };
+    },
     clearCache: async () => ({
       outcome: "cleared",
       message: "Shared API cache cleared.",

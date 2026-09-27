@@ -265,14 +265,6 @@ kbd {
 .cap { margin: 12px 0 0; font-size: var(--fs-small); line-height: 1.5; color: var(--text-2); }
 .cap code { font-size: .92em; color: var(--text); }
 
-/* placeholder for brand-kit files and missing captures */
-.ph {
-  display: grid; place-items: center; text-align: center; gap: 4px;
-  padding: 20px; border: 1px dashed var(--rule-ui); border-radius: var(--radius);
-  color: var(--text-2); font: 400 var(--fs-label)/1.55 var(--font-mono);
-  background: repeating-linear-gradient(135deg, transparent 0 11px, var(--grid-line) 11px 12px), var(--bg-sunk);
-}
-.ph strong { display: block; color: var(--text); font-weight: 500; font-size: var(--fs-small); }
 .tag { display: inline-block; padding: 1px 6px; border: 1px solid var(--rule-ui); border-radius: 3px; color: var(--text-2); font: 500 11px/1.5 var(--font-mono); }
 
 /* ============================================================= header parts */
@@ -339,6 +331,8 @@ kbd {
 .site-footer a:hover { color: var(--cyan-hot); }
 .site-footer a:focus-visible { outline: 2px solid var(--cyan-hot); outline-offset: 2px; }
 .site-footer .base { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; padding-top: 20px; border-top: 1px solid var(--steel); font: 400 var(--fs-label) var(--font-mono); color: var(--steel-light); }
+.site-footer .notes { grid-column: 1 / -1; margin-top: -16px; display: grid; gap: 4px; }
+.site-footer .notes .fine { margin: 0; max-width: none; font-size: var(--fs-label); }
 @media (max-width: 760px) {
   .site-footer .wrap { grid-template-columns: 1fr 1fr; }
   .site-footer .brandcol { grid-column: 1 / -1; }

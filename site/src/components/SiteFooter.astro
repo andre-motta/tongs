@@ -6,7 +6,7 @@ import { footerColumns, site } from '../data/nav.mjs';
   <div class="wrap">
     <div class="brandcol">
       <span class="wordmark" translate="no">tongs</span>
-      <p class="fine">Every forge. One place. A review inbox for GitHub and GitLab in your terminal. MIT licensed. No tracking, no analytics.</p>
+      <p class="fine">Unified code review for the terminal. A review inbox for GitHub and GitLab. MIT licensed. No tracking, no analytics.</p>
     </div>
     {
       footerColumns.map((col) => (
@@ -25,6 +25,10 @@ import { footerColumns, site } from '../data/nav.mjs';
     <div class="base">
       <span>made by <a href={site.author.url} rel="author">{site.author.name}</a></span>
       <span>{site.version}, released {site.released}</span>
+    </div>
+    <div class="notes">
+      <p class="fine credits">Trailer music: <cite>With These Hands</cite> by Scott Buckley (<a href="https://www.scottbuckley.com.au/library/with-these-hands/">scottbuckley.com.au</a>), released under <a href="https://creativecommons.org/licenses/by/4.0/" rel="license">CC BY 4.0</a>.</p>
+      <p class="fine trademarks">GitHub is a trademark of GitHub, Inc. GITLAB is a trademark of GitLab Inc. in the United States and other countries and regions. tongs is an independent project, not affiliated with or endorsed by either.</p>
     </div>
   </div>
 </footer>

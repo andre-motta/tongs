@@ -84,6 +84,72 @@ function loops(): void {
   });
 }
 
+// The brand-kit hero loop. The markup carries no <source>, so nothing is
+// fetched until this attaches one: only wider than 900px (phones keep the
+// poster still), in the dark scheme (home.css hides the layer in light) and
+// when motion is allowed. It pauses offscreen and behind the pause control.
+const HERO_SOURCES: [string, string][] = [
+  ['/hero-loop.webm', 'video/webm'],
+  ['/hero-loop.mp4', 'video/mp4'],
+];
+
+function heroLoop(): void {
+  const v = document.querySelector<HTMLVideoElement>('video[data-hero-loop]');
+  const hero = v?.closest<HTMLElement>('.hero');
+  const layer = v?.parentElement;
+  const btn = document.querySelector<HTMLButtonElement>('[data-hero-toggle]');
+  if (!v || !hero || !layer || reduce) return;
+  const rm = matchMedia('(prefers-reduced-motion: reduce)');
+  let attached = false;
+  let userPaused = false;
+  let visible = true;
+  const label = () => {
+    if (!btn) return;
+    const word = v.paused ? 'play' : 'pause';
+    btn.textContent = `${word} background`;
+    btn.setAttribute('aria-label', `${word} background animation`);
+  };
+  const allowed = () => wide.matches && root.dataset.theme !== 'light' && !rm.matches;
+  const update = () => {
+    const on = allowed();
+    hero.classList.toggle('loop-on', on);
+    if (!on) {
+      if (!v.paused) v.pause();
+      return label();
+    }
+    if (!attached) {
+      for (const [src, type] of HERO_SOURCES) {
+        const s = document.createElement('source');
+        s.src = src;
+        s.type = type;
+        v.append(s);
+      }
+      attached = true;
+      v.load();
+    }
+    if (!userPaused && visible) v.play().then(label, label);
+    else {
+      if (!v.paused) v.pause();
+      label();
+    }
+  };
+  v.addEventListener('playing', () => layer.classList.add('playing'), { once: true });
+  btn?.addEventListener('click', () => {
+    userPaused = !v.paused;
+    update();
+  });
+  wide.addEventListener('change', update);
+  rm.addEventListener('change', update);
+  new MutationObserver(update).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+  if (io) {
+    new IntersectionObserver((es) => es.forEach((e) => {
+      visible = e.isIntersecting;
+      update();
+    })).observe(hero);
+  }
+  update();
+}
+
 function heat(): void {
   const band = document.getElementById('heat');
   if (!band) return;
@@ -208,6 +274,7 @@ export function initHome(): void {
   if (!reduce) document.querySelectorAll('.cursor').forEach((c) => c.classList.add('blink'));
   copyButtons();
   loops();
+  heroLoop();
   heat();
   menu();
   search();

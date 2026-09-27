@@ -16,18 +16,26 @@ const docs = {
   desktop: href('desktop/installation'),
   mcp: href('extend/mcp'),
 };
+// The trailer is self-hosted; YouTube is only a plain outbound link (no embed).
+const youtube = 'https://www.youtube.com/watch?v=rqaEB2l_1w4';
 ---
 
 <Plain
   title="tongs: every forge, one place"
-  description="A keyboard-driven review inbox for GitHub pull requests and GitLab merge requests. Diffs, comments, review drafts and pipelines in one terminal."
+  description="Unified code review for the terminal. A keyboard-driven review inbox for GitHub pull requests and GitLab merge requests: diffs, comments, review drafts and pipelines in one place."
   bodyClass="home"
 >
   <main id="main">
     <!-- ================= hero: the clamp moment ================= -->
     <section class="hero" aria-labelledby="hero-title">
-      {/* PLACEHOLDER brand kit: hero-loop.webm / hero-loop.mp4 (8 to 12 s, silent, seamless) with poster
-           hero-banner-plain-1920x1080.webp replaces .light. preload="none"; plays only without reduced motion. */}
+      {/* Brand-kit hero light (dark scheme): the poster hero-banner-plain-1920x1080.webp is a CSS
+           background, so the light scheme never fetches it. home.ts attaches hero-loop.webm/.mp4 only
+           when the viewport is wider than 900px, the scheme is dark and motion is allowed; phones,
+           reduced motion and no-JS keep the still. The .light stand-in under the frame serves the
+           light scheme. */}
+      <div class="hero-kit" aria-hidden="true">
+        <video data-hero-loop muted loop playsinline preload="none" disablepictureinpicture disableremoteplayback tabindex="-1" width="1920" height="1080"></video>
+      </div>
       <div class="wrap hero-top">
         <div class="hero-id">
           <p class="eyebrow"><span>{site.version}</span><span class="dim">/</span><span>terminal, desktop beta, mcp</span></p>
@@ -62,6 +70,7 @@ const docs = {
         </figure>
         <div class="stage-foot">
           <p class="cap">My Reviews across <code>acme/*</code> on GitHub and <code>platform/*</code> on GitLab, one list. 10 s loop, muted, demo data.</p>
+          <button class="pause hero-pause" type="button" data-hero-toggle aria-label="pause background animation">pause background</button>
         </div>
       </div>
 
@@ -239,7 +248,7 @@ const docs = {
                 </figure>
                 <p class="eyebrow"><span class="ps" aria-hidden="true">$</span><span>tongs desktop install</span></p>
                 <h3>A desktop workspace, same drafts <span class="beta">beta</span></h3>
-                <p class="body">Files changed, a review composer with suggestions, and the Your review drawer. A beta for Fedora 44 on x86_64, installed per user or from the RPMs on the v1.0.0 release. The terminal app stays the main way to use tongs.</p>
+                <p class="body">Files changed, a review composer with suggestions, and the Your review drawer. A beta for Fedora 44 on x86_64, installed per user or from the RPMs on the v1.0.1 release. The terminal app stays the main way to use tongs.</p>
                 <p class="more"><a href={docs.desktop}>Install the desktop app</a></p>
               </article>
               <article class="surface">
@@ -307,10 +316,34 @@ const docs = {
           </div>
           {import.meta.env.TONGS_HAS_TRAILER && (
             <figure class="trailer">
-              <video controls preload="none" playsinline poster="/media/trailer-poster.png" width="1920" height="1080" aria-describedby="trailer-cap">
+              <video controls preload="none" playsinline poster="/media/trailer-poster.webp" width="1920" height="1080" aria-label="tongs trailer, 58 seconds" aria-describedby="trailer-cap trailer-transcript">
                 <source src="/media/trailer.mp4" type="video/mp4" />
+                <track kind="captions" src="/media/trailer.en.vtt" srclang="en" label="English" />
               </video>
-              <figcaption id="trailer-cap" class="cap">The trailer, about a minute.</figcaption>
+              <figcaption id="trailer-cap" class="trailer-cap">
+                <span class="cap">The tongs trailer, 58 s, with narration, music and English captions. Sound plays only when you start it.</span>
+                <a class="yt" href={youtube}>Watch on YouTube<span class="dim"> (higher quality)</span></a>
+              </figcaption>
+              <details class="transcript" id="trailer-transcript">
+                <summary>Transcript and scene descriptions</summary>
+                <p class="scene">[On screen: a dark frame. Browser tabs tinted cyan and orange multiply into clutter; pull request and merge request cards flicker while pipeline status dots blink, one red.]</p>
+                <p>Your code lives on more than one forge. Pull requests here. Merge requests there. A failing pipeline, somewhere. What if you could hold it all in one place?</p>
+                <p class="scene">[On screen: the clutter falls away. Steel tongs close on a glowing cyan and orange cube with a metallic clang. The glow resolves into the tongs wordmark, then a terminal.]</p>
+                <p class="scene">[On screen: the tongs inbox listing reviews from both forges, captioned "GitHub and GitLab. One inbox." Keys switch between My Reviews, My MRs and All Open.]</p>
+                <p>tongs finds your repositories and gathers every review into one inbox.</p>
+                <p class="scene">[On screen: a syntax-highlighted diff with word-level changes, captioned "Syntax highlighted. Word-level diffs." Review mode opens, an inline comment is typed and a suggestion is added.]</p>
+                <p>Real diffs, highlighted word by word. Comment inline. Suggest the fix. Send it as one review.</p>
+                <p class="scene">[On screen: "Pipeline &gt; Job &gt; Log". A failed pipeline drills down to a job log, and a search jumps to the error line. The job is retried, the merge request approved and merged.]</p>
+                <p>Follow CI down to the failing line. Retry. Approve. Merge.</p>
+                <p class="scene">[On screen: the desktop app, captioned "Desktop workspace (beta)", with a pending comment and the review drawer open.]</p>
+                <p>Prefer a window? Same drafts, on the desktop.</p>
+                <p class="scene">[On screen: an MCP client calling list_mrs, get_mr_diff and list_pipelines against tongs-mcp.]</p>
+                <p>Your agents see it too, over MCP.</p>
+                <p class="scene">[On screen: the tongs set the cube down; the cyan and orange light merges into one glow.]</p>
+                <p>Every forge. One grip. tongs. Unified code review for the terminal.</p>
+                <p class="scene">[On screen: end card with the tongs wordmark, "Unified code review for the terminal.", the command pipx install tongs, and www.tongs.tools.]</p>
+              </details>
+              <p class="credit">Music: <a href="https://www.scottbuckley.com.au/library/with-these-hands/"><cite>With These Hands</cite></a> by Scott Buckley, released under <a href="https://creativecommons.org/licenses/by/4.0/" rel="license">CC BY 4.0</a>. Shortened and mixed under the narration.</p>
             </figure>
           )}
         </div>

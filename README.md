@@ -1,9 +1,13 @@
 <p align="center">
-  <img src="docs/assets/hero-banner.png" alt="tongs - Unified code review for the terminal" width="100%">
+  <a href="https://www.youtube.com/watch?v=rqaEB2l_1w4"><img src="docs/assets/hero-banner.png" alt="The tongs wordmark and the line Unified code review for the terminal, under steel tongs gripping a glowing cyan and orange cube. Opens the trailer on YouTube." width="100%"></a>
 </p>
 
 <p align="center">
-  <strong>One TUI. Every forge. Full review.</strong><br>
+  <a href="https://www.youtube.com/watch?v=rqaEB2l_1w4">▶ Watch the trailer</a> (58 s, on YouTube)
+</p>
+
+<p align="center">
+  <strong>Every forge. One place.</strong><br>
   A terminal-native code review inbox for developers who work across GitHub and GitLab.
 </p>
 
@@ -223,11 +227,11 @@ The defects that are known and unfixed in the desktop workspace are listed in
 Every stable release publishes the desktop assets to the GitHub Release of the same `vX.Y.Z` tag that publishes `tongs` to PyPI: the signed per-user archive, its release manifest and Sigstore bundle, the Fedora RPMs, an SBOM and a checksum list. `tongs --install-desktop` selects the release whose version equals the installed core, so the pair to run for one version is:
 
 ```bash
-pip install tongs==1.0.0
+pip install tongs==1.0.1
 tongs --install-desktop
 ```
 
-> The desktop app is a beta. The v1.0.0 GitHub Release attaches the per-user archive and the Fedora RPMs. The commands and package names below describe the contract that every release satisfies.
+> The desktop app is a beta. The v1.0.1 GitHub Release attaches the per-user archive and the Fedora RPMs. The commands and package names below describe the contract that every release satisfies.
 
 The desktop application is optional. Plain `tongs` keeps scanning your repositories and opening the TUI; it never downloads, activates, or starts the desktop shell on its own.
 
@@ -581,7 +585,7 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 
 The terminal application is the released, supported product. The version you get from PyPI today provides the multi-forge inbox, the diff viewer, inline comments and suggested changes, discussion threads, MR actions, pipeline and CI drill-down, the SQLite cache, the plugin system, and the MCP server.
 
-tongs 1.0.0 includes the split diff view and durable review drafts. The desktop workspace is a beta attached to the v1.0.0 release, for Fedora 44 x86_64, together with its per-user installer and Fedora RPMs. Known defects are listed in [known issues](docs/releases/known-issues.md).
+tongs 1.0.0 added the split diff view and durable review drafts, and 1.0.1 fixes the defects found since then, including token refresh after a 401. The desktop workspace is a beta attached to every release since v1.0.0, for Fedora 44 x86_64, together with its per-user installer and Fedora RPMs. Known defects are listed in [known issues](docs/releases/known-issues.md).
 
 Track what is planned and what is blocked through the [open issues](https://github.com/andre-motta/tongs/issues) and their dependency links rather than through a phase table.
 

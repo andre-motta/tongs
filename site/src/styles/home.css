@@ -86,8 +86,9 @@ button { font: inherit; }
 .hero { position: relative; isolation: isolate; padding-top: 56px; overflow: hidden; }
 .hero-stage { position: relative; margin-top: 56px; }
 .hero .light { position: absolute; left: -12%; right: -12%; top: -260px; height: 560px; z-index: -1; pointer-events: none; --core-y: 260px; }
-/* Stand-in for hero-loop.webm (brand kit): cyan from the left, orange from the
-   right, one warm core point where they meet, just above the product frame. */
+/* Light-scheme hero light (the dark scheme uses the brand-kit render in
+   .hero-kit instead): cyan from the left, orange from the right, one warm
+   core point where they meet, just above the product frame. */
 .hero .light::before {
   content: ""; position: absolute; left: 0; right: 0; top: 0; height: 100%;
   background:
@@ -105,6 +106,37 @@ button { font: inherit; }
   -webkit-mask-image: radial-gradient(ellipse 48% 300px at 70% var(--core-y), #000, transparent 75%);
           mask-image: radial-gradient(ellipse 48% 300px at 70% var(--core-y), #000, transparent 75%);
 }
+/* Brand-kit hero light, dark scheme only. The render's lit cube sits at about
+   (69%, 26%) of the frame; --kit-x/--kit-y place that point in the empty
+   corner above the install column, level with the wordmark. The render's
+   near-black ground is lifted to the page ground with `lighten`, so the frame
+   edges disappear and only the light reaches the page. The loop (home.ts)
+   starts transparent over its own poster, which is loop frame 0. */
+.hero-kit { display: none; }
+:root:not([data-theme="light"]) .hero { background: var(--bg); }
+:root:not([data-theme="light"]) .hero .light { display: none; }
+:root:not([data-theme="light"]) .hero-kit {
+  --kit-w: min(940px, 80vw);
+  --kit-x: calc(50% + min(50vw, 640px) * .575);
+  --kit-y: 150px;
+  display: block; position: absolute; z-index: -1; pointer-events: none;
+  width: var(--kit-w); aspect-ratio: 16 / 9;
+  left: calc(var(--kit-x) - var(--kit-w) * .69);
+  top: calc(var(--kit-y) - var(--kit-w) * .5625 * .26);
+  background: image-set(url("/hero-banner-plain-1920x1080.webp") type("image/webp"), url("/hero-banner-plain-1920x1080.png") type("image/png")) center / cover no-repeat;
+  mix-blend-mode: lighten;
+  /* fade out before every edge of the render, so no straight cut shows */
+  -webkit-mask-image: radial-gradient(ellipse 31% 72% at 69% 28%, #000 50%, transparent 100%);
+          mask-image: radial-gradient(ellipse 31% 72% at 69% 28%, #000 50%, transparent 100%);
+}
+/* Phones: a smaller cube in the corner right of the wordmark, clear of the tagline. */
+@media (max-width: 640px) {
+  :root:not([data-theme="light"]) .hero-kit { --kit-w: 400px; --kit-x: 78%; --kit-y: 92px; }
+}
+.hero-kit video { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-fade) ease; }
+.hero-kit.playing video { opacity: 1; }
+.hero-pause { display: none; color: var(--text); }
+.hero.loop-on .hero-pause { display: inline-block; min-width: 0; }
 .hero-top { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 32px 64px; align-items: end; }
 .hero h1 { display: grid; gap: 18px; font-weight: 650; }
 .wm {
@@ -220,7 +252,7 @@ button { font: inherit; }
 /* beyond the terminal */
 .surfaces { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
 .surface { display: grid; align-content: start; min-width: 0; }
-.surface .ph, .surface pre.term { aspect-ratio: 16 / 9; }
+.surface pre.term { aspect-ratio: 16 / 9; }
 .surface .eyebrow { margin-top: 20px; }
 .surface h3 { margin-top: 8px; font-size: var(--fs-h3); }
 .surface p.body { margin-top: 8px; color: var(--text-2); font-size: 15.5px; line-height: 1.6; max-width: 52ch; }
@@ -283,6 +315,18 @@ pre.term .s { color: var(--mk-yellow); }
 .installs .lbl-row { font: 400 11px/1.4 var(--font-mono); color: var(--text-3); }
 .installs .install code { font-size: 15px; }
 .resolve .ctas { margin-top: 20px; display: flex; gap: 12px; flex-wrap: wrap; }
+/* trailer: self-hosted, click to play, sound only when the viewer starts it */
+.trailer video { width: 100%; height: auto; aspect-ratio: 16 / 9; background: var(--soot); border: 1px solid var(--steel-ui); border-radius: var(--radius); box-shadow: var(--frame-glow); }
+.trailer-cap { margin-top: 12px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 24px; }
+.trailer-cap .cap { margin: 0; }
+.trailer .yt { font-size: var(--fs-small); font-weight: 500; white-space: nowrap; }
+.trailer .yt .dim { color: var(--text-2); font-weight: 400; }
+.transcript { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 10px; font-size: var(--fs-small); color: var(--text-2); }
+.transcript summary { cursor: pointer; width: fit-content; font: 500 var(--fs-label)/1.6 var(--font-mono); color: var(--text); }
+.transcript summary:hover { color: var(--link-hover); }
+.transcript p { margin-top: 8px; line-height: 1.55; max-width: 62ch; }
+.transcript .scene { font-style: italic; }
+.trailer .credit { margin-top: 12px; font: 400 var(--fs-label)/1.6 var(--font-mono); color: var(--text-2); }
 
 /* 404 */
 .lost { padding: 96px 0 128px; }
@@ -329,7 +373,7 @@ pre.term .s { color: var(--mk-yellow); }
   .beat-heat { padding-top: 64px; }
   .beat-head { margin-bottom: 24px; }
   /* frames bleed back over the rail on phones, never past the right gutter */
-  .beat .frame, .beat-split .frame, .heatband, .keymap, .surface pre.term, .surface .ph { margin-left: calc(-1 * var(--rail)); }
+  .beat .frame, .beat-split .frame, .heatband, .keymap, .surface pre.term { margin-left: calc(-1 * var(--rail)); }
   .heatband { padding: 20px 16px; }
   .keymap { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .keymap li { padding: 14px 12px; }
@@ -338,8 +382,7 @@ pre.term .s { color: var(--mk-yellow); }
   .steps li { grid-template-columns: 104px minmax(0, 1fr); }
   .works .wrap { justify-content: flex-start; }
   pre.term { font-size: 12.5px; padding: 14px; }
-  .surface .ph, .surface pre.term { aspect-ratio: auto; }
-  .surface .ph { min-height: 200px; }
+  .surface pre.term { aspect-ratio: auto; }
   .resolve { margin-top: 96px; }
   .resolve .wrap { padding-top: 112px; padding-bottom: 72px; }
 }

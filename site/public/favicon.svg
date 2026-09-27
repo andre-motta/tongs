@@ -1,11 +1,11 @@
 <svg shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-label="tongs">
 <title>tongs</title>
 <style>
-.arm{fill:#17171F}.top{fill:#FF7A3D}.lf{fill:#BB5F4A}.rt{fill:#2E1614}
-@media (prefers-color-scheme: dark){.arm{fill:#F2EFE9}.top{fill:#FFF4E0}.lf{fill:#FF7A3D}.rt{fill:#BB5F4A}}
+.arm{fill:#17171F}.top{fill:#FFF4E0}.lf{fill:#7ABBD0}.rt{fill:#FF7A3D}
+@media (prefers-color-scheme: dark){.arm{fill:#F2EFE9}.top{fill:#FFF4E0}.lf{fill:#ABE5F7}.rt{fill:#FF7A3D}}
 </style>
-<path class="arm" d="M2 0h2v1h-2ZM12 0h2v1h-2ZM1 1h2v1h-2ZM13 1h2v1h-2ZM1 2h2v1h-2ZM13 2h2v1h-2ZM1 3h2v1h-2ZM13 3h2v1h-2ZM1 4h2v1h-2ZM13 4h2v1h-2ZM1 5h2v1h-2ZM13 5h2v1h-2ZM1 6h2v1h-2ZM13 6h2v1h-2ZM2 7h2v1h-2ZM12 7h2v1h-2ZM3 8h2v1h-2ZM11 8h2v1h-2ZM4 9h2v1h-2ZM10 9h2v1h-2ZM5 10h2v1h-2ZM9 10h2v1h-2ZM6 11h2v1h-2ZM8 11h2v1h-2ZM7 12h2v1h-2ZM6 13h2v1h-2ZM8 13h2v1h-2ZM5 14h2v1h-2ZM9 14h2v1h-2ZM4 15h2v1h-2ZM10 15h2v1h-2Z"/>
-<path class="top" d="M7 1h2v1h-2ZM5 2h6v1h-6ZM5 3h6v1h-6ZM7 4h2v1h-2Z"/>
-<path class="lf" d="M4 3h1v1h-1ZM4 4h3v1h-3ZM4 5h4v1h-4ZM4 6h4v1h-4ZM5 7h3v1h-3ZM7 8h1v1h-1Z"/>
-<path class="rt" d="M11 3h1v1h-1ZM9 4h3v1h-3ZM8 5h4v1h-4ZM8 6h4v1h-4ZM8 7h3v1h-3ZM8 8h1v1h-1Z"/>
+<path class="arm" d="M1 0h4v1h-4ZM11 0h4v1h-4ZM1 1h2v1h-2ZM13 1h2v1h-2ZM1 2h2v1h-2ZM13 2h2v1h-2ZM1 3h2v1h-2ZM13 3h2v1h-2ZM1 4h2v1h-2ZM13 4h2v1h-2ZM1 5h2v1h-2ZM13 5h2v1h-2ZM1 6h2v1h-2ZM13 6h2v1h-2ZM1 7h2v1h-2ZM13 7h2v1h-2ZM1 8h4v1h-4ZM11 8h4v1h-4ZM4 9h2v1h-2ZM10 9h2v1h-2ZM5 10h2v1h-2ZM9 10h2v1h-2ZM6 11h2v1h-2ZM8 11h2v1h-2ZM7 12h2v1h-2ZM6 13h2v1h-2ZM8 13h2v1h-2ZM5 14h2v1h-2ZM9 14h2v1h-2ZM4 15h2v1h-2ZM10 15h2v1h-2Z"/>
+<path class="top" d="M7 1h2v1h-2ZM6 2h4v1h-4ZM7 3h2v1h-2Z"/>
+<path class="lf" d="M5 2h1v1h-1ZM4 3h3v1h-3ZM4 4h4v1h-4ZM4 5h4v1h-4ZM4 6h4v1h-4ZM5 7h3v1h-3ZM7 8h1v1h-1Z"/>
+<path class="rt" d="M10 2h1v1h-1ZM9 3h3v1h-3ZM8 4h4v1h-4ZM8 5h4v1h-4ZM8 6h4v1h-4ZM8 7h3v1h-3ZM8 8h1v1h-1Z"/>
 </svg>

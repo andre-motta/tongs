@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "tongs"
 dynamic = ["version"]
-description = "Multi-forge MR/CI management TUI for GitHub and GitLab"
+description = "Unified code review for the terminal. A review inbox for GitHub and GitLab."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

@@ -49,14 +49,13 @@ const redirectFragments = {
 };
 
 /**
- * og-image.png (1200x630) comes from the brand kit. Until it is copied into
+ * og-image.png (1200x630) comes from the brand kit. If it is ever missing from
  * public/, pages omit og:image and twitter:image and use the small
- * twitter:card, so no page points at a missing file. Dropping the file in and
- * rebuilding turns the large card on.
+ * twitter:card, so no page points at a missing file.
  */
 const hasOg = existsSync(fileURLToPath(new URL('./public/og-image.png', import.meta.url)));
-// Same rule for the brand-kit trailer: the homepage slot renders only once
-// public/media/trailer.mp4 exists, so no placeholder ever ships.
+// Same rule for the brand-kit trailer: the homepage slot renders only while
+// public/media/trailer.mp4 exists, so no empty player ever ships.
 const hasTrailer = existsSync(fileURLToPath(new URL('./public/media/trailer.mp4', import.meta.url)));
 
 export default defineConfig({
@@ -80,10 +79,11 @@ export default defineConfig({
     starlight({
       title: 'tongs',
       description:
-        'A keyboard-driven review inbox for GitHub pull requests and GitLab merge requests, in your terminal.',
+        'Unified code review for the terminal. A keyboard-driven review inbox for GitHub pull requests and GitLab merge requests.',
       disable404Route: true,
       customCss: ['./src/styles/tokens.css', './src/styles/docs.css'],
-      social: [{ icon: 'github', label: 'GitHub', href: site.repo }],
+      // No social icons: forges appear as text only, never as logos (the
+      // header and footer carry a text GitHub link).
       sidebar,
       components: {
         Head: './src/components/starlight/Head.astro',

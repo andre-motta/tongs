@@ -581,7 +581,7 @@ function negotiatedJsonLimits(limits: Record<string, unknown>): JsonLimits {
 
 const REQUIRED_METHODS = Object.freeze([
   "assets.list", "assets.read", "ci.capabilities", "ci.receipt", "commits.list", "diff.open", "diff.page",
-  "discussions.list", "host.set_location", "jobs.list", "logs.open", "logs.page",
+  "discussions.list", "discussions.page", "host.set_location", "jobs.list", "logs.open", "logs.page",
   "jobs.cancel", "jobs.retry", "pipelines.cancel", "pipelines.list", "pipelines.retry",
   "plugins.invoke", "plugins.list", "repositories.discover",
   "repositories.open", "review_pipelines.list", "reviews.get", "reviews.list", "shutdown",

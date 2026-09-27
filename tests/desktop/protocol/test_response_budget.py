@@ -22,6 +22,7 @@ from tongs.desktop.protocol.messages import (
     JsonObject,
     JsonValue,
     encode_response,
+    to_json_value,
 )
 from tongs.desktop.protocol.server import DesktopSidecarServer, RequestContext
 from tongs.desktop.protocol.state import HandleKind
@@ -81,6 +82,7 @@ class _Session:
     def __init__(self, discussions: tuple[Discussion, ...]) -> None:
         self.config = Config()
         self.discussions = discussions
+        self.commits: list[JsonObject] = []
         self.closed = False
 
     async def start(self) -> _Session:
@@ -96,6 +98,10 @@ class _Session:
     async def get_discussions(self, review: ReviewRef) -> tuple[Discussion, ...]:
         assert review == _REVIEW
         return self.discussions
+
+    async def get_commits(self, review: ReviewRef) -> list[JsonObject]:
+        assert review == _REVIEW
+        return self.commits
 
     async def discover_repositories(self) -> tuple[RepositorySnapshot, ...]:
         return (
@@ -148,6 +154,30 @@ def _handshake(limits: JsonValue | None = None) -> bytes:
     return _frame("handshake", "handshake", params)
 
 
+def _whole_discussion_list(count: int) -> JsonObject:
+    """The unpaged list shape that 1.0.2 sent for every review."""
+    return {
+        "discussions": [
+            cast(JsonValue, to_json_value(item)) for item in _discussions(count)
+        ]
+    }
+
+
+def _commits(count: int) -> list[JsonObject]:
+    return [
+        {
+            "sha": f"{index:040x}",
+            "short_sha": f"{index:08x}",
+            "title": "Change",
+            "message": "Change",
+            "author": {"username": "author", "display_name": "Author"},
+            "created_at": None,
+            "web_url": "https://forge.example.com/c",
+        }
+        for index in range(count)
+    ]
+
+
 async def _discussion_result(count: int) -> object:
     server = DesktopSidecarServer(session=cast(object, _Session(_discussions(count))))
     handle = server._handles.issue(HandleKind.REVIEW, _REVIEW)
@@ -158,7 +188,7 @@ async def _discussion_result(count: int) -> object:
 
 @pytest.mark.asyncio
 async def test_large_discussion_list_becomes_a_bounded_error_frame() -> None:
-    result = await _discussion_result(_LARGE_THREAD_COUNT)
+    result = _whole_discussion_list(_LARGE_THREAD_COUNT)
     unbounded = {"v": 1, "type": "response", "id": "threads", "result": result}
     assert _count_values(cast(JsonValue, unbounded)) > MAX_JSON_ITEMS
 
@@ -186,6 +216,7 @@ async def test_small_discussion_list_still_encodes_its_result() -> None:
 
     assert "error" not in document
     assert len(document["result"]["discussions"]) == 3
+    assert document["result"]["next_cursor"] is None
 
 
 def test_value_budget_boundary_counts_the_whole_frame() -> None:
@@ -239,7 +270,9 @@ def test_negotiation_keeps_the_tighter_limit_on_each_axis() -> None:
 async def test_oversized_response_fails_only_its_request_and_the_service_stays_up() -> (
     None
 ):
-    session = _Session(_discussions(_LARGE_THREAD_COUNT))
+    # Commits are not paginated yet, so a long enough list still overflows.
+    session = _Session(())
+    session.commits = _commits(2_000)
     server = DesktopSidecarServer(
         session=cast(object, session),
         plugin_registry=_registry(),
@@ -258,7 +291,7 @@ async def test_oversized_response_fails_only_its_request_and_the_service_stays_u
     assert limits["json_values"] == MAX_JSON_ITEMS
     assert limits["json_depth"] == MAX_JSON_DEPTH
 
-    reader.feed_data(_frame("threads", "discussions.list", {"review": handle}))
+    reader.feed_data(_frame("threads", "commits.list", {"review": handle}))
     threads = await asyncio.wait_for(writer.frames.get(), 1)
     reader.feed_data(_frame("repos", "repositories.discover", {}))
     repositories = await asyncio.wait_for(writer.frames.get(), 1)
@@ -298,7 +331,11 @@ async def test_handshake_negotiates_tighter_client_limits() -> None:
     limits = cast(JsonObject, cast(JsonObject, handshake["result"])["limits"])
     assert limits["json_values"] == MIN_JSON_ITEMS
     assert limits["json_depth"] == MAX_JSON_DEPTH
-    assert cast(JsonObject, threads["error"])["code"] == "response_too_large"
+    # The tighter budget shrinks the discussion page rather than failing it.
+    page = cast(JsonObject, threads["result"])
+    assert 0 < len(cast(list[JsonValue], page["discussions"])) < 200
+    assert page["next_cursor"] == len(cast(list[JsonValue], page["discussions"]))
+    assert _count_values(cast(JsonValue, threads)) <= MIN_JSON_ITEMS
 
 
 @pytest.mark.asyncio

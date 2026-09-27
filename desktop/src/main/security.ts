@@ -43,6 +43,7 @@ export function assertParams(method: string, value: unknown): asserts value is J
     "diff.open": { required: ["review"], optional: ["layout", "max_items"] },
     "logs.open": { required: ["job"], optional: ["max_items"] },
     "diff.page": { required: ["snapshot", "resource", "cursor"], optional: ["max_items"] },
+    "discussions.page": { required: ["snapshot", "resource", "cursor"], optional: ["max_items"] },
     "logs.page": { required: ["snapshot", "resource", "cursor"], optional: ["max_items"] },
     "pipelines.list": { required: ["repository"], optional: ["per_page"] },
     "review_pipelines.list": { required: ["review"], optional: ["per_page"] },
@@ -107,7 +108,7 @@ function assertResultValue(method: string, value: unknown): asserts value is Jso
   }
   if (method === "diff.open" || method === "diff.page") return assertSnapshot(value, assertDiffRow, assertRevision);
   if (method === "logs.open" || method === "logs.page") return assertSnapshot(value, (row) => { assertKeys(row, ["text"]); boundedText(row.text, 512 * 1024, "text"); }, (revision) => { assertKeys(revision, ["sha256", "byte_count"]); digest(revision.sha256, "sha256"); integer(revision.byte_count, 0, "byte_count"); });
-  if (method === "discussions.list") return assertArrayField(value, "discussions", assertDiscussion);
+  if (method === "discussions.list" || method === "discussions.page") return assertDiscussionsPage(value);
   if (method === "commits.list") return assertArrayField(value, "commits", assertCommit);
   if (method === "pipelines.list" || method === "review_pipelines.list") return assertArrayField(value, "pipelines", (item) => { assertKeys(item, ["handle", "value"]); text(item.handle); assertPipeline(item.value); });
   if (method === "jobs.list") return assertArrayField(value, "jobs", (item) => { assertKeys(item, ["handle", "value"]); text(item.handle); assertJob(item.value); });
@@ -195,6 +196,12 @@ function assertReviewDetail(value: unknown): void {
 }
 function assertSnapshot(value: unknown, entry: (item: unknown) => void, revision: (item: unknown) => void): void {
   assertKeys(value, ["snapshot_id", "resource", "revision", "cursor", "next_cursor", "entries"]); text(value.snapshot_id, MAX_TEXT, "snapshot_id"); text(value.resource, MAX_TEXT, "resource"); revision(value.revision); integer(value.cursor, 0, "cursor"); if (value.next_cursor !== null) integer(value.next_cursor, 0, "next_cursor"); assertArray(value.entries, entry);
+}
+function assertDiscussionsPage(value: unknown): void {
+  assertKeys(value, ["snapshot_id", "resource", "revision", "cursor", "next_cursor", "discussions"]); text(value.snapshot_id, MAX_TEXT, "snapshot_id"); text(value.resource, MAX_TEXT, "resource");
+  assertKeys(value.revision, ["discussion_count"]); integer(value.revision.discussion_count, 0, "discussion_count");
+  integer(value.cursor, 0, "cursor"); if (value.next_cursor !== null) { integer(value.next_cursor, 0, "next_cursor"); if (value.next_cursor <= value.cursor) fail("next_cursor", "must advance past the cursor"); }
+  assertArray(value.discussions, assertDiscussion);
 }
 function assertDiffRow(value: unknown): void {
   if (!isRecord(value) || typeof value.kind !== "string") throw new Error("Invalid diff row");

@@ -60,6 +60,7 @@ const OPERATIONS = new Map<string, string>([
   [IPC_CHANNELS.openDiff, "diff.open"],
   [IPC_CHANNELS.pageDiff, "diff.page"],
   [IPC_CHANNELS.listDiscussions, "discussions.list"],
+  [IPC_CHANNELS.pageDiscussions, "discussions.page"],
   [IPC_CHANNELS.listCommits, "commits.list"],
   [IPC_CHANNELS.listPipelines, "pipelines.list"],
   [IPC_CHANNELS.listReviewPipelines, "review_pipelines.list"],

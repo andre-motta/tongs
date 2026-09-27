@@ -9,6 +9,7 @@ import {
   inboxPendingSelectionFocus,
   listDiscoveredReviews,
   MAX_RESTORED_PAGES,
+  mergedReviewItems,
   nextRepositoryToLoad,
   orderedReviewItems,
   orderWatermark,
@@ -59,6 +60,25 @@ test("the watermark is the newest frontier among repositories with more pages", 
 
   const busy = [{ ...feeds[0], loading: true }, feeds[1], feeds[2]];
   assert.equal(nextRepositoryToLoad(busy).repository, "repo-c");
+});
+
+test("a review on two pages or in two feeds is listed once", () => {
+  // A11 was updated between the two page reads, so page 2 repeats it.
+  const twoPages = [feed("repo-a", ["A12", "A11", "A11", "A10"], "cursor-a2")];
+  assert.deepEqual(titles(mergedReviewItems(twoPages)), ["A12", "A11", "A10"]);
+  assert.deepEqual(titles(orderedReviewItems(twoPages)), ["A12", "A11", "A10"]);
+
+  // The same handle reported by two feeds (one review seen through two remotes).
+  const twoFeeds = [
+    feed("repo-a", ["A12", "A11"], null),
+    { ...feed("repo-b", ["B1130"], null), items: [reviewItem("B1130"), reviewItem("A11")] },
+  ];
+  const merged = mergedReviewItems(twoFeeds);
+  assert.equal(merged.length, 3);
+  assert.deepEqual(titles(merged), ["A12", "B1130", "A11"]);
+  assert.equal(merged.filter((item) => item.handle === "review-A11").length, 1);
+  assert.equal(orderedReviewItems(twoFeeds).length, 3);
+  assert.equal(inboxFeedPresentation(twoFeeds, "title").items.length, 3);
 });
 
 test("other sort orders show every loaded row and still offer more", () => {

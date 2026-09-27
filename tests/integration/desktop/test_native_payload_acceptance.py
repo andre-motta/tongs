@@ -3528,7 +3528,6 @@ def test_collect_owned_tree_rejects_persistently_incomplete_refresh(
     def observe(_pid: int, _root_pid: int) -> None:
         nonlocal calls
         calls += 1
-        return None
 
     monkeypatch.setattr(launcher_module, "_observe_process", observe)
     monkeypatch.setattr(launcher_module.time, "sleep", lambda _seconds: None)

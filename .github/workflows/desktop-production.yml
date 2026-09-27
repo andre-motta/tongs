@@ -172,6 +172,7 @@ jobs:
         working-directory: desktop
         run: >-
           node --test --test-concurrency=1 --test-reporter=tap
+          --import ../tests/desktop/renderer/setup.mjs
           --test-reporter-destination="$RUNNER_TEMP/reports/desktop-shell.tap"
           ../tests/desktop/electron/*.test.mjs
           ../tests/desktop/renderer/*.test.mjs

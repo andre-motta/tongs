@@ -421,7 +421,8 @@ class SplitDiffColumn(OptionList):
         self._pending_resolve = discussion.id
         action = "Unresolve" if discussion.is_resolved else "Resolve"
         self.app.notify(
-            f"{action} thread by @{discussion.root_comment.author.username}? Press R again."
+            f"{action} thread by @{discussion.root_comment.author.username}? Press R again.",
+            markup=False,
         )
 
     def action_next_comment(self) -> None:

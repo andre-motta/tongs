@@ -13,9 +13,9 @@ from dataclasses import replace
 from typing import ClassVar
 from uuid import UUID
 
-from rich.markup import escape
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.content import Content
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static, TextArea
@@ -181,7 +181,11 @@ class CommentEditor(Widget):
         self._configure_submission(defer_close)
         self._draft_comment_id = None
         header = self.query_one("#editor-header", Static)
-        header.update(f"[bold]Comment on {escape(display_path)}:{display_line}[/]")
+        header.update(
+            Content.from_markup(
+                "[bold]Comment on $path:$line[/]", path=display_path, line=display_line
+            )
+        )
         text_area = self.query_one("#comment-input", TextArea)
         self._replace_text(initial_body)
         self.display = True
@@ -210,7 +214,14 @@ class CommentEditor(Widget):
         line_num = line.new_lineno or line.old_lineno or ""
         who = f"@{author} on " if author else ""
         header = self.query_one("#editor-header", Static)
-        header.update(f"[bold]Reply to {who}{file.new_path}:{line_num}[/]")
+        header.update(
+            Content.from_markup(
+                "[bold]Reply to $who$path:$line[/]",
+                who=who,
+                path=file.new_path,
+                line=line_num,
+            )
+        )
         text_area = self.query_one("#comment-input", TextArea)
         self._replace_text(initial_body)
         self.display = True
@@ -236,7 +247,7 @@ class CommentEditor(Widget):
         self._draft_comment_id = None
         who = f"@{author}" if author else "thread"
         header = self.query_one("#editor-header", Static)
-        header.update(f"[bold]Reply to {who}[/]")
+        header.update(Content.from_markup("[bold]Reply to $who[/]", who=who))
         text_area = self.query_one("#comment-input", TextArea)
         self._replace_text(initial_body)
         self.display = True
@@ -254,7 +265,7 @@ class CommentEditor(Widget):
         self._draft_comment_id = comment_id
         self._configure_submission(True)
         self.query_one("#editor-header", Static).update(
-            f"[bold]Edit draft: {escape(target)}[/]"
+            Content.from_markup("[bold]Edit draft: $target[/]", target=target)
         )
         self._replace_text(body)
         self.display = True
@@ -297,7 +308,7 @@ class CommentEditor(Widget):
         text_area = self.query_one("#comment-input", TextArea)
         text_area.disabled = False
         text_area.focus()
-        self.app.notify(message, severity="warning")
+        self.app.notify(message, severity="warning", markup=False)
 
     _cancel_pending: bool = False
 
@@ -339,7 +350,7 @@ class CommentEditor(Widget):
             text_area.clear()
             text_area.insert(new_text)
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            self.app.notify(f"Editor failed: {exc}")
+            self.app.notify(f"Editor failed: {exc}", markup=False)
         finally:
             if tmp_path:
                 with suppress(OSError):

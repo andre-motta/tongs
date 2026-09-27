@@ -3491,6 +3491,57 @@ os.read(release, 1)
         process.wait(timeout=5)
 
 
+def test_collect_owned_tree_retries_incomplete_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid = os.getpid()
+    complete = launcher_module._observe_process(pid, pid)
+    assert complete is not None
+    observations = {pid: complete}
+    samples = iter((None, complete))
+    calls = 0
+
+    def observe(_pid: int, _root_pid: int) -> ProcessObservation | None:
+        nonlocal calls
+        calls += 1
+        return next(samples)
+
+    monkeypatch.setattr(launcher_module, "_observe_process", observe)
+    monkeypatch.setattr(launcher_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(launcher_module, "_child_pids", lambda _pid: [])
+
+    launcher_module._collect_owned_tree(pid, observations)
+
+    assert calls == 2
+    assert observations[pid] == complete
+
+
+def test_collect_owned_tree_rejects_persistently_incomplete_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid = os.getpid()
+    complete = launcher_module._observe_process(pid, pid)
+    assert complete is not None
+    observations = {pid: complete}
+    calls = 0
+
+    def observe(_pid: int, _root_pid: int) -> None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    monkeypatch.setattr(launcher_module, "_observe_process", observe)
+    monkeypatch.setattr(launcher_module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(
+        NativeAcceptanceError,
+        match=rf"owned process metadata remained incomplete for pid {pid}",
+    ):
+        launcher_module._collect_owned_tree(pid, observations)
+
+    assert calls == 4
+
+
 def test_collect_owned_tree_fails_closed_on_too_many_retained_observations(
     tmp_path: Path,
 ) -> None:

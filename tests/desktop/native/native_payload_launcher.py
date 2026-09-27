@@ -546,10 +546,23 @@ def _collect_owned_tree(
         seen.add(pid)
         if len(seen) > MAX_PROCESSES:
             raise NativeAcceptanceError("owned process tree exceeds its bound")
+        previous = observations.get(pid)
         observation = _observe_process(pid, root_pid)
+        if observation is None and previous is not None:
+            process_root = Path("/proc") / str(pid)
+            for _ in range(3):
+                if not process_root.exists():
+                    break
+                time.sleep(POLL_SECONDS)
+                observation = _observe_process(pid, root_pid)
+                if observation is not None:
+                    break
+            if observation is None and process_root.exists():
+                raise NativeAcceptanceError(
+                    f"owned process metadata remained incomplete for pid {pid}"
+                )
         if observation is None:
             continue
-        previous = observations.get(pid)
         if pid == root_pid and previous is None and spawn_argv:
             observation = _bind_browser_spawn(observation, spawn_argv, spawn_executable)
         if previous is not None:

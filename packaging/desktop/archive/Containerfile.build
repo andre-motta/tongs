@@ -1,16 +1,31 @@
+FROM registry.fedoraproject.org/fedora@sha256:f59ce614aba37211165e711d732fd4785f1c0329c4a3a4289cf29e333cf36c52 AS fetch
+
+COPY builder-rpms.nevra builder-rpms.sha256 /tmp/
+
+# The only networked step: download the exact committed NEVRAs, then reject any
+# missing, extra or changed package byte before anything leaves this stage.
+RUN mkdir /tmp/builder-rpms \
+    && awk '{ print $1 "-" $2 "." $3 }' /tmp/builder-rpms.nevra \
+        > /tmp/builder-rpms.specs \
+    && xargs --arg-file=/tmp/builder-rpms.specs \
+        dnf download --destdir=/tmp/builder-rpms \
+    && cd /tmp/builder-rpms \
+    && sha256sum --check --strict /tmp/builder-rpms.sha256 \
+    && ls -1 | LC_ALL=C sort > /tmp/builder-rpms.present \
+    && awk '{ print $2 }' /tmp/builder-rpms.sha256 | LC_ALL=C sort \
+        > /tmp/builder-rpms.expected \
+    && test "$(cat /tmp/builder-rpms.expected)" = "$(cat /tmp/builder-rpms.present)"
+
 FROM registry.fedoraproject.org/fedora@sha256:f59ce614aba37211165e711d732fd4785f1c0329c4a3a4289cf29e333cf36c52
 
-COPY builder-rpms.sha256 /tmp/builder-rpms.sha256
+COPY builder-rpms.nevra builder-rpms.sha256 /tmp/
+COPY --from=fetch /tmp/builder-rpms /tmp/builder-rpms
 
-RUN mkdir /tmp/builder-rpms /usr/share/tongs-archive-builder \
-    && dnf download --destdir=/tmp/builder-rpms \
-        'python3.12-3.12.14-1.fc44.x86_64' \
-        'python3.12-libs-3.12.14-1.fc44.x86_64' \
-        'zlib-ng-compat-2.3.3-3.fc44.x86_64' \
-        'nodejs22-1:22.23.1-2.fc44.x86_64' \
-        'nodejs22-npm-1:10.9.8-1.22.23.1.2.fc44.noarch' \
+# Offline install: every repository is disabled, so the committed closure is
+# the complete package input and no live Fedora repository is consulted.
+RUN mkdir /usr/share/tongs-archive-builder \
     && cd /tmp/builder-rpms \
-    && sha256sum --check /tmp/builder-rpms.sha256 \
+    && sha256sum --check --strict /tmp/builder-rpms.sha256 \
         > /usr/share/tongs-archive-builder/rpm-sha256-check.txt \
     && cat /usr/share/tongs-archive-builder/rpm-sha256-check.txt \
     && rpmkeys --checksig --verbose ./*.rpm \
@@ -21,10 +36,20 @@ RUN mkdir /tmp/builder-rpms /usr/share/tongs-archive-builder \
         ./*.rpm > /tmp/rpm-nevra.unsorted \
     && LC_ALL=C sort /tmp/rpm-nevra.unsorted \
         > /usr/share/tongs-archive-builder/rpm-nevra.txt \
-    && dnf install --assumeyes --setopt=install_weak_deps=False \
+    && test "$(cat /tmp/builder-rpms.nevra)" \
+        = "$(cat /usr/share/tongs-archive-builder/rpm-nevra.txt)" \
+    && dnf install --assumeyes --disablerepo='*' \
+        --setopt=install_weak_deps=False \
         --setopt=localpkg_gpgcheck=True ./*.rpm \
+    && rpm --query --all \
+        --queryformat '%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n' \
+        | LC_ALL=C sort > /usr/share/tongs-archive-builder/rpm-qa.txt \
+    && LC_ALL=C comm -23 /tmp/builder-rpms.nevra \
+        /usr/share/tongs-archive-builder/rpm-qa.txt > /tmp/rpm-missing.txt \
+    && test ! -s /tmp/rpm-missing.txt \
     && dnf clean all \
-    && rm -rf /tmp/builder-rpms /var/cache/dnf
+    && rm -rf /tmp/builder-rpms /tmp/builder-rpms.nevra /tmp/builder-rpms.sha256 \
+        /tmp/rpm-nevra.unsorted /tmp/rpm-missing.txt /var/cache/dnf
 
 RUN test "$(python3.12 -c 'import platform; print(platform.python_version())')" = '3.12.14' \
     && test "$(python3.12 -c 'import zlib; print(zlib.ZLIB_VERSION)')" = '1.3.1.zlib-ng' \

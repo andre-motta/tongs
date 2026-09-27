@@ -10,7 +10,7 @@
   "scripts": {
     "clean": "node scripts/build.mjs --clean",
     "build": "node scripts/build.mjs --prepare && tsc -p tsconfig.json && node scripts/build.mjs",
-    "test": "npm run build && node --test ../tests/desktop/electron/*.test.mjs ../tests/desktop/renderer/*.test.mjs",
+    "test": "npm run build && node --test --import ../tests/desktop/renderer/setup.mjs ../tests/desktop/electron/*.test.mjs ../tests/desktop/renderer/*.test.mjs",
     "start": "npm run build && electron ."
   },
   "devDependencies": {

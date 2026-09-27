@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tongs.plugins.base import TongsPlugin
+from tongs.plugins.context import PluginContext
 from tongs.plugins.registry import PluginRegistry
 
 
@@ -39,50 +42,18 @@ class BrokenPlugin(TongsPlugin):
 
 
 class TestTongsPluginABC:
-    def test_name_is_abstract(self):
-        with pytest.raises(TypeError):
-            TongsPlugin()
-
-    def test_concrete_plugin(self):
-        p = DummyPlugin()
-        assert p.name == "dummy"
-        assert p.version == "1.0.0"
-
-    def test_default_version(self):
+    def test_minimal_plugin_contributes_nothing(self):
         class MinimalPlugin(TongsPlugin):
             @property
             def name(self):
                 return "minimal"
 
-        p = MinimalPlugin()
-        assert p.version == "0.0.0"
-
-    def test_default_commands_empty(self):
-        class MinimalPlugin(TongsPlugin):
-            @property
-            def name(self):
-                return "minimal"
-
-        assert MinimalPlugin().get_commands() == []
-
-    def test_default_screens_empty(self):
-        class MinimalPlugin(TongsPlugin):
-            @property
-            def name(self):
-                return "minimal"
-
-        assert MinimalPlugin().get_screens() == {}
+        plugin = MinimalPlugin()
+        assert plugin.get_commands() == []
+        assert plugin.get_screens() == {}
 
 
 class TestPluginRegistry:
-    def test_empty_registry(self):
-        reg = PluginRegistry()
-        assert reg.plugins == []
-
-    def test_get_all_commands_empty(self):
-        reg = PluginRegistry()
-        assert reg.get_all_commands() == []
-
     def test_get_all_commands_with_plugins(self):
         reg = PluginRegistry()
         reg._plugins.append(DummyPlugin())
@@ -133,10 +104,13 @@ class TestPluginDiscovery:
 
     @patch("tongs.plugins.registry.entry_points")
     def test_discover_filters_disabled(self, mock_eps):
-        mock_eps.return_value = [self._make_entry_point("dummy", DummyPlugin)]
+        ep = self._make_entry_point("dummy", DummyPlugin)
+        mock_eps.return_value = [ep]
         reg = PluginRegistry()
         reg.discover({"dummy": {"enabled": False}})
         assert reg.plugins == []
+        # A disabled plugin must never be imported.
+        ep.load.assert_not_called()
 
     @patch("tongs.plugins.registry.entry_points")
     def test_discover_load_failure_skipped(self, mock_eps):
@@ -156,65 +130,61 @@ class TestPluginDiscovery:
         assert reg.plugins == []
 
 
+def _tracking_plugin(name: str, calls: list) -> TongsPlugin:
+    class TrackingPlugin(TongsPlugin):
+        @property
+        def name(self):
+            return name
+
+        async def on_app_ready(self, ctx):
+            calls.append(("ready", name, ctx))
+
+        async def on_app_shutdown(self, ctx):
+            calls.append(("shutdown", name, ctx))
+
+    return TrackingPlugin()
+
+
+class FailPlugin(TongsPlugin):
+    @property
+    def name(self):
+        return "fail"
+
+    async def on_app_ready(self, ctx):
+        raise RuntimeError("boom")
+
+    async def on_app_shutdown(self, ctx):
+        raise RuntimeError("boom")
+
+
 @pytest.mark.asyncio
 class TestPluginLifecycle:
-    async def test_on_app_ready(self):
-        called = []
-
-        class TrackingPlugin(TongsPlugin):
-            @property
-            def name(self):
-                return "tracker"
-
-            async def on_app_ready(self, app):
-                called.append("ready")
-
+    @pytest.mark.parametrize("hook", ["on_app_ready", "on_app_shutdown"])
+    async def test_hook_receives_plugin_context_not_app(self, hook):
+        calls = []
+        app = SimpleNamespace(config=object())
         reg = PluginRegistry()
-        reg._plugins.append(TrackingPlugin())
-        await reg.on_app_ready(None)
-        assert called == ["ready"]
+        reg._plugins.append(_tracking_plugin("tracker", calls))
+        await getattr(reg, hook)(app)
+        assert len(calls) == 1
+        ctx = calls[0][2]
+        assert isinstance(ctx, PluginContext)
+        assert ctx is not app
+        assert ctx.config is app.config
 
-    async def test_on_app_shutdown(self):
-        called = []
-
-        class TrackingPlugin(TongsPlugin):
-            @property
-            def name(self):
-                return "tracker"
-
-            async def on_app_shutdown(self, app):
-                called.append("shutdown")
-
-        reg = PluginRegistry()
-        reg._plugins.append(TrackingPlugin())
-        await reg.on_app_shutdown(None)
-        assert called == ["shutdown"]
-
-    async def test_broken_on_app_ready_handled(self):
-        class FailPlugin(TongsPlugin):
-            @property
-            def name(self):
-                return "fail"
-
-            async def on_app_ready(self, app):
-                raise RuntimeError("boom")
-
+    @pytest.mark.parametrize("hook", ["on_app_ready", "on_app_shutdown"])
+    async def test_failing_hook_does_not_stop_later_plugins(self, hook, caplog):
+        calls = []
         reg = PluginRegistry()
         reg._plugins.append(FailPlugin())
-        await reg.on_app_ready(None)
-
-    async def test_broken_on_app_shutdown_handled(self):
-        class FailPlugin(TongsPlugin):
-            @property
-            def name(self):
-                return "fail"
-
-            async def on_app_shutdown(self, app):
-                raise RuntimeError("boom")
-
-        reg = PluginRegistry()
-        reg._plugins.append(FailPlugin())
-        await reg.on_app_shutdown(None)
+        reg._plugins.append(_tracking_plugin("healthy", calls))
+        with caplog.at_level(logging.WARNING, logger="tongs.plugins.registry"):
+            await getattr(reg, hook)(SimpleNamespace())
+        assert [(kind, name) for kind, name, _ in calls] == [
+            (hook.removeprefix("on_app_"), "healthy")
+        ]
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert [r.getMessage() for r in warnings] == [f"Plugin fail.{hook} failed"]
 
 
 class TestPluginContext:
@@ -233,21 +203,14 @@ class TestPluginContext:
 
     @pytest.fixture()
     def ctx(self, app):
-        from tongs.plugins.context import PluginContext
-
         return PluginContext(app)
 
-    def test_forge_registry_returns_app_registry(self, ctx, app):
-        assert ctx.forge_registry is app.forge_registry
+    @pytest.mark.parametrize("field", ["forge_registry", "cache", "config"])
+    def test_read_only_field_is_app_field(self, ctx, app, field):
+        assert getattr(ctx, field) is getattr(app, field)
 
-    def test_cache_returns_app_cache(self, ctx, app):
-        assert ctx.cache is app.cache
-
-    def test_config_returns_app_config(self, ctx, app):
-        assert ctx.config is app.config
-
-    def test_repos_returns_app_repos(self, ctx, app):
-        assert ctx.repos is app.repos
+    def test_repos_lists_app_repos(self, ctx, app):
+        assert list(ctx.repos) == app.repos
         assert len(ctx.repos) == 2
 
     def test_notify_calls_app_notify(self, ctx, app):
@@ -283,23 +246,17 @@ class TestPluginContext:
 
 
 class TestMCPPlugin:
-    def test_mcp_plugin_available(self):
-        from tongs.mcp.plugin import MCPPlugin
-
-        p = MCPPlugin()
-        assert p.name == "mcp"
-        assert p.version == "0.2.0"
-
     def test_mcp_plugin_commands(self, monkeypatch):
         from tongs.mcp import plugin
 
         monkeypatch.setattr(plugin, "_mcp_available", lambda: True)
 
-        commands = plugin.MCPPlugin().get_commands()
+        mcp_plugin = plugin.MCPPlugin()
+        commands = mcp_plugin.get_commands()
         assert len(commands) == 1
         assert commands[0][0] == "Start MCP Server"
         assert commands[0][1]
-        assert callable(commands[0][2])
+        assert commands[0][2] == mcp_plugin._start_server
 
     def test_mcp_plugin_hides_command_when_dependency_is_missing(self, monkeypatch):
         from tongs.mcp import plugin

@@ -15,6 +15,8 @@ export interface RepositoryFeed {
   readonly cursor: string | null;
   readonly loading: boolean;
   readonly failures: readonly ReviewFailureDto[];
+  /** How many pages have been appended, so a reload can read as deep again. */
+  readonly pages: number;
 }
 
 export function pendingFeed(repository: string): RepositoryFeed {
@@ -24,6 +26,7 @@ export function pendingFeed(repository: string): RepositoryFeed {
     cursor: null,
     loading: true,
     failures: Object.freeze([]),
+    pages: 0,
   });
 }
 
@@ -156,5 +159,6 @@ export function appendPage(
     cursor: cursor ?? (failed ? feed.cursor : null),
     loading: false,
     failures: Object.freeze([...failures]),
+    pages: failed ? feed.pages : feed.pages + 1,
   });
 }

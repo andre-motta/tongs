@@ -5,7 +5,10 @@ import { QueryCoordinator } from "../../../desktop/dist/src/renderer/core/query.
 import {
   createInboxFeature,
   inboxFeedPresentation,
+  inboxLoadedDepth,
+  inboxPendingSelectionFocus,
   listDiscoveredReviews,
+  MAX_RESTORED_PAGES,
   nextRepositoryToLoad,
   orderedReviewItems,
   orderWatermark,
@@ -373,6 +376,123 @@ test("a refresh that fails after cancelling a pending load more leaves Load more
   bridge.respond("repo-a", page(["A10"], null));
   await view.findByText("A10");
   assert.deepEqual(cardTitles(view), ["A12", "A11", "A10"]);
+});
+
+async function loadTwoPages(bridge) {
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.pending.size, 1));
+  bridge.respond("repo-a", page(["A12", "A11"], "cursor-a1"));
+  await view.findByText("A12");
+  fireEvent.click(view.getByRole("button", { name: "Load more" }));
+  await waitFor(() => assert.equal(bridge.pending.size, 1));
+  bridge.respond("repo-a", page(["A10", "A09"], "cursor-a2"));
+  await view.findByText("A10");
+  assert.equal(inboxLoadedDepth("inbox:all:all_open:open", "repo-a"), 2);
+  return view;
+}
+
+test("returning from a review opened on page 2 reloads that page and focuses the row", async () => {
+  const bridge = pagingBridge();
+  const first = await loadTwoPages(bridge);
+  fireEvent.click(first.getByText("A10").closest("button"));
+  assert.equal(inboxPendingSelectionFocus("all"), "review-A10");
+  cleanup();
+
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.calls.length, 3));
+  assert.equal(bridge.calls[2].cursor, undefined);
+  // The sealed cursor comes from the fresh first page, not the old one.
+  bridge.respond("repo-a", page(["A12", "A11"], "cursor-b1"));
+  await waitFor(() => assert.equal(bridge.calls.length, 4));
+  assert.deepEqual(bridge.calls[3], {
+    scope: "all_open",
+    state: "open",
+    repository: "repo-a",
+    cursor: "cursor-b1",
+  });
+  bridge.respond("repo-a", page(["A10", "A09"], "cursor-b2"));
+  await waitFor(() =>
+    assert.equal(document.activeElement?.dataset.reviewHandle, "review-A10"),
+  );
+  assert.deepEqual(cardTitles(view), ["A12", "A11", "A10", "A09"]);
+  assert.equal(inboxPendingSelectionFocus("all"), null);
+  assert.equal(
+    view.getByText("A10").closest("button").getAttribute("aria-current"),
+    "true",
+  );
+  assert.equal(bridge.calls.length, 4);
+});
+
+test("refresh reads each repository as deep as it had loaded", async () => {
+  const bridge = pagingBridge();
+  const view = await loadTwoPages(bridge);
+  fireEvent.click(view.getByRole("button", { name: "Refresh reviews" }));
+  await waitFor(() => assert.equal(bridge.calls.length, 3));
+  bridge.respond("repo-a", page(["A13", "A12"], "cursor-b1"));
+  await waitFor(() => assert.equal(bridge.calls.length, 4));
+  assert.equal(bridge.calls[3].cursor, "cursor-b1");
+  // The previous rows stay until the refresh completes.
+  assert.deepEqual(cardTitles(view), ["A12", "A11", "A10", "A09"]);
+  bridge.respond("repo-a", page(["A11", "A10"], "cursor-b2"));
+  await view.findByText("A13");
+  assert.deepEqual(cardTitles(view), ["A13", "A12", "A11", "A10"]);
+  assert.equal(view.getAllByRole("button", { name: "Load more" }).length, 1);
+  assert.equal(bridge.calls.length, 4);
+});
+
+test("a focus target missing from the reloaded list is released once it settles", async () => {
+  const bridge = pagingBridge();
+  const first = await loadTwoPages(bridge);
+  fireEvent.click(first.getByText("A09").closest("button"));
+  cleanup();
+
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.calls.length, 3));
+  bridge.respond("repo-a", page(["A12", "A11"], "cursor-b1"));
+  await waitFor(() => assert.equal(bridge.calls.length, 4));
+  // A09 was closed meanwhile, so the second page no longer holds it.
+  bridge.respond("repo-a", page(["A10", "A08"], "cursor-b2"));
+  await view.findByText("A10");
+  await waitFor(() => assert.equal(inboxPendingSelectionFocus("all"), null));
+  assert.equal(document.activeElement?.dataset.reviewHandle, undefined);
+});
+
+test("a reload never reads deeper than the restore limit", async () => {
+  const bridge = pagingBridge();
+  const depths = new Map([["repo-a", MAX_RESTORED_PAGES + 5]]);
+  const combined = listDiscoveredReviews(
+    bridge.bridge,
+    [{ handle: "repo-a" }],
+    "all_open",
+    "open",
+    undefined,
+    undefined,
+    depths,
+  );
+  for (let index = 0; index < MAX_RESTORED_PAGES; index += 1) {
+    await waitFor(() => assert.equal(bridge.pending.size, 1));
+    bridge.respond("repo-a", page([`A-${index * 10}`], `cursor-${index + 1}`));
+  }
+  const result = await combined.result;
+  assert.equal(bridge.calls.length, MAX_RESTORED_PAGES);
+  assert.equal(result.feeds[0].pages, MAX_RESTORED_PAGES);
+  assert.equal(result.feeds[0].cursor, `cursor-${MAX_RESTORED_PAGES}`);
+  assert.equal(result.items.length, MAX_RESTORED_PAGES);
 });
 
 test("with no repositories the list shows its empty label once the read settles", async () => {

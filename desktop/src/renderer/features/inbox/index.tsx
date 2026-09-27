@@ -97,6 +97,21 @@ const listSelections = new Map<string, InboxListSelection>();
  */
 const pendingSelectionFocus = new Map<string, string>();
 
+/**
+ * How many pages each repository had loaded in each review list, keyed by the
+ * list's read key and then by repository. Opening a review unmounts the list
+ * and Refresh replaces its feeds; both read each repository again down to this
+ * depth, so a review opened from a later page is still listed on return.
+ */
+const loadedDepths = new Map<string, Map<string, number>>();
+
+/**
+ * Deepest a reload goes per repository. Each page is one forge request, so a
+ * long scroll is not replayed in full on every refresh; a review past this
+ * depth is found again by scrolling.
+ */
+export const MAX_RESTORED_PAGES = 10;
+
 export function inboxListSelection(key: string): InboxListSelection {
   return listSelections.get(key) ?? DEFAULT_LIST_SELECTION;
 }
@@ -105,9 +120,32 @@ export function inboxPendingSelectionFocus(key: string): string | null {
   return pendingSelectionFocus.get(key) ?? null;
 }
 
+export function inboxLoadedDepth(
+  readKey: string,
+  repository: string,
+): number {
+  return loadedDepths.get(readKey)?.get(repository) ?? 0;
+}
+
+function rememberLoadedDepth(
+  readKey: string,
+  feeds: readonly RepositoryFeed[],
+): void {
+  let depths = loadedDepths.get(readKey);
+  for (const feed of feeds) {
+    if (feed.pages <= (depths?.get(feed.repository) ?? 0)) continue;
+    if (!depths) {
+      depths = new Map();
+      loadedDepths.set(readKey, depths);
+    }
+    depths.set(feed.repository, feed.pages);
+  }
+}
+
 export function resetInboxListSelections(): void {
   listSelections.clear();
   pendingSelectionFocus.clear();
+  loadedDepths.clear();
 }
 
 const CI_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
@@ -366,6 +404,7 @@ function InboxResults({
       setFeeds(
         Object.freeze(sources.map((source) => pendingFeed(source.handle))),
       );
+    const depths = new Map(loadedDepths.get(readKey) ?? []);
     return listDiscoveredReviews(
       bridge,
       sources,
@@ -384,10 +423,12 @@ function InboxResults({
             );
           }
         : undefined,
+      depths,
     );
   }, [
     bridge,
     cancelMoreReads,
+    readKey,
     repositories,
     repository,
     reviewScope,
@@ -406,6 +447,9 @@ function InboxResults({
     readDependencies,
     repositoriesReady,
   );
+  useEffect(() => {
+    if (feeds) rememberLoadedDepth(readKey, feeds);
+  }, [feeds, readKey]);
   useEffect(() => {
     if (!state.value) return;
     hasValue.current = true;
@@ -556,7 +600,8 @@ export const DISCOVERED_REVIEW_CONCURRENCY = 8;
 
 /**
  * Read one review list per discovered repository through a small pool and
- * merge them in repository order. A repository whose read is refused or fails
+ * merge them in repository order. `depths` asks for more than the first page
+ * of a repository, up to `MAX_RESTORED_PAGES`. A repository whose read is refused or fails
  * becomes one entry in `failures` instead of rejecting the whole list.
  *
  * `requestTokens` grows as reads start, so a coordinator cancelling this read
@@ -570,6 +615,7 @@ export function listDiscoveredReviews(
   state: "open" | "closed",
   signal?: AbortSignal,
   onRepository?: (index: number, feed: RepositoryFeed) => void,
+  depths?: ReadonlyMap<string, number>,
 ): CoordinatedRead<DiscoveredReviews> {
   const handles = repositories.map((repository) => repository.handle);
   const requestTokens: string[] = [];
@@ -582,30 +628,58 @@ export function listDiscoveredReviews(
   let stopped = false;
   const aborted = (): boolean => signal?.aborted === true;
 
-  const readRepository = async (index: number): Promise<void> => {
-    const handle = handles[index] as string;
+  // Reads one page of a repository and appends it. A failed read becomes a
+  // failure on the feed, which keeps its cursor so the page can be retried.
+  const readPage = async (
+    handle: string,
+    feed: RepositoryFeed,
+    cursor?: string,
+  ): Promise<RepositoryFeed> => {
     let token: string | null = null;
+    let outcome: ReviewListResult;
     try {
-      const read = bridge.listReviews({ scope, state, repository: handle });
+      const read = bridge.listReviews(
+        cursor === undefined
+          ? { scope, state, repository: handle }
+          : { scope, state, repository: handle, cursor },
+      );
       token = read.requestToken;
       requestTokens.push(token);
       inFlight.add(token);
-      outcomes[index] = await read.result;
+      outcome = await read.result;
     } catch (error) {
       if (serviceErrorOf(error)?.code === "request_cancelled") stopped = true;
-      outcomes[index] = { items: [], failures: [repositoryFailure(handle, error)] };
+      outcome = { items: [], failures: [repositoryFailure(handle, error)] };
     } finally {
       if (token !== null) inFlight.delete(token);
     }
-    const outcome = outcomes[index] as ReviewListResult;
-    feeds[index] = appendPage(
-      feeds[index] as RepositoryFeed,
+    return appendPage(
+      feed,
       outcome.items,
       outcome.next_cursor ?? null,
       outcome.failures,
     );
+  };
+  const readRepository = async (index: number): Promise<void> => {
+    const handle = handles[index] as string;
+    const depth = Math.min(depths?.get(handle) ?? 1, MAX_RESTORED_PAGES);
+    let feed = await readPage(handle, feeds[index] as RepositoryFeed);
+    // Read again as deep as this list had loaded before it was reloaded. The
+    // rows read so far are shown meanwhile, marked as still loading.
+    while (
+      feed.pages < depth &&
+      feed.cursor !== null &&
+      feed.failures.length === 0 &&
+      !aborted() &&
+      !stopped
+    ) {
+      onRepository?.(index, Object.freeze({ ...feed, loading: true }));
+      feed = await readPage(handle, feed, feed.cursor);
+    }
+    feeds[index] = feed;
+    outcomes[index] = { items: feed.items, failures: feed.failures };
     // Each repository's first page is shown as soon as it arrives.
-    if (!aborted() && !stopped) onRepository?.(index, feeds[index] as RepositoryFeed);
+    if (!aborted() && !stopped) onRepository?.(index, feed);
   };
   const worker = async (): Promise<void> => {
     while (!aborted() && !stopped && nextIndex < handles.length) {
@@ -718,13 +792,18 @@ function ReviewList({
     const target = [
       ...(listRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []),
     ].find((button) => button.dataset.reviewHandle === focusTarget);
-    if (!target) return;
+    if (!target) {
+      // Rows can arrive after the list mounts, so wait while pages are still
+      // loading. Once every read has settled without the review, give the
+      // target up: a page loaded later by scrolling must not pull focus.
+      if (presentation.loading === 0) releaseFocusTarget();
+      return;
+    }
     target.focus();
     if (typeof target.scrollIntoView === "function")
       target.scrollIntoView({ block: "nearest" });
     releaseFocusTarget();
-    // Rows can arrive after the list mounts; retry until the target is shown.
-  }, [focusTarget, items.length]);
+  }, [focusTarget, items.length, presentation.loading]);
   // Update-time order loads the next page by itself when the end of the list
   // comes into view. Other orders only load when asked through the button.
   const autoLoad = sort === "updated";

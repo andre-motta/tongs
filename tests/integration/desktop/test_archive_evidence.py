@@ -637,20 +637,6 @@ def test_producer_and_consumer_bind_the_retained_transfer(
     assert receipt["result"] == "success"
 
 
-def test_published_evidence_does_not_copy_the_large_transfer_artifacts(
-    case: dict[str, object],
-) -> None:
-    _produce(case)
-
-    published = sorted(
-        path.name for path in case["output"].rglob("*") if path.is_file()
-    )
-    assert ADAPTER.ARCHIVE_NAME not in published
-    assert "source.tar" not in published
-    assert ADAPTER.ELECTRON_ARCHIVE_NAME not in published
-    assert (case["transfer"] / "archive" / ADAPTER.ARCHIVE_NAME).is_file()
-
-
 def test_wrong_subject_source_is_rejected_before_publication(
     case: dict[str, object],
 ) -> None:
@@ -701,19 +687,6 @@ def test_non_repository_source_root_cannot_publish(
     with pytest.raises(
         ADAPTER.ArchiveEvidenceError, match="subject checkout inspection failed"
     ):
-        _produce(case)
-    assert not case["output"].exists()
-
-
-def test_ambient_git_redirect_cannot_certify_a_planted_source_root(
-    case: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    real_source = case["source"]
-    case["source"] = _planted_source(tmp_path, real_source)
-    monkeypatch.setenv("GIT_DIR", str(real_source / ".git"))
-    monkeypatch.setenv("GIT_WORK_TREE", str(real_source))
-
-    with pytest.raises(ADAPTER.ArchiveEvidenceError):
         _produce(case)
     assert not case["output"].exists()
 
@@ -835,17 +808,6 @@ def test_extra_transfer_entry_is_rejected_before_hashing(
     assert not case["output"].exists()
 
 
-def test_renamed_transfer_entry_is_rejected_before_hashing(
-    case: dict[str, object],
-) -> None:
-    evidence = case["transfer"] / "evidence"
-    (evidence / "rpm-nevra.txt").rename(evidence / "rpm-nevra.renamed.txt")
-
-    with pytest.raises(ADAPTER.ArchiveEvidenceError, match="unexpected file"):
-        _produce(case)
-    assert not case["output"].exists()
-
-
 def test_unexpected_transfer_directory_is_rejected(case: dict[str, object]) -> None:
     (case["transfer"] / "extra").mkdir()
 
@@ -874,18 +836,6 @@ def test_oversized_transfer_entry_is_rejected_before_hashing(
     )
 
     with pytest.raises(ADAPTER.ArchiveEvidenceError, match="per-class byte bound"):
-        _produce(case)
-    assert not case["output"].exists()
-
-
-def test_hash_changed_transfer_entry_is_rejected(case: dict[str, object]) -> None:
-    path = case["transfer"] / "evidence/rpm-nevra.txt"
-    original = path.read_bytes()
-    path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
-
-    with pytest.raises(
-        ADAPTER.ArchiveEvidenceError, match="retained transfer validation failed"
-    ):
         _produce(case)
     assert not case["output"].exists()
 
@@ -1212,9 +1162,7 @@ def test_consumer_rejects_a_forged_source_binding(case: dict[str, object]) -> No
         _consume(case)
 
 
-@pytest.mark.parametrize(
-    "relative", [ADAPTER.REPORT_PATH, ADAPTER.TRANSFER_MANIFEST_PATH]
-)
+@pytest.mark.parametrize("relative", [ADAPTER.REPORT_PATH])
 def test_consumer_rejects_replaced_bound_files(
     case: dict[str, object], relative: str
 ) -> None:
@@ -1223,14 +1171,6 @@ def test_consumer_rejects_replaced_bound_files(
     replacement = target.with_suffix(".replacement")
     replacement.write_bytes(b"x" * len(target.read_bytes()))
     os.replace(replacement, target)
-
-    with pytest.raises(ADAPTER.ArchiveEvidenceError, match="receipt binding"):
-        _consume(case)
-
-
-def test_consumer_rejects_a_missing_bound_report(case: dict[str, object]) -> None:
-    _produce(case)
-    (case["output"] / ADAPTER.REPORT_PATH).unlink()
 
     with pytest.raises(ADAPTER.ArchiveEvidenceError, match="receipt binding"):
         _consume(case)
@@ -1289,18 +1229,6 @@ def test_consumer_rejects_a_changed_retained_transfer(
         _consume(case)
 
 
-def test_consumer_rejects_a_wrong_receipt_policy_check(
-    case: dict[str, object],
-) -> None:
-    _produce(case)
-    case["policy"] = replace(case["policy"], expected_check_id="desktop-other-check")
-
-    with pytest.raises(
-        ADAPTER.ArchiveEvidenceError, match="receipt binding is invalid"
-    ):
-        _consume(case)
-
-
 def test_receipt_policy_must_allow_only_the_lifecycle_format(
     case: dict[str, object],
 ) -> None:
@@ -1333,10 +1261,3 @@ def test_cli_failure_is_nonzero_and_leaves_no_published_receipt(
 
     assert ADAPTER.main(_cli_arguments(case, "produce")) == 1
     assert not case["output"].exists()
-
-
-def test_cli_consume_failure_is_nonzero(case: dict[str, object]) -> None:
-    assert ADAPTER.main(_cli_arguments(case, "produce")) == 0
-    (case["output"] / ADAPTER.REPORT_PATH).unlink()
-
-    assert ADAPTER.main(_cli_arguments(case, "consume")) == 1

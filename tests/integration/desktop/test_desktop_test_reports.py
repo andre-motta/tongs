@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
-import json
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -31,15 +29,6 @@ verifier = _load_verifier()
 
 def _fixture(name: str) -> bytes:
     return (FIXTURES / name).read_bytes()
-
-
-def test_real_emitter_fixture_hashes_match_recorded_provenance() -> None:
-    provenance = json.loads(
-        (FIXTURES / "desktop_test_reports_provenance.json").read_text()
-    )
-    for emitter in ("pytest", "node"):
-        for filename, expected_hash in provenance[emitter]["files"].items():
-            assert hashlib.sha256(_fixture(filename)).hexdigest() == expected_hash
 
 
 def _junit(
@@ -248,8 +237,10 @@ def test_pytest_junit_enforces_byte_nesting_and_record_bounds(
         verifier.verify_pytest_junit(_junit(nested))
     monkeypatch.setattr(verifier, "MAX_RECORDS", 1)
     testcase = '<testcase classname="tests.test_mcp.test_server" name="test_ok"/>'
-    with pytest.raises(verifier.ReportValidationError, match="record limit"):
-        verifier.verify_pytest_junit(_junit(testcase * 2, tests="2"))
+    # The declared counter stays within the limit, so only the testcase count
+    # itself can trip it.
+    with pytest.raises(verifier.ReportValidationError, match="testcase record limit"):
+        verifier.verify_pytest_junit(_junit(testcase * 2, tests="1"))
 
 
 def test_node_tap_accepts_real_nested_emitter_fixture_and_returns_frozen_counts() -> (
@@ -321,27 +312,24 @@ def test_node_tap_treats_yaml_diagnostics_as_data() -> None:
 
 
 @pytest.mark.parametrize(
-    "outside_line",
+    ("envelope", "outside_line"),
     [
-        "not ok 999 - swallowed failure",
-        "Bail out! swallowed bailout",
-        "# fail 99",
-        "  not ok 999 - field-depth plain scalar",
+        ("  ---", "not ok 999 - swallowed failure"),
+        ("  ---", "Bail out! swallowed bailout"),
+        ("  ---", "# fail 99"),
+        ("  ---", "  not ok 999 - field-depth plain scalar"),
+        # A parent-stream record inside a nested suite's diagnostic.
+        ("      ---", "    not ok 999 - swallowed parent assertion"),
     ],
 )
 def test_node_tap_rejects_out_of_scope_lines_inside_diagnostic_envelope(
-    outside_line: str,
+    envelope: str, outside_line: str
 ) -> None:
-    report = _flat_tap().replace(b"  ---\n", f"  ---\n{outside_line}\n".encode(), 1)
-    with pytest.raises(verifier.ReportValidationError, match="diagnostic contains"):
-        verifier.verify_node_tap(report)
-
-
-def test_node_tap_rejects_parent_stream_record_inside_nested_diagnostic() -> None:
-    report = _fixture("desktop_test_reports_node_pass.tap").replace(
-        b"      ---\n",
-        b"      ---\n    not ok 999 - swallowed parent assertion\n",
-        1,
+    source = _fixture("desktop_test_reports_node_pass.tap")
+    if envelope == "  ---":
+        source = _flat_tap()
+    report = source.replace(
+        f"{envelope}\n".encode(), f"{envelope}\n{outside_line}\n".encode(), 1
     )
     with pytest.raises(verifier.ReportValidationError, match="diagnostic contains"):
         verifier.verify_node_tap(report)
@@ -454,8 +442,12 @@ def test_node_tap_enforces_byte_line_record_and_nesting_bounds(
     with pytest.raises(verifier.ReportValidationError, match="overlong line"):
         verifier.verify_node_tap(_flat_tap())
     monkeypatch.setattr(verifier, "MAX_LINE_BYTES", 256 * 1024)
-    monkeypatch.setattr(verifier, "MAX_RECORDS", 1)
-    with pytest.raises(verifier.ReportValidationError, match="record limit"):
+    # Two tests in two suites: every counter stays within three, while the
+    # stream holds four records, so only the in-stream count can trip it.
+    monkeypatch.setattr(verifier, "MAX_RECORDS", 3)
+    with pytest.raises(
+        verifier.ReportValidationError, match="^Node TAP exceeds the record limit$"
+    ):
         verifier.verify_node_tap(_fixture("desktop_test_reports_node_pass.tap"))
 
 

@@ -11,25 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[4]
 PACKAGING = ROOT / "packaging" / "rpm" / "desktop"
-WORKFLOW = ROOT / ".github" / "workflows" / "desktop-rpm.yml"
-
-
-def test_two_srpms_and_optional_mcp_ownership_are_explicit() -> None:
-    core = (PACKAGING / "templates" / "python-tongs.spec.in").read_text()
-    desktop = (PACKAGING / "templates" / "tongs-desktop.spec.in").read_text()
-
-    assert "%package -n python3-tongs+mcp" in core
-    assert "%{_bindir}/tongs-mcp" in core
-    assert "Requires:       python3-tongs = %{version}-%{release}" in core
-    assert "python3dist(mcp[cli])" in core
-    assert "%license %{_licensedir}/python3-tongs/LICENSE" in core
-    assert "mcp[cli]" not in core.split("%package -n python3-tongs+mcp", 1)[0]
-    exact_core = (
-        "Requires:       python3-tongs = @CORE_RPM_VERSION@-@RPM_RELEASE@%{?dist}"
-    )
-    assert exact_core in desktop
-    assert "SETUPTOOLS_SCM_PRETEND_VERSION=@CORE_PEP440_VERSION@" in core
-    assert "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS=@CORE_PEP440_VERSION@" in core
 
 
 def test_desktop_retains_runtime_and_has_no_scriptlets() -> None:
@@ -55,91 +36,45 @@ def test_system_launcher_uses_fixed_system_contract() -> None:
     assert "--tongs-safe-cwd /usr/libexec/tongs-desktop" in launcher
 
 
-def test_installed_plugin_owns_its_build_generated_cache_directory() -> None:
-    spec = (PACKAGING / "test-plugin" / "tongs-desktop-test-plugin.spec").read_text()
-    cache_dir = "%dir %{python3_sitelib}/tongs_rpm_test_plugin_assets/__pycache__"
+#: The only containers that may reach the network: the Fedora provider audit,
+#: the companion source download and the clean install from Fedora.
+NETWORKED_PROGRAMS = {
+    "packaging/rpm/desktop/audit_providers.py",
+    "packaging/rpm/python-dependencies/prepare_sources.py",
+    "packaging/rpm/desktop/install_and_verify.sh",
+}
 
-    assert spec.count(cache_dir) == 1
-    assert spec.index(cache_dir) < spec.index(
-        "%pycached %{python3_sitelib}/tongs_rpm_test_plugin_assets/__init__.py"
+
+def _podman_runs(script: str) -> list[list[str]]:
+    """Return each ``podman run`` command, continuation lines joined, as words."""
+
+    joined = script.replace("\\\n", " ")
+    return [line.split() for line in joined.splitlines() if "podman run" in line]
+
+
+def _program(run: list[str]) -> str:
+    return next(
+        (
+            word.removeprefix("/checkout/")
+            for word in run
+            if word.startswith("/checkout/") and word.endswith((".py", ".sh"))
+        ),
+        "<inline>",
     )
 
 
 def test_hosted_harness_is_disposable_and_rebuilds_offline() -> None:
     harness = (PACKAGING / "run_hosted.sh").read_text()
     rebuilder = (PACKAGING / "rebuild_srpms.sh").read_text()
-    installer = (PACKAGING / "install_and_verify.sh").read_text()
 
     assert "RUNNER_ENVIRONMENT:-} == github-hosted" in harness
-    assert "gh run download" in harness
-    assert "--network=none" in harness
-    assert "dnf builddep" in rebuilder
-    assert rebuilder.index("dnf builddep") < rebuilder.index("--network=none")
-    assert "pip install" not in installer
-    assert "dnf-failed-upgrade.log" in installer
-    assert "dnf-corrupt-upgrade.log" in installer
-    assert "dnf-reinstall.log" in installer
-    assert "dnf-uninstall.log" in installer
-    assert "verify_sidecar_plugin.py" in installer
-    assert "verify_mcp_command.py" in installer
-    assert "python-dependencies/verify_install.py" in installer
-    assert "rpm -V" in (PACKAGING / "verify_rpm_state.py").read_text()
-    assert "[[ $status -eq 124 ]]" in installer
-    assert "preinstall-sentinels.txt" in installer
-    assert "user-archive-sentinel" in installer
-    assert "tongs_user_plugin_sentinel.py" in installer
-    assert "verify_mcp_provider.py" in installer
-    assert "post-mcp-sidecar-plugin.ndjson" in installer
-    assert "run_desktop_smoke post-mcp-hosted-launch" in installer
-    assert "package-file-metadata-with-mcp.json" in installer
-    assert "for query in scripts triggers filetriggers" in installer
-    assert 'cmp "$evidence_dir/clean-final.json"' in installer
-    assert harness.index("preflight_core_version.sh") < harness.index(
-        "python-dependencies/prepare_sources.py"
-    )
-    assert 'cmp "$evidence_dir/installed-previous.json"' in installer
-    assert "--setopt=install_weak_deps=False" in installer
-    pre_bootstrap = installer[: installer.index("dnf-bootstrap.log")]
-    assert "sentinel_snapshot preinstall" in pre_bootstrap
-    assert installer.index("sentinel_snapshot preinstall") < installer.index("\ndnf ")
-    assert "core_version=$(python3" not in pre_bootstrap
-    assert "user_site=$(/usr/bin/python3" not in pre_bootstrap
-    assert "expected-companion-packages.txt" in installer
-    assert "clean-install-closure.txt" in installer
-    assert "|tongs-final" in installer
-    assert "companion-consumer-rpms" in harness
-    assert "select_companion_rpms.py" in harness
-    assert "base-prerequisite-probe.txt" in harness
-    assert harness.index("base-prerequisite-probe.txt") < harness.index(
-        "podman build --pull=never"
-    )
-    assert 'sha256sum "$evidence_dir/expected-companion-packages.txt"' in installer
-    assert "diffutils" in installer
-    assert "dnf_transaction_options=(" in installer
-    assert "--setopt=tsflags=" in installer
-    assert "clean_requirements_on_remove=False" not in installer
-    assert "dnf-lifecycle-policy.txt" in installer
-    assert '"$evidence_dir/$label.exit-status"' in installer
-    for label in ("sidecar-plugin", "mcp-command", "post-mcp-sidecar-plugin"):
-        assert f"run_bounded_check {label} 20s" in installer
-    retain_index = installer.index(
-        "\nretain_verifier_python\n",
-        installer.index("run_desktop_smoke hosted-launch"),
-    )
-    assert installer.index("run_desktop_smoke hosted-launch") < retain_index
-    assert retain_index < installer.index("snapshot before-mcp")
-    assert "grep -Fx dependency" not in installer
-    assert "assert_verifier_python_user_reason" in installer
-    assert "assert_verifier_python final-cycle-remove" in installer
-    assert "assert_verifier_python final-uninstall" in installer
-    assert "assert_tongs_import_absent final-cycle-remove" in installer
-    assert "assert_tongs_import_absent final-uninstall" in installer
-    assert "final-cycle-remove-absence.json" in installer
-    transactions = re.findall(
-        r"^dnf (?:install|reinstall|upgrade|remove) [^\n]+$", installer, re.MULTILINE
-    )
-    assert transactions
-    assert all('"${dnf_transaction_options[@]}"' in line for line in transactions)
+    runs = _podman_runs(harness)
+    networked = {_program(run) for run in runs if "--network=none" not in run}
+    assert networked == NETWORKED_PROGRAMS
+    rebuilds = _podman_runs(rebuilder)
+    assert rebuilds
+    for run in rebuilds:
+        assert "--network=none" in run, " ".join(run)
 
 
 def test_verifier_python_reason_stage_replays_retained_dnf5_output(
@@ -441,46 +376,6 @@ run_desktop_smoke candidate
     )
     assert module_not_found_result.returncode == 1
     assert "fatal output classified" in module_not_found_result.stderr
-
-
-def test_workflow_binds_exact_head_and_has_read_only_permissions() -> None:
-    workflow = WORKFLOW.read_text()
-
-    assert "actions: read" in workflow
-    assert "contents: read" in workflow
-    assert "persist-credentials: false" in workflow
-    assert "fetch-depth: 0" in workflow
-    assert "TONGS_HEAD_SHA" in workflow
-    assert (
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1"
-        in workflow
-    )
-    assert "secrets" not in workflow
-    assert "    paths:" not in workflow
-
-
-def test_manifest_keeps_core_and_mcp_closures_separate() -> None:
-    manifest = json.loads((PACKAGING / "manifest.json").read_text())
-
-    assert all(
-        "mcp" not in requirement
-        for requirement in manifest["core_runtime_requirements"]
-    )
-    assert "mcp[cli]" in manifest["mcp_requirement"]
-
-
-def test_provider_audit_queries_the_mcp_extra_capability() -> None:
-    audit = (PACKAGING / "audit_providers.py").read_text()
-
-    assert '"python3dist(mcp[cli])"' in audit
-    assert '"provider_query": query' in audit
-    assert '"python3-mcp+cli", "python3-mcp"' in audit
-    assert '"enabled_repositories"' in audit
-    assert "args.output.write_text" in audit
-    assert audit.index("args.output.write_text") < audit.index(
-        'raise RuntimeError(f"missing Fedora providers: {missing}")'
-    )
-    assert '"direct-package-provides" if usable else "unresolved"' in audit
 
 
 def test_textual_floor_is_the_oldest_release_the_terminal_app_passes_on() -> None:

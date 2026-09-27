@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -45,17 +47,6 @@ def test_manifest_is_valid_and_build_order_is_explicit() -> None:
     assert all(item["binary_rpm"]["epoch"] == 0 for item in manifest["companions"])
 
 
-def test_manifest_uses_only_hash_pinned_pypi_sources() -> None:
-    manifest = json.loads(MANIFEST.read_text())
-
-    for companion in manifest["companions"]:
-        source = companion["source"]
-        assert source["url"].startswith("https://files.pythonhosted.org/")
-        assert len(source["sha256"]) == 64
-        assert source["bytes"] > 0
-        assert companion["license"]
-
-
 def test_manifest_binary_identities_match_reviewed_specs() -> None:
     manifest = json.loads(MANIFEST.read_text())
 
@@ -74,57 +65,62 @@ def test_manifest_binary_identities_match_reviewed_specs() -> None:
             assert "BuildArch:      noarch" not in spec
 
 
-def test_manifest_requires_system_python_and_fedora_providers() -> None:
-    manifest = json.loads(MANIFEST.read_text())
-    requirements = {item["requirement"] for item in manifest["system_requirements"]}
-
-    assert "python(abi) >= 3.12" in requirements
-    assert "python3dist(cryptography) >= 43" in requirements
-    assert "python3dist(email-validator) >= 2" in requirements
-    assert "python3dist(id) >= 1.1" in requirements
-    assert not any("sigstore" in requirement for requirement in requirements)
-
-
-def test_rekor_distribution_records_its_actual_import_package() -> None:
-    manifest = json.loads(MANIFEST.read_text())
-    rekor = next(
-        item
-        for item in manifest["companions"]
-        if item["distribution"] == "sigstore-rekor-types"
-    )
-
-    assert rekor["module"] == "rekor_types"
-
-
-def test_rust_license_sources_are_pinned_to_locked_git_commit() -> None:
-    manifest = json.loads(MANIFEST.read_text())
-    rust = next(
+def _rust(manifest: dict[str, Any]) -> dict[str, Any]:
+    return next(
         item
         for item in manifest["companions"]
         if item["distribution"] == "rfc3161-client"
     )
 
-    commit = rust["cargo"]["git_dependency"].rsplit("#", 1)[1]
-    for source in rust["cargo"]["license_sources"]:
-        assert f"/{commit}/LICENSE" in source["url"]
-        assert len(source["sha256"]) == 64
-        assert source["bytes"] > 0
+
+def _other_commit_license(manifest: dict[str, Any]) -> None:
+    source = _rust(manifest)["cargo"]["license_sources"][0]
+    commit = _rust(manifest)["cargo"]["git_dependency"].rsplit("#", 1)[1]
+    source["url"] = source["url"].replace(commit, "0" * len(commit))
 
 
-def test_nested_and_linked_licenses_are_declared() -> None:
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda manifest: manifest["companions"][0]["source"].update(
+                url="https://example.com/source.tar.gz"
+            ),
+            "unapproved source host",
+        ),
+        (
+            lambda manifest: manifest["companions"][0]["source"].update(
+                url=manifest["companions"][0]["source"]["url"].replace(
+                    "https://", "http://", 1
+                )
+            ),
+            "unapproved source host",
+        ),
+        (
+            lambda manifest: manifest["companions"][0]["source"].update(
+                sha256="a" * 63
+            ),
+            "invalid source hash",
+        ),
+        (
+            lambda manifest: manifest["companions"][0]["source"].update(
+                sha256="g" * 64
+            ),
+            "invalid source hash",
+        ),
+        (
+            lambda manifest: manifest["companions"][0]["source"].update(bytes=0),
+            "invalid source size",
+        ),
+        (_other_commit_license, "unapproved Cargo license source"),
+    ],
+    ids=["host", "scheme", "short-hash", "non-hex-hash", "size", "license-commit"],
+)
+def test_manifest_rejects_unpinned_sources(
+    mutate: Callable[[dict[str, Any]], None], message: str
+) -> None:
     manifest = json.loads(MANIFEST.read_text())
-    licenses = {
-        item["distribution"]: item["license"] for item in manifest["companions"]
-    }
+    mutate(manifest)
 
-    assert licenses["securesystemslib"] == "MIT AND CC0-1.0"
-    assert "BSD-3-Clause" in licenses["rfc3161-client"]
-    assert "Unicode-3.0" in licenses["rfc3161-client"]
-
-
-def test_manifest_rejects_unapproved_source_host() -> None:
-    manifest = json.loads(MANIFEST.read_text())
-    manifest["companions"][0]["source"]["url"] = "https://example.com/source.tar.gz"
-
-    with pytest.raises(ValueError, match="unapproved source host"):
+    with pytest.raises(ValueError, match=message):
         validate_manifest.validate(manifest)

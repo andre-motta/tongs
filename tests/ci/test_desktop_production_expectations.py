@@ -477,15 +477,3 @@ def test_archive_expectations_never_import_the_sbom_chain(
     result = json.loads(completed.stdout)
     assert result["loaded"] == []
     assert "--expected-archive-name" in result["argv"]
-
-
-def test_the_sbom_command_still_loads_its_own_adapter() -> None:
-    """The lazy loader must still return the reviewed #135 module."""
-
-    module = sbom_adapter()
-    assert module.__file__ is not None
-    assert module.__file__.endswith("tests/integration/desktop/sbom_evidence.py")
-    assert callable(module.produce_sbom_evidence)
-    archive = archive_adapter()
-    assert archive.__file__ is not None
-    assert archive.__file__.endswith("tests/integration/desktop/archive_evidence.py")

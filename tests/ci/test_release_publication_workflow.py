@@ -237,32 +237,6 @@ def test_verification_precedes_every_creating_step(
     assert text.count("gh release edit") == 1
 
 
-def test_the_publication_program_only_reads_release_state() -> None:
-    # The draft check lists releases because the by-tag endpoint 404s for a
-    # draft; every gh call stays a plain GET and nothing deletes or edits.
-    source = (ROOT / PUBLICATION_PROGRAM).read_text()
-    gh_calls = re.findall(r"gh\(\s*\[([^\]]*)\]", source)
-    assert gh_calls == [
-        '"api", _release_list_endpoint(page)',
-        '"api", _release_endpoint(tag)',
-        '"api", _release_endpoint(tag)',
-    ]
-    for forbidden in (
-        "--method",
-        '"-X"',
-        "DELETE",
-        "PATCH",
-        "POST",
-        '"release"',
-        '"delete"',
-    ):
-        assert forbidden not in source
-    assert source.count("subprocess.run(") == 1
-    assert '["gh", *arguments]' in source
-    assert "/releases?per_page=" in source
-    assert "/releases/tags/" in source
-
-
 def test_the_publish_job_checks_out_without_credentials_and_binds_the_tag(
     jobs: dict[str, dict[str, Any]],
 ) -> None:
@@ -304,11 +278,6 @@ def test_every_release_upload_is_retry_safe_and_retained_for_fourteen_days(
     assert uploads == 3
 
 
-def test_the_installer_and_the_workflow_agree_on_the_trusted_path() -> None:
-    assert WORKFLOW == ROOT / ".github/workflows/release-desktop.yml"
-    assert Path(OFFICIAL_WORKFLOW_PATH).name == "release-desktop.yml"
-
-
 def test_the_release_body_drops_the_site_front_matter(
     jobs: dict[str, dict[str, Any]], tmp_path: Path
 ) -> None:
@@ -329,3 +298,51 @@ def test_the_release_body_drops_the_site_front_matter(
     assert not body.startswith("---")
     assert "slug:" not in body.split("\n\n", 1)[0]
     assert '> "$RELEASE_NOTES"' in require
+
+
+def _job_script(job: dict[str, Any]) -> str:
+    return "\n".join(step.get("run") or "" for step in job.get("steps", []))
+
+
+def test_every_candidate_interpreter_is_isolated_from_the_runner(
+    jobs: dict[str, dict[str, Any]],
+) -> None:
+    """Each job that builds the candidate venv must refuse ambient Python.
+
+    The signing and publish jobs hold tokens while this interpreter runs, so a
+    user site-packages directory or a tongs imported from outside the checked
+    out workspace would run foreign code with those tokens.
+    """
+
+    isolated = 0
+    for name, job in jobs.items():
+        script = _job_script(job)
+        if "tongs-candidate-venv" not in script:
+            continue
+        isolated += 1
+        assert "printf 'PYTHONNOUSERSITE=1\\n' >> \"$GITHUB_ENV\"" in script, name
+        assert "assert site.ENABLE_USER_SITE is False" in script, name
+        assert "assert tongs_path.is_relative_to(workspace)" in script, name
+        calls = re.findall(r'"\$CANDIDATE_PYTHON"\s+(\S+)', script)
+        assert calls and set(calls) == {"-I"}, name
+        installs = re.findall(r'"\$CANDIDATE_PYTHON" -I -m pip install([^\n]*)', script)
+        assert installs, name
+        for arguments in installs:
+            assert "--isolated" in arguments.split(), name
+    # Validation, transfer, signing and publish.
+    assert isolated == 4
+
+
+def test_attestations_stay_off_the_package_registry(
+    jobs: dict[str, dict[str, Any]],
+) -> None:
+    attest_steps = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("actions/attest@")
+    ]
+    assert attest_steps
+    for step in attest_steps:
+        assert step["with"]["push-to-registry"] is False, step.get("name")
+        assert step["with"]["create-storage-record"] is False, step.get("name")

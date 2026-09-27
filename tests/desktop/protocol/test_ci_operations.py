@@ -233,7 +233,10 @@ async def test_fresh_membership_change_rejects_job_before_write() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("forged", [True, 1.0, 7, "unissued"])
+# Unhashable JSON values reach the registry lookup only if the type guard is gone.
+@pytest.mark.parametrize(
+    "forged", [[], {}, "unissued"], ids=["list", "object", "unissued"]
+)
 async def test_forged_job_handle_types_fail_before_write(forged: object) -> None:
     operations, session, handles = _operations()
 
@@ -279,19 +282,23 @@ async def test_cross_session_and_wrong_kind_handles_fail_before_write() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"operation_id": "extra", "pipeline": "x", "project": "secret"},
-        {"operation_id": True, "pipeline": "x"},
-        {"operation_id": 1.0, "pipeline": "x"},
-        {"operation_id": "bad/slash", "pipeline": "x"},
+        {"operation_id": "extra", "project": "secret"},
+        {"operation_id": True},
+        {"operation_id": 1.0},
+        {"operation_id": "bad/slash"},
     ],
 )
 async def test_malformed_payloads_fail_before_handle_or_write(
     payload: JsonObject,
 ) -> None:
-    operations, session, _handles = _operations()
+    operations, session, handles = _operations()
 
-    with pytest.raises((ProtocolError, ServiceError)):
-        await operations.retry_pipeline(payload, _context())
+    with pytest.raises(ProtocolError) as raised:
+        await operations.retry_pipeline(
+            {**payload, "pipeline": handles["pipeline"]}, _context()
+        )
+
+    assert raised.value.code is ProtocolErrorCode.INVALID_PARAMS
 
     assert session.job_reads == []
     assert session.client.calls == []
@@ -445,10 +452,15 @@ async def test_cancelled_conflicting_request_cannot_inherit_retained_receipt(
     )
     original_execute = session.ci_mutations.execute
     entered_execute = asyncio.Event()
+    execute_cancelled = asyncio.Event()
 
     async def tracked_execute(command: CIMutationCommand) -> CIMutationReceipt:
         entered_execute.set()
-        return await original_execute(command)
+        try:
+            return await original_execute(command)
+        except asyncio.CancelledError:
+            execute_cancelled.set()
+            raise
 
     monkeypatch.setattr(session.ci_mutations, "execute", tracked_execute)
     await session.ci_mutations._operation_lock.acquire()
@@ -461,9 +473,10 @@ async def test_cancelled_conflicting_request_cannot_inherit_retained_receipt(
     )
     try:
         await entered_execute.wait()
-        await asyncio.sleep(0)
         context.cancellation.cancel()
-        await asyncio.sleep(0)
+        # Hold the lock until execute is cancelled while waiting for it, so the
+        # request takes the cancel path and must check the retained receipt.
+        await asyncio.wait_for(execute_cancelled.wait(), timeout=5)
     finally:
         session.ci_mutations._operation_lock.release()
 

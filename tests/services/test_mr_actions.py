@@ -410,6 +410,25 @@ async def test_lifecycle_capabilities_and_native_results() -> None:
         await closed_service.execute(ReopenReviewCommand("reopen", closed_target))
     ).action is MRAction.REOPEN
 
+    # Each action reaches its own forge call exactly once, so a misrouted
+    # dispatch shows up as a double call on one mock and none on another.
+    for dispatched in (client.unapprove_mr, client.close_mr, client.reopen_mr):
+        dispatched.assert_awaited_once_with(REPOSITORY.project_path, REVIEW.number)
+    client.merge_mr.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unapprove_is_unsupported_without_forge_support() -> None:
+    client = _client(supports_unapprove=False)
+    service, *_ = _service(client)
+
+    assert (await service.capabilities(REVIEW)).unapprove is False
+    with pytest.raises(ServiceError) as raised:
+        await service.execute(UnapproveReviewCommand("unapprove", _target()))
+
+    assert raised.value.code is ServiceErrorCode.UNSUPPORTED
+    client.unapprove_mr.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_close_retries_cancellation_and_finishes_exact_duplicate() -> None:

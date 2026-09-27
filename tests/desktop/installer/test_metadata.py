@@ -289,6 +289,7 @@ async def test_valid_signature_semantics_for_wrong_subject_are_rejected() -> Non
     [
         "extra_dependency",
         "invalid_invocation",
+        "unprefixed_invocation",
         "wrong_repository_id",
         "wrong_repository_owner_id",
     ],
@@ -315,6 +316,11 @@ async def test_valid_signature_with_noncanonical_github_predicate_is_rejected(
     elif malformation == "invalid_invocation":
         payload["predicate"]["runDetails"]["metadata"]["invocationId"] = (
             "https://example.test/actions/runs/1/attempts/1"
+        )
+    elif malformation == "unprefixed_invocation":
+        # Only the official run URL prefix check rejects a bare run path.
+        payload["predicate"]["runDetails"]["metadata"]["invocationId"] = (
+            "123/attempts/1"
         )
     elif malformation == "wrong_repository_id":
         payload["predicate"]["buildDefinition"]["internalParameters"]["github"][
@@ -409,7 +415,12 @@ async def test_implicit_selection_takes_the_release_matching_the_running_core() 
 
 
 @pytest.mark.asyncio
-async def test_missing_release_for_the_running_core_names_both_versions() -> None:
+@pytest.mark.parametrize(
+    ("core_version", "tag"), [("1.3.0", "v1.3.0"), ("1.2.4.dev3+gabcdef0", "v1.2.4")]
+)
+async def test_missing_release_for_the_running_core_names_both_versions(
+    core_version: str, tag: str
+) -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(
             lambda _request: httpx.Response(200, json=[_release_json()])
@@ -421,30 +432,10 @@ async def test_missing_release_for_the_running_core_names_both_versions() -> Non
                 InstallRequest(),
                 limits=InstallerLimits(releases_per_page=100),
                 clock=lambda: NOW,
-                core_version="1.3.0",
+                core_version=core_version,
             )
 
     assert raised.value.code is InstallerErrorCode.INVALID_METADATA
-    assert "tongs 1.3.0" in str(raised.value)
-    assert "v1.3.0" in str(raised.value)
+    assert f"tongs {core_version}" in str(raised.value)
+    assert f"tag {tag};" in str(raised.value)
     assert "retry" in str(raised.value)
-
-
-@pytest.mark.asyncio
-async def test_development_core_version_finds_no_desktop_release() -> None:
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda _request: httpx.Response(200, json=[_release_json()])
-        )
-    ) as client:
-        with pytest.raises(InstallerError) as raised:
-            await discover_release(
-                client,
-                InstallRequest(),
-                limits=InstallerLimits(releases_per_page=100),
-                clock=lambda: NOW,
-                core_version="1.2.4.dev3+gabcdef0",
-            )
-
-    assert raised.value.code is InstallerErrorCode.INVALID_METADATA
-    assert "tongs 1.2.4.dev3+gabcdef0" in str(raised.value)

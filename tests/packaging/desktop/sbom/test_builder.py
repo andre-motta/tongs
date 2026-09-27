@@ -374,6 +374,14 @@ def test_build_is_deterministic_schema_valid_and_semantically_bounded(
             lambda value: value["npm_packages"][0].update(integrity="sha256-Zm9v"),
             "differs from the verified source package lock",
         ),
+        (
+            # A rewritten registry URL with the integrity left unchanged.
+            "archive/prepared-source-inventory.json",
+            lambda value: value["npm_packages"][0].update(
+                resolved="https://registry.npmjs.org/fabricated/-/fabricated-9.9.9.tgz"
+            ),
+            "differs from the verified source package lock",
+        ),
     ],
 )
 def test_changed_lock_or_license_closure_is_rejected(
@@ -396,29 +404,6 @@ def test_changed_license_manifest_bytes_are_rejected(tmp_path: Path) -> None:
         lambda value: value["components"][-1].update(version="7.7.7"),
     )
     with pytest.raises(sbom.SbomBuildError, match="archived runtime inventory"):
-        sbom.build_desktop_sbom(root, SCHEMA, _identity(root))
-
-
-def test_fabricated_registry_identity_rebound_in_producer_metadata_is_rejected(
-    tmp_path: Path,
-) -> None:
-    root = _fixture_root(tmp_path)
-
-    def fabricate(value: dict[str, object]) -> None:
-        package = value["npm_packages"][0]
-        assert isinstance(package, dict)
-        package["resolved"] = (
-            "https://registry.npmjs.org/fabricated/-/fabricated-9.9.9.tgz"
-        )
-        package["integrity"] = (
-            "sha512-"
-            + base64.b64encode(
-                hashlib.sha512(b"fabricated registry distribution").digest()
-            ).decode()
-        )
-
-    _mutate_json(root, "archive/prepared-source-inventory.json", fabricate)
-    with pytest.raises(sbom.SbomBuildError, match="verified source package lock"):
         sbom.build_desktop_sbom(root, SCHEMA, _identity(root))
 
 

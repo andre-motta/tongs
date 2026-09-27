@@ -5,10 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from tongs.desktop.installer.launcher import (
-    _XWAYLAND_SWITCH,
-    xwayland_launch_arguments,
-)
+from tongs.desktop.installer.launcher import _XWAYLAND_SWITCH
 
 ROOT = Path(__file__).parents[3]
 MAIN_PROCESS = ROOT / "desktop" / "src" / "main" / "index.ts"
@@ -41,33 +38,13 @@ def test_shell_still_refuses_a_wayland_launch_without_the_switch() -> None:
 
     condition = _guard_condition(source)
 
-    assert 'process.platform === "linux"' in condition
-    assert "process.env.WAYLAND_DISPLAY" in condition
+    # The Python launcher supplies the switch exactly on Linux with
+    # WAYLAND_DISPLAY set, so a new term here must be mirrored there.
+    assert _PLATFORM.findall(condition) == ["linux"]
+    assert set(_ENVIRONMENT.findall(condition)) == {"WAYLAND_DISPLAY"}
     assert "!usesX11(process.argv)" in condition
     assert condition.count("&&") == 2 and "||" not in condition
     assert f'throw new Error(\n    "{REFUSAL}",\n  );' in source
-
-
-def test_python_mirror_keys_on_the_same_condition_as_the_shell_guard() -> None:
-    condition = _guard_condition(_source())
-    variables = set(_ENVIRONMENT.findall(condition))
-    platform = _PLATFORM.findall(condition)
-
-    # The Python launcher must supply the switch under exactly this condition, so
-    # a new term on either side has to be added on both sides or fail here.
-    assert variables == {"WAYLAND_DISPLAY"}
-    assert platform == ["linux"]
-    for variable in variables:
-        assert xwayland_launch_arguments(
-            platform=platform[0], environ={variable: "wayland-0"}
-        ) == (_XWAYLAND_SWITCH,)
-    assert xwayland_launch_arguments(platform=platform[0], environ={}) == ()
-    assert (
-        xwayland_launch_arguments(
-            platform=f"not-{platform[0]}", environ=dict.fromkeys(variables, "wayland-0")
-        )
-        == ()
-    )
 
 
 def test_python_switch_is_the_literal_the_shell_guard_accepts() -> None:

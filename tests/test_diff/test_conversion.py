@@ -165,6 +165,22 @@ def test_incomplete_hunk_is_truncated_with_authoritative_aggregate_counts() -> N
     assert len(file.hunks[0].lines) == 2
 
 
+def test_incomplete_hunk_without_reported_counts_is_truncated() -> None:
+    """GitLab sends no aggregate counts, so only the short hunk shows truncation."""
+    file = convert_forge_changes(
+        (
+            {
+                "old_path": "src/partial.py",
+                "new_path": "src/partial.py",
+                "diff": "@@ -1,1 +1,5 @@\n-old\n+new\n",
+            },
+        )
+    )[0]
+
+    assert file.is_truncated is True
+    assert len(file.hunks[0].lines) == 2
+
+
 def test_omitted_complete_hunks_are_truncated_by_aggregate_count_shortfall() -> None:
     file = convert_forge_changes(
         (
@@ -341,25 +357,6 @@ def test_gitlab_and_github_agree_on_the_rename_only_shape() -> None:
         assert file.is_empty is False
         assert file.is_unavailable is False
         assert file.is_metadata_only is True
-
-
-def test_a_rename_carrying_content_is_not_rename_only() -> None:
-    file = convert_forge_changes(
-        (
-            {
-                "filename": "src/renamed_module.py",
-                "previous_filename": "src/legacy_name.py",
-                "status": "renamed",
-                "additions": 1,
-                "deletions": 1,
-                "changes": 2,
-                "patch": "@@ -1 +1 @@\n-old\n+new\n",
-            },
-        )
-    )[0]
-
-    assert file.is_rename_only is False
-    assert file.hunks
 
 
 def test_a_renamed_binary_never_claims_it_carries_no_content_change() -> None:

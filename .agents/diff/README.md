@@ -145,7 +145,7 @@ Tests in `tests/test_diff/test_parser.py` cover both inline diff strings and fix
 
 ## Position Mapping
 
-`src/tongs/diff/position.py` translates diff line positions to forge-specific API formats for inline commenting. It is forge-agnostic at the core, with per-forge converters.
+`src/tongs/diff/position.py` records where an inline comment is anchored in a diff, in a forge-agnostic form.
 
 ### DiffPosition
 
@@ -161,17 +161,9 @@ Frozen dataclass capturing enough information for any forge:
 
 `position_from_diff_line(file, line)` creates a `DiffPosition` from a `DiffFile` and `DiffLine`. Side is determined by `LineType`: ADDITION -> RIGHT, DELETION -> LEFT, everything else -> RIGHT.
 
-### Forge Converters
+### From Position to Forge Payload
 
-**`to_gitlab_position(pos, base_sha, start_sha, head_sha)`** returns a dict matching GitLab's discussions API `position` object:
-- Always includes `position_type`, `base_sha`, `start_sha`, `head_sha`, `old_path`, `new_path`
-- Sets `old_line` for LEFT-side positions, `new_line` for RIGHT-side
-
-**`to_github_position(pos, commit_id)`** returns a dict matching GitHub's pull request review comments API:
-- `path` is `old_path` for LEFT, `new_path` for RIGHT
-- Includes `side`, `commit_id`, and the appropriate `line` number
-
-**`to_forge_position(pos, forge_type, ...)`** dispatches to the correct converter based on `ForgeType` enum. Accepts all keyword arguments for both forges; each converter uses only what it needs.
+`DiffPosition` carries no forge format. `TUIServiceAdapter.post_inline_comment()` in `src/tongs/tui_services.py` turns it into a `DiffAnchor` (paths, the line on the chosen side, and the side), and `ReviewMutationService` in `src/tongs/services/review_mutations.py` passes the anchor fields to the forge client, which builds the GitLab `position` object or the GitHub review comment fields.
 
 ## Rendering Pipeline
 

@@ -103,6 +103,7 @@ from tongs.services import (
     RepositoryRef,
     RepositorySnapshot,
     ReviewListItem,
+    ReviewPage,
     ReviewQuery,
     ReviewRef,
     ReviewScope,
@@ -706,20 +707,7 @@ class DesktopSidecarServer:
             allowed=frozenset({"scope", "repository", "state", "per_page", "cursor"}),
             required=frozenset({"scope"}),
         )
-        try:
-            scope = ReviewScope(_text(params, "scope", max_length=40))
-            state = MRState(_optional_text(params, "state", "open", max_length=20))
-        except ValueError:
-            raise ProtocolError(
-                ProtocolErrorCode.INVALID_PARAMS,
-                "The review scope or state is invalid.",
-            ) from None
-        repository = None
-        if "repository" in params and params["repository"] is not None:
-            repository = self._handles.resolve(
-                params["repository"], HandleKind.REPOSITORY, RepositoryRef
-            )
-        per_page = _optional_int(params, "per_page", 100, minimum=1, maximum=100)
+        scope, state, repository, per_page = self._review_query_params(params)
         repository_handle = (
             cast(str, params["repository"]) if repository is not None else None
         )
@@ -746,6 +734,50 @@ class DesktopSidecarServer:
             "next_cursor": self._review_cursors.seal(page.next_cursor, binding)
             if page.next_cursor is not None and repository is not None
             else None,
+            **self._review_page_wire(page),
+        }
+
+    async def _reviews_all(
+        self, params: JsonObject, _context: RequestContext
+    ) -> object:
+        """Return every matching review at once, for in-process plugin reads.
+
+        A plugin read never crosses the frame budget itself, so it keeps the
+        whole-list shape plugins were written against: no cursor, and All Open
+        walks every forge page of each repository.
+        """
+        _require_params(
+            params,
+            allowed=frozenset({"scope", "repository", "state", "per_page"}),
+            required=frozenset({"scope"}),
+        )
+        scope, state, repository, per_page = self._review_query_params(params)
+        page = await self._session.list_reviews(
+            ReviewQuery(scope, repository=repository, state=state, per_page=per_page)
+        )
+        return self._review_page_wire(page)
+
+    def _review_query_params(
+        self, params: JsonObject
+    ) -> tuple[ReviewScope, MRState, RepositoryRef | None, int]:
+        try:
+            scope = ReviewScope(_text(params, "scope", max_length=40))
+            state = MRState(_optional_text(params, "state", "open", max_length=20))
+        except ValueError:
+            raise ProtocolError(
+                ProtocolErrorCode.INVALID_PARAMS,
+                "The review scope or state is invalid.",
+            ) from None
+        repository = None
+        if "repository" in params and params["repository"] is not None:
+            repository = self._handles.resolve(
+                params["repository"], HandleKind.REPOSITORY, RepositoryRef
+            )
+        per_page = _optional_int(params, "per_page", 100, minimum=1, maximum=100)
+        return scope, state, repository, per_page
+
+    def _review_page_wire(self, page: ReviewPage) -> JsonObject:
+        return {
             "items": [self._review_list_wire(item) for item in page.items],
             "failures": [
                 {
@@ -1197,11 +1229,11 @@ class DesktopSidecarServer:
             DesktopReadKind.JOBS: "jobs.list",
             DesktopReadKind.LOG: "logs.open",
         }[kind]
-        handler = (
-            self._discussions_all
-            if kind is DesktopReadKind.DISCUSSIONS
-            else self._operations[method].handler
-        )
+        whole_list_handlers = {
+            DesktopReadKind.REVIEWS: self._reviews_all,
+            DesktopReadKind.DISCUSSIONS: self._discussions_all,
+        }
+        handler = whole_list_handlers.get(kind, self._operations[method].handler)
         context = RequestContext(
             f"plugin-{id(cancellation):x}",
             cancellation,

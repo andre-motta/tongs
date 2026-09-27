@@ -17,11 +17,29 @@ import pytest_asyncio
 
 from tongs.cache.store import CacheStore
 from tongs.config import Config
-from tongs.desktop.protocol.messages import MAX_JSON_ITEMS, JsonObject, JsonValue
+from tongs.desktop.protocol.messages import (
+    MAX_JSON_ITEMS,
+    JsonObject,
+    JsonValue,
+    ProtocolError,
+    ProtocolErrorCode,
+)
 from tongs.desktop.protocol.server import DesktopSidecarServer
 from tongs.forges.base import ForgeClient
 from tongs.forges.github import GitHubClient
 from tongs.forges.models import ForgeHost
+from tongs.plugins.desktop import (
+    DesktopAsset,
+    DesktopAssetBundle,
+    DesktopAssetKind,
+    DesktopCancellation,
+    DesktopCompatibility,
+    DesktopModule,
+    DesktopPluginContext,
+    DesktopPluginManifest,
+    DesktopReadKind,
+    freeze_json_object,
+)
 from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.scanner.repo import ForgeType
 from tongs.services import ApplicationSession
@@ -68,6 +86,7 @@ class _Forge:
             ],
         }
         self.list_requests: list[tuple[str, dict[str, str]]] = []
+        self.allow_unsorted = False
         self.ci_requests: list[str] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -76,8 +95,11 @@ class _Forge:
             if path == f"/repos/{project}/pulls":
                 params = dict(request.url.params)
                 self.list_requests.append((project, params))
-                assert params["sort"] == "updated"
-                assert params["direction"] == "desc"
+                # Paged reads ask for update order; only the whole-list walk
+                # of a plugin read may use the forge default order.
+                if not self.allow_unsorted or "sort" in params:
+                    assert params["sort"] == "updated"
+                    assert params["direction"] == "desc"
                 assert params["state"] == "open"
                 page = int(params["page"])
                 per_page = int(params["per_page"])
@@ -143,7 +165,13 @@ class _Writer:
 
 
 class _Wire:
-    def __init__(self, reader: asyncio.StreamReader, writer: _Writer) -> None:
+    def __init__(
+        self,
+        reader: asyncio.StreamReader,
+        writer: _Writer,
+        server: DesktopSidecarServer,
+    ) -> None:
+        self.server = server
         self.reader = reader
         self.writer = writer
         self.count = 0
@@ -201,7 +229,7 @@ async def wired(tmp_path: Path) -> AsyncIterator[tuple[_Wire, _Forge, dict[str, 
     reader = asyncio.StreamReader()
     writer = _Writer()
     running = asyncio.create_task(server.run(reader, writer))
-    wire = _Wire(reader, writer)
+    wire = _Wire(reader, writer, server)
     try:
         await wire.call(
             "handshake",
@@ -358,3 +386,94 @@ async def test_all_open_without_repository_reads_first_pages_only(
     assert result["next_cursor"] is None
     assert sorted(project for project, _ in forge.list_requests) == list(_PROJECTS)
     assert len(forge.ci_requests) == 103
+
+
+def _plugin_context(server: DesktopSidecarServer) -> DesktopPluginContext:
+    manifest = DesktopPluginManifest(
+        plugin_id="reader",
+        title="Reader fixture",
+        version="1.0",
+        compatibility=DesktopCompatibility(1, None),
+        modules=(DesktopModule("main", "Main", "ui", "main", ()),),
+        asset_bundles=(
+            DesktopAssetBundle(
+                "ui",
+                "reader_assets",
+                "assets",
+                (DesktopAsset("main", "main.mjs", DesktopAssetKind.MODULE),),
+            ),
+        ),
+        reads=(DesktopReadKind.REVIEWS,),
+    )
+    return DesktopPluginContext(
+        "reader",
+        freeze_json_object({}),
+        server._facade_for_plugin("reader", manifest),
+        DesktopCancellation(),
+        read_kinds=frozenset(manifest.reads),
+        method_ids=frozenset(),
+        event_ids=frozenset(),
+        focus_target_ids=frozenset(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_plugin_reads_of_reviews_keep_the_whole_list(
+    wired: tuple[_Wire, _Forge, dict[str, str]],
+) -> None:
+    """A provider read walks every forge page instead of stopping at one.
+
+    Plugin results are frozen under the provider SDK's own value budget, so a
+    whole-list read suits repositories of about a hundred reviews; 105 needs
+    two forge pages.
+    """
+    wire, forge, _handles = wired
+    forge.allow_unsorted = True
+    forge.pulls["acme/medium"] = [
+        _pull("acme/medium", number, _NEWEST - timedelta(minutes=number))
+        for number in range(1, 106)
+    ]
+    opened = _result(
+        await wire.call(
+            "repositories.open",
+            {"hostname": _HOST.hostname, "project_path": "acme/medium"},
+        )
+    )
+    forge.list_requests.clear()
+    context = _plugin_context(wire.server)
+
+    result = await context.read(
+        DesktopReadKind.REVIEWS,
+        {"scope": "all_open", "repository": opened["handle"]},
+        DesktopCancellation(),
+    )
+
+    assert set(result) == {"items", "failures"}
+    assert result["failures"] == ()
+    numbers = sorted(item["summary"]["number"] for item in result["items"])
+    assert numbers == list(range(1, 106))
+    assert [params["page"] for _, params in forge.list_requests] == ["1", "2"]
+
+    # The wire read of the same repository still stops at one page.
+    paged = _result(
+        await wire.call(
+            "reviews.list", {"scope": "all_open", "repository": opened["handle"]}
+        )
+    )
+    assert len(cast(list[object], paged["items"])) == 100
+    assert isinstance(paged["next_cursor"], str)
+
+
+@pytest.mark.asyncio
+async def test_plugin_reads_of_reviews_take_no_cursor(
+    wired: tuple[_Wire, _Forge, dict[str, str]],
+) -> None:
+    wire, _forge, handles = wired
+    context = _plugin_context(wire.server)
+    with pytest.raises(ProtocolError) as raised:
+        await context.read(
+            DesktopReadKind.REVIEWS,
+            {"scope": "all_open", "repository": handles["acme/huge"], "cursor": "2"},
+            DesktopCancellation(),
+        )
+    assert raised.value.code is ProtocolErrorCode.INVALID_PARAMS

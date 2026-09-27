@@ -483,11 +483,13 @@ def test_provider_audit_queries_the_mcp_extra_capability() -> None:
     assert '"direct-package-provides" if usable else "unresolved"' in audit
 
 
-def test_textual_floor_matches_the_content_markup_api() -> None:
-    """Textual 2.0 added ``textual.content.Content.from_markup`` with variables.
+def test_textual_floor_is_the_oldest_release_the_terminal_app_passes_on() -> None:
+    """Every declared Textual floor is 4.0, which Fedora 44 ships.
 
-    The terminal views escape forge text through it, so every declared floor
-    is 2, and Fedora 44 (python3-textual 4.0.0) still satisfies the RPM one.
+    The terminal views use ``Content.from_markup`` with variables (Textual
+    2.0), ``notify(markup=False)`` (3.1) and ``OptionList(compact=True)``
+    (3.2); the whole suite passes on Textual 4.0.0, python3-textual on
+    Fedora 44, so the RPM floor stays installable there.
     """
     pyproject = (ROOT / "pyproject.toml").read_text()
     release_inputs = (ROOT / "requirements" / "release.in").read_text()
@@ -498,13 +500,15 @@ def test_textual_floor_matches_the_content_markup_api() -> None:
             ROOT / "packaging" / "rpm" / "python-dependencies" / "manifest.json"
         ).read_text()
     )
+    probe = (ROOT / "tests" / "containers" / "Containerfile").read_text()
 
-    assert '"textual>=2.0",' in pyproject
-    assert re.search(r"^textual>=2\.0$", release_inputs, re.MULTILINE)
-    assert "BuildRequires:  python3dist(textual) >= 2\n" in core_spec
-    assert "Requires:       python3dist(textual) >= 2\n" in core_spec
-    assert "python3dist(textual) >= 2" in manifest["core_runtime_requirements"]
+    assert '"textual>=4.0",' in pyproject
+    assert re.search(r"^textual>=4\.0$", release_inputs, re.MULTILINE)
+    assert "BuildRequires:  python3dist(textual) >= 4\n" in core_spec
+    assert "Requires:       python3dist(textual) >= 4\n" in core_spec
+    assert "python3dist(textual) >= 4" in manifest["core_runtime_requirements"]
     assert {
-        "requirement": "python3dist(textual) >= 2",
+        "requirement": "python3dist(textual) >= 4",
         "import": "textual",
     } in dependencies["system_requirements"]
+    assert "textual\\>=4.0 \\" in probe

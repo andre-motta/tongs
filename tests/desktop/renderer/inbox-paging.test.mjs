@@ -336,6 +336,21 @@ test("a failed page is not read again until asked", async () => {
   }
 });
 
+test("with no repositories the list shows its empty label once the read settles", async () => {
+  const bridge = pagingBridge();
+  const view = render(
+    createInboxFeature().render(featureContext(bridge.bridge, []), { kind: "inbox" }),
+  );
+  await view.findByText("No open reviews match this repository scope.");
+  assert.equal(bridge.calls.length, 0);
+  assert.equal(view.queryAllByText(/Loading reviews from/).length, 0);
+  assert.equal(view.container.querySelectorAll(".review-card").length, 0);
+
+  fireEvent.click(view.getByRole("button", { name: "My Reviews" }));
+  await view.findByText("No open reviews are waiting for you.");
+  assert.equal(bridge.calls.length, 0);
+});
+
 test("the combined read reports each repository's cursor", async () => {
   const bridge = pagingBridge();
   const arrivals = [];

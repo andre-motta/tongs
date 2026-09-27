@@ -470,6 +470,12 @@ function InboxResults({
   );
 
   const shown = state.error && !state.value ? null : feeds;
+  // With no repositories there is no feed to settle, so the list (and its
+  // empty label) is shown once the read itself has finished.
+  const listReady =
+    shown !== null &&
+    (shown.some((feed) => !feed.loading) ||
+      (shown.length === 0 && !state.loading && Boolean(state.value)));
   return (
     <>
       <div className="view-actions">
@@ -495,7 +501,7 @@ function InboxResults({
             : safeError(state.error)}
         </Notice>
       )}
-      {shown?.some((feed) => !feed.loading) && (
+      {listReady && shown !== null && (
         <ReviewList
           feeds={shown}
           navigate={navigate}

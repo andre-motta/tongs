@@ -11,8 +11,8 @@ documentation site requires Node.js 22.12+.
 For substantial initiatives, use the installed `agent-sdlc` skill (0.2.3) and the
 [project SDLC profile](docs/SDLC.md), a repository-only document excluded from
 the published site. Small fixes skip it. Agents inherit the session model;
-record the model actually used in the co-author trailer. Hardware GPU
-acceleration remains a desktop release gate; see the profile.
+record the model actually used in the co-author trailer. A hardware GPU check
+runs only when a change can affect GPU rendering; see the profile.
 
 This file is the shared repository guide for coding agents; every agent that works in this repository reads it. Read `README.md` for product context and the relevant subsystem guides below before changing code. The `.agents/*/README.md` files are reference documentation to read explicitly.
 
@@ -200,8 +200,9 @@ GitHub Release. Tags match no `branches:` filter, so a tag push runs neither
 `ci.yml` nor `docs.yml`.
 
 The `CI aggregate` is not the final production desktop release gate.
-Native Fedora/GPU proof, packaging and installer proof, candidate attestation,
-and final release assembly remain separate evidence and authority boundaries.
+Native Fedora proof (and a GPU check when the profile calls for one), packaging
+and installer proof, candidate attestation, and final release assembly remain
+separate evidence and authority boundaries.
 Use issue dependencies and the current [SDLC profile](docs/SDLC.md), rather
 than phase labels or fixed test counts, to assess readiness.
 

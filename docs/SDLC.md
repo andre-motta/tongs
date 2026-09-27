@@ -43,15 +43,18 @@ Pass these to workflows as the `rules` argument:
 > Forge writes during testing go only to the `tongs-test-sandbox` repositories
 > on GitHub and GitLab; never delete anything on a forge.
 
-## Hardware GPU release gate
+## Hardware GPU check
 
-The installed desktop app must run with hardware GPU acceleration on the
-supported Fedora 44 KDE x86_64 host. Evidence identifies GPU, driver, display
-backend, Electron/Chromium versions, and the packaged artifact, and shows
-physical acceleration in the renderer diagnostics; software renderers and
-headless CI do not count. Do not relax SELinux or the renderer sandbox to pass.
-Rerun the gate after graphics, runtime, launch, or packaging changes and on
-release artifacts. This is a release gate, not a per-PR check.
+Software rendering is acceptable: the desktop app does not need hardware GPU
+acceleration to ship. A hardware GPU check is not a default release gate.
+
+Run it only when a change can affect GPU rendering: an Electron or Chromium
+version change, GPU or graphics command-line switches, the renderer sandbox or
+SELinux policy, or the native launcher and how it starts the renderer. Then
+install the packaged artifact on the Fedora 44 KDE x86_64 host and confirm in
+the renderer diagnostics that it uses the hardware GPU, noting the GPU, driver,
+display backend and Electron/Chromium versions in the PR. Headless CI cannot
+show this. Never relax SELinux or the renderer sandbox to get acceleration.
 
 ## Publication effects
 

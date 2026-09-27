@@ -395,21 +395,24 @@ async def test_actual_textual_mr_detail_uses_production_services(
         await _settle(app)
         screen._load_job_log(forge.job, forge.pipeline)
         await _settle(app)
+        job_reads_before_retry = sum(
+            call == ("get_pipeline_jobs", "acme/widgets", 101) for call in forge.calls
+        )
         screen.on_retry_job_requested(
             RetryJobRequested(forge.pipeline.id, forge.job.id)
         )
         await _settle(app)
-        job_reads_after_retry = [
-            call for call in forge.calls if call == ("get_pipeline_jobs", "acme/widgets", 101)
-        ]
-        assert len(job_reads_after_retry) == 2
+        job_reads_after_retry = sum(
+            call == ("get_pipeline_jobs", "acme/widgets", 101) for call in forge.calls
+        )
+        assert job_reads_after_retry == job_reads_before_retry + 1
 
         screen.action_refresh()
         await _settle(app)
-        job_reads_after_refresh = [
-            call for call in forge.calls if call == ("get_pipeline_jobs", "acme/widgets", 101)
-        ]
-        assert len(job_reads_after_refresh) == 3
+        job_reads_after_refresh = sum(
+            call == ("get_pipeline_jobs", "acme/widgets", 101) for call in forge.calls
+        )
+        assert job_reads_after_refresh == job_reads_after_retry + 1
         assert panel._view_level == 1
         assert panel._current_pipeline == forge.pipeline
 

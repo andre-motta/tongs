@@ -860,7 +860,7 @@ export function useInlineReviewComposer(
           return "Select a source line in the current review diff.";
       }
       if (quickBlocked)
-        return "Resolve or acknowledge the previous action in the review workflow before another mutation.";
+        return "Resolve or acknowledge the previous action in the review header before another mutation.";
       if (busy) return "A review write is already in flight.";
       if (anchor !== null && anchorLine(anchor) === null)
         return "The selected diff side has no source line.";
@@ -1323,7 +1323,7 @@ export function useInlineReviewComposer(
       if (kind === "resolve" && !capabilities.resolve)
         return "Resolution is unsupported for this review.";
       if (quickBlocked)
-        return "Resolve or acknowledge the previous action in the review workflow before another mutation.";
+        return "Resolve or acknowledge the previous action in the review header before another mutation.";
       if (busy) return "A review write is already in flight.";
       return null;
     },
@@ -1512,7 +1512,7 @@ function pendingAnchor(
 }
 
 const QUICK_IN_FLIGHT_REFUSAL =
-  "Resolve or acknowledge the previous action in the review workflow before another mutation.";
+  "Resolve or acknowledge the previous action in the review header before another mutation.";
 
 const EMPTY_REPLY_REFUSAL = "Type a reply before publishing it.";
 

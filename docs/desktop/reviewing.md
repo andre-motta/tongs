@@ -193,10 +193,18 @@ the review from whichever of those tabs you are reading; see
   **Delete source branch after merge**. Changing either option withdraws a
   pending **Confirm Merge**, so what you confirm is always what is on screen.
 - A refused action is reported in the header as an alert.
-- If the result is unknown, every action stays disabled until you choose
-  **Check retained receipt** or **I inspected the forge; acknowledge
-  uncertainty**. The unknown result follows you across the tabs, so an action
-  is never replayed by switching tabs.
+- If the result of an action is unknown, every action stays disabled until a
+  retained receipt settles the result or you acknowledge the uncertainty.
+  **Check retained receipt** looks for a receipt the app kept for that action;
+  when none was kept, inspect the review on the forge and choose **I inspected
+  the forge; acknowledge uncertainty**. The unknown result follows you across
+  the tabs, so an action is never replayed by switching tabs.
+- An unknown result from any other immediate write, such as an inline comment
+  on **Files changed**, a reply, a resolve or a verdict, blocks further writes
+  in the same way. The header reports it on **Overview**, **Files changed** and
+  **Discussions** with **I inspected the forge; acknowledge uncertainty**, so
+  you can clear it from whichever tab you are on. Only a lifecycle action
+  offers **Check retained receipt**.
 
 ## Keyboard
 

@@ -79,9 +79,9 @@ import { SidecarTransport } from "../../../desktop/dist/src/main/sidecar.js";
  *   `desktop/src/shared/review.ts` `REVIEW_MUTATION_MESSAGES.conflict`, with
  *   the message "The forge refused this action: the review changed remotely or its branch conflicts with the target. Refresh, and check for merge
  *   conflicts."
- * - Uncertainty acknowledgment (`review-detail/index.tsx` for comments and
- *   verdicts, `features/review/header.tsx` for lifecycle actions): button "I
- *   inspected the forge; acknowledge uncertainty".
+ * - Uncertainty acknowledgment (`features/review/header.tsx`, on every review
+ *   tab, for lifecycle actions, comments, replies, resolves and verdicts):
+ *   button "I inspected the forge; acknowledge uncertainty".
  */
 
 protocol.registerSchemesAsPrivileged([

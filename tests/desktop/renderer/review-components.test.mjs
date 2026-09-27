@@ -58,7 +58,22 @@ test("quick comment remains immediate, retains unknown intent, and needs explici
   const composer = await view.findByLabelText("General review comment");
   fireEvent.change(composer, { target: { value: "Possibly delivered" } });
   fireEvent.click(await enabledButton(view, "Add comment now"));
-  await view.findByText(/may have completed remotely/);
+  // The composer says what happened to its own write; the one way out is in
+  // the review header, the same on every tab.
+  await waitFor(() =>
+    assert.equal(
+      view.queryAllByRole("button", {
+        name: "I inspected the forge; acknowledge uncertainty",
+      }).length,
+      1,
+    ),
+  );
+  assert.equal(
+    view.container.querySelector(".review-header").textContent.includes(
+      "may have completed remotely",
+    ),
+    true,
+  );
   assert.equal(calls, 1);
   assert.equal(
     view.getByRole("button", { name: "Add comment now" }).disabled,
@@ -750,7 +765,7 @@ test("known quick rejection renders one actionable alert", async () => {
     },
   });
   const view = renderFeature(bridge, review);
-  fireEvent.click(await view.findByRole("button", { name: "Close" }));
+  fireEvent.click(await enabledButton(view, "Close"));
   fireEvent.click(view.getByRole("button", { name: "Confirm Close" }));
   const message = "The forge refused this action: the review changed remotely or its branch conflicts with the target. Refresh, and check for merge conflicts.";
   assert.equal((await view.findAllByText(message)).length, 1);

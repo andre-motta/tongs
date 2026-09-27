@@ -155,9 +155,13 @@ type CapabilityStanding =
  * review workflow state, so every surface of the review sees the same standing
  * and a tab change never loses an unknown result.
  *
- * Only the outcome of a lifecycle action is reported here. A verdict or a
- * general comment is reported by the Overview composer that sent it, so no
- * sentence is ever said twice on one page.
+ * Every outcome of a lifecycle action is reported here. So is an unknown or
+ * acknowledged result of any other quick intent (an inline comment, a reply, a
+ * resolve, a verdict), because an unknown result refuses every further
+ * mutation on the review and the way out has to be reachable from whichever
+ * tab the reader is on. A rejected comment or verdict is reported by the
+ * surface that sent it. Only a lifecycle action has a retained receipt to
+ * check; any other intent offers only the acknowledgement.
  */
 function ReviewLifecycleActions({
   bridge,
@@ -222,7 +226,8 @@ function ReviewLifecycleActions({
   const quick = workflow.quick;
   const blocked = quick?.status === "sending" || quick?.status === "unknown";
   const capabilities = standing.kind === "known" ? standing.capabilities : null;
-  const actionQuick = quick && isActionCommand(quick.command) ? quick : null;
+  const shownQuick = quick && reportsQuick(quick) ? quick : null;
+  const isAction = quick ? isActionCommand(quick.command) : false;
 
   const run = async (action: ReviewAction): Promise<void> => {
     if (confirmation !== action) {
@@ -316,7 +321,7 @@ function ReviewLifecycleActions({
   const showDetails =
     capabilities?.merge === true ||
     recoveryError !== null ||
-    Boolean(actionQuick?.message);
+    Boolean(shownQuick?.message);
 
   return (
     <>
@@ -379,27 +384,29 @@ function ReviewLifecycleActions({
               {recoveryError}
             </div>
           )}
-          {actionQuick?.message && (
+          {shownQuick?.message && (
             <div
-              className={`notice notice-${actionQuick.status === "rejected" ? "error" : "warning"}`}
-              role={actionQuick.status === "rejected" ? "alert" : "status"}
+              className={`notice notice-${shownQuick.status === "rejected" ? "error" : "warning"}`}
+              role={shownQuick.status === "rejected" ? "alert" : "status"}
             >
-              <span>{actionQuick.message}</span>
-              {actionQuick.status === "unknown" && (
+              <span>{shownQuick.message}</span>
+              {shownQuick.status === "unknown" && (
                 <span className="review-workflow-row">
-                  <button
-                    className="button button-secondary"
-                    onClick={() => void recover()}
-                  >
-                    Check retained receipt
-                  </button>
+                  {isAction && (
+                    <button
+                      className="button button-secondary"
+                      onClick={() => void recover()}
+                    >
+                      Check retained receipt
+                    </button>
+                  )}
                   <button
                     className="button button-secondary"
                     onClick={() =>
                       apply((current) =>
                         acknowledgeQuickUncertainty(
                           current,
-                          actionQuick.operationId,
+                          shownQuick.operationId,
                         ),
                       )
                     }
@@ -413,6 +420,23 @@ function ReviewLifecycleActions({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Whether the header reports this quick intent. A lifecycle action is always
+ * the header's own. Any other intent is reported while its result is unknown
+ * or has just been acknowledged; its rejection stays with the surface that
+ * sent it.
+ */
+export function reportsQuick(quick: {
+  readonly command: unknown;
+  readonly status: string;
+}): boolean {
+  return (
+    isActionCommand(quick.command) ||
+    quick.status === "unknown" ||
+    quick.status === "acknowledged_unknown"
   );
 }
 

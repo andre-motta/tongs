@@ -327,6 +327,99 @@ test("an unknown action result blocks every action on every tab until it is sett
   );
 });
 
+const ACKNOWLEDGE = "I inspected the forge; acknowledge uncertainty";
+
+/**
+ * Sends an inline comment from Files changed whose result is unknown, which
+ * refuses every further mutation on the review until it is acknowledged.
+ */
+async function unknownInlineComment(review) {
+  const posts = [];
+  const view = renderReview(
+    reviewBridge(review, {
+      getReviewActionCapabilities: () =>
+        read({
+          review,
+          capabilities: { merge: true, close: true, reopen: true, unapprove: true },
+        }),
+      postInlineReviewComment: async (params) => {
+        posts.push(params);
+        throw {
+          code: "mutation_timeout",
+          message: "The mutation response timed out.",
+          retryable: true,
+        };
+      },
+    }),
+    review,
+    "diff",
+  );
+  fireEvent.click(
+    await view.findByRole("button", { name: "Comment on new line 11" }),
+  );
+  fireEvent.change(await view.findByLabelText("Inline review comment"), {
+    target: { value: "Possibly delivered" },
+  });
+  fireEvent.click(view.getByRole("button", { name: "Add comment now" }));
+  await waitFor(() => assert.equal(posts.length, 1));
+  return view;
+}
+
+function headerText(view) {
+  return [...view.container.querySelectorAll(".review-header")]
+    .map((header) => header.textContent)
+    .join("");
+}
+
+function acknowledgeButtons(view) {
+  return view.queryAllByRole("button", { name: ACKNOWLEDGE }).length;
+}
+
+for (const [label, panel] of [
+  ["Files changed", "diff"],
+  ["Discussions", "discussions"],
+  ["Overview", "overview"],
+]) {
+  test(`an unknown inline comment is acknowledged from the ${label} tab header`, async () => {
+    const review = `header-unknown-inline-${panel}`;
+    const view = await unknownInlineComment(review);
+    if (panel !== "diff")
+      fireEvent.click(view.getByRole("button", { name: label }));
+    // One way out on the page, in the header, and no receipt to check: only a
+    // lifecycle action retains one.
+    await waitFor(() => assert.equal(acknowledgeButtons(view), 1));
+    assert.equal(
+      [...view.container.querySelectorAll(".review-header button")].filter(
+        (button) => button.textContent === ACKNOWLEDGE,
+      ).length,
+      1,
+    );
+    assert.equal(
+      view.queryAllByRole("button", { name: "Check retained receipt" }).length,
+      0,
+    );
+    assert.equal(headerText(view).includes("may have completed remotely"), true);
+    await waitFor(() =>
+      assert.deepEqual(
+        actionButtons(view).map((button) => button.title),
+        ACTION_LABELS.map(() => ACTIONS_BLOCKED),
+      ),
+    );
+    fireEvent.click(view.getByRole("button", { name: ACKNOWLEDGE }));
+    await waitFor(() => assert.equal(acknowledgeButtons(view), 0));
+    assert.equal(headerText(view).includes("acknowledged without replay"), true);
+    assert.equal(view.queryAllByText(/acknowledged without replay/).length, 1);
+    assert.equal(headerText(view).includes("may have completed remotely"), false);
+    await waitFor(() =>
+      assert.equal(
+        actionButtons(view).filter((button) => button.title === ACTIONS_BLOCKED)
+          .length,
+        0,
+      ),
+    );
+  });
+}
+
 test("the header tabs switch panels and keep the same controls", async () => {
   const review = "header-tabs";
   const view = renderReview(reviewBridge(review), review, "overview");

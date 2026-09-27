@@ -31,13 +31,12 @@ import {
   useInlineReviewComposer,
 } from "../review/composer.js";
 import {
-  acknowledgeQuickUncertainty,
   beginQuickIntent,
   markQuickIntentUncertain,
   rejectQuickIntent,
   settleQuickIntent,
 } from "../review/state.js";
-import { ReviewHeaderControls, isActionCommand } from "../review/header.js";
+import { ReviewHeaderControls, reportsQuick } from "../review/header.js";
 import type { SuggestionForge } from "../review/suggestion.js";
 import {
   DiscussionMarkdownBody,
@@ -397,9 +396,10 @@ function Notice({
  * refuse an inline one, a submission in flight included.
  *
  * What this component adds around it is what belongs to the review rather
- * than to the comment: the standing of an immediate write whose result is
- * unknown, and the quick verdicts, which submit the text the reader is
- * looking at and so read the composer's own body.
+ * than to the comment: the rejection of a verdict, and the quick verdicts,
+ * which submit the text the reader is looking at and so read the composer's
+ * own body. An unknown result, and the acknowledgement that clears it, is
+ * reported by the page header on every tab.
  */
 function GeneralComposer({
   bridge,
@@ -424,9 +424,10 @@ function GeneralComposer({
   // a later remount empty it without the reader asking.
   const [composerEpoch, setComposerEpoch] = useState(0);
   const quick = workflow.quick;
-  // A lifecycle action (Merge, Close, Reopen, Remove approval) reports its own
-  // outcome in the page header, so this surface reports only what it sent.
-  const ownQuick = quick && !isActionCommand(quick.command) ? quick : null;
+  // The page header reports every lifecycle action and every unknown or
+  // acknowledged result, with the way out, on every tab. What is left here is
+  // the rejection of what this page sent, a verdict or a general comment.
+  const ownQuick = quick && !reportsQuick(quick) ? quick : null;
   const publishBody = useCallback((next: string): void => {
     setBody(next);
     // A verdict's standing lasts until the reader writes the next one.
@@ -494,29 +495,14 @@ function GeneralComposer({
           {VERDICT_SUBMITTED[submitted]}
         </div>
       )}
-      {ownQuick?.message && (
+      {/* The composer already reports the sentence it was given, so it is not
+          said twice. */}
+      {ownQuick?.message && ownQuick.message !== controller.message && (
         <div
           className={`notice notice-${ownQuick.status === "rejected" ? "error" : "warning"}`}
           role={ownQuick.status === "rejected" ? "alert" : "status"}
         >
-          {/* The composer already reports the sentence it was given, so it is
-              not said twice; what is only here is the way out of an unknown
-              result, which otherwise blocks every further write. */}
-          {ownQuick.message !== controller.message && (
-            <span>{ownQuick.message}</span>
-          )}
-          {ownQuick.status === "unknown" && (
-            <button
-              className="button button-secondary notice-action"
-              onClick={() =>
-                apply((current) =>
-                  acknowledgeQuickUncertainty(current, ownQuick.operationId),
-                )
-              }
-            >
-              I inspected the forge; acknowledge uncertainty
-            </button>
-          )}
+          <span>{ownQuick.message}</span>
         </div>
       )}
       {!controller.pendingReview ? (

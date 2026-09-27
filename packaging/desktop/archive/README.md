@@ -3,8 +3,9 @@
 `scripts/build_desktop_archive.py` produces the Fedora 44 x86_64 per-user
 archive consumed by the version-1 desktop artifact and installer contracts.
 Every release, compatibility, source, runtime and timestamp value is an explicit
-input. The initial `0.5.0` value is an unpublished candidate and is not a tag or
-published release declaration.
+input. Branch and manual runs build the unpublished candidate version `0.5.0`; a
+`vX.Y.Z` tag push in `release-desktop.yml` passes the tag version instead, which
+produced the beta desktop archive attached to the 1.0.0 release.
 
 `BUILD_ENVIRONMENT.md` and `Containerfile.build` define the reproducible hosted
 builder. The package hashes are retained independently of Fedora mirror URLs.
@@ -20,7 +21,7 @@ retains the other runtime files. The app ASAR contains only the paths in
 are excluded.
 
 The producer uses `@electron/asar` 4.3.0 from the exact npm lock, Python 3.12.14
-with zlib-ng 1.3.1, Node 22.23.1, USTAR headers, level-9 raw DEFLATE, and a fixed
+with zlib-ng-compat 2.3.3 (zlib `1.3.1.zlib-ng`), Node 22.23.1, USTAR headers, level-9 raw DEFLATE, and a fixed
 gzip header. The contract checks these tool versions before building. Tar
 ownership is `0:0`, names are `root:root`, member order is lexical, and every
 tar timestamp and the gzip mtime use `SOURCE_DATE_EPOCH`. The gzip filename is

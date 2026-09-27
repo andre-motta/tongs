@@ -5,6 +5,13 @@ archive producer and the existing unsigned transfer validation. It is not a
 packager, a receipt schema, or a signing policy. Nothing in it verifies a
 certificate or a signature, so a passing receipt is never a signing claim.
 
+Issue #53 is closed. CI calls this adapter from the `archive-evidence` job in
+`.github/workflows/desktop-production.yml` through
+`tests/ci/desktop_production_expectations.py` (check ID
+`desktop-archive-lifecycle`), and the `CI aggregate` job in
+`.github/workflows/ci.yml` consumes its receipt. The obligations below are the
+contract that CI wiring must keep.
+
 The producer callable and the `produce` command require an exact clean subject
 checkout, the retained transfer root, caller-owned expectations, caller-owned
 receipt policy, and a fresh output path. The consumer callable and the `consume`
@@ -184,7 +191,7 @@ generic `application-startup` scope exclusion is the standing statement for ever
 run rather than a statement about ce4. The check ID vocabulary belongs to parent
 issue #53.
 
-## Parent issue #53 obligations
+## Caller obligations (from parent issue #53)
 
 1. Supply all four expectation identities and the receipt policy independently,
    and retain the exact transfer root through aggregate consumption.

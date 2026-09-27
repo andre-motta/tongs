@@ -10,56 +10,65 @@ frontend imports a concrete forge client. Direct `ForgeRegistry` access remains
 an internal service, MCP, and supported terminal-plugin interface.
 
 **MR operations:**
-- `list_mrs(repo_path, state, per_page)` -- list MRs for a repo
-- `list_my_reviews()` -- MRs where current user is reviewer (host-scoped)
-- `list_my_mrs()` -- MRs authored by current user (host-scoped)
-- `get_mr(repo_path, number)` -- full MR detail
-- `get_mr_diff(repo_path, number)` -- raw diff data
-- `list_mr_commits(repo_path, number)` -- commits in an MR/PR (returns `list[Commit]`)
+- `list_mrs(repo_path, state, per_page)`: list MRs for a repo
+- `list_my_reviews()`: MRs where current user is reviewer (host-scoped)
+- `list_my_mrs()`: MRs authored by current user (host-scoped)
+- `get_mr(repo_path, number)`: full MR detail
+- `get_mr_diff(repo_path, number)`: raw diff data
+- `list_mr_commits(repo_path, number)`: commits in an MR/PR (returns `list[Commit]`)
+- `get_mr_fresh()` / `get_mr_diff_fresh()`: non-abstract; default to the plain reads, used by the session for revision-bound reads that skip the cache
+- `invalidate_review_reads(repo_path, number)`: non-abstract hook, returns True; `CachedForgeClient` overrides it
 
 **Comment operations:**
-- `get_mr_discussions(repo_path, number)` -- threaded discussions
-- `create_inline_comment(repo_path, number, file_path, line, side, body, start_line=None, start_side=None, ...)` -- new inline comment; both clients use `start_line`/`start_side` to transport an optional multi-line API range. The ABC also declares keyword-only revision and old/new path fields; consult it rather than copying this abbreviated signature. Suggestion-fence syntax separately describes replacement content.
-- `reply_to_discussion(repo_path, number, discussion_id, body)` -- reply to thread
-- `resolve_discussion(repo_path, number, discussion_id, resolved)` -- resolve/unresolve
+- `get_mr_discussions(repo_path, number)`: threaded discussions
+- `create_inline_comment(repo_path, number, file_path, line, side, body, start_line=None, start_side=None, ...)`: new inline comment; both clients use `start_line`/`start_side` to transport an optional multi-line API range. The ABC also declares keyword-only revision and old/new path fields; consult it rather than copying this abbreviated signature. Suggestion-fence syntax separately describes replacement content.
+- `reply_to_discussion(repo_path, number, discussion_id, body)`: reply to thread
+- `resolve_discussion(repo_path, number, discussion_id, resolved)`: resolve/unresolve
+- `add_comment(repo_path, number, body)`: general (non-inline) comment; abstract
 
 **Review operations:**
-- `submit_review(repo_path, number, verdict, body, inline_comments)` -- abstract on both forges
+- `submit_review(repo_path, number, verdict, body, inline_comments)`: abstract on both forges
 - `approve_mr(repo_path, number)`
-- `unapprove_mr(repo_path, number)` -- non-abstract, default raises `NotImplementedError`; GitLab overrides with `/unapprove` endpoint, GitHub does not implement
+- `unapprove_mr(repo_path, number)`: non-abstract, default raises `NotImplementedError`; GitLab overrides with `/unapprove` endpoint, GitHub does not implement
 - `merge_mr(repo_path, number, squash, delete_branch)`
 - `close_mr(repo_path, number)` / `reopen_mr(repo_path, number)`
 
+submit_review, approve_mr, merge_mr and reply_to_discussion also take keyword-only revision guards (`head_sha`, `expected_source_*`, `expected_target_branch`, `root_comment_id`); consult the ABC.
+
 **Pipeline operations:**
 - `list_pipelines(repo_path, per_page)`
-- `list_mr_pipelines(repo_path, number, per_page)` -- list pipelines for a specific MR/PR. Default implementation falls back to `list_pipelines()`. GitLab overrides with `/merge_requests/{number}/pipelines`. GitHub overrides to fetch the PR's head branch then query `/actions/runs?branch={branch}`.
+- `list_mr_pipelines(repo_path, number, per_page)`: list pipelines for a specific MR/PR. Default implementation falls back to `list_pipelines()`. GitLab overrides with `/merge_requests/{number}/pipelines`. GitHub overrides to fetch the PR's head branch then query `/actions/runs?branch={branch}`.
 - `get_pipeline_jobs(repo_path, pipeline_id)`
 - `get_job_log(repo_path, job_id)` / `stream_job_log(repo_path, job_id)`
 - `retry_job(repo_path, job_id)` / `cancel_pipeline(repo_path, pipeline_id)`
-- `retry_pipeline(repo_path, pipeline_id)` -- retry all failed jobs in a pipeline. Default raises `NotImplementedError`. GitLab overrides with `/pipelines/{id}/retry`. GitHub overrides with `/actions/runs/{id}/rerun-failed-jobs`.
-- `cancel_job(repo_path, job_id)` -- cancel a single job. Default raises `NotImplementedError`. GitLab overrides with `/jobs/{id}/cancel`.
+- `retry_pipeline(repo_path, pipeline_id)`: retry all failed jobs in a pipeline. Default raises `NotImplementedError`. GitLab overrides with `/pipelines/{id}/retry`. GitHub overrides with `/actions/runs/{id}/rerun-failed-jobs`.
+- `cancel_job(repo_path, job_id)`: cancel a single job. Default raises `NotImplementedError`. GitLab overrides with `/jobs/{id}/cancel`.
 
 **Capability queries** (properties, override in subclasses):
-- `supports_batched_review` -- GitHub batches comments into a review; GitLab does not
-- `supports_thread_resolution` -- GitLab has first-class resolution; GitHub uses GraphQL
-- `supports_draft_notes` -- reserved capability; currently false for both implemented clients
-- `supports_unapprove` -- GitLab returns `True` (uses `/unapprove` endpoint); GitHub returns `False` (default). TUI checks this before calling `unapprove_mr()`
-- `supports_job_cancel` -- GitLab returns `True`; base returns `False` (default). TUI checks this before showing job cancel actions.
+- `supports_batched_review`: GitHub batches comments into a review; GitLab does not
+- `supports_thread_resolution`: GitLab has first-class resolution; GitHub uses GraphQL
+- `supports_draft_notes`: reserved capability; currently false for both implemented clients
+- `supports_unapprove`: GitLab returns `True` (uses `/unapprove` endpoint); GitHub returns `False` (default). `MRActionService` checks this before offering or running unapprove.
+- `supports_job_cancel`: GitLab returns `True`; base returns `False` (default). The session capability snapshot and `CIMutationService` check this before offering job cancel.
+
+**Lifecycle:**
+- `close()`: abstract; closes the owned httpx client
 
 ## Data Models
 
 Defined in `src/tongs/forges/models.py`. Union approach with Optional forge-specific fields:
 
-- `ForgeHost(hostname, forge_type, api_base)` -- identifies a forge instance
+- `ForgeHost(hostname, forge_type, api_base)`: identifies a forge instance
 - `User(username, display_name)`
-- `MRSummary` -- lightweight, for list views (no diff/comment data)
-- `MRDetail(MRSummary)` -- full MR with description, approvals, reviewers
-- `Commit` -- forge-agnostic commit (sha, short_sha, title, message, author, created_at, web_url)
-- `InlineComment` -- anchored to diff position, has `replies` tuple
-- `Discussion` -- comment thread, may or may not be inline
-- `Pipeline` / `PipelineJob` -- CI data
+- `MRSummary`: lightweight, for list views (no diff/comment data)
+- `MRDetail(MRSummary)`: full MR with description, approvals, reviewers
+- `Commit`: forge-agnostic commit (sha, short_sha, title, message, author, created_at, web_url)
+- `InlineComment`: anchored to diff position, has `replies` tuple
+- `Discussion`: comment thread, may or may not be inline
+- `Pipeline` / `PipelineJob`: CI data
+- `ForgeMutationResult` / `ForgeMergeResult`: receipts returned by mutating ABC methods (the merge result carries a `SourceCleanupStatus`)
 
-Enums: `MRState`, `CIStatus`, `ReviewDecision`, `FileStatus` (in diff models).
+Enums: `MRState`, `CIStatus`, `ReviewDecision`, `SourceCleanupStatus`, `FileStatus` (in diff models).
 
 Forge-specific optional fields pattern:
 
@@ -91,11 +100,11 @@ API base URL patterns:
 
 `src/tongs/forges/auth.py:resolve_token(hostname, forge_type)`:
 
-1. **CLI credential store** -- `glab config get token --host {host}` or `gh auth token [--hostname {host}]`. Single subprocess call on lazy credential resolution for a host.
-2. **~/.netrc** -- reads with `netrc` stdlib. Enforces 0o600 permissions on POSIX, raises `AuthError` otherwise.
-3. **System keyring** -- optional `keyring.get_password("tongs", hostname)`
+1. **CLI credential store**: `glab config get token --host {host}` or `gh auth token [--hostname {host}]`. Single subprocess call on lazy credential resolution for a host.
+2. **~/.netrc**: reads with `netrc` stdlib. Enforces 0o600 permissions on POSIX, raises `AuthError` otherwise.
+3. **System keyring**: optional `keyring.get_password("tongs", hostname)`
    lookup; absence or backend failure falls through safely.
-4. **Error** -- raises `AuthError` with setup instructions specific to the forge
+4. **Error**: raises `AuthError` with setup instructions specific to the forge
    type.
 
 Key details:
@@ -157,11 +166,11 @@ payload. GitLab resolves old/new sides and emits a `position.line_range` start
 and end. GitLab suggestion fences still describe the replacement content and
 are separate from API position transport.
 
-**Branch deletion safety:** `merge_mr()` with `delete_branch=True` verifies that `head.repo.full_name` matches the target `repo_path` before deleting the branch. This prevents accidental deletion of branches on fork repositories in cross-fork PRs.
+**Branch deletion safety:** `merge_mr()` with `delete_branch=True` deletes the source branch only when `head.repo.full_name` matches `repo_path` and the branch is neither the target nor the default branch. Any supplied head SHA and expected source and target must still match, or the merge is refused. The branch ref must still point at the merged head right before the DELETE. The outcome is reported as a `SourceCleanupStatus` in `ForgeMergeResult`.
 
 **Commit listing:** `list_mr_commits()` paginates `/repos/{owner}/{repo}/pulls/{number}/commits` and returns `list[Commit]`. Author is parsed from the top-level `author` (GitHub user), not `commit.author` (git author name).
 
-**Concurrent detail fetches:** `get_mr()` fires three concurrent tasks: the PR detail fetch, `_fetch_ci_status()`, and `_fetch_approvals()`. CI status and approvals are merged into the `MRDetail` after all three complete.
+**Concurrent detail fetches:** `get_mr()` fetches the PR first to learn its head SHA, then runs `_fetch_ci_status()` and `_fetch_approvals()` concurrently and merges both into the `MRDetail`.
 
 **PR-scoped workflow runs:** `list_mr_pipelines()` first fetches the PR to get the head branch ref, then GETs `/repos/{owner}/{repo}/actions/runs?branch={branch}`. `retry_pipeline()` POSTs to `/actions/runs/{id}/rerun-failed-jobs`. `cancel_job` and `supports_job_cancel` are not overridden (GitHub Actions jobs are canceled at the run level via `cancel_pipeline`).
 
@@ -203,7 +212,7 @@ are separate from API position transport.
 | HTTP transport + error mapping | Complete |
 | ForgeRegistry | Complete (GitHub + GitLab wired) |
 | GitLabClient | Complete (all ABC methods) |
-| GitHubClient | Complete (all ABC methods; CI status from PR list is UNKNOWN; thread resolution via GraphQL) |
+| GitHubClient | Complete (all ABC methods; repository PR lists fetch check-run CI status per PR, inbox search results report UNKNOWN; thread resolution via GraphQL) |
 | GitHub CI check-runs | Complete (concurrent fetch via _fetch_ci_status, aggregates all check-run statuses) |
 | GitHub approvals | Complete (concurrent fetch via _fetch_approvals from reviews API) |
 | GitLab approvals | Complete (concurrent fetch from /approvals endpoint) |

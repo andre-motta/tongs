@@ -21,7 +21,8 @@ credentials are mounted. Build and test scratch data stays in a temporary
 filesystem, while reports and wheels go to the requested output directory.
 
 The probe builds and installs fresh core and reference-plugin wheels, checks
-`tongs --help`, runs the core suite and existing fixture backend tests, and
+`tongs --help`, runs the core suite (deselecting tests marked `needs_git`) and
+the existing `spikes/desktop` fixture backend tests, and
 checks installed plugin discovery from both directions. The TUI registry must
 retain the legacy terminal command, while the experimental desktop backend must
 report the opt-in plugin as ready and the legacy plugin as terminal-only.

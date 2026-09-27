@@ -5,8 +5,9 @@ installable `python3-tongs` core and the optional `python3-tongs+mcp` command
 subpackage. `tongs-desktop` installs the accepted issue 51 Electron payload and
 requires the exact core EVR used by its launcher.
 
-The source preparation step derives the unpublished development version from the
-exact checked-out commit. By default it requires the desktop producer contract
+The source preparation step derives the version from the exact checked-out
+commit: the tag version at a `vX.Y.Z` tag (as for the unsigned beta RPMs attached
+to the 1.0.0 release), otherwise a development version after the latest tag. By default it requires the desktop producer contract
 to name that same commit, and embeds both identities into the desktop SRPM. It
 copies the accepted issue 51 archive only after
 checking its size, SHA-256, source identity, platform, compatibility interval,
@@ -48,8 +49,8 @@ desktop plugin RPM. It creates
 local install repositories and proves a minimal clean install, installed sidecar
 plugin discovery and invocation, Sigstore and system OpenSSL behavior, Electron
 SONAME providers, exact ownership and metadata, a bounded X11 launch, explicit
-MCP command integration and removal, same-NEVRA reinstall, a 0.4.9 to 0.5.0
-desktop upgrade, lower-to-current core upgrade, classified corrupted-package and
+MCP command integration and removal, same-NEVRA reinstall, a 0.4.9 to accepted-payload-version
+desktop upgrade (0.5.0 for a candidate, the tag version on a release), lower-to-current core upgrade, classified corrupted-package and
 dependency-negative failures, and uninstall preservation of user and unrelated
 sentinels. Every successful transaction is bound to the intended RPM NEVRA and
 an empty `rpm -V` result. The clean install also binds all seven companion NEVRAs

@@ -20,7 +20,7 @@ PR. The lifecycle is for multi-item, architectural, or risky initiatives.
 | Worktree root | `.worktrees/` (git-ignored). Item branches `claude/<initiative>-<item>`, so they never collide with the integration branch `claude/<initiative>`. Remove worktrees when they merge |
 | Setup | Checkout-local `.venv`; `python -m pip install -e ".[dev,mcp]" ruff`; desktop: `npm ci --prefix desktop` |
 | Focused checks | Tests for the changed subsystem plus `ruff check` and `ruff format --check` on changed files |
-| Integrated checks | `pytest`, `ruff check src/ tests/`, `ruff format --check src/ tests/`; desktop changes add `npm run build --prefix desktop` and the desktop suite; docs changes add `npm ci --prefix site && npm run build --prefix site` under the Node memory guard |
+| Integrated checks | `pytest`, `ruff check src/ tests/`, `ruff format --check src/ tests/`; desktop changes add `npm run build --prefix desktop` and the desktop suite; docs changes add `npm ci --prefix site && npm run build --prefix site` and the pinned markdownlint (`npm ci --prefix .github/linters`, then `.github/linters/node_modules/.bin/markdownlint-cli2 --config .github/linters/.markdownlint-cli2.jsonc "docs/**/*.md" "*.md"`), both under the Node memory guard |
 | Local CI reproduction | Run the relevant `ci.yml` job locally before pushing; packaging and RPM changes use the Fedora 44 container locally (Podman) rather than iterating on hosted runs |
 | Platforms | Python 3.12 and 3.13 required; desktop app on Fedora 44 KDE x86_64 required; other platforms best effort |
 | Evidence level | `automated` by default; the CTO chooses `manual` for release acceptance sessions |
@@ -58,12 +58,12 @@ release artifacts. This is a release gate, not a per-PR check.
 - PRs and pushes to `main` run CI (`ci.yml`). A PR runs only the lanes its
   changed paths select, with the `CI aggregate` as the required check; pushes
   to `main` and the `ci:full` label run the full graph. The desktop release
-  workflow runs on its own path filters and on `v*` tags.
+  workflow runs on its own path filters and on stable `vX.Y.Z` tags.
 - Pushes to `main` deploy the Astro + Starlight site built from `site/`.
   Everything under `docs/` is public except this file, `docs/site-plan.md`, and
   `docs/work/`, which the content collection glob in `site/src/content.config.ts`
   excludes.
-- `v*` tags publish to PyPI (environment `pypi`) and build the desktop GitHub
+- Stable `vX.Y.Z` tags publish to PyPI (environment `pypi`) and build the desktop GitHub
   Release. A failed draft lookup is handled per the release runbook; never
   delete releases or tags.
 

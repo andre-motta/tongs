@@ -1,8 +1,9 @@
 # Example dashboard
 
-This separately installable plugin is a deterministic SDK example. It renders
-three fixed review rows and summary counts, then invokes the Python provider's
-`refresh` method when the button is pressed.
+This separately installable plugin is a deterministic SDK example. It starts
+with empty summary counts; pressing Refresh dashboard invokes the Python
+provider's `refresh` method and renders the three fixed review rows and summary
+counts it returns.
 
 The example makes no forge calls, network requests, dynamic code evaluation, or
 remote asset loads. Installed Python and UI plugins are trusted code. The

@@ -61,7 +61,7 @@ Use Python 3.12 or newer. If you prefer `uv`, use `uv venv --python 3.12` to cre
 ## Quick start
 
 ```bash
-# Run tongs -- it scans ~/git by default
+# Run tongs; it scans ~/git by default
 tongs
 
 # Override the scan root for a single run
@@ -96,36 +96,36 @@ tongs never stores your tokens. It delegates to `gh auth token` / `glab config g
 
 ### Inbox
 
-- **Multi-forge inbox** -- GitHub PRs and GitLab MRs in one view, auto-detected from your git remotes
-- **Three tabs** -- My Reviews, My MRs, All Open with lazy loading and parallel fetching
-- **Per-repo scope** -- click any repo in the repo list to filter the inbox to just that project
-- **Sortable** -- press `s` to cycle sort order (updated, title, CI status, author)
-- **Repo list** -- searchable, filterable by forge type (GH/GL/All), sortable by name/forge/host
+- **Multi-forge inbox**: GitHub PRs and GitLab MRs in one view, auto-detected from your git remotes
+- **Three tabs**: My Reviews, My MRs, All Open with lazy loading and parallel fetching
+- **Per-repo scope**: click any repo in the repo list to filter the inbox to just that project
+- **Sortable**: press `s` to cycle sort order (updated, title, CI status, author)
+- **Repo list**: searchable, filterable by forge type (GH/GL/All), sortable by name/forge/host
 
 ### Diff review
 
-- **Split-pane viewer** -- file tree on the left, diff content on the right
-- **Syntax highlighting** -- 500+ languages via Pygments, bulk-highlighted per file for performance
-- **Word-level diffs** -- changed words highlighted bold+underline within modified lines
-- **Context folding** -- long unchanged sections collapse to "... N unchanged lines ..." markers
-- **Truncated diff handling** -- files too large for the API appear in the file tree with +/- stats and a "view in browser" prompt
-- **Markdown preview** -- toggle rendered preview for `.md` files with `m`
-- **File navigation** -- jump between files with `n` / `Shift+N`
-- **Unified or split view** -- press `v` to toggle; in split view `h` / `l` move focus between the old and new side
+- **Split-pane viewer**: file tree on the left, diff content on the right
+- **Syntax highlighting**: 500+ languages via Pygments, bulk-highlighted per file for performance
+- **Word-level diffs**: changed words highlighted bold+underline within modified lines
+- **Context folding**: long unchanged sections collapse to "... N unchanged lines ..." markers
+- **Truncated diff handling**: files too large for the API appear in the file tree with +/- stats and a "view in browser" prompt
+- **Markdown preview**: toggle rendered preview for `.md` files with `m`
+- **File navigation**: jump between files with `n` / `Shift+N`
+- **Unified or split view**: press `v` to toggle; in split view `h` / `l` move focus between the old and new side
 
 ### Commenting
 
-- **Inline comments** -- press `c` on any diff line to open the bottom-docked comment editor
-- **Discussion threads** -- existing inline comments appear as gutter markers in the diff; press `d` to expand/collapse threads with full Markdown rendering, replies, and resolution status
-- **Discussion tab** -- card-based view of all MR discussions with diff snippets, Rich Markdown threads, reply/resolve actions, and cross-tab jump-to-diff navigation
-- **Comment navigation** -- jump between comments with `]` / `[`, wrapping around
-- **Reply to threads** -- press `r` to reply to a discussion from the diff or discussion tab
-- **Resolve threads** -- press `R` to resolve/unresolve a discussion (GitHub and GitLab; double-press to confirm)
-- **Visual line selection** -- select multiple lines with `Shift+J` / `Shift+K` or `Ctrl+Click` for multi-line comments
-- **Suggested changes** -- press `F3` to open your `$EDITOR` with the selected code; edit it, and tongs posts a suggestion block (GitHub `suggestion` / GitLab `suggestion:-0+N` syntax)
-- **External editor** -- press `F2` inside the comment editor to switch to your preferred editor
-- **General comments** -- press `c` from the overview tab to post a top-level MR comment
-- **Durable review drafts** -- press `Ctrl+G` to start review mode, collect comments locally, then submit them as one review with a verdict
+- **Inline comments**: press `c` on any diff line to open the bottom-docked comment editor
+- **Discussion threads**: existing inline comments appear as gutter markers in the diff; press `d` to expand/collapse threads with full Markdown rendering, replies, and resolution status
+- **Discussion tab**: card-based view of all MR discussions with diff snippets, Rich Markdown threads, reply/resolve actions, and cross-tab jump-to-diff navigation
+- **Comment navigation**: jump between comments with `]` / `[`, wrapping around
+- **Reply to threads**: press `r` to reply to a discussion from the diff or discussion tab
+- **Resolve threads**: press `R` to resolve/unresolve a discussion (GitHub and GitLab; double-press to confirm)
+- **Visual line selection**: select multiple lines with `Shift+J` / `Shift+K` or `Ctrl+Click` for multi-line comments
+- **Suggested changes**: press `F3` to open your `$EDITOR` with the selected code; edit it, and tongs posts a suggestion block (GitHub `suggestion` / GitLab `suggestion:-0+N` syntax)
+- **External editor**: press `F2` inside the comment editor to switch to your preferred editor
+- **General comments**: press `c` from the overview tab to post a top-level MR comment
+- **Durable review drafts**: press `Ctrl+G` to start review mode, collect comments locally, then submit them as one review with a verdict
 
 ### Desktop review workspace (beta)
 
@@ -184,39 +184,39 @@ The defects that are known and unfixed in the desktop workspace are listed in
 
 ### Pipeline / CI
 
-- **Three-level drill-down** -- browse pipelines, drill into jobs grouped by stage, drill into full job logs
-- **ANSI log rendering** -- CI color output rendered natively via `Text.from_ansi()` with line numbers
-- **Cancel / Retry** -- cancel running pipelines or individual jobs (`C`), retry failed pipelines or jobs (`R`), with double-press confirmation
-- **Log search** -- press `/` in the log view to search the full job output, `n` / `N` to walk matches, `Escape` to close the search and return to where you were
-- **Open in editor** -- press `F2` to open the job log in your `$EDITOR` for deeper analysis
-- **Open in browser** -- press `o` to jump to the pipeline or job in the web UI
-- **MR-scoped** -- Pipeline tab shows only pipelines associated with the current MR/PR
-- **Lazy loading** -- pipeline data is fetched only when the Pipeline tab is first opened
+- **Three-level drill-down**: browse pipelines, drill into jobs grouped by stage, drill into full job logs
+- **ANSI log rendering**: CI color output rendered natively via `Text.from_ansi()` with line numbers
+- **Cancel / Retry**: cancel running pipelines or individual jobs (`C`), retry failed pipelines or jobs (`R`), with double-press confirmation
+- **Log search**: press `/` in the log view to search the full job output, `n` / `N` to walk matches, `Escape` to close the search and return to where you were
+- **Open in editor**: press `F2` to open the job log in your `$EDITOR` for deeper analysis
+- **Open in browser**: press `o` to jump to the pipeline or job in the web UI
+- **MR-scoped**: Pipeline tab shows only pipelines associated with the current MR/PR
+- **Lazy loading**: pipeline data is fetched only when the Pipeline tab is first opened
 
 ### Caching
 
-- **SQLite-backed cache** -- API responses are cached locally in SQLite (via aiosqlite) for snappy navigation
-- **Transparent caching layer** -- `CachedForgeClient` wraps forge clients, caching reads and invalidating on mutations
-- **Per-key TTL** -- MR lists (60s) and diffs (300s) have configurable time-to-live; expired entries are pruned automatically
-- **LRU eviction** -- size-capped at 100 MB by default; recently accessed entries are protected from eviction
-- **WAL mode** -- concurrent reads never block the UI event loop
-- **Clear Cache** -- available from the command palette (`Ctrl+P`) to force a fresh fetch
+- **SQLite-backed cache**: API responses are cached locally in SQLite (via aiosqlite) for snappy navigation
+- **Transparent caching layer**: `CachedForgeClient` wraps forge clients, caching reads and invalidating on mutations
+- **Per-key TTL**: MR lists (60s) and diffs (300s) have configurable time-to-live; expired entries are pruned automatically
+- **LRU eviction**: size-capped at 100 MB by default; recently accessed entries are protected from eviction
+- **WAL mode**: concurrent reads never block the UI event loop
+- **Clear Cache**: available from the command palette (`Ctrl+P`) to force a fresh fetch
 
 ### Actions
 
-- **Approve** (`A`) -- approve the MR/PR with double-press confirmation
-- **Unapprove** (`U`) -- revoke your approval (GitLab)
-- **Merge** (`M`) -- merge with double-press confirmation
-- **Close** (`X`) -- close with double-press confirmation
-- **Merge readiness** -- visual indicator showing blockers (draft, conflicts, CI failing, merge status)
+- **Approve** (`A`): approve the MR/PR with double-press confirmation
+- **Unapprove** (`U`): revoke your approval (GitLab)
+- **Merge** (`M`): merge with double-press confirmation
+- **Close** (`X`): close with double-press confirmation
+- **Merge readiness**: visual indicator showing blockers (draft, conflicts, CI failing, merge status)
 
 ### Navigation
 
-- **Command palette** (`Ctrl+P`) -- context-aware fuzzy search across all available actions
-- **Commits tab** -- browse the full commit history for any MR/PR
-- **Open in browser** (`o`) -- jump to the MR/PR in your default browser
-- **Copy URL** (`Ctrl+Y`) -- yank the MR URL to clipboard
-- **Refresh** (`Ctrl+R`) -- reload the current view
+- **Command palette** (`Ctrl+P`): context-aware fuzzy search across all available actions
+- **Commits tab**: browse the full commit history for any MR/PR
+- **Open in browser** (`o`): jump to the MR/PR in your default browser
+- **Copy URL** (`Ctrl+Y`): yank the MR URL to clipboard
+- **Refresh** (`Ctrl+R`): reload the current view
 
 ## Desktop application (beta)
 
@@ -432,10 +432,10 @@ tongs uses a plugin architecture based on Python entry points. The MCP server, f
        def version(self) -> str:
            return "0.1.0"
 
-       async def on_app_ready(self, app) -> None:
-           """Called after the TUI app is mounted."""
+       async def on_app_ready(self, ctx) -> None:
+           """Called after the TUI app is mounted, with a PluginContext."""
 
-       async def on_app_shutdown(self, app) -> None:
+       async def on_app_shutdown(self, ctx) -> None:
            """Called before app exit."""
 
        def get_commands(self) -> list[tuple[str, str, object]]:
@@ -470,10 +470,12 @@ enabled = false
 
 | Hook | When it fires |
 |------|---------------|
-| `on_app_ready(app)` | After the TUI mounts |
-| `on_app_shutdown(app)` | Before app exit |
+| `on_app_ready(ctx)` | After the TUI mounts |
+| `on_app_shutdown(ctx)` | Before app exit |
 | `get_commands()` | Command palette collects entries |
 | `get_screens()` | Screen registry collects routes |
+
+`ctx` is a `PluginContext`, a restricted view of the app rather than the app itself. It exposes the forge registry, cache, config and discovered repos, a `notify` helper, `push_screen` and `pop_screen`, and `plugin_config(name)` for the plugin's own config section.
 
 ## MCP server (plugin)
 
@@ -549,7 +551,7 @@ claude mcp add tongs -- "$PWD/.venv/bin/tongs-mcp"
 | `approve_mr` | Approve an MR |
 | `list_pipelines` | List CI pipelines for an MR |
 
-All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com/acme/app`). Destructive actions (merge, close, cancel) are intentionally excluded as a security boundary.
+All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com/acme/app`). Destructive actions (merge, close, reopen, cancel) are intentionally excluded as a security boundary.
 
 ## tongs is for you if
 
@@ -593,7 +595,7 @@ Run your agent from the repository root after the [source setup](#from-source). 
 
 The MCP connection above is optional for contributing to tongs. It exposes forge operations to the assistant; repository development itself uses the local source tree and tests.
 
-tongs is early enough that contributions shape the architecture. The [plugin system](#plugin-system) makes it easy to add new commands, screens, and lifecycle hooks without touching core code. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
+Contributions still shape the architecture. The [plugin system](#plugin-system) makes it easy to add new commands, screens, and lifecycle hooks without touching core code. Check the [issues](https://github.com/andre-motta/tongs/issues) for good starting points, or open one to discuss what you'd like to build.
 
 ## Why "tongs"?
 

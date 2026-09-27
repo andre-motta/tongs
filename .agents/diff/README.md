@@ -57,15 +57,11 @@ Both formats are supported in a single diff string (mixed is fine).
 - `-` lines: deletion (old_lineno set, new_lineno None), increment old_line
 - ` ` lines or empty lines: context (both linenos set), increment both
 - `\` lines: no-newline marker (both linenos None)
-- Stops at next `@@`, `diff --git`, or `---`/`+++` pair
+- Stops at the next `@@ ` or `diff --git ` line, at an empty line once the declared counts are consumed, at an unrecognized line, or at a `---`/`+++` pair that `_is_file_header_boundary()` accepts
 
 ### Boundary Detection
 
-The parser detects file boundaries by looking for:
-- `diff --git ` prefix (new git-format file)
-- `--- ` immediately followed by `+++ ` on the next line (new plain-format file)
-
-This means a line starting with `---` inside a hunk is only treated as a boundary if the very next line starts with `+++`. This prevents false matches on content lines like SQL comments (`-- DROP TABLE`).
+The parser treats `diff --git ` as a new git-format file. It treats `--- ` followed by `+++ ` as a new plain-format file only when `_is_file_header_boundary()` accepts it: always once the current hunk has consumed its declared old and new counts, never while both sides still fit the hunk, and otherwise only when a hunk header follows the pair. Inside a hunk that still has room, the pair stays a deletion and an addition, so content such as SQL comments (`-- DROP TABLE`) is not taken for a header.
 
 ### Hunk Header Regex
 
@@ -80,40 +76,42 @@ Groups: (1) old_start, (2) old_count (optional, defaults to "1"), (3) new_start,
 `src/tongs/diff/models.py` defines four frozen dataclasses:
 
 **DiffLine:**
-- `old_lineno: int | None` -- line number in old file (None for additions)
-- `new_lineno: int | None` -- line number in new file (None for deletions)
-- `content: str` -- line content (prefix character stripped)
-- `line_type: LineType` -- CONTEXT, ADDITION, DELETION, HUNK_HEADER, NO_NEWLINE
+- `old_lineno: int | None`: line number in old file (None for additions)
+- `new_lineno: int | None`: line number in new file (None for deletions)
+- `content: str`: line content (prefix character stripped)
+- `line_type: LineType`: CONTEXT, ADDITION, DELETION, HUNK_HEADER, NO_NEWLINE
 
 **DiffHunk:**
-- `header: str` -- raw `@@ ... @@` line
-- `old_start`, `old_count`, `new_start`, `new_count` -- from hunk header
-- `lines: tuple[DiffLine, ...]` -- parsed lines in this hunk
-- `context_text: str` -- function name from hunk header (after `@@`)
+- `header: str`: raw `@@ ... @@` line
+- `old_start`, `old_count`, `new_start`, `new_count`: from hunk header
+- `lines: tuple[DiffLine, ...]`: parsed lines in this hunk
+- `context_text: str`: function name from hunk header (after `@@`)
 
 **DiffFile:**
-- `old_path`, `new_path` -- file paths (no `a/`/`b/` prefixes)
-- `status: FileStatus` -- MODIFIED, ADDED, DELETED, RENAMED
+- `old_path`, `new_path`: file paths (no `a/`/`b/` prefixes)
+- `status: FileStatus`: MODIFIED, ADDED, DELETED, RENAMED
 - `hunks: tuple[DiffHunk, ...]`
-- `additions`, `deletions` -- computed counts
+- `additions`, `deletions`: computed counts
 - `is_binary: bool`
-- `language: str` -- detected from file extension
+- `language: str`: detected from file extension
 - `is_truncated`, `is_empty`, `is_mode_only`, `is_rename_only`,
-  `is_unavailable` -- explicit reasons a forge-described file has incomplete or
+  `is_unavailable`: explicit reasons a forge-described file has incomplete or
   absent content hunks. The states derived from a payload are mutually
   exclusive; a state the forge reports explicitly is passed through as reported,
   so an explicit `is_empty`, `too_large` or mode signal can still set two of
   these at once. No real GitHub or GitLab payload does, and the desktop badge
   map would render both rather than fail.
-- `is_metadata_only` -- derived property for binary, empty, mode-only,
+- `is_metadata_only`: derived property for binary, empty, mode-only,
   rename-only, or unavailable files
 
 **SplitDiffRow:**
-- `old: DiffLine | None`, `new: DiffLine | None` -- independent references to
+- `old: DiffLine | None`, `new: DiffLine | None`: independent references to
   the original `DiffLine` objects; a missing cell is `None`
-- `old_anchor`, `new_anchor` -- properties returning the respective `DiffLine`
+- `old_anchor`, `new_anchor`: properties returning the respective `DiffLine`
   only when it is a comment-anchorable context/deletion or context/addition
   line with a line number, otherwise `None`
+
+`src/tongs/diff/alignment.py:align_hunk()` pairs a hunk's lines into `SplitDiffRow` tuples for the terminal split view (`v`). It is a pure function covered by `tests/test_diff/test_alignment.py`.
 
 ## Language Detection
 
@@ -130,7 +128,7 @@ Used by the terminal renderer to select Rich syntax highlighting.
 ## Known Edge Cases
 
 1. **Empty lines in hunks:** treated as context lines (both counters increment). The `content` is empty string.
-2. **SQL comments (`-- ...`):** only treated as file boundary if next line starts with `+++ `. Inside a hunk, `--` is a deletion line.
+2. **SQL comments (`-- ...`):** inside a hunk that still has room on both sides, a `---`/`+++` pair stays a deletion and an addition; see Boundary Detection.
 3. **No-newline marker:** `\ No newline at end of file` is preserved as `LineType.NO_NEWLINE` with both linenos as None.
 4. **Binary files:** detected via `Binary files` line. DiffFile has `is_binary=True` and empty hunks.
 5. **Renamed files without content change:** detected via `rename from`/`rename to` lines. DiffFile has `status=RENAMED` and may have empty hunks. From a forge change payload the same shape sets `is_rename_only`.
@@ -140,8 +138,8 @@ Used by the terminal renderer to select Rich syntax highlighting.
 ## Test Fixtures
 
 Real diff files for testing are in `tests/fixtures/`:
-- `builder_mr_3113.diff` -- real MR diff from the builder project
-- `fromager_pr_1258.diff` -- real PR diff from fromager
+- `builder_mr_3113.diff`: real MR diff from the builder project
+- `fromager_pr_1258.diff`: real PR diff from fromager
 
 Tests in `tests/test_diff/test_parser.py` cover both inline diff strings and fixture file parsing.
 
@@ -153,11 +151,11 @@ Tests in `tests/test_diff/test_parser.py` cover both inline diff strings and fix
 
 Frozen dataclass capturing enough information for any forge:
 
-- `file: DiffFile` -- the file this position belongs to
-- `line: DiffLine` -- the specific diff line
-- `old_path`, `new_path` -- file paths
-- `old_line: int | None`, `new_line: int | None` -- line numbers in old/new file
-- `side: str` -- `"LEFT"` (old file / deletions) or `"RIGHT"` (new file / additions and context)
+- `file: DiffFile`: the file this position belongs to
+- `line: DiffLine`: the specific diff line
+- `old_path`, `new_path`: file paths
+- `old_line: int | None`, `new_line: int | None`: line numbers in old/new file
+- `side: str`: `"LEFT"` (old file / deletions) or `"RIGHT"` (new file / additions and context)
 
 ### Factory
 
@@ -179,11 +177,11 @@ Frozen dataclass capturing enough information for any forge:
 
 Diff lines flow through this pipeline from parser to screen:
 
-1. `parse_diff()` produces `list[DiffFile]` with `DiffHunk` and `DiffLine` objects
-2. `DiffContent.show_file()` passes the file to `DiffRenderer.render_lines()`
-3. `DiffRenderer` handles syntax highlighting (`rich.syntax.Syntax`), word-level diffs (`difflib.SequenceMatcher`), and context folding. Returns `list[tuple[DiffLine | None, Text]]` with foreground-only styling
+1. `convert_forge_changes()` (which uses `parse_diff()` for patch text) produces `list[DiffFile]`
+2. `DiffContent.show_file()` calls `_render_current_file()`, which sends split mode (`v`) to `SplitDiffView.show_file()` and unified mode to `_show_diff()`
+3. `_show_diff()` calls `DiffRenderer.render_lines(hunk)` for each hunk. `DiffRenderer` handles syntax highlighting (`rich.syntax.Syntax`), word-level diffs (`difflib.SequenceMatcher`) and context folding, and returns `list[tuple[DiffLine | None, Text]]` with foreground-only styling
 4. Each `(DiffLine, Text)` pair becomes an `Option` in `DiffOptionList`
-5. `DiffOptionList.render_line()` injects background colors (addition/deletion/selection) via `VisualStyle` BEFORE calling `_get_option_render()`. This is the only place backgrounds are set
+5. `DiffOptionList.render_line()`, and `SplitDiffColumn.render_line()` in split mode, add background colors (addition/deletion/selection) through `VisualStyle` BEFORE calling `_get_option_render()`. These are the only places backgrounds are set.
 
 The foreground/background split is intentional: `Strip.apply_style()` cannot reliably override backgrounds due to Textual style priority, so backgrounds must be set in the VisualStyle before rendering.
 
@@ -210,9 +208,8 @@ The gutter lookup uses a `comment_lines: dict[tuple[int | None, int | None], boo
 `DiffPanel.jump_to_discussion(file_path, line, discussion_id)` supports cross-tab navigation from the Discussion tab to the Diff tab. When invoked:
 1. Finds the file by matching `new_path` or `old_path` against the file list
 2. Switches to the file via `_show_file(index)`
-3. Adds `discussion_id` to `DiffOptionList._expanded_threads` so the thread renders inline
-4. Re-renders the diff via `DiffContent._show_diff()` with the expanded thread
-5. Scrolls to the target line via `ol.highlighted` and `ol.scroll_to_highlight()`
+3. Picks `DiffSide.OLD` for a discussion anchored only on the old side, otherwise `DiffSide.NEW`
+4. Calls `DiffContent.jump_to(line, side, discussion_id)`. In split mode this delegates to `SplitDiffView.jump_to()`. In unified mode it adds `discussion_id` to `DiffOptionList._expanded_threads`, re-renders through `_show_diff()`, and scrolls to the line on that side through `ol.highlighted` and `ol.scroll_to_highlight()`.
 
 This enables the Discussion tab's `Enter` key (via `JumpToDiffDiscussion` message) to jump directly to the code location with the discussion expanded.
 

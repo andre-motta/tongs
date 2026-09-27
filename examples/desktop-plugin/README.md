@@ -41,5 +41,6 @@ node --test tests/test_dashboard_module.mjs
 
 The module test uses a small mocked DOM and a frozen scoped host API. It checks
 mount, event subscription and rendering, invocation and notification, focus
-binding, navigation, abort handling, and cleanup. Native Electron host
-integration is exercised by the desktop application acceptance workflow.
+binding, navigation, abort handling, and cleanup. CI installs this example in
+`desktop-production.yml` and runs its Python tests with `tests/plugins`; the
+module test and native Electron host integration are not run in CI.

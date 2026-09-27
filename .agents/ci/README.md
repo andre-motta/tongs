@@ -16,13 +16,13 @@ pytest tests/ --ignore=tests/test_mcp -v
 pytest tests/test_mcp -v --junitxml="/tmp/tongs-mcp-$$.junit.xml"
 python tests/ci/verify_desktop_ci.py mcp-report \
   --path "/tmp/tongs-mcp-$$.junit.xml"
-ruff check src/ tests/
-ruff format --check src/ tests/
+ruff check src/ tests/ packaging/
+ruff format --check src/ tests/ packaging/
 ```
 
 The MCP extra is required so MCP tests execute rather than skip on import. The
 `$$` in the report path keeps concurrent worktrees from overwriting each other's
-report; CI uses `"$RUNNER_TEMP/mcp-<python-version>.junit.xml"` for the same
+report; CI writes to `"$RUNNER_TEMP/reports/mcp.junit.xml"`, which is private to each job's runner, for the same
 reason. Use a focused path during development, then run the checks appropriate to
 the changed source.
 
@@ -119,7 +119,7 @@ Matching rules add their lanes together, and a push to `main`, the `ci:full` lab
 
 | Lane | `ci.yml` job |
 |---|---|
-| `docs` | `Docs build`: `mkdocs build --strict` and the pinned Markdown linter |
+| `docs` | `Docs build`: the Astro + Starlight site build (`npm run build --prefix site`), the CNAME and repository-only record checks, and the pinned Markdown linter |
 | `lint` | `Lint and format`: Ruff over `src/`, `tests/` and `packaging/` |
 | `core` | `Core and MCP` on Python 3.12 and 3.13 |
 | `desktop_fixtures` | `Desktop fixture checks`: the spike fixtures and the production Electron shell suite |
@@ -184,7 +184,7 @@ Node setup identical to the deploy's.
 ## Releases
 
 Two workflows run on a stable `vX.Y.Z` tag. `publish.yml` builds the core
-and publishes it to PyPI. `release-desktop.yml` builds the desktop archive for
+and publishes it to PyPI. `release-desktop.yml` builds the beta desktop archive for
 that version, attests it with GitHub-managed Sigstore, verifies the attestation
 with the installer's own code path, rebuilds the Fedora RPMs from the signed
 archive, and publishes everything to the GitHub Release of the same tag,

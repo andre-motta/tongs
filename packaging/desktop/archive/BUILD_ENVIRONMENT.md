@@ -16,7 +16,8 @@ Build the image with `packaging/desktop/archive` as its context:
 docker build --file Containerfile.build --tag tongs-archive-builder:local .
 ```
 
-The narrow `.github/workflows/desktop-archive.yml` validation job builds this
+The narrow, manually dispatched `.github/workflows/desktop-archive.yml`
+validation job builds this
 image with Podman on a disposable GitHub-hosted x86_64 runner. It records the
 image identity and asserted tool versions, downloads the exact official Electron
 zip, and uses `git archive` to prepare two clean source roots. Each root gets an
@@ -36,13 +37,14 @@ TONGS_HEAD_SHA=$(git rev-parse HEAD) \
   --output-dir /path/to/new/evidence-directory
 ```
 
-Issue 53 may call this validation seam from its aggregate workflow. It must keep
-the exact candidate checkout, pinned inputs, two-clean-root comparison, and
-bounded evidence retention intact.
+The packaging lane of the CI aggregate (the `archive` job in
+`desktop-production.yml`) and `release-desktop.yml` call the same
+`run_hosted.sh` seam, keeping the exact candidate checkout, pinned inputs,
+two-clean-root comparison, and bounded evidence retention intact.
 
-Fedora mirrors may retire an update RPM. Before that happens, issue 53 should
-retain the five Fedora-signed RPM bytes in its approved build-input store under
-these exact SHA-256 identities. Fedora Koji builds with the same NVRs are an
+Fedora mirrors may retire an update RPM. The builder downloads the five Fedora-signed
+RPMs with `dnf download` and keeps no retained copy; each must match these exact
+SHA-256 identities. Fedora Koji builds with the same NVRs are an
 acceptable source only when every downloaded RPM matches this committed list;
 changing a package or base-image digest creates a new toolchain and requires two
 new clean builds. No package is silently substituted from a moving repository.

@@ -27,19 +27,19 @@ CREATE TABLE IF NOT EXISTS cache (
 
 ### Core Methods
 
-- `open()` -- Create directory/file, connect, enable WAL, create table. Must be called before any other method.
-- `get(key) -> bytes | None` -- Return cached value if key exists and not expired. Updates `created_at` on hit (LRU touch). Returns None if not found, expired, or excluded.
-- `put(key, value, ttl)` -- Insert or replace entry. `ttl` is seconds from now. Calls `_enforce_size_limit()` after write.
-- `invalidate(key)` -- Delete a single entry.
-- `invalidate_prefix(prefix)` -- Delete all entries matching prefix (SQL `LIKE prefix%`).
-- `clear()` -- Delete all entries.
-- `prune()` -- Delete all expired entries.
-- `close()` -- Close the aiosqlite connection.
+- `open()`: Create directory/file, connect, enable WAL, create table. Before `open()` and after `close()` every other method is a silent no-op (reads return None).
+- `get(key) -> bytes | None`: Return cached value if key exists and not expired. Updates `created_at` on hit (LRU touch). Returns None if not found, expired, or excluded.
+- `put(key, value, ttl)`: Insert or replace entry. `ttl` is seconds from now. Calls `_enforce_size_limit()` after write.
+- `invalidate(key)`: Delete a single entry.
+- `invalidate_prefix(prefix)`: Delete all entries matching prefix (SQL `LIKE prefix%`).
+- `clear()`: Delete all entries.
+- `prune()`: Delete all expired entries.
+- `close()`: Close the aiosqlite connection.
 
 ### Convenience Methods
 
-- `get_json(key) -> dict | list | None` -- Calls `get()`, deserializes JSON.
-- `put_json(key, value, ttl)` -- Serializes to JSON bytes, calls `put()`.
+- `get_json(key) -> dict | list | None`: Calls `get()`, deserializes JSON.
+- `put_json(key, value, ttl)`: Serializes to JSON bytes, calls `put()`.
 
 ## Eviction Strategy
 
@@ -57,7 +57,8 @@ Keys starting with `_EXCLUDED_PREFIXES` (`"job_log:"`, `"stream_log:"`) are sile
 
 `src/tongs/cache/cached_client.py` wraps any `ForgeClient` with transparent SQLite caching. `ForgeRegistry.get_client()` automatically wraps every forge client in `CachedForgeClient` when a cache is configured.
 
-- **Cached reads:** `list_mrs` (keyed by repo_path + state, TTL = mr_list_ttl) and `get_mr_diff` (keyed by repo_path + MR number, TTL = diff_ttl). On cache hit, returns deserialized JSON without an API call.
+- **Cached reads:** `list_mrs` (keyed by hostname, repo_path and state, not per_page; TTL = mr_list_ttl) and `get_mr_diff` (keyed by hostname, repo_path and MR number; TTL = diff_ttl). On a hit they return deserialized JSON without an API call.
+- **Fresh reads:** `get_mr_fresh` and `get_mr_diff_fresh` always bypass the cache. `ApplicationSession` uses them for review detail and raw diff reads, so the built-in terminal and desktop views get only MR lists from the cache. The MCP server builds its own registry without a cache.
 - **Mutation coherence:** approve/unapprove, close/reopen, general and inline
   comments, replies, discussion resolution, and review submission all call
   `_finish_review_mutation()`. It marks the review and list prefixes dirty
@@ -71,12 +72,12 @@ Keys starting with `_EXCLUDED_PREFIXES` (`"job_log:"`, `"stream_log:"`) are sile
 - **Pass-through:** Operations without an explicit cache or coherence wrapper,
   including pipeline reads/mutations and job logs, delegate through
   `__getattr__`. Job logs remain excluded from storage.
-- **Serialization:** `_mr_summary_to_dict` / `_dict_to_mr_summary` handle MRSummary round-trip through JSON, including enum values (CIStatus, MRState, ForgeType) and datetime fields.
+- **Serialization:** `_mr_summary_to_dict` / `_dict_to_mr_summary` round-trip the core MRSummary fields through JSON, including enum values (CIStatus, MRState, ForgeType) and datetimes. `comment_count`, `has_conflicts`, `labels`, `review_decision`, `additions` and `deletions` are not restored and come back as defaults on a cache hit.
 
 ## Clear Cache operations
 
 The terminal command palette clears the session-owned cache through
-`app.cache.clear()` and shows a notification. The production desktop invokes the
+`app.cache.clear()` and shows a notification. The desktop app (beta) invokes the
 exact `utilities.cache_clear` protocol method; its handler calls
 `ApplicationSession.clear_cache()` and then emits `RESYNC_REQUIRED` so desktop
 views refetch current data. Neither path deletes durable review drafts, editor
@@ -94,7 +95,7 @@ clear authority and ignores renderer paths or keys.
 - `TongsApp` and `TUIServiceAdapter` use the session; `cache` and
   `forge_registry` properties on the app remain compatibility views of
   session-owned resources.
-- The production sidecar creates its own session and closes it when the protocol
+- The desktop (beta) sidecar creates its own session and closes it when the protocol
   connection ends.
 - `ApplicationSession.close()` closes forge clients, drafts, and the cache with
   bounded cleanup and retains a safe cleanup failure when necessary.
@@ -112,13 +113,14 @@ clear authority and ignores renderer paths or keys.
 ## Testing
 
 Tests in `tests/test_cache/test_store.py` cover:
-- Store open/close lifecycle
-- get/put with TTL expiration
-- LRU eviction behavior
+- get/put round trip and TTL expiration
 - JSON convenience methods
-- Prefix invalidation
+- Single-key and prefix invalidation
+- clear and prune
 - Excluded key prefixes
-- Size limit enforcement
+- No-op behavior before open() and after close()
+
+LRU touch and size-limit eviction currently have no dedicated test.
 
 `tests/test_cache/test_cached_client.py` covers read caching, review and merge
 dirty-prefix coherence, invalidation failure, bounded background cleanup, close

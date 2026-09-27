@@ -73,8 +73,10 @@ delivery under those names replaces them in place.
 
 ## Brand kit placeholders (not in this tree yet)
 
-The pages still reference or reserve these final filenames: `og-image.png`
-(referenced by `og:image` and `twitter:image`, currently missing, so social
-cards have no image), `hero-loop.webm`, `hero-loop.mp4`,
-`hero-banner-plain-1920x1080.webp`, `trailer.mp4` and `trailer-poster.png`.
-Record each one's license here when it lands in `public/`.
+The pages still reserve these final filenames: `og-image.png` (until it exists
+in `public/`, pages omit `og:image` and `twitter:image` and use the small
+Twitter card), `hero-loop.webm`, `hero-loop.mp4`,
+`hero-banner-plain-1920x1080.webp`, and `media/trailer.mp4` with
+`media/trailer-poster.png` (the trailer slot renders only once
+`public/media/trailer.mp4` exists). Record each one's license here when it
+lands in `public/`.

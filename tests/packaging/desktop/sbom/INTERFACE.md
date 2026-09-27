@@ -1,6 +1,7 @@
 # Desktop SBOM caller identity
 
-The issue #53 caller must compute these values independently from its exact,
+The caller (`tests/integration/desktop/sbom_evidence.py`, run by the
+`archive-sbom` job in `.github/workflows/desktop-production.yml`) must compute these values independently from its exact,
 checked-out candidate before invoking `scripts/build_desktop_sbom.py`:
 
 - the full source commit and tree IDs;
@@ -17,5 +18,5 @@ prepared inventory. The generator verifies the retained source tar, selected
 source files, source package lock, producer metadata, and actual Electron ZIP
 against those caller-owned identities.
 
-The final issue #53 assembly must regenerate the SBOM for its exact paired
-source and desktop archive. Historical candidate evidence is diagnostic only.
+CI regenerates the SBOM for each tested head's exact paired source and desktop
+archive. Historical candidate evidence is diagnostic only.

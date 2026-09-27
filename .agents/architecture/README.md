@@ -31,7 +31,7 @@ models while retaining service-issued identities and revisions for later
 mutations. Textual views call `app.services`; they do not import concrete forge
 clients.
 
-The production desktop starts from top-level `desktop/`. Electron main owns the
+The desktop app (beta) starts from top-level `desktop/`. Electron main owns the
 Python sidecar lifecycle and all privileged OS integrations. The preload exposes
 an allowlisted, typed bridge into a context-isolated React renderer. The Python
 sidecar in `src/tongs/desktop/sidecar.py` serves protocol major 1 over bounded
@@ -61,8 +61,8 @@ models themselves.
   forge detection.
 - `src/tongs/cache/`: async SQLite response cache and forge client wrapper.
 - `src/tongs/state/drafts/`: persistent review draft state and recovery.
-- `src/tongs/diff/`: unified diff models, conversion, parsing, rendering
-  position helpers.
+- `src/tongs/diff/`: unified diff models, conversion, parsing, split-view
+  alignment, and rendering position helpers.
 - `src/tongs/views/` and `src/tongs/widgets/`: Textual screens and widgets.
 - `src/tongs/desktop/`: sidecar, bounded protocol, artifact contract,
   installer, asset catalog, and editor-export reservations.
@@ -127,8 +127,9 @@ than replaying a renderer request blindly.
    `src/tongs/diff/conversion.py:convert_forge_changes()` and returns terminal
    `DiffFile` objects with their revision.
 3. `DiffPanel` renders file trees, syntax highlighting, context folding, comment
-   gutters, and inline threads. `diff/position.py` maps selected lines to
-   forge-specific anchors.
+   gutters, and inline threads in a unified list or, toggled with `v`, a
+   `SplitDiffView`. `diff/position.py` maps selected lines to forge-specific
+   anchors.
 4. The desktop protocol performs its own bounded diff projection and paging in
    `src/tongs/desktop/protocol/diff_projection.py`. Paging tokens refer to
    connection-local snapshots and expire; they are not resource identifiers.

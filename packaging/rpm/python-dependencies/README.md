@@ -18,7 +18,10 @@ links Fedora's OpenSSL provider. Target-resolved Cargo packages must have licens
 metadata and actual license text. Their inventory and texts ship in the binary
 RPM, while the complete vendored source archive remains in the source RPM.
 
-The GitHub Actions workflow is the supported execution environment. It uses a
+The manually dispatched `.github/workflows/desktop-python-rpms.yml` workflow is
+the supported standalone execution environment; the desktop RPM lifecycle
+harness (`packaging/rpm/desktop/run_hosted.sh`) rebuilds the same companions in
+CI and for releases. It uses a
 disposable Fedora 44 container on a GitHub-hosted runner to refresh `repoquery`
 and prepare sources. It creates SRPMs offline, provisions one clean Fedora image
 per SRPM with `dnf builddep`, rebuilds each SRPM with networking disabled, and

@@ -6,6 +6,12 @@ clean checkout, the verified candidate transfer root, a fresh output path, the
 immutable bytes and independently expected SHA-256 of the archive receipt, and
 caller-owned receipt and source policy.
 
+Issue #53 is closed. CI calls this adapter from the `archive-sbom` job in
+`.github/workflows/desktop-production.yml` through
+`tests/ci/desktop_production_expectations.py` (check ID `desktop-archive-sbom`)
+after the `archive-evidence` job succeeds, and the `CI aggregate` job in
+`.github/workflows/ci.yml` consumes its receipt whenever the packaging lane runs.
+
 Four identities stay separate. Candidate subject policy fixes the historical or
 current source commit, tree, epoch, source archive, desktop archive, Electron
 archive, and Electron configuration. Trusted tool policy fixes the adapter
@@ -59,5 +65,5 @@ The SBOM covers the desktop user archive. The separately installed core wheel,
 optional plugins, host operating system, and RPM package set remain outside its
 component inventory. npm integrity values identify registry distributions and
 do not represent installed ASAR bytes. Historical retained candidates exercise
-the adapter diagnostically, but final issue #53 must regenerate and bind the
-SBOM for its exact source-paired archive.
+the adapter diagnostically, and CI regenerates and binds the SBOM for each tested
+head's exact source-paired archive.

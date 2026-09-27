@@ -1,8 +1,10 @@
 # Shared desktop package inputs
 
-`tongs.desktop` and `tongs.png` are the stable desktop-menu inputs shared by
-the archive and RPM producers. The RPM may install the entry with its system
-`tongs` command. The per-user installer does not copy this static entry into the
+`tongs.desktop` and `tongs.png` are the stable desktop-menu inputs for the
+archive producer; the RPM reuses `tongs.png` (checked against the archive's
+runtime icon) but installs its own entry from
+`packaging/rpm/desktop/templates/tongs.desktop.in`, bound to the
+`/usr/bin/tongs-desktop` system launcher. The per-user installer does not copy this static entry into the
 user menu: it renders the same product metadata while binding `Exec` to the
 absolute persistent Python environment that requested installation.
 

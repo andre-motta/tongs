@@ -1,7 +1,7 @@
 # tongs
 
 Terminal-first multi-forge MR/CI management with a Textual UI and an optional
-production Electron desktop UI. Both frontends use the same Python application
+beta Electron desktop UI. Both frontends use the same Python application
 services, forge clients, repository discovery, cache, and durable review drafts.
 Python 3.12+ is required for the core; building the desktop shell or the
 documentation site requires Node.js 22.12+.
@@ -29,7 +29,7 @@ This file is the shared repository guide for coding agents; every agent that wor
 - **HTTP:** httpx (async), no CLI subprocess per operation
 - **Config:** TOML via tomllib, platformdirs for cross-platform paths
 - **Build:** hatchling + hatch-vcs, `pip install -e ".[dev]"` for development
-- **Distribution:** `pipx install tongs`, `uvx tongs`, `uv tool install tongs`, or the unreleased Fedora RPMs `python3-tongs`, `python3-tongs+mcp` and `tongs-desktop`
+- **Distribution:** `pipx install tongs`, `uvx tongs`, `uv tool install tongs`, or the unsigned beta Fedora RPMs `python3-tongs`, `python3-tongs+mcp` and `tongs-desktop` attached to each stable GitHub Release
 - **Entry points:** `tongs` (TUI), `tongs-mcp` (MCP server), `tongs desktop` and the `tongs --install-desktop` alias (per-user desktop lifecycle), and the RPM-owned `/usr/libexec/tongs-desktop` launcher
 - **Plugins:** independent `tongs.plugins` and `tongs.desktop_plugins` entry-point groups
 - **Docs:** Astro and Starlight site in `site/`, published at [www.tongs.tools](https://www.tongs.tools). The Markdown stays in `docs/`, reached through the committed symlink `site/src/content/docs -> ../../../docs`. The content collection glob in `site/src/content.config.ts` excludes `docs/SDLC.md`, `docs/site-plan.md` and `docs/work/`, which stay repository-only; everything else under `docs/` is published. `starlight-links-validator` fails the build on a broken page link or anchor.
@@ -209,9 +209,9 @@ than phase labels or fixed test counts, to assess readiness.
 
 Every feature goes through four review areas before merge:
 
-1. **Architecture** -- fits existing abstractions, extends cleanly
-2. **Security** -- no token leaks, proper credential handling
-3. **UX** -- TUI flow, keybinding consistency, ASCII mode support
-4. **QE** -- test coverage, edge cases, runs without network
+1. **Architecture**: fits existing abstractions, extends cleanly
+2. **Security**: no token leaks, proper credential handling
+3. **UX**: TUI flow, keybinding consistency, ASCII mode support
+4. **QE**: test coverage, edge cases, runs without network
 
 Verdicts: APPROVED WITH NOTES (address notes, proceed) or NEEDS CHANGES (fix and re-review).

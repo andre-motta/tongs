@@ -95,7 +95,7 @@ The `plugin_config` dict is loaded in `config.py:load_config()` from the `[plugi
 Defined in `src/tongs/mcp/plugin.py`. Demonstrates the plugin pattern:
 
 - `name = "mcp"`, `version = "0.2.0"`
-- `get_commands()` returns one command: "Start MCP Server" which launches `tongs-mcp` as a subprocess
+- `get_commands()` returns one command, "Start MCP Server", which launches `tongs-mcp` as a subprocess, but only when the optional `mcp` extra is installed; otherwise it returns no commands
 - No lifecycle hooks, no screens
 - Registered as the `mcp` entry point in `pyproject.toml`
 
@@ -144,16 +144,16 @@ interface. This narrows normal access, but is not a security boundary against
 trusted in-process Python code.
 
 **Exposed properties (read-only):**
-- `forge_registry` -- access to authenticated forge clients
-- `cache` -- access to the SQLite cache store
-- `config` -- application configuration
-- `repos` -- list of discovered repositories
+- `forge_registry`: access to authenticated forge clients
+- `cache`: access to the SQLite cache store
+- `config`: application configuration
+- `repos`: list of discovered repositories
 
 **Exposed methods:**
-- `notify(message, severity)` -- send a user-visible notification
-- `push_screen(screen)` -- push a screen onto the TUI stack
-- `pop_screen()` -- pop the current screen
-- `plugin_config(plugin_name)` -- return the config section for a specific plugin (returns a copy, not a reference)
+- `notify(message, severity)`: send a user-visible notification
+- `push_screen(screen)`: push a screen onto the TUI stack
+- `pop_screen()`: pop the current screen
+- `plugin_config(plugin_name)`: return the config section for a specific plugin (returns a copy, not a reference)
 
 In lifecycle hooks, access forge data via `ctx.forge_registry`, cache via `ctx.cache`, and repos via `ctx.repos`. Do not access raw HTTP clients or tokens.
 

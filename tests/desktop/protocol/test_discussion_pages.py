@@ -419,3 +419,46 @@ def test_snapshot_pages_stop_before_the_value_limit() -> None:
     with pytest.raises(ProtocolError) as crossed:
         store.page(snapshot, "review", 0, 10, kind="other")
     assert crossed.value.code.value == "snapshot_expired"
+
+
+@pytest.mark.asyncio
+async def test_the_last_page_of_a_multi_page_read_releases_its_snapshot() -> None:
+    server = DesktopSidecarServer(
+        session=cast(object, _Session(_discussions(_LARGE_THREAD_COUNT)))
+    )
+    handle = server._handles.issue(HandleKind.REVIEW, _REVIEW)
+    context = RequestContext("threads", DesktopCancellation())
+
+    page = cast(
+        JsonObject,
+        await server._discussions_list({"review": handle, "max_items": 500}, context),
+    )
+    snapshot_id = page["snapshot_id"]
+    pages = 1
+    threads = len(cast(list[JsonValue], page["discussions"]))
+    while page["next_cursor"] is not None:
+        # Every page before the last one keeps the snapshot for the next read.
+        assert list(server._snapshots._snapshots) == [snapshot_id]
+        page = cast(
+            JsonObject,
+            await server._discussions_page(
+                {
+                    "snapshot": snapshot_id,
+                    "resource": handle,
+                    "cursor": page["next_cursor"],
+                    "max_items": 500,
+                },
+                context,
+            ),
+        )
+        pages += 1
+        threads += len(cast(list[JsonValue], page["discussions"]))
+
+    assert pages > 1
+    assert threads == _LARGE_THREAD_COUNT
+    assert len(server._snapshots._snapshots) == 0
+    with pytest.raises(ProtocolError) as expired:
+        await server._discussions_page(
+            {"snapshot": snapshot_id, "resource": handle, "cursor": 0}, context
+        )
+    assert expired.value.code.value == "snapshot_expired"

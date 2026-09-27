@@ -481,3 +481,34 @@ def test_provider_audit_queries_the_mcp_extra_capability() -> None:
         'raise RuntimeError(f"missing Fedora providers: {missing}")'
     )
     assert '"direct-package-provides" if usable else "unresolved"' in audit
+
+
+def test_textual_floor_is_the_oldest_release_the_terminal_app_passes_on() -> None:
+    """Every declared Textual floor is 4.0, which Fedora 44 ships.
+
+    The terminal views use ``Content.from_markup`` with variables (Textual
+    2.0), ``notify(markup=False)`` (3.1) and ``OptionList(compact=True)``
+    (3.2); the whole suite passes on Textual 4.0.0, python3-textual on
+    Fedora 44, so the RPM floor stays installable there.
+    """
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    release_inputs = (ROOT / "requirements" / "release.in").read_text()
+    core_spec = (PACKAGING / "templates" / "python-tongs.spec.in").read_text()
+    manifest = json.loads((PACKAGING / "manifest.json").read_text())
+    dependencies = json.loads(
+        (
+            ROOT / "packaging" / "rpm" / "python-dependencies" / "manifest.json"
+        ).read_text()
+    )
+    probe = (ROOT / "tests" / "containers" / "Containerfile").read_text()
+
+    assert '"textual>=4.0",' in pyproject
+    assert re.search(r"^textual>=4\.0$", release_inputs, re.MULTILINE)
+    assert "BuildRequires:  python3dist(textual) >= 4\n" in core_spec
+    assert "Requires:       python3dist(textual) >= 4\n" in core_spec
+    assert "python3dist(textual) >= 4" in manifest["core_runtime_requirements"]
+    assert {
+        "requirement": "python3dist(textual) >= 4",
+        "import": "textual",
+    } in dependencies["system_requirements"]
+    assert "textual\\>=4.0 \\" in probe

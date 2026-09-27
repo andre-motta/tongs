@@ -156,8 +156,18 @@ class CachedForgeClient:
         page: int = 1,
         per_page: int = 100,
     ) -> MRPage:
-        """Cache each page under its own key below the repository list prefix."""
-        key = self._key(repo_path, "mrs", state, "page", per_page, page)
+        """Cache the first page only, below the repository list prefix.
+
+        Offset pages are not stable over time: a review updated between two
+        reads moves up a page. A later page is therefore always read from the
+        forge, and reading one drops the cached first page, so the next read
+        of this repository never starts from a first page older than the
+        later pages already shown.
+        """
+        key = self._key(repo_path, "mrs", state, "page", per_page, 1)
+        if page != 1:
+            await self._cache.invalidate(key)
+            return await read_mr_page(self._inner, repo_path, state, page, per_page)
         if any(key.startswith(prefix) for prefix in self._dirty_review_prefixes):
             return await read_mr_page(self._inner, repo_path, state, page, per_page)
         cached = await self._cache.get_json(key)

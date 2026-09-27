@@ -24,7 +24,7 @@ RUN dnf install --assumeyes --setopt=install_weak_deps=False \
         pytest-asyncio\>=0.24 \
         pyyaml\>=6.0 \
         setuptools\>=68 \
-        textual\>=1.0 \
+        textual\>=4.0 \
         wheel \
         -r /opt/tongs-harness/installer-verifier.lock
 

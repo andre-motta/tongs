@@ -35,6 +35,8 @@ export class ServiceStatusModel {
   #probeFailed = false;
   #updates = false;
   #view: ServiceStatusView = view(SERVICE_STATUS_TEXT.connecting, BASE_CLASS);
+  #notices: readonly string[] = NO_NOTICES;
+  readonly #dismissed = new Set<string>();
   readonly #listeners = new Set<() => void>();
 
   get view(): ServiceStatusView {
@@ -48,6 +50,14 @@ export class ServiceStatusModel {
 
   snapshot = (): ServiceStatusView => this.#view;
 
+  /** The service's startup warnings the user has not dismissed yet. */
+  notices = (): readonly string[] => this.#notices;
+
+  dismissNotice(notice: string): void {
+    this.#dismissed.add(notice);
+    this.#setNotices(this.#notices);
+  }
+
   /** Applies a main-process report, ignoring any older than one already seen. */
   applyStatus(status: ServiceStatusDto): void {
     if (!isStatus(status) || status.revision <= this.#revision) return;
@@ -59,6 +69,7 @@ export class ServiceStatusModel {
       this.#updates = false;
     }
     this.#refresh();
+    this.#setNotices(statusNotices(status));
   }
 
   probeSucceeded(): void {
@@ -93,6 +104,18 @@ export class ServiceStatusModel {
       active = false;
       unsubscribe();
     };
+  }
+
+  #setNotices(candidates: readonly string[]): void {
+    const next = candidates.filter((notice) => !this.#dismissed.has(notice));
+    if (
+      next.length === this.#notices.length &&
+      next.every((notice, index) => notice === this.#notices[index])
+    ) {
+      return;
+    }
+    this.#notices = next.length === 0 ? NO_NOTICES : Object.freeze(next);
+    for (const listener of [...this.#listeners]) listener();
   }
 
   #refresh(): void {
@@ -134,6 +157,46 @@ export function ServiceStatusLine({
     <p id="service-status" className={current.className} role="status">
       {current.text}
     </p>
+  );
+}
+
+/**
+ * Shows the local service's startup warnings, such as a review draft whose
+ * interrupted submission may have partly posted, until the user dismisses
+ * each one.
+ */
+export function ServiceNotices({
+  model,
+}: {
+  readonly model: ServiceStatusModel;
+}): ReactNode {
+  const notices = useSyncExternalStore(model.subscribe, model.notices);
+  if (notices.length === 0) return null;
+  return (
+    <div id="service-notices" className="service-notices">
+      {notices.map((notice) => (
+        <div key={notice} className="service-notice" role="alert">
+          <span>{notice}</span>
+          <button
+            type="button"
+            className="button button-quiet"
+            onClick={() => model.dismissNotice(notice)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const NO_NOTICES: readonly string[] = Object.freeze([]);
+
+function statusNotices(status: ServiceStatusDto): readonly string[] {
+  const notices: unknown = (status as { notices?: unknown }).notices;
+  if (!Array.isArray(notices)) return NO_NOTICES;
+  return notices.filter(
+    (notice): notice is string => typeof notice === "string" && notice.length > 0,
   );
 }
 

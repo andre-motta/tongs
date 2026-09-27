@@ -1379,6 +1379,7 @@ class DraftStore:
             ownership = AttemptLock.try_acquire(self._lock_dir, str(attempt_id))
             if ownership is None:
                 continue
+            review: ReviewRef | None = None
             try:
                 try:
                     await db.execute("BEGIN IMMEDIATE")
@@ -1399,6 +1400,7 @@ class DraftStore:
                     if attempt.state not in {DraftState.SUBMITTING, DraftState.PARTIAL}:
                         await self._rollback(db)
                         continue
+                    review = attempt.snapshot.review
                     now = _now()
                     if attempt.pending_dispatch is not None:
                         await db.execute(
@@ -1441,7 +1443,9 @@ class DraftStore:
                 except sqlite3.Error:
                     await self._rollback(db)
                     warnings.append(
-                        RecoveryWarning(attempt_id, RECOVERY_WRITE_FAILED_MESSAGE)
+                        RecoveryWarning(
+                            attempt_id, RECOVERY_WRITE_FAILED_MESSAGE, review=review
+                        )
                     )
                     continue
                 except BaseException:
@@ -1464,8 +1468,10 @@ class DraftStore:
         and detached from its draft, so later starts neither list nor warn
         about it again. A failed write leaves both rows unchanged.
         """
+        review: ReviewRef | None = None
         try:
             await db.execute("BEGIN IMMEDIATE")
+            review = await self._draft_review_for_attempt(db, raw_id)
             now = _format_time(_now())
             await db.execute(
                 """
@@ -1489,11 +1495,39 @@ class DraftStore:
             await db.execute("COMMIT")
         except sqlite3.Error:
             await self._rollback(db)
-            return RecoveryWarning(attempt_id, RECOVERY_WRITE_FAILED_MESSAGE)
+            return RecoveryWarning(
+                attempt_id, RECOVERY_WRITE_FAILED_MESSAGE, review=review
+            )
         except BaseException:
             await self._rollback(db)
             raise
-        return RecoveryWarning(attempt_id)
+        return RecoveryWarning(attempt_id, review=review)
+
+    @staticmethod
+    async def _draft_review_for_attempt(
+        db: aiosqlite.Connection, raw_id: object
+    ) -> ReviewRef | None:
+        """Read the review of the draft an unreadable attempt holds, if any.
+
+        Only the identity columns are read, never draft text; a row whose
+        identity is itself damaged yields no review rather than an error.
+        """
+        row = await (
+            await db.execute(
+                """
+                SELECT hostname, project_path, review_number FROM drafts
+                WHERE active_attempt_id = ? AND state IN (?, ?)
+                ORDER BY id LIMIT 1
+                """,
+                (raw_id, DraftState.SUBMITTING.value, DraftState.PARTIAL.value),
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return ReviewRef(RepositoryRef(row[0], row[1]), row[2])
+        except (TypeError, ValueError):
+            return None
 
     @_serialized
     async def list_recovery_attempts(self) -> tuple[SubmissionAttempt, ...]:

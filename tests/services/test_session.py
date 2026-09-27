@@ -627,7 +627,12 @@ class TestLifecycle:
             forge_registry=FakeRegistry(),
         ).start()
 
-        assert session.recovery_warnings == (RecoveryWarning(attempts[0].id),)
+        assert session.recovery_warnings == (
+            RecoveryWarning(
+                attempts[0].id,
+                review=ReviewRef(RepositoryRef("github.com", "acme/widgets"), 7),
+            ),
+        )
         assert "private text" not in session.recovery_warnings[0].describe()
         recovered = await session.drafts.get_attempt(attempts[1].id)
         assert recovered.state is DraftState.UNKNOWN

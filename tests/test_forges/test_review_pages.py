@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -259,6 +260,23 @@ class TestFallbackPage:
         last = await read_mr_page(client, "acme/repo", "open", 3, 2)  # type: ignore[arg-type]
         assert first == MRPage((client.items[4], client.items[3]), has_next=True)
         assert last == MRPage((client.items[0],), has_next=False)
+
+    @pytest.mark.asyncio
+    async def test_items_without_an_update_time_sort_last(self) -> None:
+        client = _ListOnlyClient()
+        undated = [
+            replace(client.items[0], number=41, updated_at=None),  # type: ignore[arg-type]
+            replace(client.items[0], number=42, updated_at=None),  # type: ignore[arg-type]
+        ]
+        client.items = [undated[0], *client.items, undated[1]]
+
+        first = await read_mr_page(client, "acme/repo", "open", 1, 3)  # type: ignore[arg-type]
+        last = await read_mr_page(client, "acme/repo", "open", 3, 3)  # type: ignore[arg-type]
+
+        assert [item.number for item in first.items] == [5, 4, 3]
+        assert [item.number for item in last.items] == [42]
+        middle = await read_mr_page(client, "acme/repo", "open", 2, 3)  # type: ignore[arg-type]
+        assert [item.number for item in middle.items] == [2, 1, 41]
 
     @pytest.mark.asyncio
     async def test_invalid_page_is_rejected(self) -> None:

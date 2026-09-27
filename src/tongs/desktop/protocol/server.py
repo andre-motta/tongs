@@ -103,6 +103,7 @@ from tongs.services import (
     RepositoryRef,
     RepositorySnapshot,
     ReviewListItem,
+    ReviewPage,
     ReviewQuery,
     ReviewRef,
     ReviewScope,
@@ -513,9 +514,10 @@ class DesktopSidecarServer:
         try:
             requested, client_limits = _parse_handshake(frame.params)
             await self._session.start()
-            _report_recovery_warnings(
+            recovery_warnings = tuple(
                 getattr(cast(object, self._session), "recovery_warnings", ())
             )
+            _report_recovery_warnings(recovery_warnings)
             if self._plugin_registry is None:
                 config = cast(object, self._session.config)
                 plugin_config = getattr(config, "plugin_config", {})
@@ -536,6 +538,7 @@ class DesktopSidecarServer:
                     "capabilities": sorted(SUPPORTED_CAPABILITIES),
                     "accepted_capabilities": sorted(requested),
                     "methods": [*sorted(self._operations), "shutdown"],
+                    "recovery_warnings": _recovery_notices(recovery_warnings),
                     "limits": {
                         "request_frame_bytes": MAX_REQUEST_FRAME_BYTES,
                         "response_frame_bytes": MAX_RESPONSE_FRAME_BYTES,
@@ -696,30 +699,23 @@ class DesktopSidecarServer:
     ) -> object:
         """List one page of reviews.
 
-        All Open reads one page per repository, most recently updated first, so
-        a response holds at most ``per_page`` reviews for each repository. A
-        repository-scoped All Open read returns ``next_cursor`` when the forge
-        has another page; passing it back as ``cursor`` reads that page.
+        All Open reads one repository at a time, most recently updated first,
+        so a response holds at most ``per_page`` reviews. It returns
+        ``next_cursor`` when the forge has another page; passing it back as
+        ``cursor`` reads that page. An All Open read without a repository is
+        rejected: it could neither be paged nor stay inside the frame budget.
         """
         _require_params(
             params,
             allowed=frozenset({"scope", "repository", "state", "per_page", "cursor"}),
             required=frozenset({"scope"}),
         )
-        try:
-            scope = ReviewScope(_text(params, "scope", max_length=40))
-            state = MRState(_optional_text(params, "state", "open", max_length=20))
-        except ValueError:
+        scope, state, repository, per_page = self._review_query_params(params)
+        if scope is ReviewScope.ALL_OPEN and repository is None:
             raise ProtocolError(
                 ProtocolErrorCode.INVALID_PARAMS,
-                "The review scope or state is invalid.",
-            ) from None
-        repository = None
-        if "repository" in params and params["repository"] is not None:
-            repository = self._handles.resolve(
-                params["repository"], HandleKind.REPOSITORY, RepositoryRef
+                "An All Open review list needs a repository.",
             )
-        per_page = _optional_int(params, "per_page", 100, minimum=1, maximum=100)
         repository_handle = (
             cast(str, params["repository"]) if repository is not None else None
         )
@@ -744,8 +740,52 @@ class DesktopSidecarServer:
         )
         return {
             "next_cursor": self._review_cursors.seal(page.next_cursor, binding)
-            if page.next_cursor is not None and repository is not None
+            if page.next_cursor is not None
             else None,
+            **self._review_page_wire(page),
+        }
+
+    async def _reviews_all(
+        self, params: JsonObject, _context: RequestContext
+    ) -> object:
+        """Return every matching review at once, for in-process plugin reads.
+
+        A plugin read never crosses the frame budget itself, so it keeps the
+        whole-list shape plugins were written against: no cursor, and All Open
+        walks every forge page of each repository.
+        """
+        _require_params(
+            params,
+            allowed=frozenset({"scope", "repository", "state", "per_page"}),
+            required=frozenset({"scope"}),
+        )
+        scope, state, repository, per_page = self._review_query_params(params)
+        page = await self._session.list_reviews(
+            ReviewQuery(scope, repository=repository, state=state, per_page=per_page)
+        )
+        return self._review_page_wire(page)
+
+    def _review_query_params(
+        self, params: JsonObject
+    ) -> tuple[ReviewScope, MRState, RepositoryRef | None, int]:
+        try:
+            scope = ReviewScope(_text(params, "scope", max_length=40))
+            state = MRState(_optional_text(params, "state", "open", max_length=20))
+        except ValueError:
+            raise ProtocolError(
+                ProtocolErrorCode.INVALID_PARAMS,
+                "The review scope or state is invalid.",
+            ) from None
+        repository = None
+        if "repository" in params and params["repository"] is not None:
+            repository = self._handles.resolve(
+                params["repository"], HandleKind.REPOSITORY, RepositoryRef
+            )
+        per_page = _optional_int(params, "per_page", 100, minimum=1, maximum=100)
+        return scope, state, repository, per_page
+
+    def _review_page_wire(self, page: ReviewPage) -> JsonObject:
+        return {
             "items": [self._review_list_wire(item) for item in page.items],
             "failures": [
                 {
@@ -871,12 +911,17 @@ class DesktopSidecarServer:
             required=frozenset({"snapshot", "resource", "cursor"}),
         )
         self._handles.resolve(params["resource"], HandleKind.REVIEW, ReviewRef)
-        return self._discussions_page_wire(
+        value = self._discussions_page_wire(
             params["snapshot"],
             params["resource"],
             params["cursor"],
             params.get("max_items", _DISCUSSION_PAGE_ITEMS),
         )
+        # The renderer never reads a finished snapshot again, so the last page
+        # releases it instead of letting it crowd diff and log snapshots.
+        if value.get("next_cursor") is None:
+            self._snapshots.expire(cast(str, value["snapshot_id"]))
+        return value
 
     async def _discussions_all(
         self, params: JsonObject, _context: RequestContext
@@ -1197,11 +1242,11 @@ class DesktopSidecarServer:
             DesktopReadKind.JOBS: "jobs.list",
             DesktopReadKind.LOG: "logs.open",
         }[kind]
-        handler = (
-            self._discussions_all
-            if kind is DesktopReadKind.DISCUSSIONS
-            else self._operations[method].handler
-        )
+        whole_list_handlers = {
+            DesktopReadKind.REVIEWS: self._reviews_all,
+            DesktopReadKind.DISCUSSIONS: self._discussions_all,
+        }
+        handler = whole_list_handlers.get(kind, self._operations[method].handler)
         context = RequestContext(
             f"plugin-{id(cancellation):x}",
             cancellation,
@@ -1893,6 +1938,26 @@ def _consume_task(task: asyncio.Task[object]) -> None:
     if not task.cancelled():
         with suppress(BaseException):
             task.exception()
+
+
+#: Bounds of the handshake's ``recovery_warnings``, matched by the desktop shell.
+MAX_RECOVERY_NOTICES = 20
+MAX_RECOVERY_NOTICE_CHARS = 1000
+
+
+def _recovery_notices(warnings: tuple[RecoveryWarning, ...]) -> list[JsonValue]:
+    """Describe startup recovery warnings for the desktop to show the user.
+
+    Each names the review to check on the forge. The list and each text are
+    bounded so a damaged store can never make the handshake too large.
+    """
+    notices: list[JsonValue] = []
+    for warning in warnings[:MAX_RECOVERY_NOTICES]:
+        text = warning.describe()
+        if len(text) > MAX_RECOVERY_NOTICE_CHARS:
+            text = text[: MAX_RECOVERY_NOTICE_CHARS - 1] + "…"
+        notices.append(text)
+    return notices
 
 
 def _report_recovery_warnings(warnings: tuple[RecoveryWarning, ...]) -> None:

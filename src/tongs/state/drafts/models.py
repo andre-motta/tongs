@@ -304,18 +304,26 @@ class RecoveryWarning:
 
     An unreadable attempt has its draft returned to editing; an attempt whose
     recovery write failed is left unchanged for the next start. The warning
-    carries only the attempt identity, when readable, and a fixed message,
-    never draft text.
+    carries the attempt identity and the draft's review, when readable, and a
+    fixed message, never draft text.
     """
 
     attempt_id: UUID | None
     message: str = RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+    review: ReviewRef | None = None
 
     def describe(self) -> str:
-        """Return the message with the attempt identity, for logs and notices."""
-        if self.attempt_id is None:
-            return self.message
-        return f"{self.message} Attempt {self.attempt_id}."
+        """Return the message with the review and attempt, for logs and notices."""
+        parts = [self.message]
+        if self.review is not None:
+            repository = self.review.repository
+            parts.append(
+                f"Review: {repository.hostname}/{repository.project_path} "
+                f"#{self.review.number}."
+            )
+        if self.attempt_id is not None:
+            parts.append(f"Attempt {self.attempt_id}.")
+        return " ".join(parts)
 
 
 @dataclass(frozen=True, slots=True)

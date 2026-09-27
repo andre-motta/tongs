@@ -9,6 +9,7 @@ import {
 } from "../../../desktop/dist/src/main/sidecar.js";
 import {
   SERVICE_STATUS_TEXT,
+  ServiceNotices,
   ServiceStatusLine,
   ServiceStatusModel,
 } from "../../../desktop/dist/src/renderer/core/service-status.js";
@@ -28,7 +29,7 @@ Object.assign(globalThis, {
   HTMLElement: dom.window.HTMLElement,
   Node: dom.window.Node,
 });
-const { act, cleanup, render } = desktopRequire("@testing-library/react");
+const { act, cleanup, fireEvent, render } = desktopRequire("@testing-library/react");
 afterEach(cleanup);
 
 /**
@@ -224,4 +225,69 @@ test("the main process leaves the header text to the status channel", () => {
   );
   assert.equal(source.includes("#service-status"), false);
   assert.equal(source.includes("service is unavailable"), false);
+});
+
+function noticeTexts() {
+  return [...document.querySelectorAll("#service-notices .service-notice span")].map(
+    (node) => node.textContent,
+  );
+}
+
+test("startup recovery warnings show as notices until dismissed", async () => {
+  const warnings = [
+    "Part of the review may already have posted. Review: github.com/acme/widgets #12.",
+    "Part of the review may already have posted. Review: gitlab.example.com/group/app #3.",
+  ];
+  const fake = harness({ handshakeExtras: { recovery_warnings: warnings } });
+  const transport = transportFor(fake);
+  await transport.start();
+  const { bridge, publisher } = wire(transport);
+  const model = new ServiceStatusModel();
+  render(
+    React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(ServiceStatusLine, { model, bridge }),
+      React.createElement(ServiceNotices, { model }),
+    ),
+  );
+  await settle();
+  assert.equal(headerText(), "Local service connected");
+  assert.deepEqual(noticeTexts(), warnings);
+  assert.equal(
+    document.querySelectorAll("#service-notices [role='alert']").length,
+    2,
+  );
+
+  const dismiss = document.querySelectorAll("#service-notices button")[0];
+  assert.equal(dismiss.textContent, "Dismiss");
+  await act(async () => {
+    fireEvent.click(dismiss);
+  });
+  assert.deepEqual(noticeTexts(), [warnings[1]]);
+
+  // A later report of the same session does not bring a dismissed one back.
+  await act(async () => {
+    model.applyStatus({ state: "connected", revision: 99, notices: warnings });
+  });
+  assert.deepEqual(noticeTexts(), [warnings[1]]);
+
+  await act(async () => {
+    fireEvent.click(document.querySelectorAll("#service-notices button")[0]);
+  });
+  assert.equal(document.querySelector("#service-notices"), null);
+  publisher.dispose();
+  await transport.stop();
+});
+
+test("a stopped service clears the notices and malformed notices are ignored", () => {
+  const model = new ServiceStatusModel();
+  model.applyStatus({ state: "connected", revision: 1, notices: ["Check review 4."] });
+  assert.deepEqual([...model.notices()], ["Check review 4."]);
+  model.applyStatus({ state: "stopped", revision: 2, notices: [] });
+  assert.deepEqual([...model.notices()], []);
+  model.applyStatus({ state: "connected", revision: 3, notices: "Check review 4." });
+  assert.deepEqual([...model.notices()], []);
+  model.applyStatus({ state: "connected", revision: 4, notices: [7, "", "Check review 5."] });
+  assert.deepEqual([...model.notices()], ["Check review 5."]);
 });

@@ -48,7 +48,7 @@
     "python3dist(platformdirs) >= 4",
     "python3dist(pyperclip) >= 1.8",
     "(python3dist(sigstore) >= 4.5 with python3dist(sigstore) < 5)",
-    "python3dist(textual) >= 1"
+    "python3dist(textual) >= 4"
   ],
   "mcp_requirement": "(python3dist(mcp[cli]) >= 1 with python3dist(mcp[cli]) < 2)",
   "desktop_runtime_requirements": [

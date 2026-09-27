@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -76,8 +76,13 @@ test("actual installed sidecar discards a review draft out of the durable store"
     );
   try {
     await withFixtureSidecar(isolated, async (transport) => {
+      // All Open reads one repository at a time, so mint its handle first.
+      await writeFile(path.join(isolated, "discovery-state.txt"), "present\n");
+      const discovered = await transport.requestRead("repositories.discover", {}).result;
+      assert.equal(discovered.repositories.length, 1);
       const listed = await transport.requestRead("reviews.list", {
         scope: "all_open",
+        repository: discovered.repositories[0].handle,
       }).result;
       assert.equal(listed.items.length, 1);
       const review = listed.items[0].handle;

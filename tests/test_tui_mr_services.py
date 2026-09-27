@@ -478,9 +478,14 @@ async def test_inline_comment_keeps_the_revision_displayed_when_line_was_selecte
         assert command.revision.head_sha == "head-7"  # type: ignore[union-attr]
         assert records[0].error is not None
         assert "revision changed" in records[0].error.message.lower()
-        assert any(
-            "revision changed" in notification.message.lower()
-            for notification in app._notifications
+        # The toast follows the ledger entry on a later message-pump turn,
+        # which older Textual releases schedule a little later.
+        await _wait_until(
+            app,
+            lambda: any(
+                "revision changed" in notification.message.lower()
+                for notification in app._notifications
+            ),
         )
 
 

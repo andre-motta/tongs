@@ -634,7 +634,8 @@ class GitHubClient(ForgeClient):
                 repo_path, number, ReviewDecision.APPROVED, "", head_sha=head_sha
             )
         except ValidationError as exc:
-            if "self-approv" in str(exc).lower():
+            message = str(exc).lower()
+            if "self-approv" in message or "approve your own pull request" in message:
                 raise ValidationError("GitHub does not allow self-approving PRs") from exc
             raise
 

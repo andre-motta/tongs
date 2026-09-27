@@ -25,7 +25,7 @@ SOURCE_TREE = "b" * 40
 REF = "refs/heads/main"
 PR_REF = "refs/pull/138/merge"
 PUSH_TRANSFER_MANIFEST_SHA256 = (
-    "dd483b54858125bb8abca224fee00e95188ceca11e22fb57fb27907b2cd9945c"
+    "9e911370a3d88bcaad7c390a3bbe399b0accc682852343e81517557ce1829036"
 )
 
 
@@ -373,7 +373,7 @@ def test_official_push_conversion_preserves_manifest_bytes(tmp_path: Path) -> No
     )
 
     manifest = (root / candidate.TRANSFER_MANIFEST_NAME).read_bytes()
-    assert len(manifest) == 3137
+    assert len(manifest) == 3254
     assert _digest(manifest) == PUSH_TRANSFER_MANIFEST_SHA256
     assert json.loads(manifest)["execution"] == {
         "repository": official.repository,

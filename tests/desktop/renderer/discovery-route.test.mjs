@@ -191,7 +191,7 @@ function bridgeFixture() {
       });
     },
     getReview: () => read(reviewSnapshot()),
-    listDiscussions: () => read({ discussions: [] }),
+    listDiscussions: () => read(discussionsPage([])),
     getReviewMutationCapabilities: () =>
       read({ review: "review-a", capabilities: mutationCapabilities() }),
     getReviewActionCapabilities: () =>
@@ -475,4 +475,9 @@ function routeNotice() {
   return [...document.querySelectorAll("main > .notice")].find((item) =>
     item.textContent.includes("selected repository"),
   ) ?? null;
+}
+
+/** A first discussions page that holds every thread, as the sidecar sends it. */
+function discussionsPage(discussions) {
+  return { discussions, revision: { discussion_count: discussions.length } };
 }

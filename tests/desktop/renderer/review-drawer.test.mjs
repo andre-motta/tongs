@@ -1570,7 +1570,7 @@ function diffBridge(review, changes = {}) {
     },
     getReviewMutationCapabilities: () =>
       read({ review, capabilities: capabilities() }),
-    listDiscussions: () => read({ discussions: [] }),
+    listDiscussions: () => read(discussionsPage([])),
     listReviewDrafts: () => read({ cursor: 0, next_cursor: null, drafts: [] }),
     listReviewSubmissions: () =>
       read({ cursor: 0, next_cursor: null, attempts: [] }),
@@ -1768,4 +1768,9 @@ function diffPage(review, layout) {
     next_cursor: null,
     entries: [file, hunk, ...entries],
   };
+}
+
+/** A first discussions page that holds every thread, as the sidecar sends it. */
+function discussionsPage(discussions) {
+  return { discussions, revision: { discussion_count: discussions.length } };
 }

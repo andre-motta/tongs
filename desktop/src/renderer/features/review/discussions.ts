@@ -20,10 +20,12 @@ export type DiscussionPagesBridge = Pick<
 export const MAX_DISCUSSION_PAGES = 1000;
 export const MAX_DISCUSSIONS = 100_000;
 /**
- * A change to the review expires its snapshot, so a read that lands on an
- * expired page starts over this many times before it reports the failure.
+ * A change to the review expires its snapshot or changes its thread count, so
+ * a read that lands on an expired or changed page starts over this many times
+ * before it reports the failure.
  */
 const EXPIRED_RESTARTS = 1;
+const RESTARTABLE_CODES = new Set(["snapshot_expired", "discussions_changed"]);
 
 /**
  * A read of every page of a review's discussions. `requestTokens` grows as
@@ -87,16 +89,15 @@ export function readAllDiscussions(
         page.resource !== first.resource ||
         page.revision.discussion_count !== first.revision.discussion_count
       )
-        throw new RendererReadError(
-          "discussions_changed",
-          "The discussions changed while they were being read.",
-          true,
-        );
+        throw discussionsChanged();
       if (page.cursor !== cursor)
         throw invalidPage("The discussions page cursor did not match the request.");
       discussions.push(...page.discussions);
       pageCount += 1;
     }
+    // The pages must add up to the count the snapshot was taken with.
+    if (discussions.length !== first.revision.discussion_count)
+      throw discussionsChanged();
     return Object.freeze({ discussions: Object.freeze(discussions) });
   };
   const result = (async (): Promise<DiscussionsResult> => {
@@ -107,7 +108,7 @@ export function readAllDiscussions(
         if (
           cancelled ||
           restarts >= EXPIRED_RESTARTS ||
-          serviceErrorOf(error)?.code !== "snapshot_expired"
+          !RESTARTABLE_CODES.has(serviceErrorOf(error)?.code ?? "")
         )
           throw error;
       }
@@ -126,6 +127,14 @@ export function readAllDiscussions(
       }
     },
   };
+}
+
+function discussionsChanged(): RendererReadError {
+  return new RendererReadError(
+    "discussions_changed",
+    "The discussions changed while they were being read.",
+    true,
+  );
 }
 
 function invalidPage(message: string): RendererReadError {

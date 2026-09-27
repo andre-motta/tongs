@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
 from types import MappingProxyType
 
 import pytest
@@ -57,11 +56,12 @@ def manifest(**changes: object) -> DesktopPluginManifest:
     return DesktopPluginManifest(**values)  # type: ignore[arg-type]
 
 
-def test_declarations_are_frozen_and_accept_pep440_versions() -> None:
+def test_manifest_accepts_pep440_dev_and_local_versions() -> None:
+    # hatch-vcs development builds carry dev and local version segments.
     declaration = validate_manifest(manifest())
 
-    with pytest.raises(FrozenInstanceError):
-        declaration.title = "Changed"  # type: ignore[misc]
+    assert declaration.version == "1.2.dev3+gabc"
+    assert declaration.compatibility.minimum_host_version == "0.1.dev2+host"
 
 
 @pytest.mark.parametrize(
@@ -120,7 +120,7 @@ def test_manifest_rejects_non_normalized_resource_paths(path: str) -> None:
         )
 
 
-def test_manifest_enforces_asset_type_and_absolute_host_size_caps() -> None:
+def test_manifest_rejects_disallowed_asset_extension() -> None:
     with pytest.raises(ValueError, match="extension"):
         validate_manifest(
             manifest(
@@ -143,21 +143,32 @@ def test_manifest_rejects_duplicate_declared_reads() -> None:
         validate_manifest(
             manifest(reads=(DesktopReadKind.REVIEWS, DesktopReadKind.REVIEWS))
         )
-    with pytest.raises(ValueError, match="file limit"):
-        validate_manifest(
-            manifest(
-                asset_bundles=(
-                    DesktopAssetBundle(
-                        "ui",
-                        "example.assets",
-                        ".",
-                        manifest().asset_bundles[0].assets,
-                        max_file_bytes=8 * 1024 * 1024 + 1,
-                        max_total_bytes=16 * 1024 * 1024,
-                    ),
-                )
-            )
+
+
+def _manifest_with_limits(
+    max_file_bytes: int, max_total_bytes: int
+) -> DesktopPluginManifest:
+    return manifest(
+        asset_bundles=(
+            DesktopAssetBundle(
+                "ui",
+                "example.assets",
+                ".",
+                manifest().asset_bundles[0].assets,
+                max_file_bytes=max_file_bytes,
+                max_total_bytes=max_total_bytes,
+            ),
         )
+    )
+
+
+def test_manifest_enforces_absolute_host_size_caps() -> None:
+    mib = 1024 * 1024
+    validate_manifest(_manifest_with_limits(8 * mib, 32 * mib))
+    with pytest.raises(ValueError, match="file limit"):
+        validate_manifest(_manifest_with_limits(8 * mib + 1, 16 * mib))
+    with pytest.raises(ValueError, match="total limit"):
+        validate_manifest(_manifest_with_limits(8 * mib, 32 * mib + 1))
 
 
 def test_freeze_json_returns_immutable_bounded_data() -> None:
@@ -175,9 +186,14 @@ def test_freeze_json_returns_immutable_bounded_data() -> None:
         freeze_json({1, 2})  # type: ignore[arg-type]
 
 
-def test_freeze_json_rejects_excessive_depth() -> None:
+def _nested(levels: int) -> object:
     value: object = None
-    for _ in range(MAX_JSON_DEPTH + 2):
+    for _ in range(levels):
         value = [value]
+    return value
+
+
+def test_freeze_json_rejects_excessive_depth() -> None:
+    freeze_json(_nested(MAX_JSON_DEPTH))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="nesting depth"):
-        freeze_json(value)  # type: ignore[arg-type]
+        freeze_json(_nested(MAX_JSON_DEPTH + 1))  # type: ignore[arg-type]

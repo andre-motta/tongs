@@ -2017,7 +2017,11 @@ class MRDetailScreen(Screen):
         tabbed = self.query_one(TabbedContent)
         if tabbed.active == "pipeline":
             panel = self.query_one("#pipeline-panel", PipelinePanel)
-            if panel._view_level > 0 and panel._current_pipeline is not None:
-                self._load_pipeline_jobs(panel._current_pipeline)
+            pipeline = panel._current_pipeline
+            job = panel._current_job
+            if panel._view_level == 2 and pipeline is not None and job is not None:
+                self._load_job_log(job, pipeline)
+            elif panel._view_level == 1 and pipeline is not None:
+                self._load_pipeline_jobs(pipeline)
             else:
                 self._on_tab_switch("pipeline")

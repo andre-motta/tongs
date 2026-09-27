@@ -395,26 +395,35 @@ async def test_actual_textual_mr_detail_uses_production_services(
         await _settle(app)
         screen._load_job_log(forge.job, forge.pipeline)
         await _settle(app)
-        job_reads_before_retry = sum(
-            call == ("get_pipeline_jobs", "acme/widgets", 101) for call in forge.calls
-        )
+        jobs_read = ("get_pipeline_jobs", "acme/widgets", 101)
+        log_read = ("get_job_log", "acme/widgets", 201)
         screen.on_retry_job_requested(
             RetryJobRequested(forge.pipeline.id, forge.job.id)
         )
         await _settle(app)
-        job_reads_after_retry = sum(
-            call == ("get_pipeline_jobs", "acme/widgets", 101) for call in forge.calls
-        )
-        assert job_reads_after_retry == job_reads_before_retry + 1
+        # The service reads the jobs once before retrying to validate the
+        # target; the screen then reloads them exactly once afterwards.
+        retry_at = forge.calls.index(("retry_job", "acme/widgets", 201))
+        assert forge.calls[retry_at + 1 :].count(jobs_read) == 1
+        assert panel._view_level == 1
 
+        jobs_before_refresh = forge.calls.count(jobs_read)
         screen.action_refresh()
         await _settle(app)
-        job_reads_after_refresh = sum(
-            call == ("get_pipeline_jobs", "acme/widgets", 101) for call in forge.calls
-        )
-        assert job_reads_after_refresh == job_reads_after_retry + 1
+        assert forge.calls.count(jobs_read) == jobs_before_refresh + 1
         assert panel._view_level == 1
         assert panel._current_pipeline == forge.pipeline
+
+        screen._load_job_log(forge.job, forge.pipeline)
+        await _settle(app)
+        assert panel._view_level == 2
+        jobs_before_log_refresh = forge.calls.count(jobs_read)
+        logs_before_refresh = forge.calls.count(log_read)
+        screen.action_refresh()
+        await _settle(app)
+        assert forge.calls.count(log_read) == logs_before_refresh + 1
+        assert forge.calls.count(jobs_read) == jobs_before_log_refresh
+        assert panel._view_level == 2
 
         assert ("get_diff", "acme/widgets", 7) in forge.calls
         assert ("get_discussions", "acme/widgets", 7) in forge.calls

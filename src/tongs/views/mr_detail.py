@@ -8,11 +8,11 @@ from dataclasses import dataclass, replace
 from typing import ClassVar
 from uuid import UUID
 
-from rich.markup import escape
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
+from textual.content import Content
 from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.widgets import (
@@ -128,11 +128,11 @@ class _MutationIntent:
     unknown: bool = False
 
 
-def _merge_readiness(mr: MRDetail) -> str:
+def _merge_readiness(mr: MRDetail) -> Content:
     if mr.state == MRState.MERGED:
-        return "[green bold]MERGED[/]"
+        return Content.from_markup("[green bold]MERGED[/]")
     if mr.state == MRState.CLOSED:
-        return "[red]CLOSED[/]"
+        return Content.from_markup("[red]CLOSED[/]")
     blockers = []
     if mr.is_draft:
         blockers.append("draft")
@@ -150,8 +150,11 @@ def _merge_readiness(mr: MRDetail) -> str:
         if status not in " ".join(blockers):
             blockers.append(status)
     if not blockers:
-        return "[green]ready[/]"
-    return "[yellow]blocked[/] -- " + ", ".join(blockers)
+        return Content.from_markup("[green]ready[/]")
+    # The merge status comes from the forge, so it is substituted literally.
+    return Content.from_markup(
+        "[yellow]blocked[/] -- $blockers", blockers=", ".join(blockers)
+    )
 
 
 class MROverview(Static):
@@ -165,21 +168,34 @@ class MROverview(Static):
         draft = "[yellow]DRAFT[/]  " if mr.is_draft else ""
         conflicts = "[red]HAS CONFLICTS[/]  " if mr.has_conflicts else ""
 
-        meta = (
-            f"[bold]!{mr.number} {escape(mr.title)}[/]\n"
+        # Forge text (title, branches, names, labels) is passed as template
+        # variables, which Content inserts literally instead of parsing as
+        # markup. Only the fixed styling in the templates is markup.
+        head = Content.from_markup(
+            "[bold]!$number $title[/]\n"
             f"{draft}{conflicts}"
-            f"{mr.source_branch} -> {mr.target_branch}  "
-            f"by @{mr.author.username}\n\n"
+            "$source -> $target  by @$author\n\n"
             f"CI: {_ci_label(mr.ci_status)}  "
-            f"Approvals: {approvals}\n"
-            f"Merge: {_merge_readiness(mr)}\n"
-            f"Reviewers: {reviewers}  "
-            f"Assignees: {assignees}\n"
-            f"Labels: {labels}  "
-            f"Changes: +{mr.additions or 0} -{mr.deletions or 0}\n"
+            "Approvals: $approvals\n"
+            "Merge: ",
+            number=mr.number,
+            title=mr.title,
+            source=mr.source_branch,
+            target=mr.target_branch,
+            author=mr.author.username,
+            approvals=approvals,
+        )
+        tail = Content.from_markup(
+            "\nReviewers: $reviewers  Assignees: $assignees\n"
+            "Labels: $labels  Changes: +$additions -$deletions\n",
+            reviewers=reviewers,
+            assignees=assignees,
+            labels=labels,
+            additions=mr.additions or 0,
+            deletions=mr.deletions or 0,
         )
 
-        self.update(meta)
+        self.update(Content.assemble(head, _merge_readiness(mr), tail))
 
 
 class MRDetailScreen(Screen):
@@ -257,7 +273,8 @@ class MRDetailScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.sub_title = f"!{self.mr_summary.number} {escape(self.mr_summary.title)}"
+        # The header renders the subtitle as plain text, never as markup.
+        self.sub_title = f"!{self.mr_summary.number} {self.mr_summary.title}"
         self._load_detail()
 
     @work(exclusive=True, group="mr-detail")
@@ -277,6 +294,7 @@ class MRDetailScreen(Screen):
             self.notify(
                 f"Could not load MR details. Try Ctrl+R to refresh. ({exc})",
                 severity="warning",
+                markup=False,
             )
 
     @work(exclusive=True, group="review-draft-load")
@@ -309,7 +327,11 @@ class MRDetailScreen(Screen):
             )
             self._refresh_draft_ui()
         except Exception as exc:  # noqa: BLE001 - Keep MR reads usable if draft recovery fails.
-            self.notify(f"Could not recover review drafts. ({exc})", severity="warning")
+            self.notify(
+                f"Could not recover review drafts. ({exc})",
+                severity="warning",
+                markup=False,
+            )
 
     def _detached_from_app(self) -> bool:
         """Has this screen left the app, taking its draft widgets with it?
@@ -505,7 +527,9 @@ class MRDetailScreen(Screen):
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - Surface safe durable-store failures.
-            self.notify(f"Could not start review mode. ({exc})", severity="error")
+            self.notify(
+                f"Could not start review mode. ({exc})", severity="error", markup=False
+            )
         finally:
             self._draft_busy = False
             self._refresh_draft_ui()
@@ -648,7 +672,9 @@ class MRDetailScreen(Screen):
             if acknowledge_editor:
                 editor.reject_submission(f"Draft was not saved. ({exc})")
             else:
-                self.notify(f"Draft was not saved. ({exc})", severity="error")
+                self.notify(
+                    f"Draft was not saved. ({exc})", severity="error", markup=False
+                )
         finally:
             self._draft_busy = False
             if not self._detached_from_app():
@@ -701,7 +727,9 @@ class MRDetailScreen(Screen):
                 severity="warning",
             )
         except Exception as exc:  # noqa: BLE001 - Surface safe durable-store failures.
-            self.notify(f"Draft was not discarded. ({exc})", severity="error")
+            self.notify(
+                f"Draft was not discarded. ({exc})", severity="error", markup=False
+            )
         finally:
             self._draft_busy = False
             self._refresh_draft_ui()
@@ -765,7 +793,9 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Service errors are safe for the terminal surface.
             await self._recover_submission_state(target, draft_id)
-            self.notify(f"Review submission stopped. ({exc})", severity="error")
+            self.notify(
+                f"Review submission stopped. ({exc})", severity="error", markup=False
+            )
         finally:
             self._draft_busy = False
             self._refresh_draft_ui()
@@ -812,7 +842,9 @@ class MRDetailScreen(Screen):
             )
             raise
         except Exception as exc:  # noqa: BLE001 - Service errors are safe for the terminal surface.
-            self.notify(f"Review recovery stopped. ({exc})", severity="error")
+            self.notify(
+                f"Review recovery stopped. ({exc})", severity="error", markup=False
+            )
         finally:
             self._draft_busy = False
             self._refresh_draft_ui()
@@ -983,22 +1015,34 @@ class MRDetailScreen(Screen):
                 content.update("[dim]No commits[/]")
                 return
 
-            lines = []
+            lines: list[Content] = []
             for c in commits:
-                sha = f"[yellow]{c.short_sha}[/]"
-                author = f"[dim]@{c.author.username}[/]"
-                title = escape(c.title)
-                lines.append(f"{sha} {title}  {author}")
+                lines.append(
+                    Content.from_markup(
+                        "[yellow]$sha[/] $title  [dim]@$author[/]",
+                        sha=c.short_sha,
+                        title=c.title,
+                        author=c.author.username,
+                    )
+                )
                 if c.message and c.message != c.title:
                     body = c.message[len(c.title) :].strip()
                     if body:
                         for body_line in body.split("\n"):
-                            lines.append(f"        [dim]{escape(body_line)}[/]")
-                lines.append("")
+                            lines.append(
+                                Content.from_markup(
+                                    "        [dim]$line[/]", line=body_line
+                                )
+                            )
+                lines.append(Content(""))
 
-            content.update("\n".join(lines) if lines else "[dim]No commits[/]")
+            content.update(
+                Content("\n").join(lines)
+                if lines
+                else Content.from_markup("[dim]No commits[/]")
+            )
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            content.update(f"Could not load commits. ({exc})")
+            content.update(Content(f"Could not load commits. ({exc})"))
 
     @work(exclusive=True, group="mr-discussions")
     async def _load_discussions(self) -> None:
@@ -1022,7 +1066,7 @@ class MRDetailScreen(Screen):
                 f"[yellow]{unresolved} unresolved[/]  [dim]{resolved} resolved[/]"
             )
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            status.update(f"Could not load discussions. ({exc})")
+            status.update(Content(f"Could not load discussions. ({exc})"))
 
     def on_jump_to_diff_discussion(self, event: JumpToDiffDiscussion) -> None:
         """Switch to Diff tab and navigate to a discussion's location."""
@@ -1048,7 +1092,7 @@ class MRDetailScreen(Screen):
                 parts.append(f"[red]{failed} failed[/]")
             status.update("  ".join(parts))
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            status.update(f"Could not load pipelines. ({exc})")
+            status.update(Content(f"Could not load pipelines. ({exc})"))
 
     def on_load_jobs_requested(self, event: LoadJobsRequested) -> None:
         self._load_pipeline_jobs(event.pipeline)
@@ -1062,7 +1106,7 @@ class MRDetailScreen(Screen):
             panel = self.query_one("#pipeline-panel", PipelinePanel)
             panel.set_jobs(list(jobs), pipeline)
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            self.notify(f"Could not load jobs: {exc}", severity="error")
+            self.notify(f"Could not load jobs: {exc}", severity="error", markup=False)
 
     def on_load_job_log_requested(self, event: LoadJobLogRequested) -> None:
         self._load_job_log(event.job, event.pipeline)
@@ -1074,7 +1118,9 @@ class MRDetailScreen(Screen):
             panel = self.query_one("#pipeline-panel", PipelinePanel)
             panel.set_job_log(log_text, job, pipeline)
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            self.notify(f"Could not load job log: {exc}", severity="error")
+            self.notify(
+                f"Could not load job log: {exc}", severity="error", markup=False
+            )
 
     def on_cancel_pipeline_requested(self, event: CancelPipelineRequested) -> None:
         intent = self._begin_mutation("cancel-pipeline", "Cancel", event.pipeline_id)
@@ -1106,7 +1152,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Cancel failed: {exc}", severity="error")
+            self.notify(f"Cancel failed: {exc}", severity="error", markup=False)
 
     def on_retry_pipeline_requested(self, event: RetryPipelineRequested) -> None:
         intent = self._begin_mutation("retry-pipeline", "Retry", event.pipeline_id)
@@ -1138,7 +1184,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Retry failed: {exc}", severity="error")
+            self.notify(f"Retry failed: {exc}", severity="error", markup=False)
 
     def on_cancel_job_requested(self, event: CancelJobRequested) -> None:
         intent = self._begin_mutation(
@@ -1176,7 +1222,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Cancel job failed: {exc}", severity="error")
+            self.notify(f"Cancel job failed: {exc}", severity="error", markup=False)
 
     def on_retry_job_requested(self, event: RetryJobRequested) -> None:
         intent = self._begin_mutation(
@@ -1214,7 +1260,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Retry job failed: {exc}", severity="error")
+            self.notify(f"Retry job failed: {exc}", severity="error", markup=False)
 
     def on_discussion_reply_requested(self, event: DiscussionReplyRequested) -> None:
         """Open reply editor from the Discussion tab."""
@@ -1266,7 +1312,7 @@ class MRDetailScreen(Screen):
             pyperclip.copy(self.mr_summary.web_url)
             self.notify("URL copied to clipboard")
         except (pyperclip.PyperclipException, OSError):
-            self.notify(f"URL: {self.mr_summary.web_url}")
+            self.notify(f"URL: {self.mr_summary.web_url}", markup=False)
 
     def action_add_comment(self) -> None:
         editor = self.query_one("#comment-editor", CommentEditor)
@@ -1336,6 +1382,7 @@ class MRDetailScreen(Screen):
                 f"Merge !{self.mr_summary.number} into {self.mr_summary.target_branch}? "
                 "Press M again to confirm.",
                 severity="warning",
+                markup=False,
             )
 
     def action_close_mr(self) -> None:
@@ -1375,7 +1422,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Approve failed: {exc}", severity="error")
+            self.notify(f"Approve failed: {exc}", severity="error", markup=False)
 
     @work(group="mr-action-mutation")
     async def _do_unapprove(self, intent: _MutationIntent) -> None:
@@ -1400,7 +1447,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Unapprove failed: {exc}", severity="error")
+            self.notify(f"Unapprove failed: {exc}", severity="error", markup=False)
 
     @work(group="mr-action-mutation")
     async def _do_merge(self, intent: _MutationIntent) -> None:
@@ -1425,7 +1472,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Merge failed: {exc}", severity="error")
+            self.notify(f"Merge failed: {exc}", severity="error", markup=False)
 
     @work(group="mr-action-mutation")
     async def _do_close(self, intent: _MutationIntent) -> None:
@@ -1450,7 +1497,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Close failed: {exc}", severity="error")
+            self.notify(f"Close failed: {exc}", severity="error", markup=False)
 
     def _review_mutation_succeeded(self, outcome: MutationOutcome, action: str) -> bool:
         if outcome.status is MutationStatus.KNOWN:
@@ -1689,7 +1736,7 @@ class MRDetailScreen(Screen):
                 start_side=start_side,
             )
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
-            self.notify(f"Suggestion failed: {exc}", severity="error")
+            self.notify(f"Suggestion failed: {exc}", severity="error", markup=False)
         finally:
             if tmp_path:
                 with suppress(OSError):
@@ -1902,7 +1949,7 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Failed to post reply: {exc}", severity="error")
+            self.notify(f"Failed to post reply: {exc}", severity="error", markup=False)
 
     @work(group="mr-comment-mutation")
     async def _resolve_thread(
@@ -1931,7 +1978,9 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Failed to resolve thread: {exc}", severity="error")
+            self.notify(
+                f"Failed to resolve thread: {exc}", severity="error", markup=False
+            )
 
     @work(group="mr-comment-mutation")
     async def _post_general_comment(self, body: str, intent: _MutationIntent) -> None:
@@ -1949,7 +1998,9 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Failed to post comment: {exc}", severity="error")
+            self.notify(
+                f"Failed to post comment: {exc}", severity="error", markup=False
+            )
 
     def _start_inline_comment(
         self,
@@ -2011,7 +2062,9 @@ class MRDetailScreen(Screen):
             raise
         except Exception as exc:  # noqa: BLE001 - Report background/action failures without terminating the TUI.
             self._finish_mutation(intent)
-            self.notify(f"Failed to post comment: {exc}", severity="error")
+            self.notify(
+                f"Failed to post comment: {exc}", severity="error", markup=False
+            )
 
     def action_refresh(self) -> None:
         self._diff_loaded = False

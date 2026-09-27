@@ -363,7 +363,8 @@ class DiscussionPanel(Widget):
             self._pending_resolve = disc.id
             action = "Unresolve" if disc.is_resolved else "Resolve"
             self.app.notify(
-                f"{action} thread by @{disc.root_comment.author.username}? Press R again."
+                f"{action} thread by @{disc.root_comment.author.username}? Press R again.",
+                markup=False,
             )
 
     def action_cycle_filter(self) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.text import Text
 from textual.binding import Binding
 from textual.widgets import DataTable
 from textual.widgets.data_table import CellDoesNotExist
@@ -64,20 +65,28 @@ class MRTable(DataTable):
         self.add_column("Updated", key="updated", width=8)
 
     def add_mr_row(self, mr: MRSummary, ascii_mode: bool = False) -> None:
-        ci = ci_icon(mr.ci_status, ascii_mode)
-        draft = "[dim]D [/]" if mr.is_draft else "  "
+        # Forge text is wrapped in Text so DataTable never parses it as markup:
+        # a title such as "Fix [/] x" would raise MarkupError, and "[docs] y"
+        # would silently lose its bracketed word. Only our own fixed labels
+        # (forge and CI icons) go through the markup parser.
+        title = Text()
+        if mr.is_draft:
+            title.append("D ", style="dim")
+        else:
+            title.append("  ")
+        title.append(mr.title)
         row_key = f"{mr.forge_host.hostname}:{mr.repo_path}:{mr.number}"
         self._mr_data[row_key] = mr
-        row = [
-            forge_label(mr.forge_host.forge_type),
-            ci,
-            str(mr.number),
-            f"{draft}{mr.title}",
-            mr.author.username,
+        row: list[Text] = [
+            Text.from_markup(forge_label(mr.forge_host.forge_type)),
+            Text.from_markup(ci_icon(mr.ci_status, ascii_mode)),
+            Text(str(mr.number)),
+            title,
+            Text(mr.author.username),
         ]
         if self._show_repo:
-            row.append(mr.repo_path)
-        row.append(relative_time(mr.updated_at))
+            row.append(Text(mr.repo_path))
+        row.append(Text(relative_time(mr.updated_at)))
         self.add_row(*row, key=row_key)
 
     def get_selected_mr(self) -> MRSummary | None:

@@ -5,6 +5,7 @@ import { TextDecoder } from "node:util";
 import {
   PROTOCOL_MAJOR,
   REQUIRED_CAPABILITIES,
+  RESPONSE_TOO_LARGE,
   type DesktopEvent,
   type JsonObject,
   type JsonValue,
@@ -23,9 +24,11 @@ export const MAX_EVENT_BYTES = 64 * 1024;
 export const MAX_PENDING = 64;
 export const MAX_QUEUED_EVENTS = 256;
 export const MAX_ASSET_CHUNK_BYTES = 512 * 1024;
+export const MAX_JSON_DEPTH = 24;
+export const MAX_JSON_ITEMS = 20_000;
+export const MIN_JSON_DEPTH = 8;
+export const MIN_JSON_ITEMS = 1_024;
 const MAX_CRASH_HISTORY = 16;
-const MAX_JSON_DEPTH = 24;
-const MAX_JSON_ITEMS = 20_000;
 const EDITOR_EXPORT_ROOT_ENV = "TONGS_DESKTOP_EDITOR_EXPORT_ROOT";
 
 export class SidecarError extends Error {
@@ -49,6 +52,19 @@ export interface SidecarRequest<T extends JsonValue = JsonValue> {
   readonly requestId: string;
   readonly result: Promise<T>;
 }
+
+/** The JSON value-count and depth budget every protocol frame must respect. */
+export interface JsonLimits {
+  readonly values: number;
+  readonly depth: number;
+}
+
+const DEFAULT_JSON_LIMITS: JsonLimits = Object.freeze({
+  values: MAX_JSON_ITEMS,
+  depth: MAX_JSON_DEPTH,
+});
+
+class JsonLimitError extends Error {}
 
 interface PendingRequest {
   readonly method: string;
@@ -86,6 +102,7 @@ export class SidecarTransport extends EventEmitter {
   private nextId = 1;
   private generation = 0;
   private lastEventSequence = 0;
+  private jsonLimits: JsonLimits = DEFAULT_JSON_LIMITS;
   private starting: Promise<void> | null = null;
   private stopping: Promise<void> | null = null;
   private expectedExit = false;
@@ -108,6 +125,11 @@ export class SidecarTransport extends EventEmitter {
 
   get sessionGeneration(): number {
     return this.generation;
+  }
+
+  /** The JSON budget negotiated in the current session's handshake. */
+  get negotiatedJsonLimits(): JsonLimits {
+    return this.jsonLimits;
   }
 
   get processId(): number | undefined {
@@ -185,6 +207,7 @@ export class SidecarTransport extends EventEmitter {
     this.failureReported = false;
     this.buffer = Buffer.alloc(0);
     this.lastEventSequence = 0;
+    this.jsonLimits = DEFAULT_JSON_LIMITS;
     this.generation += 1;
     const environment = { ...process.env };
     delete environment.PYTHONHOME;
@@ -219,12 +242,13 @@ export class SidecarTransport extends EventEmitter {
         core_version: this.launch.coreVersion,
         capabilities: [...REQUIRED_CAPABILITIES],
         client: "tongs-electron-44.2.0",
+        limits: { json_values: MAX_JSON_ITEMS, json_depth: MAX_JSON_DEPTH },
       },
       false,
       this.startupTimeoutMs,
     );
     try {
-      validateHandshake(await handshake.result, this.launch.coreVersion);
+      this.jsonLimits = validateHandshake(await handshake.result, this.launch.coreVersion);
     } catch (error) {
       await this.stop();
       throw error;
@@ -243,7 +267,7 @@ export class SidecarTransport extends EventEmitter {
     if (this.pending.size >= MAX_PENDING) {
       throw new SidecarError("too_many_requests", "Too many desktop requests are pending.");
     }
-    validateJson(params);
+    validateJson(params, this.jsonLimits);
     const requestId = `electron-${this.generation}-${this.nextId}`;
     this.nextId = this.nextId === Number.MAX_SAFE_INTEGER ? 1 : this.nextId + 1;
     if (this.pending.has(requestId)) {
@@ -324,9 +348,16 @@ export class SidecarTransport extends EventEmitter {
     let value: unknown;
     try {
       value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw));
-      validateJson(value);
     } catch {
       this.failConnection(child, generation, "invalid_frame");
+      return;
+    }
+    try {
+      validateJson(value, this.jsonLimits);
+    } catch (error) {
+      if (!(error instanceof JsonLimitError) || !this.failOversizedResponse(value)) {
+        this.failConnection(child, generation, "invalid_frame");
+      }
       return;
     }
     if (!isRecord(value) || value.v !== PROTOCOL_MAJOR || typeof value.type !== "string") {
@@ -375,6 +406,35 @@ export class SidecarTransport extends EventEmitter {
         error.retryable === true,
       ),
     );
+  }
+
+  /**
+   * Fail only the request an over-budget response answers. A frame that parses
+   * but exceeds the JSON value or depth budget still names its request, so the
+   * other pending requests and the service itself survive. Returns false when
+   * the frame is not a response with a request id, which fails the connection.
+   */
+  private failOversizedResponse(value: unknown): boolean {
+    if (
+      !isRecord(value) ||
+      value.v !== PROTOCOL_MAJOR ||
+      value.type !== "response" ||
+      typeof value.id !== "string"
+    ) {
+      return false;
+    }
+    const pending = this.pending.get(value.id);
+    if (!pending) return true;
+    clearTimeout(pending.timer);
+    this.pending.delete(value.id);
+    pending.reject(
+      new SidecarError(
+        RESPONSE_TOO_LARGE,
+        "The desktop response is too large to show.",
+        false,
+      ),
+    );
+    return true;
   }
 
   private failConnection(child: ChildProcessWithoutNullStreams, generation: number, code: string): void {
@@ -468,7 +528,7 @@ function mutationErrorCode(
     : protocolCode;
 }
 
-function validateHandshake(value: JsonValue, coreVersion: string): asserts value is HandshakeResult {
+function validateHandshake(value: JsonValue, coreVersion: string): JsonLimits {
   if (!isRecord(value)) throw new SidecarError("invalid_handshake", "Invalid desktop handshake.");
   const required = [...REQUIRED_CAPABILITIES].sort();
   const capabilities = stringArray(value.capabilities);
@@ -492,6 +552,31 @@ function validateHandshake(value: JsonValue, coreVersion: string): asserts value
   ) {
     throw new SidecarError("incompatible_handshake", "The desktop service is incompatible.");
   }
+  return negotiatedJsonLimits(value.limits);
+}
+
+/**
+ * Accept the sidecar's negotiated JSON budget only when it is an integer pair
+ * no looser than this client's own limits and no tighter than the protocol
+ * floor, so the two sides can never enforce different budgets silently.
+ */
+function negotiatedJsonLimits(limits: Record<string, unknown>): JsonLimits {
+  const values = limits.json_values;
+  const depth = limits.json_depth;
+  if (
+    !Number.isSafeInteger(values) ||
+    !Number.isSafeInteger(depth) ||
+    Number(values) < MIN_JSON_ITEMS ||
+    Number(values) > MAX_JSON_ITEMS ||
+    Number(depth) < MIN_JSON_DEPTH ||
+    Number(depth) > MAX_JSON_DEPTH
+  ) {
+    throw new SidecarError(
+      "incompatible_handshake",
+      "The desktop service JSON limits are incompatible with this app.",
+    );
+  }
+  return Object.freeze({ values: Number(values), depth: Number(depth) });
 }
 
 const REQUIRED_METHODS = Object.freeze([
@@ -528,18 +613,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function validateJson(value: unknown, depth = 0, budget = { items: 0 }): asserts value is JsonValue {
-  if (depth > MAX_JSON_DEPTH || budget.items++ > MAX_JSON_ITEMS) throw new Error("invalid JSON");
+function validateJson(
+  value: unknown,
+  limits: JsonLimits,
+  depth = 0,
+  budget = { items: 0 },
+): asserts value is JsonValue {
+  // The same whole-frame budget the sidecar applies: at most `limits.values`
+  // values, and nothing nested deeper than `limits.depth` below the frame.
+  if (depth > limits.depth) throw new JsonLimitError("JSON is nested too deeply");
+  budget.items += 1;
+  if (budget.items > limits.values) throw new JsonLimitError("JSON has too many values");
   if (value === null || typeof value === "string" || typeof value === "boolean") return;
   if (typeof value === "number" && Number.isFinite(value)) return;
   if (Array.isArray(value)) {
-    for (const item of value) validateJson(item, depth + 1, budget);
+    for (const item of value) validateJson(item, limits, depth + 1, budget);
     return;
   }
   if (!isRecord(value)) throw new Error("invalid JSON");
   for (const [key, item] of Object.entries(value)) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") throw new Error("invalid JSON key");
-    validateJson(item, depth + 1, budget);
+    validateJson(item, limits, depth + 1, budget);
   }
 }
 

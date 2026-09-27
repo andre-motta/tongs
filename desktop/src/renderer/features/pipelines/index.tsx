@@ -7,11 +7,12 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import type {
-  DesktopBridge,
-  JobItemDto,
-  LogPage,
-  PipelineItemDto,
+import {
+  RESPONSE_TOO_LARGE,
+  type DesktopBridge,
+  type JobItemDto,
+  type LogPage,
+  type PipelineItemDto,
 } from "../../../shared/bridge.js";
 import type {
   CICapabilityFlags,
@@ -1329,6 +1330,8 @@ function logLimit(message: string): RendererReadError {
 
 function logError(error: unknown): string {
   const code = errorCode(error);
+  if (code === RESPONSE_TOO_LARGE)
+    return "This job log is too large to show in the desktop app.";
   if (code === "snapshot_expired")
     return "This log snapshot expired. Reload the job log to continue.";
   if (code === "revision_changed")

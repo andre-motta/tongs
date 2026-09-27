@@ -205,7 +205,7 @@ class InboxScreen(Screen):
                 scope, repository=self.scoped_repo
             )
         except ServiceError as error:
-            self.notify(f"{label}: {error.message}", severity="warning")
+            self.notify(f"{label}: {error.message}", severity="warning", markup=False)
             return
 
         if page.items or not page.failures:
@@ -216,9 +216,11 @@ class InboxScreen(Screen):
             details = "; ".join(
                 f"{failure.hostname}: {failure.message}" for failure in page.failures
             )
+            # Failure messages can carry forge text, so show them literally.
             self.notify(
-                f"[dim]{label} skipped: {details}[/]",
+                f"{label} skipped: {details}",
                 severity="warning",
+                markup=False,
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

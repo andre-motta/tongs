@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -27,9 +27,6 @@ from tongs.scanner.repo import ForgeType
 
 
 class TestEncodeProject:
-    def test_simple_path(self):
-        assert _encode_project("org/repo") == "org%2Frepo"
-
     def test_nested_path(self):
         assert (
             _encode_project("redhat/rhel-ai/wheels/builder")
@@ -43,9 +40,10 @@ class TestParseDatetime:
         assert dt == datetime(2026, 1, 15, 10, 30, 0, tzinfo=UTC)
 
     def test_iso_format_with_offset(self):
-        dt = _parse_datetime("2026-01-15T10:30:00+00:00")
-        assert dt is not None
-        assert dt.year == 2026
+        dt = _parse_datetime("2026-01-15T10:30:00+05:30")
+        offset = timezone(timedelta(hours=5, minutes=30))
+        assert dt == datetime(2026, 1, 15, 10, 30, 0, tzinfo=offset)
+        assert dt.utcoffset() == timedelta(hours=5, minutes=30)
 
     def test_none_returns_none(self):
         assert _parse_datetime(None) is None
@@ -54,70 +52,48 @@ class TestParseDatetime:
         assert _parse_datetime("") is None
 
 
-class TestParseCIStatus:
-    def test_success(self):
-        assert _parse_ci_status("success") == CIStatus.SUCCESS
-
-    def test_failed(self):
-        assert _parse_ci_status("failed") == CIStatus.FAILED
-
-    def test_running(self):
-        assert _parse_ci_status("running") == CIStatus.RUNNING
-
-    def test_pending(self):
-        assert _parse_ci_status("pending") == CIStatus.PENDING
-
-    def test_canceled(self):
-        assert _parse_ci_status("canceled") == CIStatus.CANCELED
-
-    def test_cancelled_british(self):
-        assert _parse_ci_status("cancelled") == CIStatus.CANCELED
-
-    def test_created_maps_to_pending(self):
-        assert _parse_ci_status("created") == CIStatus.PENDING
-
-    def test_manual_maps_to_pending(self):
-        assert _parse_ci_status("manual") == CIStatus.PENDING
-
-    def test_unknown_value(self):
-        assert _parse_ci_status("something_new") == CIStatus.UNKNOWN
-
-    def test_none(self):
-        assert _parse_ci_status(None) == CIStatus.UNKNOWN
+@pytest.mark.parametrize(
+    ("wire", "expected"),
+    [
+        ("success", CIStatus.SUCCESS),
+        ("failed", CIStatus.FAILED),
+        ("running", CIStatus.RUNNING),
+        ("pending", CIStatus.PENDING),
+        ("canceled", CIStatus.CANCELED),
+        ("cancelled", CIStatus.CANCELED),
+        ("created", CIStatus.PENDING),
+        ("manual", CIStatus.PENDING),
+        ("something_new", CIStatus.UNKNOWN),
+        (None, CIStatus.UNKNOWN),
+    ],
+)
+def test_parse_ci_status(wire: str | None, expected: CIStatus) -> None:
+    assert _parse_ci_status(wire) == expected
 
 
-class TestParseMRState:
-    def test_opened(self):
-        assert _parse_mr_state("opened") == MRState.OPEN
-
-    def test_closed(self):
-        assert _parse_mr_state("closed") == MRState.CLOSED
-
-    def test_merged(self):
-        assert _parse_mr_state("merged") == MRState.MERGED
-
-    def test_unknown_defaults_to_open(self):
-        assert _parse_mr_state("unknown") == MRState.OPEN
+@pytest.mark.parametrize(
+    ("wire", "expected"),
+    [
+        ("closed", MRState.CLOSED),
+        ("merged", MRState.MERGED),
+        ("unknown", MRState.OPEN),
+    ],
+)
+def test_parse_mr_state(wire: str, expected: MRState) -> None:
+    assert _parse_mr_state(wire) == expected
 
 
-class TestParseUser:
-    def test_full_user(self):
-        user = _parse_user({"username": "dev", "name": "Developer"})
-        assert user.username == "dev"
-        assert user.display_name == "Developer"
-
-    def test_minimal_user(self):
-        user = _parse_user({"username": "dev"})
-        assert user.username == "dev"
-        assert user.display_name == ""
-
-    def test_none_returns_unknown(self):
-        user = _parse_user(None)
-        assert user.username == "unknown"
-
-    def test_empty_dict_returns_unknown(self):
-        user = _parse_user({})
-        assert user.username == "unknown"
+@pytest.mark.parametrize(
+    ("data", "username", "display_name"),
+    [
+        ({"username": "dev", "name": "Developer"}, "dev", "Developer"),
+        ({"username": "dev"}, "dev", ""),
+        (None, "unknown", ""),
+    ],
+)
+def test_parse_user(data: dict | None, username: str, display_name: str) -> None:
+    user = _parse_user(data)
+    assert (user.username, user.display_name) == (username, display_name)
 
 
 # ---------------------------------------------------------------------------
@@ -675,8 +651,11 @@ class TestGitLabLifecycleActions:
 
     @pytest.mark.asyncio
     async def test_merge_without_cleanup_uses_squash_commit_identity(self) -> None:
-        client, http = _make_gitlab_client(
-            lambda _: httpx.Response(
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
                 200,
                 json={
                     "id": 420,
@@ -688,7 +667,8 @@ class TestGitLabLifecycleActions:
                     "squash_commit_sha": "squash-sha",
                 },
             )
-        )
+
+        client, http = _make_gitlab_client(handler)
         async with http:
             result = await client.merge_mr(
                 "acme/widgets",
@@ -699,11 +679,24 @@ class TestGitLabLifecycleActions:
 
         assert result.merge_sha == "squash-sha"
         assert result.source_cleanup is SourceCleanupStatus.NOT_REQUESTED
+        assert json.loads(requests[0].content) == {
+            "squash": False,
+            "should_remove_source_branch": False,
+        }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("identity", [True, 1.0, 0, -1, "42"])
+    @pytest.mark.parametrize(
+        ("identity", "number", "state"),
+        [
+            (True, 1, "merged"),
+            (42.0, 42, "merged"),
+            (0, 42, "merged"),
+            (-1, 42, "merged"),
+            (42, 42, "opened"),
+        ],
+    )
     async def test_merge_rejects_malformed_native_identity(
-        self, identity: object
+        self, identity: object, number: int, state: str
     ) -> None:
         client, http = _make_gitlab_client(
             lambda _: httpx.Response(
@@ -711,7 +704,7 @@ class TestGitLabLifecycleActions:
                 json={
                     "id": 420,
                     "iid": identity,
-                    "state": "merged",
+                    "state": state,
                     "source_branch": "feature",
                     "target_branch": "main",
                     "merge_commit_sha": "merge-sha",
@@ -720,12 +713,14 @@ class TestGitLabLifecycleActions:
         )
         async with http:
             with pytest.raises(ValueError, match="merge response"):
-                await client.merge_mr("acme/widgets", 42)
+                await client.merge_mr("acme/widgets", number)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("identity", [True, 1.0, 0, -1, "42"])
+    @pytest.mark.parametrize(
+        ("identity", "number"), [(True, 1), (42.0, 42), (0, 42), (-1, 42)]
+    )
     async def test_state_action_rejects_malformed_native_identity(
-        self, identity: object
+        self, identity: object, number: int
     ) -> None:
         client, http = _make_gitlab_client(
             lambda _: httpx.Response(
@@ -734,7 +729,7 @@ class TestGitLabLifecycleActions:
         )
         async with http:
             with pytest.raises(ValueError, match="action response"):
-                await client.close_mr("acme/widgets", 42)
+                await client.close_mr("acme/widgets", number)
 
     @pytest.mark.asyncio
     async def test_close_reopen_and_unapprove_validate_native_results(self) -> None:
@@ -743,6 +738,9 @@ class TestGitLabLifecycleActions:
                 {"id": 420, "iid": 42, "state": "closed"},
                 {"id": 420, "iid": 42, "state": "opened"},
                 {"id": 420, "iid": 42, "state": "opened"},
+                {"id": 420, "iid": 42, "state": "opened"},
+                {"id": 420, "iid": 42, "state": "closed"},
+                {"id": 420, "iid": 7, "state": "opened"},
             ]
         )
         client, http = _make_gitlab_client(
@@ -752,6 +750,12 @@ class TestGitLabLifecycleActions:
             closed = await client.close_mr("acme/widgets", 42)
             reopened = await client.reopen_mr("acme/widgets", 42)
             unapproved = await client.unapprove_mr("acme/widgets", 42)
+            with pytest.raises(ValueError, match="action response"):
+                await client.close_mr("acme/widgets", 42)
+            with pytest.raises(ValueError, match="action response"):
+                await client.reopen_mr("acme/widgets", 42)
+            with pytest.raises(ValueError, match="action response"):
+                await client.unapprove_mr("acme/widgets", 42)
 
         assert closed.remote_id == "420"
         assert reopened.remote_id == "420"

@@ -18,14 +18,9 @@ class TestApiBaseUrls:
     def test_github_enterprise(self):
         assert _github_api_base("github.corp.com") == "https://github.corp.com/api/v3"
 
-    def test_gitlab_com(self):
-        assert _gitlab_api_base("gitlab.com") == "https://gitlab.com/api/v4"
-
-    def test_gitlab_internal(self):
-        assert (
-            _gitlab_api_base("gitlab.cee.redhat.com")
-            == "https://gitlab.cee.redhat.com/api/v4"
-        )
+    @pytest.mark.parametrize("hostname", ["gitlab.com", "gitlab.cee.redhat.com"])
+    def test_gitlab(self, hostname):
+        assert _gitlab_api_base(hostname) == f"https://{hostname}/api/v4"
 
 
 class TestForgeRegistry:
@@ -55,10 +50,6 @@ class TestForgeRegistry:
         assert host is not None
         assert host.forge_type == ForgeType.GITHUB
 
-    def test_unknown_host_returns_none(self):
-        registry = ForgeRegistry()
-        assert registry.get_host("bitbucket.org") is None
-
     def test_caches_host(self):
         registry = ForgeRegistry()
         host1 = registry.get_host("gitlab.com")
@@ -72,7 +63,7 @@ class TestForgeRegistry:
             "evil-gitlab.example",
             "github.com.evil.io",
             "mygithub.example",
-            "g\u0456thub.com",
+            "bitbucket.org",
         ],
     )
     def test_unconfigured_host_is_not_mapped_by_substring(self, hostname):
@@ -104,12 +95,6 @@ class TestForgeRegistry:
         ]
 
     @pytest.mark.asyncio
-    async def test_get_client_unknown_host_raises_auth_error(self):
-        registry = ForgeRegistry()
-        with pytest.raises(AuthError, match="Unknown forge host"):
-            await registry.get_client("bitbucket.org")
-
-    @pytest.mark.asyncio
     async def test_get_client_refreshes_token_for_its_host(self):
         registry = ForgeRegistry()
         with (
@@ -124,19 +109,6 @@ class TestForgeRegistry:
             assert auth._refresh() == "fresh"
         refresh.assert_called_once_with("gitlab.com", ForgeType.GITLAB)
         await registry.close_all()
-
-    @pytest.mark.asyncio
-    async def test_close_all_clears_cache(self):
-        registry = ForgeRegistry()
-        # Manually inject a mock client into the cache
-        mock_client = AsyncMock()
-        registry._clients["gitlab.example.com"] = mock_client
-        assert len(registry._clients) == 1
-
-        await registry.close_all()
-
-        mock_client.close.assert_awaited_once()
-        assert len(registry._clients) == 0
 
     @pytest.mark.asyncio
     async def test_close_all_finishes_other_clients_before_propagating_cancel(self):

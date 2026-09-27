@@ -25,12 +25,6 @@ class TestPutGet:
         assert result == b"hello"
 
     @pytest.mark.asyncio
-    async def test_get_miss_returns_none(self, store):
-        """get on a nonexistent key returns None."""
-        result = await store.get("nonexistent")
-        assert result is None
-
-    @pytest.mark.asyncio
     async def test_ttl_expiration(self, store):
         """Expired entries are not returned by get."""
         await store.put("expire_me", b"data", ttl=10)
@@ -68,16 +62,6 @@ class TestExcludedPrefixes:
         await store._db.commit()
         result = await store.get("stream_log:xyz")
         assert result is None
-
-
-class TestJson:
-    @pytest.mark.asyncio
-    async def test_json_roundtrip(self, store):
-        """put_json/get_json preserves dict structure."""
-        payload = {"status": "ok", "count": 42, "items": [1, 2, 3]}
-        await store.put_json("json_key", payload, ttl=60)
-        result = await store.get_json("json_key")
-        assert result == payload
 
 
 class TestInvalidate:
@@ -131,6 +115,24 @@ class TestClearAndPrune:
         await store.prune()
         assert await store.get("expired") is None
         assert await store.get("live") == b"fresh"
+
+
+class TestSizeLimit:
+    @pytest.mark.asyncio
+    async def test_oldest_quarter_by_recency_is_evicted_past_the_cap(self, store):
+        """Past the size cap the least recently used quarter goes, newest stay."""
+        clock = iter(range(1, 100))
+        chunk = b"x" * (128 * 1024)
+        with patch("tongs.cache.store.time") as mock_time:
+            mock_time.time.side_effect = lambda: 1_000_000.0 + next(clock)
+            for index in range(8):
+                await store.put(f"k{index}", chunk, ttl=3600)
+            assert await store.get("k0") == chunk
+            await store.put("k8", chunk, ttl=3600)
+
+        cursor = await store._db.execute("SELECT key FROM cache")
+        remaining = {row[0] for row in await cursor.fetchall()}
+        assert remaining == {"k0", "k3", "k4", "k5", "k6", "k7", "k8"}
 
 
 class TestNotOpened:

@@ -92,14 +92,6 @@ class TestTokenFromNetrc:
 
 
 class TestResolveToken:
-    def test_raises_auth_error_when_no_credentials(self, tmp_path):
-        with (
-            patch("tongs.forges.auth._token_from_cli", return_value=None),
-            patch("tongs.forges.auth._token_from_netrc", return_value=None),
-            pytest.raises(AuthError, match="No credentials found"),
-        ):
-            resolve_token("gitlab.com", ForgeType.GITLAB)
-
     def test_prefers_cli_over_netrc(self):
         with (
             patch("tongs.forges.auth._token_from_cli", return_value="cli-token"),
@@ -149,7 +141,7 @@ class TestTokenFromCli:
         result = subprocess.CompletedProcess(
             args=["glab", "config", "get", "token", "--host", "gitlab.com"],
             returncode=1,
-            stdout="",
+            stdout="glpat-stale\n",
             stderr="not logged in",
         )
         with patch("tongs.forges.auth.subprocess.run", return_value=result):

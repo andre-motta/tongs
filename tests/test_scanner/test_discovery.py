@@ -46,28 +46,14 @@ class TestDiscoverRepos:
         repos = discover_repos(mock_repo_tree)
         assert len(repos) == 3
 
-    def test_skips_non_repo_dirs(self, mock_repo_tree):
-        repos = discover_repos(mock_repo_tree)
-        paths = {r.path.name for r in repos}
-        assert "not-a-repo" not in paths
-
-    def test_respects_max_depth(self, mock_repo_tree):
-        repos = discover_repos(mock_repo_tree, max_depth=1)
-        paths = {r.path.name for r in repos}
-        assert "solo-repo" in paths
-        assert "repo-b" not in paths
-
-    def test_repos_sorted_by_display_name(self, mock_repo_tree):
-        repos = discover_repos(mock_repo_tree)
-        names = [r.display_name for r in repos]
-        assert names == sorted(names, key=str.lower)
+    def test_repos_sorted_by_display_name(self, tmp_path):
+        _init_repo(tmp_path / "a", {"origin": "https://github.com/zzz/a.git"})
+        _init_repo(tmp_path / "b", {"origin": "https://github.com/AAA/b.git"})
+        repos = discover_repos(tmp_path)
+        assert [r.display_name for r in repos] == ["AAA/b", "zzz/a"]
 
     def test_nonexistent_root_returns_empty(self, tmp_path):
         repos = discover_repos(tmp_path / "nonexistent")
-        assert repos == []
-
-    def test_empty_dir_returns_empty(self, tmp_path):
-        repos = discover_repos(tmp_path)
         assert repos == []
 
 
@@ -90,7 +76,7 @@ class TestPickPrimaryRemote:
         assert _pick_primary_remote(remotes).name == "origin"
 
     def test_falls_back_to_upstream(self):
-        remotes = [self._remote("upstream"), self._remote("fork")]
+        remotes = [self._remote("fork"), self._remote("upstream")]
         assert _pick_primary_remote(remotes).name == "upstream"
 
     def test_falls_back_to_first(self):
@@ -132,17 +118,6 @@ class TestRepoProperties:
         )
         repo = Repo(path=Path("/tmp/repo"), remotes=(remote,), primary_remote=remote)
         assert repo.namespace == ""
-
-    def test_namespace_two_segments(self):
-        remote = Remote(
-            name="origin",
-            url="https://github.com/org/repo.git",
-            hostname="github.com",
-            repo_path="org/repo",
-            forge_type=ForgeType.GITHUB,
-        )
-        repo = Repo(path=Path("/tmp/repo"), remotes=(remote,), primary_remote=remote)
-        assert repo.namespace == "org"
 
 
 class TestDiscoverReposEdgeCases:

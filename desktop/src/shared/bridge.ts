@@ -54,8 +54,9 @@ export interface ReviewDetailDto extends ReviewSummaryDto {
 }
 export interface ReviewListItemDto { readonly handle: OpaqueHandle; readonly repository: OpaqueHandle; readonly summary: ReviewSummaryDto; }
 export interface ReviewFailureDto extends ServiceErrorDto { readonly repository: OpaqueHandle | null; }
-export interface ListReviewsParams { readonly scope: string; readonly repository?: OpaqueHandle; readonly state?: string; readonly per_page?: number; }
-export interface ReviewListResult { readonly items: readonly ReviewListItemDto[]; readonly failures: readonly ReviewFailureDto[]; }
+export interface ListReviewsParams { readonly scope: string; readonly repository?: OpaqueHandle; readonly state?: string; readonly per_page?: number; readonly cursor?: string; }
+/** `next_cursor` is set when a repository-scoped All Open read has another page. */
+export interface ReviewListResult { readonly items: readonly ReviewListItemDto[]; readonly failures: readonly ReviewFailureDto[]; readonly next_cursor?: string | null; }
 export interface ReviewSnapshotDto {
   readonly handle: OpaqueHandle; readonly repository: OpaqueHandle;
   readonly detail: ReviewDetailDto; readonly capabilities: ForgeCapabilitiesDto;

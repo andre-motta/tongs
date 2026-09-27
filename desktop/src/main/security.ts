@@ -37,7 +37,7 @@ export function assertParams(method: string, value: unknown): asserts value is J
   const specs: Record<string, { required: readonly string[]; optional?: readonly string[] }> = {
     "repositories.discover": { required: [] },
     "repositories.open": { required: ["hostname", "project_path"] },
-    "reviews.list": { required: ["scope"], optional: ["repository", "state", "per_page"] },
+    "reviews.list": { required: ["scope"], optional: ["repository", "state", "per_page", "cursor"] },
     "reviews.get": { required: ["review"] }, "discussions.list": { required: ["review"] },
     "commits.list": { required: ["review"] }, "jobs.list": { required: ["pipeline"] },
     "diff.open": { required: ["review"], optional: ["layout", "max_items"] },
@@ -55,7 +55,10 @@ export function assertParams(method: string, value: unknown): asserts value is J
   const allowed = new Set([...spec.required, ...(spec.optional ?? [])]);
   if (Object.keys(value).some((key) => !allowed.has(key)) || spec.required.some((key) => !Object.hasOwn(value, key))) throw new Error("Invalid desktop parameter fields");
   for (const [key, item] of Object.entries(value)) {
-    if (["per_page", "max_items", "cursor"].includes(key)) {
+    if (method === "reviews.list" && key === "cursor") {
+      // An opaque cursor the service sealed; the service rejects forged ones.
+      if (item !== null && (typeof item !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(item))) throw new Error("Invalid desktop cursor parameter");
+    } else if (["per_page", "max_items", "cursor"].includes(key)) {
       const maximum = key === "cursor" ? Number.MAX_SAFE_INTEGER : key === "per_page" ? 100 : 1000;
       if (!Number.isSafeInteger(item) || Number(item) < (key === "cursor" ? 0 : 1) || Number(item) > maximum) throw new Error("Invalid desktop numeric parameter");
     } else if (key === "params" || key === "location") {
@@ -93,7 +96,8 @@ function assertResultValue(method: string, value: unknown): asserts value is Jso
   if (method === "repositories.discover") return assertArrayField(value, "repositories", assertRepository);
   if (method === "repositories.open") return assertRepository(value);
   if (method === "reviews.list") {
-    assertKeys(value, ["items", "failures"]);
+    assertKeys(value, ["next_cursor", "items", "failures"]);
+    if (value.next_cursor !== null && (typeof value.next_cursor !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(value.next_cursor))) fail("next_cursor", "must be null or an opaque cursor of at most 64 characters");
     assertArray(value.items, (item) => { assertKeys(item, ["handle", "repository", "summary"]); text(item.handle); text(item.repository); assertReviewSummary(item.summary); });
     return assertArray(value.failures, (failure) => { assertKeys(failure, ["code", "message", "retryable", "repository"]); text(failure.code); text(failure.message); bool(failure.retryable); nullableText(failure.repository); });
   }

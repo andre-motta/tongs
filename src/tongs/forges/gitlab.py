@@ -11,7 +11,7 @@ import httpx
 
 from tongs.errors import ForgeError, NetworkError, redact_credentials
 from tongs.forges.base import ForgeClient
-from tongs.forges.http import map_http_error, paginate, request
+from tongs.forges.http import map_http_error, paginate, request, request_page
 from tongs.forges.models import (
     CIStatus,
     Commit,
@@ -21,6 +21,7 @@ from tongs.forges.models import (
     ForgeMutationResult,
     InlineComment,
     MRDetail,
+    MRPage,
     MRState,
     MRSummary,
     Pipeline,
@@ -148,6 +149,33 @@ class GitLabClient(ForgeClient):
             params={"state": gitlab_state},
         )
         return await self._enrich_ci_status(data, repo_path)
+
+    async def list_mrs_page(
+        self,
+        repo_path: str,
+        state: str = "opened",
+        page: int = 1,
+        per_page: int = 100,
+    ) -> MRPage:
+        """Read one page of merge requests, most recently updated first.
+
+        Pipeline status is fetched only for the merge requests on this page.
+        """
+        project = _encode_project(repo_path)
+        gitlab_state = "opened" if state == "open" else state
+        data, has_next = await request_page(
+            self._http,
+            f"/projects/{project}/merge_requests",
+            page=page,
+            per_page=per_page,
+            params={
+                "state": gitlab_state,
+                "order_by": "updated_at",
+                "sort": "desc",
+            },
+        )
+        summaries = await self._enrich_ci_status(data, repo_path)
+        return MRPage(tuple(summaries), has_next=has_next)
 
     async def list_my_reviews(self) -> list[MRSummary]:
         user_data = await request(self._http, "GET", "/user")

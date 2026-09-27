@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import os
+import secrets
 import sys
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -108,6 +110,7 @@ from tongs.services import (
     ServiceError,
     ServiceEvent,
 )
+from tongs.services.models import review_cursor_page
 
 SUPPORTED_CAPABILITIES = frozenset(
     {
@@ -304,6 +307,7 @@ class DesktopSidecarServer:
             self._editor_exports or _UnavailableEditorExports()
         )
         self._handles = HandleRegistry()
+        self._review_cursors = _ReviewCursors()
         self._snapshots = SnapshotStore()
         self._assets = AssetCatalog()
         self._operations: dict[str, _Operation] = {}
@@ -636,9 +640,16 @@ class DesktopSidecarServer:
     async def _reviews_list(
         self, params: JsonObject, _context: RequestContext
     ) -> object:
+        """List one page of reviews.
+
+        All Open reads one page per repository, most recently updated first, so
+        a response holds at most ``per_page`` reviews for each repository. A
+        repository-scoped All Open read returns ``next_cursor`` when the forge
+        has another page; passing it back as ``cursor`` reads that page.
+        """
         _require_params(
             params,
-            allowed=frozenset({"scope", "repository", "state", "per_page"}),
+            allowed=frozenset({"scope", "repository", "state", "per_page", "cursor"}),
             required=frozenset({"scope"}),
         )
         try:
@@ -655,10 +666,32 @@ class DesktopSidecarServer:
                 params["repository"], HandleKind.REPOSITORY, RepositoryRef
             )
         per_page = _optional_int(params, "per_page", 100, minimum=1, maximum=100)
+        repository_handle = (
+            cast(str, params["repository"]) if repository is not None else None
+        )
+        binding = (scope.value, state.value, per_page, repository_handle)
+        cursor = None
+        if params.get("cursor") is not None:
+            if repository is None or scope is not ReviewScope.ALL_OPEN:
+                raise ProtocolError(
+                    ProtocolErrorCode.INVALID_PARAMS,
+                    "The review list cursor is invalid.",
+                )
+            cursor = self._review_cursors.open(params["cursor"], binding)
         page = await self._session.list_reviews(
-            ReviewQuery(scope, repository=repository, state=state, per_page=per_page)
+            ReviewQuery(
+                scope,
+                repository=repository,
+                state=state,
+                per_page=per_page,
+                paged=True,
+                cursor=cursor,
+            )
         )
         return {
+            "next_cursor": self._review_cursors.seal(page.next_cursor, binding)
+            if page.next_cursor is not None and repository is not None
+            else None,
             "items": [self._review_list_wire(item) for item in page.items],
             "failures": [
                 {
@@ -1363,6 +1396,57 @@ def _parse_handshake_limits(value: JsonValue | None) -> JsonLimits:
             },
         )
     return DEFAULT_JSON_LIMITS.negotiate(values, depth)
+
+
+_REVIEW_CURSOR_PREFIX = "rc1"
+_REVIEW_CURSOR_MAX_LENGTH = 64
+
+
+class _ReviewCursors:
+    """Seal session review cursors so the renderer can only return real ones.
+
+    A cursor names the session's next page and carries a keyed digest over that
+    page and the query it belongs to (scope, state, page size and repository
+    handle). The key lives only in this server instance, so a cursor from a
+    different query, a previous service run or any hand-written value fails
+    validation instead of reaching the forge.
+    """
+
+    def __init__(self) -> None:
+        self._key = secrets.token_bytes(32)
+
+    def seal(self, cursor: str, binding: tuple[str, str, int, str | None]) -> str:
+        return f"{_REVIEW_CURSOR_PREFIX}.{cursor}.{self._digest(cursor, binding)}"
+
+    def open(self, value: object, binding: tuple[str, str, int, str | None]) -> str:
+        invalid = ProtocolError(
+            ProtocolErrorCode.INVALID_PARAMS,
+            "The review list cursor is invalid.",
+        )
+        if (
+            not isinstance(value, str)
+            or not 1 <= len(value) <= _REVIEW_CURSOR_MAX_LENGTH
+            or not value.isascii()
+        ):
+            raise invalid
+        parts = value.split(".")
+        if len(parts) != 3 or parts[0] != _REVIEW_CURSOR_PREFIX:
+            raise invalid
+        cursor, digest = parts[1], parts[2]
+        try:
+            review_cursor_page(cursor)
+        except ValueError:
+            raise invalid from None
+        if not hmac.compare_digest(digest, self._digest(cursor, binding)):
+            raise invalid
+        return cursor
+
+    def _digest(self, cursor: str, binding: tuple[str, str, int, str | None]) -> str:
+        scope, state, per_page, repository = binding
+        message = "\x1f".join(
+            ("reviews.list", scope, state, str(per_page), repository or "", cursor)
+        ).encode()
+        return hmac.new(self._key, message, hashlib.sha256).hexdigest()[:32]
 
 
 def _require_params(

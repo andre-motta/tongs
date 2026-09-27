@@ -656,6 +656,7 @@ class ApplicationSession:
             hostname: str, repository: RepositoryRef | None
         ) -> tuple[tuple[ReviewListItem, ...], HostFailure | None]:
             async with semaphore:
+                next_page: str | None = None
                 try:
                     client = await self._get_client(hostname, "list_reviews")
                     if query.scope == ReviewScope.ALL_OPEN and query.paged:
@@ -669,7 +670,7 @@ class ApplicationSession:
                         )
                         summaries = _page_items(page)
                         if page.has_next and page_number < MAX_REVIEW_PAGE:
-                            next_cursors[repository] = str(page_number + 1)
+                            next_page = str(page_number + 1)
                     elif query.scope == ReviewScope.ALL_OPEN:
                         assert repository is not None
                         summaries = await client.list_mrs(
@@ -692,6 +693,9 @@ class ApplicationSession:
                         if query.scope != ReviewScope.ALL_OPEN
                         else None,
                     )
+                    # Only a page that passed validation offers the next one.
+                    if next_page is not None and repository is not None:
+                        next_cursors[repository] = next_page
                     return items, None
                 except asyncio.CancelledError:
                     raise

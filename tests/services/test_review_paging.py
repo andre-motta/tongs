@@ -219,3 +219,64 @@ async def test_failed_first_page_has_no_cursor() -> None:
     assert len(page.failures) == 1
     assert page.next_cursor is None
     await session.close()
+
+
+class _ForeignPageClient(_PagedClient):
+    """Returns a summary of another project on the chosen pages."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.foreign_pages: set[int] = set()
+
+    async def list_mrs_page(
+        self, repo_path: str, state: str = "open", page: int = 1, per_page: int = 100
+    ) -> MRPage:
+        result = await super().list_mrs_page(repo_path, state, page, per_page)
+        if page not in self.foreign_pages:
+            return result
+        foreign = make_summary(project="other/project", number=99)
+        return MRPage((foreign, *result.items[1:]), has_next=result.has_next)
+
+
+@pytest.mark.asyncio
+async def test_first_page_that_fails_validation_has_no_cursor() -> None:
+    client = _ForeignPageClient()
+    session = await _session_with(client)
+    client.foreign_pages.add(1)
+
+    page = await session.list_reviews(
+        ReviewQuery(
+            ReviewScope.ALL_OPEN, repository=_REPOSITORY, per_page=2, paged=True
+        )
+    )
+
+    assert page.items == ()
+    assert [failure.code for failure in page.failures] == [
+        ServiceErrorCode.INVALID_RESPONSE
+    ]
+    # The forge said a page 2 exists, but page 1 was never shown, so the
+    # caller must read page 1 again instead of skipping past it.
+    assert page.next_cursor is None
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_later_page_that_fails_validation_keeps_its_cursor() -> None:
+    client = _ForeignPageClient()
+    session = await _session_with(client)
+    client.foreign_pages.add(2)
+
+    page = await session.list_reviews(
+        ReviewQuery(
+            ReviewScope.ALL_OPEN,
+            repository=_REPOSITORY,
+            per_page=2,
+            paged=True,
+            cursor="2",
+        )
+    )
+
+    assert page.items == ()
+    assert len(page.failures) == 1
+    assert page.next_cursor == "2"
+    await session.close()

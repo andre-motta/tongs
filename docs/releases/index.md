@@ -10,6 +10,7 @@ and unsigned Fedora RPMs.
 
 | Version | Date | Notes |
 |---|---|---|
+| 1.0.3 | 2026-09-27 | [Release notes](/releases/v1.0.3/). A paged desktop inbox for large repositories, and no more crashes from damaged drafts, long discussions or bracketed titles. |
 | 1.0.2 | 2026-09-27 | [Release notes](/releases/v1.0.2/). Two credential security fixes, link destinations in the desktop app and pinned release builds. |
 | 1.0.1 | 2026-09-27 | [Release notes](/releases/v1.0.1/). First patch release: token refresh, pipeline refresh fixes, review actions on every desktop tab and inbox tabs for any number of repositories. |
 | 1.0.0 | 2026-09-10 | [Release notes](/releases/v1.0.0/). First stable release, split diffs, durable review drafts and the first desktop app beta. |

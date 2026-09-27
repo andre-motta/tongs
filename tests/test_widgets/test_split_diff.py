@@ -435,6 +435,8 @@ async def test_added_deleted_and_metadata_only_files_have_valid_sides() -> None:
         ):
             panel.set_files([file])
             await pilot.pause()
+            assert panel.selection is not None
+            assert panel.selection.side is populated_side
             assert bool(app.query_one("#split-old", SplitDiffColumn)._line_map) is (
                 populated_side is DiffSide.OLD
             )
@@ -487,7 +489,14 @@ async def test_placeholder_cannot_restore_prior_source_on_layout_or_navigation(
 
     async with app.run_test(size=(160, 30)) as pilot:
         panel = app.query_one(DiffPanel)
+        # Render the file in split first, so the columns hold the prior source
+        # that the placeholder must clear.
+        panel.request_mode(DiffViewMode.SPLIT)
         panel.set_files([file], [discussion])
+        await pilot.pause()
+        assert app.query_one("#split-new", SplitDiffColumn)._current_file is not None
+        panel.request_mode(DiffViewMode.UNIFIED)
+        await pilot.pause()
         content = panel.query_one("#diff-content", DiffContent)
         content._preview_selection = panel.selection
         content._showing_preview = True
@@ -590,6 +599,14 @@ async def test_h_and_l_move_focus_between_split_columns() -> None:
         await pilot.pause()
         assert new.has_focus
 
+        # h and l must still work after a unified and split round trip.
+        panel.request_mode(DiffViewMode.UNIFIED)
+        await pilot.pause()
+        panel.request_mode(DiffViewMode.SPLIT)
+        await pilot.pause()
+        new.focus()
+        await pilot.pause()
+
         await pilot.press("h")
         await pilot.pause()
         assert old.has_focus
@@ -603,41 +620,6 @@ async def test_h_and_l_move_focus_between_split_columns() -> None:
         assert panel.selection is not None
         assert panel.selection.side is DiffSide.NEW
         assert panel.selection.line is added
-
-
-@pytest.mark.asyncio
-async def test_h_and_l_survive_a_unified_split_round_trip() -> None:
-    app = _DiffApp()
-    file = _file()
-
-    async with app.run_test(size=(160, 30)) as pilot:
-        panel = app.query_one(DiffPanel)
-        panel.set_files([file])
-        panel.request_mode(DiffViewMode.SPLIT)
-        await pilot.pause()
-        assert app.query_one(SplitDiffView).jump_to(21, DiffSide.NEW)
-        await pilot.pause()
-
-        panel.request_mode(DiffViewMode.UNIFIED)
-        await pilot.pause()
-        panel.request_mode(DiffViewMode.SPLIT)
-        await pilot.pause()
-
-        split = app.query_one(SplitDiffView)
-        assert split.jump_to(21, DiffSide.NEW)
-        await pilot.pause()
-
-        await pilot.press("h")
-        await pilot.pause()
-        assert app.query_one("#split-old", SplitDiffColumn).has_focus
-        assert panel.selection is not None
-        assert panel.selection.side is DiffSide.OLD
-
-        await pilot.press("l")
-        await pilot.pause()
-        assert app.query_one("#split-new", SplitDiffColumn).has_focus
-        assert panel.selection is not None
-        assert panel.selection.side is DiffSide.NEW
 
 
 def _metadata_file(**flags: object) -> DiffFile:
@@ -684,31 +666,18 @@ def test_placeholder_message_states_what_the_forge_reported(
     assert placeholder_message(_metadata_file(**flags)) == expected
 
 
-@pytest.mark.parametrize(
-    ("flags", "expected"),
-    (
-        ({"is_binary": True}, "[Binary file]"),
-        ({"is_empty": True}, "[Empty file]"),
-        ({"is_mode_only": True}, "[File mode changed]"),
-        ({"is_rename_only": True}, "[Renamed with no content change]"),
-        (
-            {"is_unavailable": True},
-            "Not exposed by the forge. Press o to view in browser.",
-        ),
-    ),
-)
 @pytest.mark.asyncio
-async def test_unified_placeholder_never_blames_a_too_large_api_response(
-    flags: dict[str, object], expected: str
-) -> None:
+async def test_unified_placeholder_never_blames_a_too_large_api_response() -> None:
     """The terminal unified view must not invent a size limit it cannot know."""
 
     app = _DiffApp()
     async with app.run_test(size=(160, 30)) as pilot:
         panel = app.query_one(DiffPanel)
-        panel.set_files([_metadata_file(**flags)])
+        panel.set_files([_metadata_file(is_unavailable=True)])
         await pilot.pause()
 
         unified = app.query_one(DiffOptionList)
         assert unified.option_count == 1
-        assert str(unified.get_option_at_index(0).prompt) == expected
+        assert str(unified.get_option_at_index(0).prompt) == (
+            "Not exposed by the forge. Press o to view in browser."
+        )

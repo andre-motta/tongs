@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-from rich.style import Style
 from textual.app import App, ComposeResult
+from textual.message import Message
 
 from tongs.forges.models import CIStatus, Pipeline, PipelineJob
-from tongs.helpers import ci_icon_markup, ci_icon_text, format_duration, relative_time
 from tongs.widgets.pipeline_panel import (
     CancelJobRequested,
     CancelPipelineRequested,
@@ -25,8 +22,30 @@ from tongs.widgets.pipeline_panel import (
 
 
 class PipelinePanelApp(App[None]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.posted: list[Message] = []
+
     def compose(self) -> ComposeResult:
         yield PipelinePanel(id="pipeline-panel")
+
+    def on_cancel_pipeline_requested(self, message: CancelPipelineRequested) -> None:
+        self.posted.append(message)
+
+    def on_retry_pipeline_requested(self, message: RetryPipelineRequested) -> None:
+        self.posted.append(message)
+
+    def on_cancel_job_requested(self, message: CancelJobRequested) -> None:
+        self.posted.append(message)
+
+    def on_retry_job_requested(self, message: RetryJobRequested) -> None:
+        self.posted.append(message)
+
+    def on_load_jobs_requested(self, message: LoadJobsRequested) -> None:
+        self.posted.append(message)
+
+    def on_load_job_log_requested(self, message: LoadJobLogRequested) -> None:
+        self.posted.append(message)
 
 
 @pytest.mark.asyncio
@@ -35,10 +54,13 @@ async def test_editor_export_strips_ansi_sequences(
 ) -> None:
     app = PipelinePanelApp()
     exported: list[str] = []
+    paths: list[Path] = []
 
     def capture(command: list[str], *, check: bool) -> None:
         assert check is False
-        exported.append(Path(command[-1]).read_text())
+        path = Path(command[-1])
+        paths.append(path)
+        exported.append(path.read_text())
 
     monkeypatch.setenv("EDITOR", "editor")
     monkeypatch.setattr(app, "suspend", lambda: nullcontext())
@@ -52,249 +74,109 @@ async def test_editor_export_strips_ansi_sequences(
 
     assert exported == ["failed\nplain"]
     assert "\x1b" not in exported[0]
+    # Job logs can hold secrets, so the exported copy must not outlive the editor.
+    assert paths
+    assert not paths[0].exists()
 
 
 # ===================================================================
-# format_duration
+# Messages posted by the panel actions
 # ===================================================================
 
 
-class TestFormatDuration:
-    """Tests for format_duration()."""
-
-    def test_none_returns_empty(self):
-        assert format_duration(None) == ""
-
-    def test_zero_returns_zero_s(self):
-        assert format_duration(0) == "0s"
-
-    def test_seconds_only(self):
-        assert format_duration(59) == "59s"
-
-    def test_boundary_exactly_60(self):
-        assert format_duration(60) == "1m 00s"
-
-    def test_minutes_and_seconds(self):
-        assert format_duration(90) == "1m 30s"
-
-    def test_boundary_exactly_3600(self):
-        assert format_duration(3600) == "1h 00m"
-
-    def test_float_truncated(self):
-        assert format_duration(362.27) == "6m 02s"
-
-    def test_one_second(self):
-        assert format_duration(1) == "1s"
-
-    def test_hours_with_remaining_minutes(self):
-        assert format_duration(3661) == "1h 01m"
-
-    def test_large_hours(self):
-        assert format_duration(36000) == "10h 00m"
+def _pipeline(status: CIStatus) -> Pipeline:
+    return Pipeline(
+        id=7,
+        status=status,
+        ref="main",
+        sha="abc1234",
+        web_url="https://example.com/pipelines/7",
+    )
 
 
-# ===================================================================
-# relative_time
-# ===================================================================
+def _job(status: CIStatus) -> PipelineJob:
+    return PipelineJob(id=31, name="build", stage="build", status=status)
 
 
-class TestRelativeTime:
-    """Tests for relative_time()."""
-
-    def _fixed_now(self, **kwargs):
-        """Return a patcher that freezes datetime.now to a fixed offset from the reference dt."""
-        ref = datetime(2026, 1, 1, tzinfo=UTC)
-        frozen = ref + timedelta(**kwargs)
-
-        original_now = datetime.now
-
-        def fake_now(tz=None):
-            if tz is not None:
-                return frozen
-            return original_now(tz)
-
-        return patch(
-            "tongs.helpers.datetime",
-            wraps=datetime,
-            now=fake_now,
+def _ids(messages: list[Message]) -> list[tuple]:
+    return [
+        (
+            type(m).__name__,
+            getattr(m, "pipeline_id", None),
+            getattr(m, "job_id", None),
         )
-
-    def test_none_returns_empty(self):
-        assert relative_time(None) == ""
-
-    def test_just_now_zero_seconds(self):
-        with self._fixed_now(seconds=0):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "just now"
-
-    def test_just_now_under_60_seconds(self):
-        with self._fixed_now(seconds=59):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "just now"
-
-    def test_boundary_exactly_60_seconds(self):
-        with self._fixed_now(seconds=60):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1m ago"
-
-    def test_minutes_plural(self):
-        with self._fixed_now(minutes=30):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "30m ago"
-
-    def test_boundary_exactly_59_minutes(self):
-        with self._fixed_now(minutes=59):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "59m ago"
-
-    def test_boundary_exactly_60_minutes(self):
-        with self._fixed_now(minutes=60):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1h ago"
-
-    def test_hours_plural(self):
-        with self._fixed_now(hours=5):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "5h ago"
-
-    def test_boundary_exactly_23_hours(self):
-        with self._fixed_now(hours=23):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "23h ago"
-
-    def test_boundary_exactly_24_hours(self):
-        with self._fixed_now(hours=24):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "1d ago"
-
-    def test_days_plural(self):
-        with self._fixed_now(days=7):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "7d ago"
-
-    def test_large_day_count(self):
-        with self._fixed_now(days=365):
-            assert relative_time(datetime(2026, 1, 1, tzinfo=UTC)) == "365d ago"
+        for m in messages
+    ]
 
 
-# ===================================================================
-# ci_icon_text
-# ===================================================================
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "status", "expected"),
+    [
+        ("C", CIStatus.RUNNING, "CancelPipelineRequested"),
+        ("R", CIStatus.FAILED, "RetryPipelineRequested"),
+    ],
+)
+async def test_pipeline_mutation_posts_only_after_the_confirm_press(
+    key: str, status: CIStatus, expected: str
+) -> None:
+    app = PipelinePanelApp()
+    async with app.run_test() as pilot:
+        panel = app.query_one(PipelinePanel)
+        panel.set_pipelines([_pipeline(status)])
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.posted == []
+        await pilot.press(key)
+        await pilot.pause()
+
+    assert _ids(app.posted) == [(expected, 7, None)]
 
 
-class TestCiIconText:
-    """Tests for ci_icon_text()."""
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "status", "expected"),
+    [
+        ("C", CIStatus.RUNNING, "CancelJobRequested"),
+        ("R", CIStatus.FAILED, "RetryJobRequested"),
+    ],
+)
+async def test_job_mutation_posts_only_after_the_confirm_press(
+    key: str, status: CIStatus, expected: str
+) -> None:
+    app = PipelinePanelApp()
+    async with app.run_test() as pilot:
+        panel = app.query_one(PipelinePanel)
+        panel.set_jobs([_job(status)], _pipeline(CIStatus.RUNNING))
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.posted == []
+        await pilot.press(key)
+        await pilot.pause()
 
-    def test_success(self):
-        char, style = ci_icon_text(CIStatus.SUCCESS)
-        assert char == "●"
-        assert style == Style(color="green")
-
-    def test_failed(self):
-        char, style = ci_icon_text(CIStatus.FAILED)
-        assert char == "●"
-        assert style == Style(color="red")
-
-    def test_running(self):
-        char, style = ci_icon_text(CIStatus.RUNNING)
-        assert char == "▶"
-        assert style == Style(color="yellow")
-
-    def test_pending(self):
-        char, style = ci_icon_text(CIStatus.PENDING)
-        assert char == "○"
-        assert style == Style(dim=True)
-
-    def test_canceled(self):
-        char, style = ci_icon_text(CIStatus.CANCELED)
-        assert char == "—"
-        assert style == Style(dim=True)
-
-    def test_skipped(self):
-        char, style = ci_icon_text(CIStatus.SKIPPED)
-        assert char == "—"
-        assert style == Style(dim=True)
-
-    def test_unknown(self):
-        char, style = ci_icon_text(CIStatus.UNKNOWN)
-        assert char == "?"
-        assert style == Style(dim=True)
+    assert _ids(app.posted) == [(expected, 7, 31)]
 
 
-# ===================================================================
-# ci_icon_markup
-# ===================================================================
+@pytest.mark.asyncio
+async def test_enter_loads_the_focused_pipeline_then_the_focused_job_log() -> None:
+    app = PipelinePanelApp()
+    pipeline = _pipeline(CIStatus.SUCCESS)
+    job = _job(CIStatus.SUCCESS)
+    async with app.run_test() as pilot:
+        panel = app.query_one(PipelinePanel)
+        panel.set_pipelines([pipeline])
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        panel.set_jobs([job], pipeline)
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
 
-
-class TestCiIconMarkup:
-    """Tests for ci_icon_markup()."""
-
-    def test_success(self):
-        assert ci_icon_markup(CIStatus.SUCCESS) == "[green]●[/]"
-
-    def test_failed(self):
-        assert ci_icon_markup(CIStatus.FAILED) == "[red]●[/]"
-
-    def test_running(self):
-        assert ci_icon_markup(CIStatus.RUNNING) == "[yellow]▶[/]"
-
-    def test_pending(self):
-        assert ci_icon_markup(CIStatus.PENDING) == "[dim]○[/]"
-
-    def test_canceled(self):
-        assert ci_icon_markup(CIStatus.CANCELED) == "[dim]—[/]"
-
-    def test_skipped(self):
-        assert ci_icon_markup(CIStatus.SKIPPED) == "[dim]—[/]"
-
-    def test_unknown(self):
-        assert ci_icon_markup(CIStatus.UNKNOWN) == "[dim]?[/]"
-
-
-# ===================================================================
-# Messages
-# ===================================================================
-
-
-class TestMessages:
-    """Tests for pipeline panel message classes."""
-
-    def test_cancel_pipeline_requested(self):
-        msg = CancelPipelineRequested(pipeline_id=42)
-        assert msg.pipeline_id == 42
-
-    def test_retry_pipeline_requested(self):
-        msg = RetryPipelineRequested(pipeline_id=99)
-        assert msg.pipeline_id == 99
-
-    def test_cancel_job_requested(self):
-        msg = CancelJobRequested(pipeline_id=55, job_id=101)
-        assert msg.pipeline_id == 55
-        assert msg.job_id == 101
-
-    def test_retry_job_requested(self):
-        msg = RetryJobRequested(pipeline_id=56, job_id=202)
-        assert msg.pipeline_id == 56
-        assert msg.job_id == 202
-
-    def test_load_jobs_requested(self):
-        pipeline = Pipeline(
-            id=1,
-            status=CIStatus.SUCCESS,
-            ref="main",
-            sha="abc1234",
-            web_url="https://example.com/pipelines/1",
-        )
-        msg = LoadJobsRequested(pipeline=pipeline)
-        assert msg.pipeline is pipeline
-        assert msg.pipeline.id == 1
-
-    def test_load_job_log_requested(self):
-        pipeline = Pipeline(
-            id=5,
-            status=CIStatus.RUNNING,
-            ref="feature",
-            sha="def5678",
-            web_url="https://example.com/pipelines/5",
-        )
-        job = PipelineJob(
-            id=10,
-            name="build",
-            stage="build",
-            status=CIStatus.RUNNING,
-        )
-        msg = LoadJobLogRequested(job=job, pipeline=pipeline)
-        assert msg.job is job
-        assert msg.pipeline is pipeline
-        assert msg.job.id == 10
-        assert msg.pipeline.id == 5
+    load_jobs, load_log = app.posted
+    assert isinstance(load_jobs, LoadJobsRequested)
+    assert load_jobs.pipeline is pipeline
+    assert isinstance(load_log, LoadJobLogRequested)
+    assert (load_log.job, load_log.pipeline) == (job, pipeline)

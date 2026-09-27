@@ -1,13 +1,15 @@
-"""Tests for inbox view helper functions."""
+"""Tests for the shared CI icon, relative time and duration helpers."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
+from rich.style import Style
 
 from tongs.forges.models import CIStatus
-from tongs.helpers import ci_icon, format_duration, relative_time
+from tongs.helpers import ci_icon, ci_icon_text, format_duration, relative_time
 
 
 class TestCiIconRichMode:
@@ -44,62 +46,66 @@ class TestCiIconAsciiMode:
         assert ci_icon(status, ascii_mode=True) == expected
 
 
-class TestRelativeTime:
-    def _ago(self, **kwargs) -> datetime:
-        return datetime.now(UTC) - timedelta(**kwargs)
-
-    def test_seconds_ago_shows_just_now(self):
-        assert relative_time(self._ago(seconds=30)) == "just now"
-
-    def test_just_under_a_minute_shows_just_now(self):
-        assert relative_time(self._ago(seconds=59)) == "just now"
-
-    def test_five_minutes_ago(self):
-        assert relative_time(self._ago(minutes=5)) == "5m ago"
-
-    def test_three_hours_ago(self):
-        assert relative_time(self._ago(hours=3)) == "3h ago"
-
-    def test_two_days_ago(self):
-        assert relative_time(self._ago(days=2)) == "2d ago"
-
-    def test_boundary_60_seconds_shows_1m(self):
-        assert relative_time(self._ago(seconds=60)) == "1m ago"
-
-    def test_boundary_60_minutes_shows_1h(self):
-        assert relative_time(self._ago(minutes=60)) == "1h ago"
-
-    def test_boundary_24_hours_shows_1d(self):
-        assert relative_time(self._ago(hours=24)) == "1d ago"
-
-    def test_none_returns_empty(self):
-        assert relative_time(None) == ""
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (CIStatus.SUCCESS, ("●", Style(color="green"))),
+        (CIStatus.FAILED, ("●", Style(color="red"))),
+        (CIStatus.RUNNING, ("▶", Style(color="yellow"))),
+        (CIStatus.PENDING, ("○", Style(dim=True))),
+        (CIStatus.CANCELED, ("—", Style(dim=True))),
+        (CIStatus.SKIPPED, ("—", Style(dim=True))),
+        (CIStatus.UNKNOWN, ("?", Style(dim=True))),
+    ],
+)
+def test_ci_icon_text_table(status: CIStatus, expected: tuple[str, Style]) -> None:
+    """The pipeline and job rows draw from this table, not from the markup one."""
+    assert ci_icon_text(status) == expected
 
 
-class TestFormatDuration:
-    def test_none_returns_empty(self):
-        assert format_duration(None) == ""
+_REFERENCE = datetime(2026, 1, 1, tzinfo=UTC)
 
-    def test_zero_seconds(self):
-        assert format_duration(0) == "0s"
 
-    def test_under_one_minute(self):
-        assert format_duration(59) == "59s"
+@pytest.mark.parametrize(
+    ("elapsed", "expected"),
+    [
+        (timedelta(0), "just now"),
+        (timedelta(seconds=59), "just now"),
+        (timedelta(seconds=60), "1m ago"),
+        (timedelta(minutes=30), "30m ago"),
+        (timedelta(minutes=59), "59m ago"),
+        (timedelta(minutes=60), "1h ago"),
+        (timedelta(hours=5), "5h ago"),
+        (timedelta(hours=23), "23h ago"),
+        (timedelta(hours=24), "1d ago"),
+        (timedelta(days=7), "7d ago"),
+        (timedelta(days=365), "365d ago"),
+    ],
+)
+def test_relative_time_units_and_boundaries(elapsed: timedelta, expected: str) -> None:
+    frozen = _REFERENCE + elapsed
+    with patch("tongs.helpers.datetime", wraps=datetime, now=lambda tz=None: frozen):
+        assert relative_time(_REFERENCE) == expected
 
-    def test_exactly_one_minute(self):
-        assert format_duration(60) == "1m 00s"
 
-    def test_minutes_and_seconds(self):
-        assert format_duration(154) == "2m 34s"
+def test_relative_time_of_missing_timestamp_is_empty() -> None:
+    assert relative_time(None) == ""
 
-    def test_exactly_one_hour(self):
-        assert format_duration(3600) == "1h 00m"
 
-    def test_hours_and_minutes(self):
-        assert format_duration(3960) == "1h 06m"
-
-    def test_float_input_truncates(self):
-        assert format_duration(59.9) == "59s"
-
-    def test_float_over_minute(self):
-        assert format_duration(90.7) == "1m 30s"
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (None, ""),
+        (0, "0s"),
+        (59, "59s"),
+        (59.9, "59s"),
+        (60, "1m 00s"),
+        (154, "2m 34s"),
+        (362.27, "6m 02s"),
+        (3600, "1h 00m"),
+        (3960, "1h 06m"),
+        (36000, "10h 00m"),
+    ],
+)
+def test_format_duration(seconds: float | None, expected: str) -> None:
+    assert format_duration(seconds) == expected

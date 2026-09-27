@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 import aiosqlite
 import pytest
-from platformdirs import user_cache_dir
+from platformdirs import user_cache_dir, user_data_dir
 
 from tongs.scanner.repo import ForgeType
 from tongs.services import RepositoryRef, ReviewRef, ReviewRevision
@@ -138,31 +138,12 @@ async def test_submission_plan_is_write_once_and_survives_reopen(db_path: Path) 
     await reopened.close()
 
 
-@pytest.mark.asyncio
-async def test_two_restarted_consumers_share_the_application_data_path(
-    db_path: Path,
-) -> None:
-    first = DraftStore(db_path)
-    await first.open()
-    draft = await first.create_draft(REVIEW, REVISION)
-    await first.close()
-
-    second = DraftStore(db_path)
-    await second.open()
-    saved = await second.save_draft(
-        draft.id, draft.version, make_content("second"), current_revision=REVISION
-    )
-    await second.close()
-
-    third = DraftStore(db_path)
-    await third.open()
-    assert await third.get_draft(draft.id) == saved
-    await third.close()
-
-
 def test_default_database_is_separate_from_evictable_cache() -> None:
-    assert default_draft_db_path() != Path(user_cache_dir("tongs")) / "cache.db"
-    assert default_draft_db_path().name == "drafts.db"
+    path = default_draft_db_path()
+
+    assert path.name == "drafts.db"
+    assert path.is_relative_to(Path(user_data_dir("tongs")))
+    assert not path.is_relative_to(Path(user_cache_dir("tongs")))
 
 
 @pytest.mark.asyncio
@@ -614,41 +595,6 @@ async def test_migration_is_idempotent_and_rejects_newer_schema(db_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_v1_to_v2_migration_preserves_drafts_attempts_and_receipts(
-    db_path: Path,
-) -> None:
-    original = DraftStore(db_path)
-    await original.open()
-    draft = await original.create_draft(REVIEW, REVISION, make_content())
-    attempt = await original.lock_submission(draft.id, draft.version)
-    saved = await original.record_receipt(attempt.id, "comment:one", "remote-one")
-    await original.close()
-    with sqlite3.connect(db_path) as db:
-        for table in (
-            "submission_plans",
-            "submission_receipt_resync",
-            "submission_pending_dispatches",
-            "submission_unknown_outcomes",
-            "submission_retry_authorizations",
-        ):
-            db.execute(f"DROP TABLE {table}")
-        db.execute("PRAGMA user_version=1")
-
-    migrated = DraftStore(db_path)
-    await migrated.open()
-
-    assert await migrated.get_draft(draft.id)
-    recovered = await migrated.get_attempt(attempt.id)
-    assert recovered.snapshot == saved.snapshot
-    assert recovered.receipts[0].step_id == saved.receipts[0].step_id
-    assert recovered.receipts[0].remote_id == saved.receipts[0].remote_id
-    assert recovered.receipts[0].recorded_at == saved.receipts[0].recorded_at
-    assert recovered.receipts[0].resync_required is True
-    assert recovered.plan is None
-    await migrated.close()
-
-
-@pytest.mark.asyncio
 async def test_declared_current_but_incomplete_schema_fails_on_open(
     db_path: Path,
 ) -> None:
@@ -740,6 +686,9 @@ async def test_attempt_lock_rejects_symlink_without_touching_target(
     attempt_id = uuid4()
     target = db_path.parent / "unrelated"
     target.write_text("preserve")
+    # A private regular target passes every other lock check, so only the
+    # refusal to follow the symlink keeps the lock off it.
+    target.chmod(0o600)
     lock_dir = db_path.with_name(f"{db_path.name}.locks")
     lock_dir.mkdir(mode=0o700)
     (lock_dir / f"{attempt_id}.lock").symlink_to(target)

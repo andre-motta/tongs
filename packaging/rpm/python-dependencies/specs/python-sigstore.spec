@@ -34,5 +34,5 @@ Python implementation of Sigstore signing and verification APIs.
 %{_bindir}/sigstore
 
 %changelog
-* Tue Sep 08 2026 Tongs Desktop Packaging <noreply@openai.com> - 4.5.0-1
+* Tue Sep 08 2026 Tongs release automation <noreply@tongs.tools> - 4.5.0-1
 - Initial source-built companion RPM

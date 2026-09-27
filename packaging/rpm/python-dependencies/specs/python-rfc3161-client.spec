@@ -49,5 +49,5 @@ install -m 0644 %{SOURCE2} \
 %license %{_licensedir}/python3-rfc3161-client
 
 %changelog
-* Tue Sep 08 2026 Tongs Desktop Packaging <noreply@openai.com> - 1.0.8-1
+* Tue Sep 08 2026 Tongs release automation <noreply@tongs.tools> - 1.0.8-1
 - Initial source-built companion RPM with Fedora system OpenSSL

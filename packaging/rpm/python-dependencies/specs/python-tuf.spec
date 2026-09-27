@@ -34,5 +34,5 @@ sed -i 's/hatchling==1\.32\.0/hatchling>=1.31,<2/' pyproject.toml
 %files -n python3-tuf -f %{pyproject_files}
 
 %changelog
-* Tue Sep 08 2026 Tongs Desktop Packaging <noreply@openai.com> - 7.0.1-1
+* Tue Sep 08 2026 Tongs release automation <noreply@tongs.tools> - 7.0.1-1
 - Initial source-built companion RPM

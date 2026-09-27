@@ -35,5 +35,5 @@ sed -i '\#securesystemslib/_vendor/ed25519/LICENSE$#d' %{pyproject_files}
 %license %{python3_sitelib}/securesystemslib/_vendor/ed25519/LICENSE
 
 %changelog
-* Tue Sep 08 2026 Tongs Desktop Packaging <noreply@openai.com> - 1.5.1-1
+* Tue Sep 08 2026 Tongs release automation <noreply@tongs.tools> - 1.5.1-1
 - Initial source-built companion RPM

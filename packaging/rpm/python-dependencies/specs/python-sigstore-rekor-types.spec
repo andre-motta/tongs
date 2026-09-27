@@ -34,5 +34,5 @@ sed -i 's/"pydantic\[email\] >=2,<3",/"pydantic >=2,<3", "email-validator >=2",/
 %files -n python3-sigstore-rekor-types -f %{pyproject_files}
 
 %changelog
-* Tue Sep 08 2026 Tongs Desktop Packaging <noreply@openai.com> - 0.0.18-1
+* Tue Sep 08 2026 Tongs release automation <noreply@tongs.tools> - 0.0.18-1
 - Initial source-built companion RPM

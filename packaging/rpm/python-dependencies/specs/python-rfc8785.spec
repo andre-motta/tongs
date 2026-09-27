@@ -33,5 +33,5 @@ Pure Python JSON Canonicalization Scheme implementation.
 %files -n python3-rfc8785 -f %{pyproject_files}
 
 %changelog
-* Tue Sep 08 2026 Tongs Desktop Packaging <noreply@openai.com> - 0.1.4-1
+* Tue Sep 08 2026 Tongs release automation <noreply@tongs.tools> - 0.1.4-1
 - Initial source-built companion RPM

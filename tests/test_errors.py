@@ -103,6 +103,10 @@ class TestRedactCredentials:
         result = redact_credentials("ssh://oauth2-secret@gitlab.example/x")
         assert result == "ssh://[REDACTED]@gitlab.example/x"
 
+    def test_url_userinfo_with_unencoded_at_in_password(self):
+        result = redact_credentials("https://user:p@ss@host/x and more")
+        assert result == "https://[REDACTED]@host/x and more"
+
     def test_at_sign_in_path_or_query_not_mangled(self):
         text = "https://host/users/@me?by=a@b.c"
         assert redact_credentials(text) == text

@@ -55,7 +55,7 @@ _TOKEN_PATTERNS = re.compile(
 )
 
 # The userinfo part of a URL (``scheme://user:password@host``).
-_URL_USERINFO = re.compile(r"(://)[^/?#@\s]+@")
+_URL_USERINFO = re.compile(r"(://)[^/?#\s]+@")
 
 
 def redact_credentials(text: str) -> str:

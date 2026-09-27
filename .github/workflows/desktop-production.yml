@@ -1039,7 +1039,7 @@ jobs:
             --junitxml="$RUNNER_TEMP/reports/native-payload.junit.xml"
       - name: Run the integration contract suite
         run: >-
-          pytest tests/integration -v
+          pytest tests/integration/desktop -v
           --ignore=tests/integration/desktop/test_native_payload_acceptance.py
           --ignore=tests/integration/desktop/test_draft_process_acceptance.py
           --junitxml="$RUNNER_TEMP/reports/integration-contracts.junit.xml"

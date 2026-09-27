@@ -359,6 +359,46 @@ def test_the_core_job_lists_its_suites_positively(ci: dict[str, Any]) -> None:
     assert mcp[:2] == ["pytest", "tests/test_mcp"]
 
 
+def test_every_pytest_target_sits_under_its_report_classname_prefix(
+    ci: dict[str, Any], production: dict[str, Any]
+) -> None:
+    """A pytest target outside its report's classname prefix fails the gate
+    only after the run, so the target must name the prefix's package itself."""
+
+    prefixes = {
+        report.path: report.classname_prefix
+        for check in REQUIRED_CHECKS
+        for report in check.reports
+        if report.classname_prefix is not None
+    }
+    checked = set()
+    for workflow in (ci, production):
+        for job in workflow["jobs"].values():
+            if not isinstance(job, dict) or "steps" not in job:
+                continue
+            for words in _pytest_commands(job):
+                reports = [
+                    word.split("/reports/", 1)[1]
+                    for word in words
+                    if word.startswith("--junitxml=") and "/reports/" in word
+                ]
+                if len(reports) != 1 or f"reports/{reports[0]}" not in prefixes:
+                    continue
+                prefix = prefixes[f"reports/{reports[0]}"]
+                for word in words[1:]:
+                    if word.startswith("-"):
+                        continue
+                    module = word.removesuffix(".py").replace("/", ".")
+                    assert (module + ".").startswith(prefix), (word, prefix)
+                checked.add(reports[0])
+    assert {
+        "integration-contracts.junit.xml",
+        "packaging-contracts.junit.xml",
+        "native-payload.junit.xml",
+        "plugin-example.junit.xml",
+    } <= checked
+
+
 def test_the_lint_job_runs_the_harness_suites_without_skips(
     ci: dict[str, Any],
 ) -> None:

@@ -37,7 +37,7 @@ tongs desktop uninstall
 
 | Option | Command | Meaning |
 | --- | --- | --- |
-| `--version VERSION` | `install` | Install one exact release, written without the `v` prefix, such as `1.0.1`. |
+| `--version VERSION` | `install` | Install one exact release, written without the `v` prefix, such as `1.0.2`. |
 | `--allow-downgrade` | `install` | Accept a release older than the newest one accepted before. Valid only with `--version`. |
 | `--redownload` | `repair` | Download a verified replacement when local recovery fails. |
 | `--json` | `status` | Print the status as one JSON object. |

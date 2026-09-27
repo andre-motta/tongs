@@ -95,7 +95,7 @@ To install one exact release instead, name its version without the `v`
 prefix:
 
 ```console
-tongs desktop install --version 1.0.1
+tongs desktop install --version 1.0.2
 ```
 
 tongs remembers the newest release you have installed and refuses an older
@@ -148,7 +148,7 @@ with the source-built companion packages they depend on. Download all of them
 with the checksum file, check them, and install them together:
 
 ```console
-gh release download v1.0.1 --repo andre-motta/tongs --pattern '*.rpm' --pattern SHA256SUMS
+gh release download v1.0.2 --repo andre-motta/tongs --pattern '*.rpm' --pattern SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 sudo dnf install ./*.rpm
 ```

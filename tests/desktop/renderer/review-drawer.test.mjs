@@ -323,6 +323,33 @@ test("the drawer shows the engine's step list with each step's own standing", as
   assert.ok(view.getByRole("button", { name: "Resume confirmed attempt" }));
 });
 
+test("a zero-step interrupted attempt only offers returning to editing", async () => {
+  const review = "review-drawer-zero-step-recovery";
+  const attempt = {
+    ...submission(review, "unknown", 3),
+    unknown_step_ids: [],
+  };
+  const view = renderDiff(
+    diffBridge(review, {
+      listReviewDrafts: () =>
+        read({ cursor: 0, next_cursor: null, drafts: [draft(review, 3, content())] }),
+      listReviewSubmissions: () =>
+        read({ cursor: 0, next_cursor: null, attempts: [attempt] }),
+    }),
+    review,
+  );
+  fireEvent.click(await view.findByRole("button", { name: /Your review/ }));
+  fireEvent.click(
+    await view.findByRole("button", {
+      name: "Recover unknown attempt with 0 confirmed step(s)",
+    }),
+  );
+  await view.findByText(/interrupted before anything was sent/);
+  assert.ok(view.getByRole("button", { name: "Return draft to editing" }));
+  assert.equal(view.queryByRole("button", { name: "Retry only remaining steps" }), null);
+  assert.equal(view.queryByRole("button", { name: "Mark submitted" }), null);
+});
+
 test("a durable attempt is recovered inside the drawer without replaying start", async () => {
   const review = "review-drawer-recovery";
   let starts = 0;

@@ -799,7 +799,9 @@ export function canCaptureDraftInline(state: ReviewWorkflowState): boolean {
 export function submissionGuidance(progress: SubmissionProgressDto): string | null {
   if (progress.outcome === "submitted") return "Review submitted.";
   if (progress.outcome === "unknown")
-    return `Remote status is unknown for ${progress.unknown_step_ids.length} step(s). Reconcile before continuing.`;
+    return progress.unknown_step_ids.length === 0
+      ? "Submission was interrupted before anything was sent. Return the draft to editing to continue."
+      : `Remote status is unknown for ${progress.unknown_step_ids.length} step(s). Reconcile before continuing.`;
   if (progress.outcome === "paused")
     return "Submission paused after confirmed steps. Resume uses the existing durable attempt.";
   return "The draft is editable again.";

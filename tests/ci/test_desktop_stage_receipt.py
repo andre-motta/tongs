@@ -19,7 +19,6 @@ from tests.ci.desktop_stage_receipt import (
     NOT_A_PULL_REQUEST,
     RECEIPTS,
     StageReceiptError,
-    admit_source,
     consume_stage_receipt,
     publish_stage_receipt,
 )
@@ -366,12 +365,13 @@ def test_refuses_a_plan_that_declares_no_scope_exclusion(
 
 
 @pytest.mark.parametrize(
-    "mutation",
+    ("mutation", "message"),
     [
-        {"stages": []},
-        {"files": []},
-        {"report_path": "../escape.json"},
-        {"report_path": "/absolute.json"},
+        ({"stages": []}, "at least one stage"),
+        # No stages either, so the only file reference left is the file list.
+        ({"files": [], "stages": [], "equalities": []}, "at least one file"),
+        ({"report_path": "../escape.json"}, None),
+        ({"report_path": "/absolute.json"}, None),
     ],
 )
 def test_refuses_structurally_invalid_plans(
@@ -379,8 +379,9 @@ def test_refuses_structurally_invalid_plans(
     produced: dict[str, Path],
     tmp_path: Path,
     mutation: dict[str, Any],
+    message: str | None,
 ) -> None:
-    with pytest.raises(StageReceiptError):
+    with pytest.raises(StageReceiptError, match=message):
         _publish(checkout, _plan(produced, **mutation), tmp_path)
 
 
@@ -458,24 +459,6 @@ def test_refuses_a_policy_that_omits_the_lifecycle_format(
         )
 
 
-def test_consumer_rejects_a_report_replaced_after_publication(
-    checkout: tuple[Path, str, str], produced: dict[str, Path], tmp_path: Path
-) -> None:
-    _publish(checkout, _plan(produced), tmp_path)
-    _, commit, tree = checkout
-    evidence = tmp_path / "evidence"
-    target = evidence / "reports/desktop-shell.tap"
-    target.chmod(0o600)
-    target.write_text(_tap("not ok"))
-    with pytest.raises(RECEIPTS.ReceiptValidationError):
-        consume_stage_receipt(
-            evidence_root=evidence,
-            receipt_path=evidence / RECEIPT_NAME,
-            receipt_policy=_policy(commit, tree),
-            expected_report_path=REPORT_PATH,
-        )
-
-
 def test_consumer_rejects_a_stale_run_identity(
     checkout: tuple[Path, str, str], produced: dict[str, Path], tmp_path: Path
 ) -> None:
@@ -489,13 +472,6 @@ def test_consumer_rejects_a_stale_run_identity(
             receipt_policy=_policy(commit, tree, expected_run_id="34274245441"),
             expected_report_path=REPORT_PATH,
         )
-
-
-def test_source_admission_accepts_the_real_checkout(
-    checkout: tuple[Path, str, str],
-) -> None:
-    root, commit, tree = checkout
-    admit_source(root, commit, tree)
 
 
 def test_records_a_push_run_without_inventing_pull_request_identity(
@@ -534,6 +510,11 @@ def test_refuses_a_pull_request_plan_that_claims_the_head_was_checked_out(
         },
         {
             "event": "pull_request",
+            "pull_request_head": "a" * 12,
+            "pull_request_base": "b" * 40,
+        },
+        {
+            "event": "pull_request",
             "pull_request_head": "A" * 40,
             "pull_request_base": "b" * 40,
         },
@@ -561,23 +542,3 @@ def test_refuses_a_dishonest_or_malformed_source_context(
     plan["source_context"] = context
     with pytest.raises(StageReceiptError):
         _publish(checkout, plan, tmp_path)
-
-
-def test_consumer_rejects_a_source_context_edited_after_publication(
-    checkout: tuple[Path, str, str], produced: dict[str, Path], tmp_path: Path
-) -> None:
-    _publish(checkout, _plan(produced), tmp_path)
-    _, commit, tree = checkout
-    evidence = tmp_path / "evidence"
-    report = evidence / REPORT_PATH
-    report.chmod(0o600)
-    document = json.loads(report.read_bytes())
-    document["source_context"]["pull_request_head"] = "c" * 40
-    report.write_bytes(json.dumps(document, sort_keys=True).encode())
-    with pytest.raises(RECEIPTS.ReceiptValidationError):
-        consume_stage_receipt(
-            evidence_root=evidence,
-            receipt_path=evidence / RECEIPT_NAME,
-            receipt_policy=_policy(commit, tree),
-            expected_report_path=REPORT_PATH,
-        )

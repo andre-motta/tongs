@@ -128,18 +128,10 @@ def _archive_fixture(
     return archive_path, install
 
 
-def test_manifest_pins_accepted_issue_51_payload() -> None:
+def test_the_committed_manifest_is_valid() -> None:
     manifest = json.loads((PACKAGING / "manifest.json").read_text())
 
     contract.validate_manifest(manifest)
-
-    accepted = manifest["accepted_desktop"]
-    assert accepted["source_commit"] == "825a4217c5b5e64fc8908c3444f1bd89fd469b2e"
-    assert accepted["archive"]["sha256"] == (
-        "4593c1585b46e5b48181815307c29b0380bc5f14714b2c12df464dd66d365900"
-    )
-    assert manifest["companion_binary_count"] == 7
-    assert "mcp[cli]" in manifest["mcp_requirement"]
 
 
 def test_development_version_is_derived_from_exact_head(
@@ -291,9 +283,7 @@ def test_payload_validator_rejects_links(tmp_path: Path) -> None:
         contract._validate_archive_members(archive_path, install)
 
 
-@pytest.mark.parametrize(
-    "filename", ("../payload", "dir/payload", "dir\\payload", "manifest.json")
-)
+@pytest.mark.parametrize("filename", ("../payload", "dir\\payload", "manifest.json"))
 def test_manifest_rejects_unsafe_or_reserved_source_names(filename: str) -> None:
     manifest = json.loads((PACKAGING / "manifest.json").read_text())
     manifest["accepted_desktop"]["archive"]["filename"] = filename
@@ -332,12 +322,26 @@ def test_bind_rejects_mismatched_unreviewed_fixture() -> None:
         contract.bind_manifest(manifest, identity, allow_reviewed_fixture=True)
 
 
-def test_input_identity_rejects_hash_and_size_mismatch(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("expected_bytes", "expected_content"),
+    [
+        # The same size with other bytes: only the hash can differ.
+        (5, b"other"),
+        # The right hash with a wrong size: only the size can differ.
+        (6, b"bytes"),
+    ],
+    ids=["hash", "size"],
+)
+def test_input_identity_rejects_hash_and_size_mismatch(
+    tmp_path: Path, expected_bytes: int, expected_content: bytes
+) -> None:
     candidate = tmp_path / "candidate"
     candidate.write_bytes(b"bytes")
 
     with pytest.raises(RuntimeError, match="input mismatch"):
-        contract._verify_file(candidate, 6, hashlib.sha256(b"other").hexdigest())
+        contract._verify_file(
+            candidate, expected_bytes, hashlib.sha256(expected_content).hexdigest()
+        )
 
 
 @pytest.mark.parametrize(

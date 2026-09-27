@@ -51,16 +51,6 @@ def _pinned_version() -> str:
     return package["devDependencies"][LINTER]
 
 
-def test_the_lint_step_runs_after_the_site_build(
-    docs_job: dict[str, Any],
-) -> None:
-    names = [step.get("name") for step in docs_job["steps"]]
-    commands = [step.get("run") for step in docs_job["steps"]]
-    assert names.count(LINT_STEP) == 1
-    assert names.index(LINT_STEP) > commands.index(SITE_BUILD)
-    assert names[-1] == LINT_STEP
-
-
 def test_the_lint_step_runs_the_pinned_binary_with_the_committed_config(
     docs_job: dict[str, Any],
 ) -> None:

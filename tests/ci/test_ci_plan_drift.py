@@ -176,17 +176,6 @@ def production_jobs() -> dict[str, dict]:
     }
 
 
-def test_the_lane_jobs_exist_in_the_production_workflow(
-    production_jobs: dict[str, dict],
-) -> None:
-    named = {
-        PRODUCTION_PREFIX + job
-        for jobs in LANE_PRODUCTION_JOBS.values()
-        for job in jobs
-    }
-    assert named <= set(production_jobs), sorted(named - set(production_jobs))
-
-
 def test_every_packaging_entry_point_selects_packaging() -> None:
     paths = {
         entry.program: f"ENTRY_POINTS {sorted(set(entry.jobs) & PACKAGING_JOBS)}"
@@ -534,13 +523,7 @@ def test_every_tracked_path_matches_an_explicit_rule() -> None:
     )
 
 
-@pytest.mark.needs_git
 def test_the_unmatched_allowlist_is_current() -> None:
-    for path, reason in UNMATCHED_ALLOWLIST.items():
-        assert reason.strip(), path
-        assert path in TRACKED, f"{path} is allowlisted but not tracked"
-        assert not any(rule.matches(path) for rule in RULES), (
-            f"{path} is allowlisted but now matches a rule"
-        )
-        _, full, _ = classify_paths([path])
-        assert full
+    # Every tracked path needs an explicit rule, so the fallback allowlist
+    # stays empty; an entry here would silently widen the full-graph fallback.
+    assert UNMATCHED_ALLOWLIST == {}

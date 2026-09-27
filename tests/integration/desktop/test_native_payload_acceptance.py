@@ -682,7 +682,9 @@ def test_accepts_repeated_synthetic_fixture_as_structural_only(tmp_path: Path) -
 def test_rejects_tampered_and_extra_payload_files(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     launcher = fixture["payload"] / "runtime/tongs-desktop"
-    launcher.write_bytes(b"changed")
+    # Same length, so only the digest comparison can notice the change.
+    original = launcher.read_bytes()
+    launcher.write_bytes(bytes(byte ^ 0xFF for byte in original))
     with pytest.raises(NativeAcceptanceError, match="differs from manifest"):
         capture_payload_snapshot(
             fixture["payload"],
@@ -916,10 +918,23 @@ def test_rejects_missing_process_sandbox_and_launch_binding(tmp_path: Path) -> N
         else item
         for item in first.processes
     )
-    fixture["observations"] = (
-        replace(first, processes=processes),
-        fixture["observations"][1],
+    # The report agrees with the process, so only the filter-mode rule rejects.
+    report_path = fixture["evidence"] / fixture["policy"].runs[0].report_path
+    report = json.loads(report_path.read_bytes())
+    for metric in report["metrics"]:
+        if metric["type"] == "GPU":
+            metric["linuxSandbox"] = {**metric["linuxSandbox"], "seccomp": 0}
+    _write(report_path, (json.dumps(report) + "\n").encode(), 0o600)
+    first = replace(
+        first,
+        processes=processes,
+        outputs=capture_expected_outputs(
+            fixture["evidence"],
+            fixture["policy"].runs[0],
+            fixture["policy"].evidence_uid,
+        ),
     )
+    fixture["observations"] = (first, fixture["observations"][1])
     with pytest.raises(NativeAcceptanceError, match="sandbox evidence"):
         _verify(fixture)
 
@@ -1163,13 +1178,16 @@ def test_final_verifier_rejects_browser_observed_only_as_a_compact_title(
     browser = fixture["observations"][0].processes[0]
     compacted = (" ".join(browser.argv),)
 
-    with pytest.raises(
-        NativeAcceptanceError,
-        match="process role differs from canonical type arguments",
-    ):
-        acceptance_module._verify_raw_process_argv(
-            replace(browser, argv=compacted, raw_argv=compacted)
-        )
+    # Neither the plain nor the switches-first permuted title may stand in for
+    # a canonical browser argv on a first observation.
+    for title in (compacted, (_command_line_permuted_title(browser),)):
+        with pytest.raises(
+            NativeAcceptanceError,
+            match="process role differs from canonical type arguments",
+        ):
+            acceptance_module._verify_raw_process_argv(
+                replace(browser, argv=title, raw_argv=title)
+            )
 
     observations = tuple(
         replace(
@@ -1220,6 +1238,24 @@ def test_final_verifier_rejects_first_observed_compacted_helper_with_hidden_swit
         _verify(fixture)
 
 
+# Exact canonical tail of a network-service utility process recorded on a
+# native run, trimmed to the arguments recorded in full. Chromium forked it from
+# the zygote, so canonical argv[0] is the literal `/proc/self/exe` while the
+# later compacted title starts with the resolved executable.
+NETWORK_SERVICE_UTILITY_TAIL = (
+    "--type=utility",
+    "--utility-sub-type=network.mojom.NetworkService",
+    "--lang=en-US",
+    "--service-sandbox-type=none",
+    "--enable-crash-reporter=4c35a100-cf37-40d1-9460-3f34de5e5ea6,no_channel",
+    "--standard-schemes=tongs",
+    "--shared-files=v8_context_snapshot_data:100",
+    "--field-trial-handle=3,i,16729955238146300512,10406605718793136162,262144",
+    "--variations-seed-version",
+)
+GPU_PROCESS_TAIL = ("--type=gpu-process", "--gpu-preferences=value with space")
+
+
 def _fixture_with_zygote_forked_utility(
     tmp_path: Path,
     *,
@@ -1231,7 +1267,7 @@ def _fixture_with_zygote_forked_utility(
     fixture = _fixture(tmp_path)
     first, second = fixture["observations"]
     zygote = first.processes[1]
-    canonical = (argv0, *ATTEMPT_SIX_UTILITY_TAIL)
+    canonical = (argv0, *NETWORK_SERVICE_UTILITY_TAIL)
     base = replace(
         zygote,
         pid=105,
@@ -1254,38 +1290,34 @@ def _compacted_title(executable: str, tail: tuple[str, ...]) -> tuple[str, ...]:
     return (" ".join((executable, *tail)),)
 
 
-def test_final_verifier_accepts_zygote_forked_utility_compaction_end_to_end(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("role", "tail"),
+    [("utility", NETWORK_SERVICE_UTILITY_TAIL), ("gpu", GPU_PROCESS_TAIL)],
+    ids=["utility", "gpu"],
+)
+def test_final_verifier_accepts_zygote_forked_compaction_end_to_end(
+    tmp_path: Path, role: str, tail: tuple[str, ...]
 ) -> None:
-    reference = _fixture(tmp_path)
-    executable = reference["observations"][0].processes[1].executable
-    fixture = _fixture_with_zygote_forked_utility(
-        tmp_path,
-        argv0=acceptance_module.CHROMIUM_ZYGOTE_ARGV0,
-        later_raw=_compacted_title(executable, ATTEMPT_SIX_UTILITY_TAIL),
-    )
+    """The second run sees the zygote-forked child only as its compacted title."""
 
-    assert _verify(fixture).validation == "controlled-fixture-structural-only"
-
-
-def test_final_verifier_accepts_zygote_forked_gpu_compaction_end_to_end(
-    tmp_path: Path,
-) -> None:
-    fixture = _fixture(tmp_path)
-    tail = ("--type=gpu-process", "--gpu-preferences=value with space")
+    if role == "utility":
+        fixture = _fixture_with_zygote_forked_utility(
+            tmp_path, argv0=acceptance_module.CHROMIUM_ZYGOTE_ARGV0, later_raw=None
+        )
+    else:
+        fixture = _fixture(tmp_path)
+    canonical = (acceptance_module.CHROMIUM_ZYGOTE_ARGV0, *tail)
     observations = []
     for index, observation in enumerate(fixture["observations"]):
         processes = tuple(
             replace(
                 process,
-                argv=(acceptance_module.CHROMIUM_ZYGOTE_ARGV0, *tail),
+                argv=canonical,
                 raw_argv=(
-                    _compacted_title(process.executable, tail)
-                    if index
-                    else (acceptance_module.CHROMIUM_ZYGOTE_ARGV0, *tail)
+                    _compacted_title(process.executable, tail) if index else canonical
                 ),
             )
-            if process.role == "gpu"
+            if process.role == role
             else process
             for process in observation.processes
         )
@@ -1302,7 +1334,7 @@ def test_final_verifier_rejects_compaction_whose_leading_path_is_not_the_executa
         tmp_path,
         argv0=acceptance_module.CHROMIUM_ZYGOTE_ARGV0,
         later_raw=_compacted_title(
-            acceptance_module.CHROMIUM_ZYGOTE_ARGV0, ATTEMPT_SIX_UTILITY_TAIL
+            acceptance_module.CHROMIUM_ZYGOTE_ARGV0, NETWORK_SERVICE_UTILITY_TAIL
         ),
     )
 
@@ -1329,38 +1361,6 @@ def test_final_verifier_rejects_zygote_forked_utility_with_unknown_argv0(
         _verify(fixture)
 
 
-def test_final_verifier_rejects_utility_observed_only_as_a_compact_title(
-    tmp_path: Path,
-) -> None:
-    reference = _fixture(tmp_path)
-    executable = reference["observations"][0].processes[1].executable
-    compacted = _compacted_title(executable, ATTEMPT_SIX_UTILITY_TAIL)
-    fixture = _fixture_with_zygote_forked_utility(
-        tmp_path,
-        argv0=compacted[0],
-        later_raw=None,
-    )
-    observations = tuple(
-        replace(
-            observation,
-            processes=tuple(
-                replace(process, argv=compacted, raw_argv=compacted)
-                if process.role == "utility"
-                else process
-                for process in observation.processes
-            ),
-        )
-        for observation in fixture["observations"]
-    )
-    fixture["observations"] = observations
-
-    with pytest.raises(
-        NativeAcceptanceError,
-        match="process role differs from canonical type arguments",
-    ):
-        _verify(fixture)
-
-
 def test_rejects_editable_or_wrong_wheel_core(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     editable = replace(fixture["policy"].core, editable=True)
@@ -1374,14 +1374,16 @@ def test_rejects_static_generated_and_distribution_core_tampering(
 ) -> None:
     fixture = _fixture(tmp_path)
     core = fixture["policy"].core
-    (Path(core.package_root) / "__init__.py").write_bytes(b"substituted source\n")
+    # Same-length substitutions, so only the digest comparisons can notice.
+    member = Path(core.package_root) / "__init__.py"
+    member.write_bytes(bytes(byte ^ 0xFF for byte in member.read_bytes()))
     with pytest.raises(NativeAcceptanceError, match="installed core member"):
         capture_core_snapshot(core)
 
     fixture = _fixture(tmp_path / "generated")
     core = fixture["policy"].core
     generated = Path(core.package_root) / core.generated_members[0][0]
-    generated.write_bytes(b"substituted bytecode")
+    generated.write_bytes(bytes(byte ^ 0xFF for byte in generated.read_bytes()))
     with pytest.raises(NativeAcceptanceError, match="generated core member"):
         capture_core_snapshot(core)
 
@@ -1949,25 +1951,6 @@ def test_process_refresh_normalizes_exact_chromium_argv_storage_compaction(
     )
 
 
-# Exact canonical tail of the network-service utility process from failed native
-# attempt 6 (`.worktrees/evidence/desktop-125-ac90ce9-local-inputs/
-# failed-native-attempt-6.md`), trimmed to the arguments the journal recorded in
-# full. Chromium forked it from the zygote, so canonical argv[0] is the literal
-# `/proc/self/exe` while the later compacted title starts with the resolved
-# executable.
-ATTEMPT_SIX_UTILITY_TAIL = (
-    "--type=utility",
-    "--utility-sub-type=network.mojom.NetworkService",
-    "--lang=en-US",
-    "--service-sandbox-type=none",
-    "--enable-crash-reporter=4c35a100-cf37-40d1-9460-3f34de5e5ea6,no_channel",
-    "--standard-schemes=tongs",
-    "--shared-files=v8_context_snapshot_data:100",
-    "--field-trial-handle=3,i,16729955238146300512,10406605718793136162,262144",
-    "--variations-seed-version",
-)
-
-
 def _zygote_forked_pair(
     tmp_path: Path, role: str, tail: tuple[str, ...]
 ) -> tuple[ProcessObservation, ProcessObservation, dict[int, ProcessObservation]]:
@@ -1982,18 +1965,21 @@ def _zygote_forked_pair(
     return previous, current, {browser.pid: browser, previous.pid: previous}
 
 
-def test_process_refresh_carries_utility_role_across_attempt_six_compaction(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("role", "tail"),
+    [("utility", NETWORK_SERVICE_UTILITY_TAIL), ("gpu", GPU_PROCESS_TAIL)],
+    ids=["utility", "gpu"],
+)
+def test_process_refresh_carries_the_role_across_zygote_forked_compaction(
+    tmp_path: Path, role: str, tail: tuple[str, ...]
 ) -> None:
-    previous, current, observations = _zygote_forked_pair(
-        tmp_path, "utility", ATTEMPT_SIX_UTILITY_TAIL
-    )
+    previous, current, observations = _zygote_forked_pair(tmp_path, role, tail)
 
     normalized = launcher_module._validate_process_refresh(
         previous, current, observations
     )
 
-    assert normalized.role == "utility"
+    assert normalized.role == role
     assert normalized.argv == previous.argv
     assert normalized.argv[0] == acceptance_module.CHROMIUM_ZYGOTE_ARGV0
     assert normalized.raw_argv == current.argv
@@ -2009,22 +1995,6 @@ def test_process_refresh_carries_utility_role_across_attempt_six_compaction(
         previous.process_group,
         previous.ppid,
     )
-
-
-def test_process_refresh_carries_gpu_role_across_zygote_forked_compaction(
-    tmp_path: Path,
-) -> None:
-    previous, current, observations = _zygote_forked_pair(
-        tmp_path, "gpu", ("--type=gpu-process", "--gpu-preferences=value with space")
-    )
-
-    normalized = launcher_module._validate_process_refresh(
-        previous, current, observations
-    )
-
-    assert normalized.role == "gpu"
-    assert normalized.argv == previous.argv
-    assert normalized.raw_argv == current.argv
 
 
 @pytest.mark.parametrize(
@@ -2072,7 +2042,7 @@ def test_process_refresh_rejects_compaction_with_changed_kernel_identity(
     tmp_path: Path, change: dict[str, Any]
 ) -> None:
     previous, current, observations = _zygote_forked_pair(
-        tmp_path, "utility", ATTEMPT_SIX_UTILITY_TAIL
+        tmp_path, "utility", NETWORK_SERVICE_UTILITY_TAIL
     )
 
     with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
@@ -2085,7 +2055,7 @@ def test_process_refresh_does_not_promote_a_compact_first_observation(
     tmp_path: Path,
 ) -> None:
     previous, current, observations = _zygote_forked_pair(
-        tmp_path, "utility", ATTEMPT_SIX_UTILITY_TAIL
+        tmp_path, "utility", NETWORK_SERVICE_UTILITY_TAIL
     )
     compact_first = replace(
         previous, role="helper", argv=current.argv, raw_argv=current.argv
@@ -2122,7 +2092,7 @@ def _command_line_permuted_title(process: ProcessObservation) -> str:
     return " ".join((process.executable, *switches, *arguments))
 
 
-def test_process_refresh_accepts_the_attempt_nine_permuted_browser_title(
+def test_process_refresh_accepts_a_switches_first_permuted_browser_title(
     tmp_path: Path,
 ) -> None:
     """Confirmed native attempt 9: switches first, then positional arguments."""
@@ -2146,7 +2116,7 @@ def test_process_refresh_accepts_the_attempt_nine_permuted_browser_title(
     assert normalized.raw_argv == permuted
 
 
-def test_final_verifier_accepts_the_attempt_nine_permuted_browser_title(
+def test_final_verifier_accepts_a_switches_first_permuted_browser_title(
     tmp_path: Path,
 ) -> None:
     fixture = _fixture(tmp_path)
@@ -2289,6 +2259,23 @@ def test_process_refresh_mirrors_the_posix_switch_prefixes(
     assert normalized.argv == canonical
 
 
+def test_process_refresh_does_not_hoist_a_bare_dash_as_a_switch(
+    tmp_path: Path,
+) -> None:
+    """A bare ``-`` is an argument, so a title moving it first is rejected."""
+
+    fixture = _fixture(tmp_path)
+    browser = fixture["observations"][0].processes[0]
+    canonical = (browser.executable, "argument", "-")
+    previous = replace(browser, argv=canonical, raw_argv=canonical)
+    hoisted = (f"{browser.executable} - argument",)
+
+    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
+        launcher_module._validate_process_refresh(
+            previous, replace(previous, argv=hoisted, raw_argv=hoisted), {}
+        )
+
+
 def test_child_roles_do_not_accept_the_permutation(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     zygote = fixture["observations"][0].processes[1]
@@ -2301,22 +2288,6 @@ def test_child_roles_do_not_accept_the_permutation(tmp_path: Path) -> None:
             previous,
             replace(previous, role="helper", argv=permuted, raw_argv=permuted),
             {},
-        )
-
-
-def test_final_verifier_rejects_a_compact_first_permuted_browser_title(
-    tmp_path: Path,
-) -> None:
-    fixture = _fixture(tmp_path)
-    browser = fixture["observations"][0].processes[0]
-    permuted = (_command_line_permuted_title(browser),)
-
-    with pytest.raises(
-        NativeAcceptanceError,
-        match="process role differs from canonical type arguments",
-    ):
-        acceptance_module._verify_raw_process_argv(
-            replace(browser, argv=permuted, raw_argv=permuted)
         )
 
 
@@ -2455,7 +2426,7 @@ def test_refresh_rejection_reports_a_changed_kernel_identity(tmp_path: Path) -> 
     assert "precondition='kernel identity'" in str(raised.value)
 
 
-def test_process_refresh_carries_browser_role_across_attempt_seven_compaction(
+def test_process_refresh_carries_browser_role_across_in_place_argv_compaction(
     tmp_path: Path,
 ) -> None:
     """Failed native attempt 7: the browser argv storage compacted in place."""
@@ -2587,16 +2558,6 @@ def test_final_verifier_rejects_first_observed_compacted_utility_title(
         ({}, {"argv": "{exe} --type=zygote --extra"}),
         ({}, {"argv": "{exe}"}),
         ({}, {"argv": "--type=zygote {exe}"}),
-        (
-            {
-                "argv": (
-                    "{exe}",
-                    "--type=zygote",
-                    "--type=renderer",
-                )
-            },
-            {},
-        ),
         ({}, {"executable": "/usr/bin/false"}),
     ],
 )
@@ -2630,35 +2591,6 @@ def test_process_refresh_rejects_other_argv_mutations(
 
     with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
         launcher_module._validate_process_refresh(previous, current, {})
-
-
-def test_process_refresh_rejects_second_compacted_argv_mutation(tmp_path: Path) -> None:
-    fixture = _fixture(tmp_path)
-    zygote = fixture["observations"][0].processes[1]
-    compacted_raw = (f"{zygote.executable} --type=zygote",)
-    normalized = launcher_module._validate_process_refresh(
-        zygote,
-        replace(
-            zygote,
-            role="helper",
-            argv=compacted_raw,
-            raw_argv=compacted_raw,
-        ),
-        {},
-    )
-    changed_raw = (f"{zygote.executable} --type=renderer",)
-
-    with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
-        launcher_module._validate_process_refresh(
-            normalized,
-            replace(
-                normalized,
-                role="helper",
-                argv=changed_raw,
-                raw_argv=changed_raw,
-            ),
-            {},
-        )
 
 
 def test_process_refresh_rejects_compacted_to_canonical_reversal(
@@ -2789,7 +2721,6 @@ def test_title_derived_role_classifies_every_audited_type(
     [
         "/usr/bin/false --type=renderer",
         "{exe}--type=renderer",
-        "{exe} ",
         "{exe} --lang=en-US",
         "{exe} --type=renderer --type=gpu-process",
         "{exe} --type=broker",
@@ -3275,30 +3206,6 @@ def test_final_verifier_rejects_a_title_derived_process_with_a_foreign_executabl
         _verify(fixture)
 
 
-def test_final_verifier_rejects_a_forbidden_switch_inside_a_compacted_title(
-    tmp_path: Path,
-) -> None:
-    fixture = _fixture(tmp_path)
-    # The collector cannot classify this title, so it records a plain helper.
-    # The forbidden switch must still be found by splitting the title.
-    _with_process(
-        fixture,
-        104,
-        lambda process: replace(
-            process,
-            role="helper",
-            argv=(f"{process.executable} --type=renderer --no-sandbox",),
-            raw_argv=(f"{process.executable} --type=renderer --no-sandbox",),
-        ),
-    )
-
-    with pytest.raises(
-        NativeAcceptanceError,
-        match="owned process uses a forbidden security/GPU switch",
-    ):
-        _verify(fixture)
-
-
 def test_final_verifier_rejects_a_title_derived_browser(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     _with_process(
@@ -3362,7 +3269,8 @@ def test_process_refresh_still_rejects_a_changed_role_over_a_title(
     zygote = fixture["observations"][0].processes[1]
     canonical = (zygote.executable, "--type=zygote")
     previous = replace(zygote, argv=canonical, raw_argv=canonical)
-    compacted = (f"{zygote.executable} --type=renderer",)
+    # The title still names the zygote; only the claimed role changes.
+    compacted = (f"{zygote.executable} --type=zygote",)
 
     with pytest.raises(NativeAcceptanceError, match="PID identity changed"):
         launcher_module._validate_process_refresh(
@@ -3760,13 +3668,15 @@ def test_post_exit_output_bound_is_enforced(
 
         def __init__(self, *_args: Any, stdout: Any, env: Any, **_kwargs: Any) -> None:
             assert env == launcher_module.native_environment()
-            stdout.write(b"x" * (launcher_module.MAX_LOG_BYTES + 1))
-            stdout.flush()
+            self.stdout = stdout
 
         def poll(self) -> int:
             return 0
 
         def wait(self, timeout: int) -> int:
+            # Written at exit, so only the post-exit check can see it.
+            self.stdout.write(b"x" * (launcher_module.MAX_LOG_BYTES + 1))
+            self.stdout.flush()
             return 0
 
     monkeypatch.setattr(

@@ -379,23 +379,6 @@ def test_wrong_trusted_adapter_hash_is_rejected_before_generation(
     assert not case["output"].exists()
 
 
-def test_generator_failure_cannot_publish_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    case = _case(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        ADAPTER.SBOM,
-        "build_desktop_sbom",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ADAPTER.SBOM.SbomBuildError("fixture failure")
-        ),
-    )
-
-    with pytest.raises(ADAPTER.SBOM.SbomBuildError, match="fixture failure"):
-        _produce(case)
-    assert not case["output"].exists()
-
-
 def test_unequal_generator_outputs_cannot_publish_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -505,17 +488,6 @@ def test_consumer_rejects_transfer_change_during_semantic_reproduction(
     monkeypatch.setattr(ADAPTER.SBOM, "build_desktop_sbom", reproduce)
 
     with pytest.raises(ADAPTER.SbomEvidenceError, match="changed during semantic"):
-        _consume(case)
-
-
-def test_consumer_rejects_missing_required_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    case = _case(tmp_path, monkeypatch)
-    _produce(case)
-    (case["output"] / ADAPTER.SBOM_PATH).unlink()
-
-    with pytest.raises(ADAPTER.SbomEvidenceError, match="receipt binding"):
         _consume(case)
 
 

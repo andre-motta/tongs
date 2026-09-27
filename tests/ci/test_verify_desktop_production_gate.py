@@ -6,7 +6,9 @@ value, because each one reproduces a way a real workflow could otherwise report
 a false green: a failed job, a skipped job, a cancelled job, a missing result,
 a stale receipt from another run, and an injected receipt or report.  The
 plan-aware cases prove that a skip passes only for a lane the effective plan
-deselected, including the partial desktop selection without packaging.
+deselected, including the partial desktop selection without packaging, the
+desktop source selection that runs the archive jobs without the RPM lifecycle,
+and the reduced plan that runs core on the newest interpreter only.
 """
 
 from __future__ import annotations
@@ -65,6 +67,7 @@ def _plan(*lanes: str) -> Any:
 DOCS_ONLY = _plan("docs")
 TUI_ONLY = _plan("lint", "core")
 DESKTOP_WITHOUT_PACKAGING = _plan("lint", "core", "desktop")
+DESKTOP_SOURCE = _plan("lint", "core", "desktop", "archive")
 
 IDENTITY = GateIdentity(
     commit=COMMIT,
@@ -140,10 +143,12 @@ def _report_bytes(check_id: str, path: str, report_format: str) -> bytes:
         return _lifecycle(check_id)
     if "mcp" in path:
         return _junit("tests.test_mcp.test_server")
-    if "draft-process" in path:
-        return _junit(
-            "tests.integration.desktop.test_draft_process_acceptance.TestDrafts"
-        )
+    if "plugin-example" in path:
+        return _junit("examples.desktop-plugin.tests.test_provider")
+    if "integration-contracts" in path:
+        return _junit("tests.integration.desktop.test_sbom_evidence")
+    if "packaging-contracts" in path:
+        return _junit("tests.packaging.rpm.desktop.test_contract")
     if "native-payload" in path:
         return _junit(
             "tests.integration.desktop.test_native_payload_acceptance.TestPayload"
@@ -529,10 +534,42 @@ def test_gate_rejects_a_dropped_report(evidence: Path) -> None:
     receipt["reports"] = [
         entry
         for entry in receipt["reports"]
-        if entry["path"] != "reports/draft-process.junit.xml"
+        if entry["path"] != "reports/plugin-example.junit.xml"
     ]
     _write_receipt(path, receipt)
-    with pytest.raises(GateVerificationError, match="missing=..reports/draft-process"):
+    with pytest.raises(GateVerificationError, match="missing=..reports/plugin-example"):
+        verify_check_set(evidence, IDENTITY)
+
+
+@pytest.mark.parametrize(
+    ("report", "classname"),
+    [
+        ("reports/integration-contracts.junit.xml", "tests.packaging.rpm.x"),
+        ("reports/packaging-contracts.junit.xml", "tests.integration.desktop.x"),
+        ("reports/plugin-example.junit.xml", "tests.plugins.test_desktop_contract"),
+    ],
+)
+def test_gate_rejects_a_rehomed_suite_report_from_another_suite(
+    evidence: Path, report: str, classname: str
+) -> None:
+    """Each re-homed suite's report is bound to its own directory, so a
+    passing report of a different suite cannot stand in for it."""
+
+    check = next(
+        item
+        for item in REQUIRED_CHECKS
+        if any(expected.path == report for expected in item.reports)
+    )
+    directory = evidence / check.evidence_directory
+    identity = _write(directory / report, _junit(classname))
+    path = directory / check.receipt_name
+    receipt = _read_receipt(path)
+    for entry in receipt["reports"]:
+        if entry["path"] == report:
+            entry["size"] = identity["size"]
+            entry["sha256"] = identity["sha256"]
+    _write_receipt(path, receipt)
+    with pytest.raises(GateVerificationError, match="did not pass"):
         verify_check_set(evidence, IDENTITY)
 
 
@@ -1029,19 +1066,29 @@ def _gate(evidence: Path, plan: Any, **kwargs: Any) -> dict[str, str]:
     ("plan", "expected"),
     [
         (DOCS_ONLY, set()),
-        (TUI_ONLY, {"core-python-3.12", "core-python-3.13"}),
+        (TUI_ONLY, {"core-python-3.13"}),
         (
             DESKTOP_WITHOUT_PACKAGING,
             {
-                "core-python-3.12",
                 "core-python-3.13",
                 "desktop-production-tap",
                 "desktop-installed-core",
                 "desktop-native-payload-fixture",
             },
         ),
+        (
+            DESKTOP_SOURCE,
+            {
+                "core-python-3.13",
+                "desktop-production-tap",
+                "desktop-installed-core",
+                "desktop-native-payload-fixture",
+                "desktop-archive-lifecycle",
+                "desktop-archive-sbom",
+            },
+        ),
     ],
-    ids=["docs", "tui", "desktop-without-packaging"],
+    ids=["docs", "tui", "desktop-without-packaging", "desktop-source"],
 )
 def test_the_gate_accepts_exactly_the_checks_a_reduced_plan_selects(
     evidence: Path, plan: Any, expected: set[str]
@@ -1090,7 +1137,11 @@ def test_desktop_without_packaging_requires_the_packaging_jobs_to_skip(
     evidence: Path,
 ) -> None:
     _keep_only(evidence, DESKTOP_WITHOUT_PACKAGING)
-    for job in sorted(CI_PLAN.LANE_PRODUCTION_JOBS["packaging"]):
+    skipped = (
+        CI_PLAN.LANE_PRODUCTION_JOBS["archive"]
+        | CI_PLAN.LANE_PRODUCTION_JOBS["packaging"]
+    )
+    for job in sorted(skipped):
         with pytest.raises(GateVerificationError, match=job):
             _gate(
                 evidence,
@@ -1114,6 +1165,120 @@ def test_desktop_without_packaging_still_requires_every_desktop_job(
                     DESKTOP_WITHOUT_PACKAGING, **{job: {"result": "skipped"}}
                 ),
             )
+
+
+def test_a_desktop_source_plan_requires_the_rpm_lifecycle_to_skip(
+    evidence: Path,
+) -> None:
+    """Decision 9: desktop/src runs the archive and SBOM jobs, never the RPM
+    lifecycle, so a run of it or a stray RPM receipt is drift."""
+
+    _keep_only(evidence, DESKTOP_SOURCE)
+    assert set(_gate(evidence, DESKTOP_SOURCE)) == CI_PLAN.selected_checks(
+        DESKTOP_SOURCE
+    )
+    with pytest.raises(GateVerificationError, match="rpm-lifecycle"):
+        _gate(
+            evidence,
+            DESKTOP_SOURCE,
+            production_results=_plan_production_results(
+                DESKTOP_SOURCE, **{"rpm-lifecycle": {"result": "success"}}
+            ),
+        )
+    for job in sorted(CI_PLAN.LANE_PRODUCTION_JOBS["archive"]):
+        with pytest.raises(GateVerificationError, match=job):
+            _gate(
+                evidence,
+                DESKTOP_SOURCE,
+                production_results=_plan_production_results(
+                    DESKTOP_SOURCE, **{job: {"result": "skipped"}}
+                ),
+            )
+
+
+def test_a_stray_rpm_receipt_fails_a_desktop_source_plan(tmp_path: Path) -> None:
+    evidence = _build_evidence(tmp_path / "gate-evidence")
+    _keep_only(evidence, DESKTOP_SOURCE)
+    rpm = _build_evidence(tmp_path / "all") / "desktop-rpm-lifecycle"
+    shutil.copytree(rpm, evidence / "desktop-rpm-lifecycle")
+    with pytest.raises(GateVerificationError, match="injected=.*desktop-rpm"):
+        _gate(evidence, DESKTOP_SOURCE)
+
+
+def test_a_full_plan_without_the_python_3_12_receipt_fails(evidence: Path) -> None:
+    shutil.rmtree(evidence / "core-python-3.12")
+    with pytest.raises(GateVerificationError, match="missing=..core-python-3.12"):
+        _gate(evidence, FULL)
+
+
+def test_a_reduced_plan_with_a_python_3_12_receipt_fails(evidence: Path) -> None:
+    """A reduced plan never schedules the 3.12 leg, so its receipt is drift."""
+
+    _keep_only(evidence, FULL)
+    for check in REQUIRED_CHECKS:
+        if check.check_id not in CI_PLAN.selected_checks(TUI_ONLY) | {
+            "core-python-3.12"
+        }:
+            shutil.rmtree(evidence / check.evidence_directory)
+    with pytest.raises(GateVerificationError, match="injected=..core-python-3.12"):
+        _gate(evidence, TUI_ONLY)
+
+
+def test_a_recomputed_full_plan_requires_python_3_12_that_upstream_skipped(
+    evidence: Path,
+) -> None:
+    """Upstream planned a reduced run, so only 3.13 ran; the aggregate's own
+    plan is full, so the effective plan requires 3.12 and the gate fails."""
+
+    _keep_only(evidence, TUI_ONLY)
+    effective = CI_PLAN.effective_plan(
+        recomputed=CI_PLAN.full_plan(COMMIT, "event 'push' is not pull_request"),
+        upstream_json=TUI_ONLY.to_json(),
+        changes_result="success",
+    )
+    assert effective.full
+    with pytest.raises(GateVerificationError, match="missing=..core-python-3.12"):
+        verify_check_set(evidence, IDENTITY, effective)
+
+
+@pytest.mark.parametrize(
+    ("check_id", "stage"),
+    [
+        ("desktop-native-payload-fixture", "integration-contract-suite"),
+        ("desktop-native-payload-fixture", "packaging-contract-suite"),
+        ("desktop-production-tap", "plugin-example-compatibility"),
+    ],
+)
+def test_a_missing_or_extra_stage_fails(
+    evidence: Path, check_id: str, stage: str
+) -> None:
+    check = _check(check_id)
+    directory = evidence / check.evidence_directory
+    lifecycle = next(
+        report.path
+        for report in check.reports
+        if report.report_format == ARTIFACT_LIFECYCLE
+    )
+    original = json.loads((directory / lifecycle).read_bytes())
+    for stages in (
+        [item for item in original["stages"] if item["name"] != stage],
+        [
+            *original["stages"],
+            {"name": "draft-and-process-acceptance", "result": "pass"},
+        ],
+    ):
+        document = {**original, "stages": stages}
+        payload = (json.dumps(document, sort_keys=True) + "\n").encode()
+        identity = _write(directory / lifecycle, payload)
+        path = directory / check.receipt_name
+        receipt = _read_receipt(path)
+        for entry in receipt["reports"]:
+            if entry["path"] == lifecycle:
+                entry["size"] = identity["size"]
+                entry["sha256"] = identity["sha256"]
+        _write_receipt(path, receipt)
+        with pytest.raises(GateVerificationError, match="stage set mismatch"):
+            verify_check_set(evidence, IDENTITY)
 
 
 @pytest.mark.parametrize("raw", ["{}", "null"])
@@ -1233,7 +1398,7 @@ def test_the_cli_verifies_against_the_plan_file(
     monkeypatch.setenv("DESKTOP_GATE_RESULTS", _plan_ci_results(TUI_ONLY))
     monkeypatch.setenv("DESKTOP_PRODUCTION_RESULTS", "")
     assert main(_cli_arguments(evidence, plan_path)) == 0
-    assert "verified the 2 checks" in capsys.readouterr().out
+    assert "verified the 1 checks" in capsys.readouterr().out
 
     plan_path.write_text(FULL.to_json())
     assert main(_cli_arguments(evidence, plan_path)) == 1

@@ -79,6 +79,7 @@ INSTALL_PROVIDES: dict[str, frozenset[str]] = {
     '--disable-pip-version-check -e ".[dev]" '
     '"sigstore==${SIGSTORE_VERSION}"': CORE_MODULES | DEV_MODULES,
     "python -m pip install build": frozenset(),
+    "python -m pip install ruff": frozenset(),
     "python -m pip install ./examples/desktop-plugin": frozenset(),
 }
 
@@ -114,7 +115,7 @@ ENTRY_POINTS: tuple[EntryPoint, ...] = (
     ),
     EntryPoint(
         program="tests/ci/verify_desktop_ci.py",
-        jobs=("ci.yml:core", "ci.yml:desktop-pr-gate"),
+        jobs=("ci.yml:lint-and-format", "ci.yml:core", "ci.yml:desktop-pr-gate"),
         note="the aggregate job installs nothing and loads ci_plan.py by path",
     ),
     EntryPoint(

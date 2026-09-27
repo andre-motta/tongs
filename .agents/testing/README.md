@@ -267,11 +267,11 @@ using the rules in `tests/ci/ci_plan.py`:
 | --- | --- | --- |
 | docs | `docs/**`, `site/**`, `.agents/**`, `*.md`, `.github/ISSUE_TEMPLATE/**`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/PULL_REQUEST_TEMPLATE/**`, `.github/FUNDING.yml`, `.github/linters/**` | docs |
 | readme | `README.md` | docs, core |
-| core-read-docs | `.agents/ci/README.md`, `.agents/testing/README.md`, `.github/linters/**` | docs, core |
+| ci-read-docs | `.agents/ci/README.md`, `.agents/testing/README.md`, `.github/linters/**` | docs, lint |
 | tui | `src/tongs/views/**`, `src/tongs/widgets/**`, `src/tongs/mcp/**`, `src/tongs/app.py`, `src/tongs/commands.py`, `src/tongs/helpers.py`, `src/tongs/__main__.py` | lint, core |
 | core-tests | `tests/test_*.py`, `tests/test_cache/**`, `tests/test_diff/**`, `tests/test_forges/**`, `tests/test_mcp/**`, `tests/test_plugins/**`, `tests/test_scanner/**`, `tests/test_views/**`, `tests/test_widgets/**` | lint, core |
 | sidecar | `src/tongs/cache/**`, `src/tongs/config.py`, `src/tongs/desktop/**`, `src/tongs/diff/**`, `src/tongs/errors.py`, `src/tongs/forges/**`, `src/tongs/plugins/**`, `src/tongs/scanner/**`, `src/tongs/services/**`, `src/tongs/state/**`, `src/tongs/tui_services.py`, `tests/__init__.py`, `tests/desktop/**`, `tests/fixtures/**`, `tests/integration/**`, `tests/plugins/**`, `tests/services/**`, `tests/state/**`, `examples/desktop-plugin/**` | lint, core, desktop |
-| packaging | `LICENSE`, `scripts/build_desktop_archive.py`, `scripts/build_desktop_sbom.py`, `src/tongs/__init__.py`, `src/tongs/desktop/artifact_contract/**`, `src/tongs/desktop/installer/**`, `tests/integration/desktop/archive_evidence.py`, `tests/integration/desktop/candidate_attestation.py`, `tests/integration/desktop/rpm_payload_contract.py`, `tests/integration/desktop/sbom_evidence.py`, `tests/desktop/installer/fixtures/**`, `tests/packaging/**` | lint, core, desktop, packaging |
+| packaging | `LICENSE`, `scripts/build_desktop_archive.py`, `scripts/build_desktop_sbom.py`, `src/tongs/__init__.py`, `src/tongs/desktop/artifact_contract/**`, `src/tongs/desktop/installer/**`, `tests/integration/desktop/archive_evidence.py`, `tests/integration/desktop/candidate_attestation.py`, `tests/integration/desktop/rpm_payload_contract.py`, `tests/integration/desktop/sbom_evidence.py`, `tests/desktop/installer/fixtures/**`, `tests/packaging/**` | lint, core, desktop, archive, packaging |
 | release-evidence | `scripts/release-evidence/**` | lint, core |
 | ci-infrastructure | `.github/workflows/**`, `.github/scripts/**`, `tests/ci/**`, `tests/containers/**` | full graph |
 | build-configuration | `pyproject.toml`, `requirements/**`, `packaging/**`, `desktop/**`, `.gitignore` | full graph |

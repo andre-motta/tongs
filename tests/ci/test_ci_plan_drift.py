@@ -7,10 +7,10 @@ inputs from their sources instead of restating them:
 * the archive producer's ``_SOURCE_INPUTS``, loaded from the producer itself;
 * the programs the production jobs run, from ``ENTRY_POINTS`` and from the
   paths the job steps name in ``desktop-production.yml``;
-* the repository files those packaging programs import and name, by loading
-  them in a subprocess;
-* the repository files the desktop jobs' pytest targets import, by collecting
-  them in a subprocess;
+* the repository files those archive and packaging programs import and name,
+  by loading them in a subprocess;
+* the repository files the desktop and core jobs' pytest targets import, by
+  collecting them in a subprocess;
 * the tongs modules the installed-core job's audited TUI launch loads, by
   starting the ``tongs`` console entry point headless in a subprocess;
 * every tracked file, which must match an explicit rule unless it is on the
@@ -40,6 +40,7 @@ from tests.ci.test_production_entry_points import ENTRY_POINTS
 ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE_PRODUCER = ROOT / "scripts/build_desktop_archive.py"
 PRODUCTION_WORKFLOW = ROOT / ".github/workflows/desktop-production.yml"
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 PRODUCTION_PREFIX = "desktop-production.yml:"
 #: The job runs ``pip install ./examples/desktop-plugin``, so collection of
 #: its tests needs the example package importable.
@@ -55,7 +56,10 @@ SYNTHETIC_CHILD = "ci-plan-drift-synthetic-child.txt"
 #: mapped to the reason.  Every entry must be tracked and actually unmatched.
 UNMATCHED_ALLOWLIST: dict[str, str] = {}
 
-PACKAGING_JOBS = frozenset(
+ARCHIVE_JOBS = frozenset(
+    PRODUCTION_PREFIX + job for job in LANE_PRODUCTION_JOBS["archive"]
+)
+RPM_JOBS = frozenset(
     PRODUCTION_PREFIX + job for job in LANE_PRODUCTION_JOBS["packaging"]
 )
 #: ``source-identity`` only reads git metadata, so it has no path inputs.
@@ -176,14 +180,19 @@ def production_jobs() -> dict[str, dict]:
     }
 
 
-def test_every_packaging_entry_point_selects_packaging() -> None:
+@pytest.mark.parametrize(
+    ("jobs", "lane"), [(ARCHIVE_JOBS, "archive"), (RPM_JOBS, "packaging")]
+)
+def test_every_archive_and_packaging_entry_point_selects_its_lane(
+    jobs: frozenset[str], lane: str
+) -> None:
     paths = {
-        entry.program: f"ENTRY_POINTS {sorted(set(entry.jobs) & PACKAGING_JOBS)}"
+        entry.program: f"ENTRY_POINTS {sorted(set(entry.jobs) & jobs)}"
         for entry in ENTRY_POINTS
-        if set(entry.jobs) & PACKAGING_JOBS
+        if set(entry.jobs) & jobs
     }
-    assert paths, "no ENTRY_POINTS program runs in a packaging job"
-    assert _offenders(paths, "packaging") == []
+    assert paths, f"no ENTRY_POINTS program runs in a {lane} job"
+    assert _offenders(paths, lane) == []
 
 
 def test_every_desktop_entry_point_selects_desktop() -> None:
@@ -227,7 +236,8 @@ def _named_paths(job: dict) -> list[str]:
 
 @pytest.mark.needs_git
 @pytest.mark.parametrize(
-    ("jobs", "lane"), [(PACKAGING_JOBS, "packaging"), (DESKTOP_JOBS, "desktop")]
+    ("jobs", "lane"),
+    [(ARCHIVE_JOBS, "archive"), (RPM_JOBS, "packaging"), (DESKTOP_JOBS, "desktop")],
 )
 def test_every_path_a_lane_job_names_selects_its_lane(
     production_jobs: dict[str, dict], jobs: frozenset[str], lane: str
@@ -286,27 +296,46 @@ print(json.dumps({"files": sorted(files), "named": sorted(named)}))
 )
 
 
-def _packaging_programs() -> list[str]:
-    programs = {
-        entry.program for entry in ENTRY_POINTS if set(entry.jobs) & PACKAGING_JOBS
-    }
+def _lane_programs(jobs: frozenset[str]) -> list[str]:
+    programs = {entry.program for entry in ENTRY_POINTS if set(entry.jobs) & jobs}
     # desktop_production_expectations.py loads its adapters lazily per
-    # subcommand, so name them from its own constants.
-    expectations = _load_by_path(
-        "ci_plan_drift_expectations",
-        ROOT / "tests/ci/desktop_production_expectations.py",
-    )
-    for name in dir(expectations):
-        value = getattr(expectations, name)
-        if name.endswith("_PROGRAM") and isinstance(value, str):
-            programs.add(value)
+    # subcommand, so name them from its own constants.  Only the archive-lane
+    # jobs run it.
+    if "tests/ci/desktop_production_expectations.py" in programs:
+        expectations = _load_by_path(
+            "ci_plan_drift_expectations",
+            ROOT / "tests/ci/desktop_production_expectations.py",
+        )
+        for name in dir(expectations):
+            value = getattr(expectations, name)
+            if name.endswith("_PROGRAM") and isinstance(value, str):
+                programs.add(value)
     return sorted(program for program in programs if program.endswith(".py"))
 
 
 @pytest.mark.needs_git
-def test_everything_the_packaging_programs_import_or_name_selects_packaging() -> None:
-    programs = _packaging_programs()
-    assert "scripts/build_desktop_sbom.py" in programs
+@pytest.mark.parametrize(
+    ("jobs", "lane", "witness", "loaded"),
+    [
+        (
+            ARCHIVE_JOBS,
+            "archive",
+            "scripts/build_desktop_sbom.py",
+            "src/tongs/desktop/artifact_contract/__init__.py",
+        ),
+        (
+            RPM_JOBS,
+            "packaging",
+            "tests/integration/desktop/rpm_payload_contract.py",
+            "packaging/rpm/desktop/package_contract.py",
+        ),
+    ],
+)
+def test_everything_the_archive_and_packaging_programs_import_or_name_selects_it(
+    jobs: frozenset[str], lane: str, witness: str, loaded: str
+) -> None:
+    programs = _lane_programs(jobs)
+    assert witness in programs
     completed = subprocess.run(
         [sys.executable, "-c", _LOAD_PROBE, str(ROOT), json.dumps(programs)],
         capture_output=True,
@@ -316,14 +345,14 @@ def test_everything_the_packaging_programs_import_or_name_selects_packaging() ->
         timeout=300,
     )
     report = json.loads(completed.stdout)
-    assert "src/tongs/desktop/artifact_contract/__init__.py" in report["files"]
+    assert loaded in report["files"]
     paths = {path: "imported" for path in report["files"]}
     for value in report["named"]:
         if value.startswith(("/", ".")) or "/" not in value:
             continue
         for path in _expand(value.rstrip("/")):
             paths.setdefault(path, "named by a module constant")
-    assert _offenders(paths, "packaging") == []
+    assert _offenders(paths, lane) == []
 
 
 _COLLECT_PROBE = (
@@ -352,50 +381,88 @@ print(json.dumps(sorted(files)))
 )
 
 
-def _pytest_targets(job: dict) -> list[str]:
-    targets = []
+def _pytest_invocations(job: dict) -> list[list[str]]:
+    """The arguments of every pytest command a job runs, one list per command.
+
+    Paths and ``--ignore`` options are kept; report options, verbosity and
+    shell continuations are dropped, and shell globs are expanded.
+    """
+
+    invocations = []
     for step in job["steps"]:
-        words = (step.get("run") or "").split()
+        words = (step.get("run") or "").replace("\\\n", " ").split()
         if "pytest" not in words:
             continue
+        arguments = []
         for word in words[words.index("pytest") + 1 :]:
-            if word.startswith("-") or "$" in word or word == "\\":
+            if word.startswith("--ignore="):
+                arguments.append(word)
+            elif word.startswith("-") or "$" in word or word == "\\":
                 continue
-            targets.append(word)
-    return targets
+            elif any(character in word for character in "*?["):
+                arguments.extend(
+                    sorted(
+                        path.relative_to(ROOT).as_posix() for path in ROOT.glob(word)
+                    )
+                )
+            else:
+                arguments.append(word)
+        invocations.append(arguments)
+    return invocations
+
+
+def _collected_imports(invocations: list[list[str]]) -> list[str]:
+    imported: set[str] = set()
+    for arguments in invocations:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _COLLECT_PROBE,
+                str(ROOT),
+                str(EXAMPLE_PLUGIN_SOURCE),
+                json.dumps(arguments),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            check=False,
+            timeout=300,
+        )
+        assert completed.returncode == 0, completed.stderr
+        imported.update(json.loads(completed.stdout))
+    return sorted(imported)
 
 
 def test_everything_the_desktop_suites_import_selects_desktop(
     production_jobs: dict[str, dict],
 ) -> None:
-    targets = sorted(
-        {
-            target
-            for label in DESKTOP_JOBS
-            for target in _pytest_targets(production_jobs[label])
-        }
-    )
-    assert "tests/plugins" in targets
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            _COLLECT_PROBE,
-            str(ROOT),
-            str(EXAMPLE_PLUGIN_SOURCE),
-            json.dumps(targets),
-        ],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-        check=False,
-        timeout=300,
-    )
-    assert completed.returncode == 0, completed.stderr
-    imported = json.loads(completed.stdout)
-    assert "src/tongs/tui_services.py" in imported
+    invocations = [
+        arguments
+        for label in sorted(DESKTOP_JOBS)
+        for arguments in _pytest_invocations(production_jobs[label])
+    ]
+    targets = {word for arguments in invocations for word in arguments}
+    assert "examples/desktop-plugin/tests" in targets
+    assert "tests/packaging" in targets
+    imported = _collected_imports(invocations)
+    assert "tests/desktop/native/native_payload_launcher.py" in imported
     paths = {path: "imported by a desktop suite" for path in imported}
     assert _offenders(paths, "desktop") == []
+
+
+def test_everything_the_core_suites_import_selects_core() -> None:
+    """The core job runs a positive path list, so a helper that only core
+    suites import must still select core when it lives outside their rules."""
+
+    core = yaml.safe_load(CI_WORKFLOW.read_text())["jobs"]["core"]
+    invocations = _pytest_invocations(core)
+    targets = {word for arguments in invocations for word in arguments}
+    assert "tests/integration/desktop/test_draft_process_acceptance.py" in targets
+    imported = _collected_imports(invocations)
+    assert "src/tongs/tui_services.py" in imported
+    paths = {path: "imported by a core suite" for path in imported}
+    assert _offenders(paths, "core") == []
 
 
 # The installed-core job launches the installed ``tongs`` TUI under an audit

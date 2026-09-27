@@ -49,17 +49,24 @@ LANES: tuple[str, ...] = (
     "core",
     "fedora_podman",
     "desktop",
+    "archive",
     "packaging",
 )
 ALL_LANES: frozenset[str] = frozenset(LANES)
 FULL_LABEL = "ci:full"
 PLAN_VERSION = 1
 
-#: A lane that cannot run without another.  Packaging jobs run inside the
-#: called desktop production workflow, so selecting them selects desktop.
-LANE_IMPLIES: dict[str, frozenset[str]] = {"packaging": frozenset({"desktop"})}
+#: A lane that cannot run without another.  The archive and packaging jobs run
+#: inside the called desktop production workflow, and the RPM lifecycle
+#: consumes the fresh archive, so packaging selects archive and archive selects
+#: desktop.
+LANE_IMPLIES: dict[str, frozenset[str]] = {
+    "packaging": frozenset({"archive"}),
+    "archive": frozenset({"desktop"}),
+}
 
-#: The ``ci.yml`` job that owns each lane.  Packaging has no job of its own.
+#: The ``ci.yml`` job that owns each lane.  Archive and packaging have no job
+#: of their own.
 LANE_CI_JOBS: dict[str, str] = {
     "docs": "docs",
     "lint": "lint-and-format",
@@ -75,9 +82,8 @@ LANE_PRODUCTION_JOBS: dict[str, frozenset[str]] = {
     "desktop": frozenset(
         {"source-identity", "desktop-tap", "installed-core", "native-payload"}
     ),
-    "packaging": frozenset(
-        {"archive", "archive-evidence", "archive-sbom", "rpm-lifecycle"}
-    ),
+    "archive": frozenset({"archive", "archive-evidence", "archive-sbom"}),
+    "packaging": frozenset({"rpm-lifecycle"}),
 }
 
 #: Receipt-bearing gate checks each lane publishes.
@@ -90,14 +96,23 @@ LANE_CHECKS: dict[str, frozenset[str]] = {
             "desktop-native-payload-fixture",
         }
     ),
-    "packaging": frozenset(
-        {
-            "desktop-archive-lifecycle",
-            "desktop-archive-sbom",
-            "desktop-rpm-lifecycle",
-        }
-    ),
+    "archive": frozenset({"desktop-archive-lifecycle", "desktop-archive-sbom"}),
+    "packaging": frozenset({"desktop-rpm-lifecycle"}),
 }
+
+#: Core interpreters.  Every full plan (a push, ``ci:full``, any doubt or a
+#: full-rule path) runs both; a reduced pull request plan runs the newest only,
+#: so the oldest interpreter's check is required exactly when the plan is full.
+CORE_VERSIONS_FULL: tuple[str, ...] = ("3.12", "3.13")
+CORE_VERSIONS_REDUCED: tuple[str, ...] = ("3.13",)
+FULL_PLAN_ONLY_CHECKS: frozenset[str] = frozenset({"core-python-3.12"})
+
+
+def core_versions_for(full: bool) -> tuple[str, ...]:
+    """The core interpreter matrix for a full or a reduced plan."""
+
+    return CORE_VERSIONS_FULL if full else CORE_VERSIONS_REDUCED
+
 
 #: Every result GitHub reports for a job.
 JOB_RESULTS: frozenset[str] = frozenset({"success", "failure", "cancelled", "skipped"})
@@ -188,16 +203,17 @@ RULES: tuple[Rule, ...] = (
     ),
     # The wheel's readme, so the core lane builds it as well as the docs lane.
     Rule(name="readme", patterns=("README.md",), lanes=frozenset({"docs", "core"})),
-    # Files that core-lane tests read (the generated lane tables and the pinned
-    # markdown linter), so editing them runs those tests as well as the docs lane.
+    # Files that the tests/ci suites read (the generated lane tables and the
+    # pinned markdown linter).  Those suites run in the lint job, so editing
+    # them runs lint as well as the docs lane.
     Rule(
-        name="core-read-docs",
+        name="ci-read-docs",
         patterns=(
             ".agents/ci/README.md",
             ".agents/testing/README.md",
             ".github/linters/**",
         ),
-        lanes=frozenset({"docs", "core"}),
+        lanes=frozenset({"docs", "lint"}),
     ),
     # Terminal modules.  The sidecar never imports them.  By CTO decision they
     # run lint and core only: the desktop installed-core job also launches the
@@ -677,12 +693,17 @@ def expected_production_results(plan: Plan) -> dict[str, frozenset[str]] | None:
 
 
 def selected_checks(plan: Plan) -> frozenset[str]:
-    """The receipt-bearing checks a plan requires."""
+    """The receipt-bearing checks a plan requires.
+
+    A reduced plan runs core on :data:`CORE_VERSIONS_REDUCED` only, so it does
+    not require the checks in :data:`FULL_PLAN_ONLY_CHECKS`.
+    """
 
     validate_plan(plan)
-    return frozenset(
+    checks = frozenset(
         check for lane in plan.lanes for check in LANE_CHECKS.get(lane, frozenset())
     )
+    return checks if plan.full else checks - FULL_PLAN_ONLY_CHECKS
 
 
 def render_table() -> str:
@@ -762,6 +783,9 @@ def _write_outputs(plan: Plan, arguments: argparse.Namespace) -> None:
     if arguments.github_output is not None:
         lines = [f"plan={plan.to_json()}"]
         lines.extend(f"{lane}={value}" for lane, value in plan.lane_outputs().items())
+        lines.append(f"full={'true' if plan.full else 'false'}")
+        versions = json.dumps(list(core_versions_for(plan.full)), separators=(",", ":"))
+        lines.append(f"core_versions={versions}")
         with arguments.github_output.open("a", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
 
@@ -946,6 +970,15 @@ def _explain(arguments: argparse.Namespace) -> int:
         | {job for lane, job in LANE_CI_JOBS.items() if lane in plan.lanes}
     )
     print("ci.yml jobs that run: " + ", ".join(jobs))
+    production = sorted(
+        job
+        for lane, lane_jobs in LANE_PRODUCTION_JOBS.items()
+        if lane in plan.lanes
+        for job in lane_jobs
+    )
+    print("desktop-production jobs that run: " + (", ".join(production) or "none"))
+    if "core" in plan.lanes:
+        print("Core interpreters: " + ", ".join(core_versions_for(plan.full)))
     print("Reasons:")
     for reason in plan.reasons:
         print(f"  {reason}")

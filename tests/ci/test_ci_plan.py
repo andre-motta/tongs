@@ -53,11 +53,11 @@ HEAD = "a" * 40
 ZERO = "0" * 40
 DOCS = frozenset({"docs"})
 TUI = frozenset({"lint", "core"})
-CORE_READ_DOCS = frozenset({"docs", "core"})
+LINT_READ_DOCS = frozenset({"docs", "lint"})
 CORE_TESTS = frozenset({"lint", "core"})
 README = frozenset({"docs", "core"})
 SIDECAR = frozenset({"lint", "core", "desktop"})
-PACKAGING = SIDECAR | {"packaging"}
+PACKAGING = SIDECAR | {"archive", "packaging"}
 RELEASE_EVIDENCE = frozenset({"lint", "core"})
 
 
@@ -72,7 +72,7 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("site/package.json", DOCS),
     ("site/src/content/docs", DOCS),
     ("site/public/CNAME", DOCS),
-    (".agents/testing/README.md", CORE_READ_DOCS),
+    (".agents/testing/README.md", LINT_READ_DOCS),
     ("CONTRIBUTING.md", DOCS),
     ("AGENTS.md", DOCS),
     ("SECURITY.md", DOCS),
@@ -81,14 +81,14 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     (".github/PULL_REQUEST_TEMPLATE.md", DOCS),
     (".github/PULL_REQUEST_TEMPLATE/feature.md", DOCS),
     (".github/FUNDING.yml", DOCS),
-    (".github/linters/.markdownlint-cli2.yaml", CORE_READ_DOCS),
+    (".github/linters/.markdownlint-cli2.yaml", LINT_READ_DOCS),
     # README
     ("README.md", README),
     # TUI
     ("src/tongs/views/inbox.py", TUI),
-    (".agents/ci/README.md", CORE_READ_DOCS),
-    (".agents/testing/README.md", CORE_READ_DOCS),
-    (".github/linters/package-lock.json", CORE_READ_DOCS),
+    (".agents/ci/README.md", LINT_READ_DOCS),
+    (".agents/testing/README.md", LINT_READ_DOCS),
+    (".github/linters/package-lock.json", LINT_READ_DOCS),
     ("src/tongs/widgets/diff_panel.py", TUI),
     ("src/tongs/mcp/server.py", TUI),
     ("src/tongs/app.py", TUI),
@@ -285,7 +285,8 @@ def test_full_reasons_are_capped() -> None:
 
 
 def test_close_lanes_applies_implications() -> None:
-    assert close_lanes({"packaging"}) == {"packaging", "desktop"}
+    assert close_lanes({"packaging"}) == {"packaging", "archive", "desktop"}
+    assert close_lanes({"archive"}) == {"archive", "desktop"}
     assert close_lanes({"docs"}) == {"docs"}
     assert close_lanes(()) == frozenset()
 
@@ -383,8 +384,9 @@ def test_lane_outputs_spell_every_lane() -> None:
 
 
 def test_union_adds_lanes_and_keeps_full() -> None:
-    union = _plan("docs").union(_plan("packaging", "desktop"))
-    assert union.lanes == {"docs", "packaging", "desktop"} and not union.full
+    union = _plan("docs").union(_plan("packaging", "archive", "desktop"))
+    assert union.lanes == {"docs", "packaging", "archive", "desktop"}
+    assert not union.full
     assert _plan("docs").union(full_plan(MERGE, "x")).lanes == ALL_LANES
     assert full_plan(MERGE, "x").union(_plan()).full
 
@@ -727,9 +729,31 @@ def test_expected_results_for_partial_desktop_selection() -> None:
     production = expected_production_results(plan)
     assert production is not None
     assert {job for job, allowed in production.items() if allowed == {"skipped"}} == (
-        LANE_PRODUCTION_JOBS["packaging"]
+        LANE_PRODUCTION_JOBS["archive"] | LANE_PRODUCTION_JOBS["packaging"]
     )
-    assert selected_checks(plan) == LANE_CHECKS["core"] | LANE_CHECKS["desktop"]
+    assert selected_checks(plan) == {"core-python-3.13"} | LANE_CHECKS["desktop"]
+
+
+def test_core_versions_follow_the_plan_fullness() -> None:
+    assert ci_plan.core_versions_for(True) == ("3.12", "3.13")
+    assert ci_plan.core_versions_for(False) == ("3.13",)
+    # The full-plan-only checks are exactly the core legs a reduced plan drops.
+    dropped = {
+        f"core-python-{version}"
+        for version in ci_plan.CORE_VERSIONS_FULL
+        if version not in ci_plan.CORE_VERSIONS_REDUCED
+    }
+    assert dropped == ci_plan.FULL_PLAN_ONLY_CHECKS
+    assert {
+        f"core-python-{version}" for version in ci_plan.CORE_VERSIONS_FULL
+    } == LANE_CHECKS["core"]
+
+
+def test_a_reduced_plan_requires_the_newest_core_check_only() -> None:
+    assert selected_checks(_plan("lint", "core")) == {"core-python-3.13"}
+    full = full_plan(MERGE, "x")
+    assert selected_checks(full) == frozenset().union(*LANE_CHECKS.values())
+    assert "core-python-3.12" in selected_checks(full)
 
 
 def test_expected_results_for_the_full_and_docs_plans() -> None:
@@ -787,7 +811,11 @@ def test_compute_writes_the_plan_and_every_lane_output(tmp_path: Path) -> None:
     assert plan.full
     lines = github_output.read_text().splitlines()
     assert lines[0] == f"plan={plan.to_json()}"
-    assert lines[1:] == [f"{lane}=true" for lane in LANES]
+    assert lines[1:] == [
+        *(f"{lane}=true" for lane in LANES),
+        "full=true",
+        'core_versions=["3.12","3.13"]',
+    ]
     text = summary.read_text()
     assert "full graph" in text and "Merge parents" in text
 
@@ -851,9 +879,33 @@ def test_effective_writes_the_union_and_lists_mismatches(tmp_path: Path) -> None
     assert code == 0
     assert Plan.from_json(output.read_text()).full
     assert "core=true" in github_output.read_text().splitlines()
+    assert "full=true" in github_output.read_text().splitlines()
     text = summary.read_text()
     assert "Upstream and recomputed plans differ" in text
     assert "Merge parents" in text
+
+
+def test_a_reduced_plan_publishes_the_newest_core_interpreter_only(
+    tmp_path: Path,
+) -> None:
+    github_output = tmp_path / "github-output"
+    arguments = ci_plan._parser().parse_args(
+        [
+            "compute",
+            "--event-name",
+            "pull_request",
+            "--checked-out",
+            MERGE,
+            "--output",
+            str(tmp_path / "plan.json"),
+            "--github-output",
+            str(github_output),
+        ]
+    )
+    ci_plan._write_outputs(_plan("lint", "core"), arguments)
+    lines = github_output.read_text().splitlines()
+    assert lines[-2:] == ["full=false", 'core_versions=["3.13"]']
+    assert json.loads(lines[-1].split("=", 1)[1]) == ["3.13"]
 
 
 def test_render_table_is_generated_from_the_rules(

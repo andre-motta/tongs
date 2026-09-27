@@ -304,11 +304,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: >-
-            gate-desktop-production-tap-${{ needs.source-identity.outputs.checked-out-commit
-            }}-${{ github.run_id }}-${{ github.run_attempt }}
+            gate-desktop-production-tap-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}
           path: ${{ runner.temp }}/gate/desktop-production-tap
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   archive:
     name: Reproducible archive and unsigned transfer
@@ -320,6 +321,7 @@ jobs:
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
       artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
       artifact-name: ${{ steps.names.outputs.transfer_artifact }}
+      run-attempt: ${{ steps.names.outputs.run_attempt }}
       archive-sha256: ${{ steps.observe.outputs.archive_sha256 }}
       release-manifest-sha256: ${{ steps.observe.outputs.release_manifest_sha256 }}
       install-manifest-sha256: ${{ steps.observe.outputs.install_manifest_sha256 }}
@@ -335,12 +337,15 @@ jobs:
         run: |
           uname -a
           podman version
+      # The transfer artifact keeps the attempt in its name because it is
+      # immutable.  A consumer rerun alone after a partial rerun still reaches
+      # the producer's attempt through the artifact-name and run-attempt outputs.
       - name: Name this run's retry-safe transfer artifact
         id: names
-        run: >-
-          printf 'transfer_artifact=desktop-archive-transfer-%s-%s-%s\n'
-          "${{ needs.source-identity.outputs.checked-out-commit }}"
-          "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          printf 'transfer_artifact=desktop-archive-transfer-%s-%s-%s\n' "${{ needs.source-identity.outputs.checked-out-commit }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Build the archive twice in the pinned Fedora environment
         env:
           TONGS_HEAD_SHA: ${{ needs.source-identity.outputs.checked-out-commit }}
@@ -471,6 +476,7 @@ jobs:
           --repository "$GITHUB_REPOSITORY"
           --run-id "$GITHUB_RUN_ID"
           --attempt "$GITHUB_RUN_ATTEMPT"
+          --transfer-attempt "${{ needs.archive.outputs.run-attempt }}"
           --environment "$PRODUCTION_ENVIRONMENT"
           --provenance "$PRODUCTION_PROVENANCE"
           --check-id "$CHECK_ID"
@@ -479,11 +485,11 @@ jobs:
         with:
           name: >-
             gate-desktop-archive-lifecycle-${{
-            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}-${{
-            github.run_attempt }}
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}
           path: ${{ runner.temp }}/gate/desktop-archive-lifecycle
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   installed-core:
     name: Same-source noneditable installed core
@@ -626,11 +632,11 @@ jobs:
         with:
           name: >-
             gate-desktop-installed-core-${{
-            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}-${{
-            github.run_attempt }}
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}
           path: ${{ runner.temp }}/gate/desktop-installed-core
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   archive-sbom:
     name: Archive SBOM receipt
@@ -670,8 +676,7 @@ jobs:
         with:
           name: >-
             gate-desktop-archive-lifecycle-${{
-            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}-${{
-            github.run_attempt }}
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}
           path: ${{ runner.temp }}/archive-gate
       - name: Generate, reproduce and receipt the archive SBOM
         run: >-
@@ -690,6 +695,7 @@ jobs:
           --repository "$GITHUB_REPOSITORY"
           --run-id "$GITHUB_RUN_ID"
           --attempt "$GITHUB_RUN_ATTEMPT"
+          --transfer-attempt "${{ needs.archive.outputs.run-attempt }}"
           --environment "$PRODUCTION_ENVIRONMENT"
           --provenance "$PRODUCTION_PROVENANCE"
           --check-id "$CHECK_ID"
@@ -697,11 +703,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: >-
-            gate-desktop-archive-sbom-${{ needs.source-identity.outputs.checked-out-commit
-            }}-${{ github.run_id }}-${{ github.run_attempt }}
+            gate-desktop-archive-sbom-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}
           path: ${{ runner.temp }}/gate/desktop-archive-sbom
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   rpm-lifecycle:
     name: Fresh archive to RPM payload contract and full lifecycle
@@ -985,11 +992,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: >-
-            gate-desktop-rpm-lifecycle-${{ needs.source-identity.outputs.checked-out-commit
-            }}-${{ github.run_id }}-${{ github.run_attempt }}
+            gate-desktop-rpm-lifecycle-${{
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}
           path: ${{ runner.temp }}/gate/desktop-rpm-lifecycle
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
       - name: Upload the complete RPM producer output for diagnosis
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1093,11 +1101,11 @@ jobs:
         with:
           name: >-
             gate-desktop-native-payload-fixture-${{
-            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}-${{
-            github.run_attempt }}
+            needs.source-identity.outputs.checked-out-commit }}-${{ github.run_id }}
           path: ${{ runner.temp }}/gate/desktop-native-payload-fixture
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   production-results:
     name: Publish production job results

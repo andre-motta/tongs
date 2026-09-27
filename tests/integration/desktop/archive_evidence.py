@@ -1056,7 +1056,7 @@ def _require_tool_identity(
             ROOT / RECEIPT_READER_PROGRAM, MAX_JSON_BYTES, "receipt reader"
         )
     )
-    contract = _directory_digest(ROOT / ARTIFACT_CONTRACT_PACKAGE)
+    contract = expected_tool_digests(ROOT)["artifact_contract_sha256"]
     if (
         adapter != expectations.adapter_program_sha256
         or validator != expectations.transfer_validator_program_sha256

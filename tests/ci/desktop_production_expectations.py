@@ -168,7 +168,7 @@ def _program_digest(source_root: Path, program: str) -> str:
 
 
 def artifact_contract_digest(source_root: Path) -> str:
-    """Recompute the artifact contract package digest the archive adapter uses."""
+    """Recompute the artifact contract package digest the archive adapter uses.\n\n    Call the adapter's own helper rather than reimplementing the algorithm, so\n    the two cannot drift apart silently.\n    """
 
     helper = getattr(archive_adapter(), "expected_tool_digests", None)
     if helper is None:

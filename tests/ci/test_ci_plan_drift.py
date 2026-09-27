@@ -13,6 +13,10 @@ inputs from their sources instead of restating them:
   collecting them in a subprocess;
 * the tongs modules the installed-core job's audited TUI launch loads, by
   starting the ``tongs`` console entry point headless in a subprocess;
+* the documentation the tests read, from the path literals in tests/, mapped
+  to the lane of the job that runs the reading test;
+* the files the Fedora Podman probe reads, from ``probe.py`` itself;
+* the Python files the lint job checks, from its ``ruff check`` command;
 * every tracked file, which must match an explicit rule unless it is on the
   allowlist below with a reason.
 
@@ -24,6 +28,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -35,12 +40,14 @@ import pytest
 import yaml
 
 from tests.ci.ci_plan import LANE_PRODUCTION_JOBS, RULES, classify_paths
+from tests.ci.test_lane_test_ownership import job_lane, pre_merge_owners
 from tests.ci.test_production_entry_points import ENTRY_POINTS
 
 ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE_PRODUCER = ROOT / "scripts/build_desktop_archive.py"
 PRODUCTION_WORKFLOW = ROOT / ".github/workflows/desktop-production.yml"
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+FEDORA_PROBE = ROOT / "tests/containers/probe.py"
 PRODUCTION_PREFIX = "desktop-production.yml:"
 #: The job runs ``pip install ./examples/desktop-plugin``, so collection of
 #: its tests needs the example package importable.
@@ -55,6 +62,15 @@ SYNTHETIC_CHILD = "ci-plan-drift-synthetic-child.txt"
 #: Tracked paths deliberately left to the unmatched full-graph fallback,
 #: mapped to the reason.  Every entry must be tracked and actually unmatched.
 UNMATCHED_ALLOWLIST: dict[str, str] = {}
+
+#: Archive source inputs that select the archive lane without the packaging
+#: lane (the RPM lifecycle), each with the ruling that allows it.
+ARCHIVE_ONLY_SOURCE_INPUTS: dict[str, str] = {
+    "desktop/src": (
+        "CTO decision 9, 2026-09-27: renderer and main source run the archive "
+        "and SBOM jobs, not the RPM lifecycle or Podman"
+    ),
+}
 
 ARCHIVE_JOBS = frozenset(
     PRODUCTION_PREFIX + job for job in LANE_PRODUCTION_JOBS["archive"]
@@ -155,16 +171,33 @@ def _source_inputs() -> list[str]:
     return [Path(entry).as_posix() for entry in producer._SOURCE_INPUTS]
 
 
-@pytest.mark.needs_git
-def test_every_archive_source_input_selects_packaging() -> None:
-    inputs = _source_inputs()
-    assert "src/tongs/__init__.py" in inputs
+def _source_input_paths(entries: list[str]) -> dict[str, str]:
     paths: dict[str, str] = {}
-    for entry in inputs:
+    for entry in entries:
         expanded = _expand(entry)
         assert expanded, f"_SOURCE_INPUTS names {entry}, which is not tracked"
         paths.update(dict.fromkeys(expanded, f"_SOURCE_INPUTS {entry}"))
-    assert _offenders(paths, "packaging") == []
+    return paths
+
+
+@pytest.mark.needs_git
+def test_every_archive_source_input_selects_archive() -> None:
+    inputs = _source_inputs()
+    assert "src/tongs/__init__.py" in inputs
+    assert _offenders(_source_input_paths(inputs), "archive") == []
+
+
+@pytest.mark.needs_git
+def test_every_archive_source_input_selects_packaging_unless_ruled() -> None:
+    inputs = _source_inputs()
+    for entry, ruling in ARCHIVE_ONLY_SOURCE_INPUTS.items():
+        assert ruling, entry
+        assert entry in inputs, f"{entry} is no longer an archive source input"
+        exempt = _source_input_paths([entry])
+        assert _offenders(exempt, "archive") == []
+        assert _offenders(exempt, "desktop") == []
+    ruled = [entry for entry in inputs if entry not in ARCHIVE_ONLY_SOURCE_INPUTS]
+    assert _offenders(_source_input_paths(ruled), "packaging") == []
 
 
 # (2) The programs the production jobs run, and what they read.
@@ -574,7 +607,150 @@ def test_every_shared_module_the_installed_core_startup_loads_selects_desktop() 
     assert _offenders(paths, "desktop") == []
 
 
-# (3) Every tracked path matches an explicit rule.
+# (3) Documentation the tests read, and what the Fedora probe and lint read.
+
+#: Where the documentation that tests read lives.  A string literal in a test
+#: that names a tracked file under one of these roots is a documentation read.
+DOCUMENTATION_ROOTS = ("docs/", ".agents/")
+#: Files whose literals are classifier samples or the rule table itself, not
+#: reads: ci_plan.py holds the patterns, and the two classifier suites feed
+#: sample paths to it.
+CLASSIFIER_SAMPLE_FILES = frozenset(
+    {
+        "tests/ci/ci_plan.py",
+        "tests/ci/test_ci_plan.py",
+        "tests/ci/test_ci_plan_drift.py",
+    }
+)
+#: The rules that exist only to route documentation to its readers' lanes.
+DOCUMENTATION_READ_RULES = (
+    "docs-read-by-lint-tests",
+    "docs-read-by-core-tests",
+    "docs-read-by-desktop-tests",
+)
+_JS_STRING = re.compile(r"""(["'`])((?:docs|\.agents)/[^"'`$\s]+)\1""")
+
+
+def _python_literals(text: str) -> set[str]:
+    return {
+        node.value
+        for node in ast.walk(ast.parse(text))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+def _documentation_reads(path: str) -> set[str]:
+    """Tracked documentation files a test file names in a string literal."""
+
+    text = (ROOT / path).read_text(encoding="utf-8")
+    if path.endswith(".py"):
+        literals = _python_literals(text)
+    else:
+        literals = {match.group(2) for match in _JS_STRING.finditer(text)}
+    return {
+        literal
+        for literal in literals
+        if literal.startswith(DOCUMENTATION_ROOTS) and literal in TRACKED
+    }
+
+
+def _tracked_test_sources() -> list[str]:
+    return sorted(
+        path
+        for path in TRACKED
+        if path.startswith(("tests/", "examples/"))
+        and path.endswith((".py", ".mjs"))
+        and path not in CLASSIFIER_SAMPLE_FILES
+    )
+
+
+@pytest.mark.needs_git
+def test_every_document_a_test_reads_selects_the_lane_of_its_reader() -> None:
+    """A documentation edit must run the tests that read that document.
+
+    The reader's lane comes from the job that runs it before merge.  A support
+    module with no owner of its own (a helper a test imports) maps through the
+    tests that live beside it.
+    """
+
+    owners = pre_merge_owners()
+    reads: dict[str, set[str]] = {}
+    for source in _tracked_test_sources():
+        for document in _documentation_reads(source):
+            owner = owners.get(source)
+            if owner is None:
+                siblings = {
+                    label
+                    for path, label in owners.items()
+                    if Path(path).parent == Path(source).parent
+                }
+                assert len(siblings) == 1, f"{source} reads {document}, owner unknown"
+                (owner,) = siblings
+            reads.setdefault(document, set()).add(job_lane(owner))
+    # The known readers, so a broken derivation cannot pass by finding nothing.
+    assert reads.get("docs/desktop/troubleshooting.md") == {"core"}
+    assert reads.get("docs/reference/keybindings.md") == {"desktop"}
+    assert reads.get("docs/releases/v1.0.0.md") == {"lint"}
+    offenders = [
+        f"{document} (read in {sorted(lanes)}) -> {sorted(classify_paths([document])[0])}"
+        for document, lanes in sorted(reads.items())
+        if not lanes <= classify_paths([document])[0]
+    ]
+    assert offenders == []
+    # Every routing entry is still read by a test, so the rules cannot go
+    # stale and keep selecting lanes for a document nobody reads.
+    routed = {
+        pattern
+        for rule in RULES
+        if rule.name in DOCUMENTATION_READ_RULES
+        for pattern in rule.patterns
+    }
+    assert routed == set(reads)
+    for rule in RULES:
+        if rule.name in DOCUMENTATION_READ_RULES:
+            lanes = {lane for document in rule.patterns for lane in reads[document]}
+            assert rule.lanes == {"docs"} | lanes, rule.name
+
+
+def _load_fedora_probe() -> ModuleType:
+    return _load_by_path("ci_plan_drift_fedora_probe", FEDORA_PROBE)
+
+
+def test_the_fedora_probe_inputs_rule_is_what_the_probe_reads() -> None:
+    """The probe builds the example plugin wheel and runs SMOKE_TESTS from the
+    source copy, so exactly those paths select it outside the full graph."""
+
+    probe = _load_fedora_probe()
+    expected = {f"{probe.EXAMPLE_PLUGIN.as_posix()}/**", *probe.SMOKE_TESTS}
+    (rule,) = [rule for rule in RULES if rule.name == "fedora-probe-inputs"]
+    assert set(rule.patterns) == expected
+    assert len(rule.patterns) == len(expected)
+    for path in probe.SMOKE_TESTS:
+        assert _selects(path, "fedora_podman"), path
+
+
+def _ruff_check_paths() -> list[str]:
+    lint = yaml.safe_load(CI_WORKFLOW.read_text())["jobs"]["lint-and-format"]
+    for step in lint["steps"]:
+        words = (step.get("run") or "").split()
+        if words[:2] == ["ruff", "check"]:
+            return [word.rstrip("/") for word in words[2:] if not word.startswith("-")]
+    raise AssertionError("the lint job runs no ruff check")
+
+
+@pytest.mark.needs_git
+def test_every_python_file_the_lint_job_checks_selects_lint() -> None:
+    roots = _ruff_check_paths()
+    assert "src" in roots and "tests" in roots
+    paths = {
+        path: "ruff check"
+        for path in TRACKED
+        if path.endswith(".py") and any(path.startswith(root + "/") for root in roots)
+    }
+    assert _offenders(paths, "lint") == []
+
+
+# (4) Every tracked path matches an explicit rule.
 
 
 @pytest.mark.needs_git

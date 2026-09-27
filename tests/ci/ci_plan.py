@@ -203,22 +203,45 @@ RULES: tuple[Rule, ...] = (
     ),
     # The wheel's readme, so the core lane builds it as well as the docs lane.
     Rule(name="readme", patterns=("README.md",), lanes=frozenset({"docs", "core"})),
-    # Files that the tests/ci suites read (the generated lane tables and the
-    # pinned markdown linter).  Those suites run in the lint job, so editing
-    # them runs lint as well as the docs lane.
+    # Documentation that tests read, each selecting the lane whose job runs the
+    # reading test.  test_ci_plan_drift.py derives these paths from the string
+    # literals in tests/ and fails when a rule here is missing or stale.  The
+    # tests/ci suites run in the lint job.
     Rule(
-        name="ci-read-docs",
+        name="docs-read-by-lint-tests",
         patterns=(
             ".agents/ci/README.md",
             ".agents/testing/README.md",
-            ".github/linters/**",
+            "docs/releases/v1.0.0.md",
         ),
         lanes=frozenset({"docs", "lint"}),
     ),
-    # Terminal modules.  The sidecar never imports them.  By CTO decision they
-    # run lint and core only: the desktop installed-core job also launches the
-    # installed TUI, so a TUI change that breaks that launch surfaces on the
-    # full-graph push to main (or before merge with the ci:full label).
+    Rule(
+        name="docs-read-by-core-tests",
+        patterns=("docs/desktop/troubleshooting.md",),
+        lanes=frozenset({"docs", "core"}),
+    ),
+    Rule(
+        name="docs-read-by-desktop-tests",
+        patterns=(
+            "docs/desktop/reviewing.md",
+            "docs/desktop/workspace.md",
+            "docs/reference/keybindings.md",
+        ),
+        lanes=frozenset({"docs", "desktop"}),
+    ),
+    # The pinned Markdown linter, whose pins tests/ci/test_docs_lane_contract.py
+    # reads in the lint job.
+    Rule(
+        name="markdown-linter",
+        patterns=(".github/linters/**",),
+        lanes=frozenset({"docs", "lint"}),
+    ),
+    # Terminal modules and the terminal plugin API.  The sidecar never imports
+    # them.  By CTO decision they run lint and core only: the desktop
+    # installed-core job also launches the installed TUI, so a TUI change that
+    # breaks that launch surfaces on the full-graph push to main (or before
+    # merge with the ci:full label).
     Rule(
         name="tui",
         patterns=(
@@ -229,11 +252,15 @@ RULES: tuple[Rule, ...] = (
             "src/tongs/commands.py",
             "src/tongs/helpers.py",
             "src/tongs/__main__.py",
+            "src/tongs/plugins/base.py",
+            "src/tongs/plugins/context.py",
+            "src/tongs/plugins/registry.py",
         ),
         lanes=frozenset({"lint", "core"}),
     ),
-    # The suites only the core lane runs.  None of them is imported by a
-    # desktop job's tests, which test_ci_plan_drift.py keeps honest.
+    # The suites only the core job runs, and the helpers only they import.
+    # test_lane_test_ownership.py proves the core job runs exactly these test
+    # files and test_ci_plan_drift.py that no desktop suite imports them.
     Rule(
         name="core-tests",
         patterns=(
@@ -246,14 +273,50 @@ RULES: tuple[Rule, ...] = (
             "tests/test_scanner/**",
             "tests/test_views/**",
             "tests/test_widgets/**",
+            "tests/services/**",
+            "tests/state/**",
+            "tests/plugins/**",
+            "tests/desktop/test_*.py",
+            "tests/desktop/artifact_contract/**",
+            "tests/desktop/installer/*.py",
+            "tests/desktop/protocol/**",
+            "tests/integration/__init__.py",
+            "tests/integration/desktop/__init__.py",
+            "tests/integration/desktop/draft_acceptance_sidecar.py",
+            "tests/integration/desktop/test_draft_process_acceptance.py",
         ),
         lanes=frozenset({"lint", "core"}),
     ),
+    # Suites and fixtures the desktop production jobs run: the TAP job's
+    # Electron and renderer files, the native payload fixtures, and the
+    # contract-test job (native-payload) that owns tests/integration and
+    # tests/packaging.
+    Rule(
+        name="desktop-tests",
+        patterns=(
+            "tests/desktop/electron/**",
+            "tests/desktop/renderer/**",
+            "tests/desktop/native/**",
+            "tests/integration/**",
+            "tests/packaging/**",
+        ),
+        lanes=frozenset({"lint", "desktop"}),
+    ),
+    # Fixtures that both a core suite and a desktop suite read.
+    Rule(
+        name="shared-test-fixtures",
+        patterns=(
+            "tests/__init__.py",
+            "tests/fixtures/**",
+            "tests/desktop/fixtures/**",
+            "tests/desktop/artifact_contract/__init__.py",
+            "tests/desktop/artifact_contract/reference_builder.py",
+        ),
+        lanes=frozenset({"lint", "core", "desktop"}),
+    ),
     # Everything the desktop sidecar reaches, including forge clients it loads
-    # at run time, plus the suites and fixtures the desktop jobs run.  The
-    # ``tui_services`` adapter is here because the desktop TAP job's draft
-    # acceptance test imports it.  None of this is read by the archive, SBOM
-    # or RPM jobs except through the packaging rule below.
+    # at run time.  The ``tui_services`` adapter is here because the core draft
+    # acceptance test and the installed-core launch both load it.
     Rule(
         name="sidecar",
         patterns=(
@@ -263,21 +326,67 @@ RULES: tuple[Rule, ...] = (
             "src/tongs/diff/**",
             "src/tongs/errors.py",
             "src/tongs/forges/**",
-            "src/tongs/plugins/**",
+            "src/tongs/plugins/__init__.py",
+            "src/tongs/plugins/desktop.py",
+            "src/tongs/plugins/desktop_registry.py",
+            "src/tongs/plugins/desktop_resources.py",
             "src/tongs/scanner/**",
             "src/tongs/services/**",
             "src/tongs/state/**",
             "src/tongs/tui_services.py",
-            "tests/__init__.py",
-            "tests/desktop/**",
-            "tests/fixtures/**",
-            "tests/integration/**",
-            "tests/plugins/**",
-            "tests/services/**",
-            "tests/state/**",
-            "examples/desktop-plugin/**",
         ),
         lanes=frozenset({"lint", "core", "desktop"}),
+    ),
+    # The example desktop plugin: the desktop TAP job installs it and runs its
+    # tests.
+    Rule(
+        name="example-plugin",
+        patterns=("examples/desktop-plugin/**",),
+        lanes=frozenset({"desktop"}),
+    ),
+    # What the Fedora Podman probe reads beyond the full-graph roots: it builds
+    # the example plugin wheel and runs the installed-wheel smoke subset named
+    # by SMOKE_TESTS in tests/containers/probe.py.  test_ci_plan_drift.py keeps
+    # this list equal to the probe's own constants.
+    Rule(
+        name="fedora-probe-inputs",
+        patterns=(
+            "examples/desktop-plugin/**",
+            "tests/test_plugins/test_plugin_system.py",
+            "tests/plugins/test_desktop_discovery.py",
+            "tests/plugins/test_desktop_resources.py",
+            "tests/desktop/artifact_contract/test_schemas.py",
+            "tests/desktop/test_assets.py",
+            "tests/desktop/test_sidecar.py",
+            "tests/test_mcp/test_server.py",
+            "tests/test_config.py",
+            "tests/desktop/installer/test_launcher.py",
+            "tests/test_tui_mr_services.py",
+            "tests/test_tui_review_mode.py",
+            "tests/test_tui_session.py",
+            "tests/test_views/test_forge_text_literal.py",
+            "tests/test_views/test_pipeline_log_search.py",
+            "tests/test_views/test_repo_list_search.py",
+            "tests/test_widgets/test_diff_panel.py",
+            "tests/test_widgets/test_mr_table.py",
+            "tests/test_widgets/test_pipeline_panel.py",
+            "tests/test_widgets/test_split_diff.py",
+        ),
+        lanes=frozenset({"fedora_podman"}),
+    ),
+    # Electron main and renderer source (CTO decision 9): the desktop jobs plus
+    # the archive and SBOM jobs, without the RPM lifecycle or the Podman probe.
+    # Every other archive source input keeps the packaging lane.
+    Rule(
+        name="desktop-source",
+        patterns=("desktop/src/**",),
+        lanes=frozenset({"lint", "core", "desktop", "archive"}),
+    ),
+    # The SPDX schema the archive-sbom job validates against.
+    Rule(
+        name="sbom-schema",
+        patterns=("tests/packaging/desktop/sbom/schema/**",),
+        lanes=frozenset({"archive"}),
     ),
     # The archive producer's _SOURCE_INPUTS outside the full-graph roots, the
     # programs the archive, archive-evidence, archive-sbom and rpm-lifecycle
@@ -297,7 +406,6 @@ RULES: tuple[Rule, ...] = (
             "tests/integration/desktop/rpm_payload_contract.py",
             "tests/integration/desktop/sbom_evidence.py",
             "tests/desktop/installer/fixtures/**",
-            "tests/packaging/**",
         ),
         lanes=frozenset({"lint", "core", "desktop", "packaging"}),
     ),
@@ -318,16 +426,23 @@ RULES: tuple[Rule, ...] = (
         ),
         full=True,
     ),
-    # Build and packaging inputs.  These are the only paths, with the CI
-    # infrastructure above, that select the Fedora Podman probe.  Hatchling
-    # reads .gitignore to choose the files a wheel or sdist ships.
+    # Build and packaging inputs.  These, with the CI infrastructure above, are
+    # the full-graph roots.  The desktop manifests, lock, build script, config
+    # and assets are archive source inputs that also feed the RPM lifecycle;
+    # desktop/src has its own rule above.  Hatchling reads .gitignore to choose
+    # the files a wheel or sdist ships.
     Rule(
         name="build-configuration",
         patterns=(
             "pyproject.toml",
             "requirements/**",
             "packaging/**",
-            "desktop/**",
+            "desktop/assets/**",
+            "desktop/scripts/**",
+            "desktop/package.json",
+            "desktop/package-lock.json",
+            "desktop/tsconfig.json",
+            "desktop/.gitignore",
             ".gitignore",
         ),
         full=True,

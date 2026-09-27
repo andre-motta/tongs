@@ -54,9 +54,17 @@ ZERO = "0" * 40
 DOCS = frozenset({"docs"})
 TUI = frozenset({"lint", "core"})
 LINT_READ_DOCS = frozenset({"docs", "lint"})
+CORE_READ_DOCS = frozenset({"docs", "core"})
+DESKTOP_READ_DOCS = frozenset({"docs", "desktop"})
 CORE_TESTS = frozenset({"lint", "core"})
+PROBE = frozenset({"fedora_podman"})
 README = frozenset({"docs", "core"})
+DESKTOP_TESTS = frozenset({"lint", "desktop"})
+SHARED = frozenset({"lint", "core", "desktop"})
 SIDECAR = frozenset({"lint", "core", "desktop"})
+EXAMPLE = frozenset({"desktop", "fedora_podman"})
+DESKTOP_SOURCE = frozenset({"lint", "core", "desktop", "archive"})
+SBOM_SCHEMA = DESKTOP_TESTS | {"archive"}
 PACKAGING = SIDECAR | {"archive", "packaging"}
 RELEASE_EVIDENCE = frozenset({"lint", "core"})
 
@@ -72,7 +80,7 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("site/package.json", DOCS),
     ("site/src/content/docs", DOCS),
     ("site/public/CNAME", DOCS),
-    (".agents/testing/README.md", LINT_READ_DOCS),
+    (".agents/tui/README.md", DOCS),
     ("CONTRIBUTING.md", DOCS),
     ("AGENTS.md", DOCS),
     ("SECURITY.md", DOCS),
@@ -82,30 +90,87 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     (".github/PULL_REQUEST_TEMPLATE/feature.md", DOCS),
     (".github/FUNDING.yml", DOCS),
     (".github/linters/.markdownlint-cli2.yaml", LINT_READ_DOCS),
+    (".github/linters/package-lock.json", LINT_READ_DOCS),
+    # The lane guides embed the generated table, which a lint-job test reads
+    (".agents/ci/README.md", LINT_READ_DOCS),
     # README
     ("README.md", README),
+    # DOCUMENTATION READ BY TESTS, per the reading test's lane
+    (".agents/testing/README.md", LINT_READ_DOCS),
+    ("docs/releases/v1.0.0.md", LINT_READ_DOCS),
+    ("docs/releases/v1.0.3.md", DOCS),
+    ("docs/desktop/troubleshooting.md", CORE_READ_DOCS),
+    ("docs/desktop/reviewing.md", DESKTOP_READ_DOCS),
+    ("docs/desktop/workspace.md", DESKTOP_READ_DOCS),
+    ("docs/reference/keybindings.md", DESKTOP_READ_DOCS),
     # TUI
     ("src/tongs/views/inbox.py", TUI),
-    (".agents/ci/README.md", LINT_READ_DOCS),
-    (".agents/testing/README.md", LINT_READ_DOCS),
-    (".github/linters/package-lock.json", LINT_READ_DOCS),
     ("src/tongs/widgets/diff_panel.py", TUI),
     ("src/tongs/mcp/server.py", TUI),
     ("src/tongs/app.py", TUI),
     ("src/tongs/commands.py", TUI),
     ("src/tongs/helpers.py", TUI),
     ("src/tongs/__main__.py", TUI),
+    ("src/tongs/plugins/base.py", TUI),
+    ("src/tongs/plugins/context.py", TUI),
+    ("src/tongs/plugins/registry.py", TUI),
     # CORE TESTS
-    ("tests/test_config.py", CORE_TESTS),
-    ("tests/test_tui_session.py", CORE_TESTS),
+    ("tests/test_commands.py", CORE_TESTS),
     ("tests/test_cache/test_store.py", CORE_TESTS),
     ("tests/test_diff/test_parser.py", CORE_TESTS),
     ("tests/test_forges/test_github.py", CORE_TESTS),
-    ("tests/test_mcp/test_server.py", CORE_TESTS),
-    ("tests/test_plugins/test_registry.py", CORE_TESTS),
+    ("tests/test_mcp/__init__.py", CORE_TESTS),
+    ("tests/test_plugins/__init__.py", CORE_TESTS),
     ("tests/test_scanner/test_remote.py", CORE_TESTS),
-    ("tests/test_views/test_inbox.py", CORE_TESTS),
-    ("tests/test_widgets/test_mr_table.py", CORE_TESTS),
+    ("tests/test_views/test_helpers.py", CORE_TESTS),
+    ("tests/test_widgets/test_discussion_list.py", CORE_TESTS),
+    ("tests/services/test_session.py", CORE_TESTS),
+    ("tests/state/drafts/test_store.py", CORE_TESTS),
+    ("tests/plugins/conftest.py", CORE_TESTS),
+    ("tests/desktop/test_editor_exports.py", CORE_TESTS),
+    ("tests/desktop/artifact_contract/fixtures/SHA256SUMS", CORE_TESTS),
+    ("tests/desktop/installer/helpers.py", CORE_TESTS),
+    ("tests/desktop/protocol/test_server.py", CORE_TESTS),
+    ("tests/integration/desktop/draft_acceptance_sidecar.py", SHARED),
+    ("tests/integration/desktop/test_draft_process_acceptance.py", SHARED),
+    ("tests/integration/__init__.py", SHARED),
+    ("tests/integration/desktop/__init__.py", SHARED),
+    # FEDORA PROBE SMOKE SUBSET (core tests the probe also runs installed)
+    ("tests/test_config.py", CORE_TESTS | PROBE),
+    ("tests/test_tui_session.py", CORE_TESTS | PROBE),
+    ("tests/test_tui_mr_services.py", CORE_TESTS | PROBE),
+    ("tests/test_tui_review_mode.py", CORE_TESTS | PROBE),
+    ("tests/test_mcp/test_server.py", CORE_TESTS | PROBE),
+    ("tests/test_plugins/test_plugin_system.py", CORE_TESTS | PROBE),
+    ("tests/plugins/test_desktop_discovery.py", CORE_TESTS | PROBE),
+    ("tests/plugins/test_desktop_resources.py", CORE_TESTS | PROBE),
+    ("tests/desktop/artifact_contract/test_schemas.py", CORE_TESTS | PROBE),
+    ("tests/desktop/test_assets.py", CORE_TESTS | PROBE),
+    ("tests/desktop/test_sidecar.py", CORE_TESTS | PROBE),
+    ("tests/desktop/installer/test_launcher.py", CORE_TESTS | PROBE),
+    ("tests/test_views/test_forge_text_literal.py", CORE_TESTS | PROBE),
+    ("tests/test_views/test_pipeline_log_search.py", CORE_TESTS | PROBE),
+    ("tests/test_views/test_repo_list_search.py", CORE_TESTS | PROBE),
+    ("tests/test_widgets/test_diff_panel.py", CORE_TESTS | PROBE),
+    ("tests/test_widgets/test_mr_table.py", CORE_TESTS | PROBE),
+    ("tests/test_widgets/test_pipeline_panel.py", CORE_TESTS | PROBE),
+    ("tests/test_widgets/test_split_diff.py", CORE_TESTS | PROBE),
+    # DESKTOP TESTS
+    ("tests/desktop/electron/app.test.mjs", DESKTOP_TESTS),
+    ("tests/desktop/renderer/setup.mjs", DESKTOP_TESTS),
+    ("tests/desktop/native/native_payload_launcher.py", DESKTOP_TESTS),
+    ("tests/integration/desktop/installed_core_composition.py", DESKTOP_TESTS),
+    (
+        "tests/integration/desktop/fixtures/desktop_test_reports_pytest_pass.xml",
+        DESKTOP_TESTS,
+    ),
+    ("tests/packaging/rpm/desktop/test_spec.py", DESKTOP_TESTS),
+    # SHARED TEST FIXTURES
+    ("tests/__init__.py", SHARED),
+    ("tests/fixtures/builder_mr_3113.diff", SHARED),
+    ("tests/desktop/fixtures/diff-shapes.json", SHARED),
+    ("tests/desktop/artifact_contract/__init__.py", SHARED),
+    ("tests/desktop/artifact_contract/reference_builder.py", SHARED),
     # SIDECAR
     ("src/tongs/cache/store.py", SIDECAR),
     ("src/tongs/config.py", SIDECAR),
@@ -114,20 +179,20 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("src/tongs/diff/parser.py", SIDECAR),
     ("src/tongs/errors.py", SIDECAR),
     ("src/tongs/forges/github.py", SIDECAR),
+    ("src/tongs/plugins/__init__.py", SIDECAR),
     ("src/tongs/plugins/desktop.py", SIDECAR),
+    ("src/tongs/plugins/desktop_registry.py", SIDECAR),
+    ("src/tongs/plugins/desktop_resources.py", SIDECAR),
     ("src/tongs/scanner/discovery.py", SIDECAR),
     ("src/tongs/services/session.py", SIDECAR),
     ("src/tongs/state/drafts/store.py", SIDECAR),
     ("src/tongs/tui_services.py", SIDECAR),
-    ("tests/__init__.py", SIDECAR),
-    ("tests/desktop/test_sidecar.py", SIDECAR),
-    ("tests/desktop/electron/app.test.mjs", SIDECAR),
-    ("tests/fixtures/builder_mr_3113.diff", SIDECAR),
-    ("tests/integration/desktop/installed_core_composition.py", SIDECAR),
-    ("tests/plugins/conftest.py", SIDECAR),
-    ("tests/services/test_session.py", SIDECAR),
-    ("tests/state/test_drafts.py", SIDECAR),
-    ("examples/desktop-plugin/pyproject.toml", SIDECAR),
+    # EXAMPLE PLUGIN (desktop TAP job and the Fedora probe's wheel build)
+    ("examples/desktop-plugin/pyproject.toml", EXAMPLE),
+    ("examples/desktop-plugin/tests/test_dashboard_module.mjs", EXAMPLE),
+    # DESKTOP SOURCE (CTO decision 9)
+    ("desktop/src/main/index.ts", DESKTOP_SOURCE),
+    ("desktop/src/renderer/app.tsx", DESKTOP_SOURCE),
     # PACKAGING
     ("LICENSE", PACKAGING),
     ("scripts/build_desktop_archive.py", PACKAGING),
@@ -140,7 +205,8 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("tests/integration/desktop/rpm_payload_contract.py", PACKAGING),
     ("tests/integration/desktop/sbom_evidence.py", PACKAGING),
     ("tests/desktop/installer/fixtures/wheel.json", PACKAGING),
-    ("tests/packaging/desktop/sbom/schema/spdx-2.3.schema.json", PACKAGING),
+    # SBOM SCHEMA
+    ("tests/packaging/desktop/sbom/schema/spdx-2.3.schema.json", SBOM_SCHEMA),
     # RELEASE EVIDENCE
     ("scripts/release-evidence/native/ci-proof.mjs", RELEASE_EVIDENCE),
     # FULL rules
@@ -154,11 +220,18 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("requirements/installer-verifier.lock", None),
     ("packaging/rpm/tongs.spec", None),
     ("desktop/package.json", None),
+    ("desktop/package-lock.json", None),
+    ("desktop/tsconfig.json", None),
+    ("desktop/scripts/build.mjs", None),
+    ("desktop/assets/icon.png", None),
+    ("desktop/.gitignore", None),
     (".gitignore", None),
     # Unmatched, therefore full
     ("src/tongs/new_module.py", None),
     ("scripts/new_tool.py", None),
     ("examples/other-plugin/setup.py", None),
+    ("desktop/other/x.ts", None),
+    ("desktop/README.md", None),
     (".github/CODEOWNERS", None),
     ("tests/conftest.py", None),
     ("tests/test_new/test_x.py", None),
@@ -220,8 +293,10 @@ def test_matching_rules_add_their_lanes_together() -> None:
     assert not full and lanes == README
     lanes, full, _ = classify_paths(["docs/index.md", "src/tongs/forges/github.py"])
     assert not full and lanes == DOCS | SIDECAR
-    lanes, full, _ = classify_paths(["src/tongs/views/x.py", "LICENSE"])
-    assert not full and lanes == TUI | PACKAGING
+    lanes, full, _ = classify_paths(["src/tongs/views/x.py", "desktop/src/a.ts"])
+    assert not full and lanes == TUI | DESKTOP_SOURCE
+    lanes, full, _ = classify_paths(["desktop/src/a.ts", "LICENSE"])
+    assert not full and lanes == DESKTOP_SOURCE | PACKAGING
     lanes, full, _ = classify_paths(["docs/index.md", "src/tongs/new_module.py"])
     assert full and lanes == ALL_LANES
 
@@ -233,7 +308,7 @@ PATH_CLASSES: list[tuple[str, frozenset[str] | None]] = [
     ("src/tongs/forges/x.py", SIDECAR),
     ("src/tongs/__init__.py", PACKAGING),
     ("pyproject.toml", None),
-    ("tests/fixtures/x", SIDECAR),
+    ("tests/fixtures/x", SHARED),
     ("tests/containers/x", None),
 ]
 
@@ -251,9 +326,20 @@ def test_each_path_class(path: str, expected: frozenset[str] | None) -> None:
     assert "fedora_podman" not in lanes
 
 
-def test_only_full_paths_select_the_fedora_podman_probe() -> None:
-    for rule in RULES:
-        assert rule.full or "fedora_podman" not in close_lanes(rule.lanes), rule.name
+def test_only_full_paths_and_the_probe_inputs_select_the_fedora_podman_probe() -> None:
+    """The probe runs for full-graph paths and for the files it reads that no
+    full rule covers (the example plugin and its smoke subset), which
+    test_ci_plan_drift.py derives from probe.py.  That rule selects nothing
+    else, so it can never pull a path into a wider plan than the probe."""
+
+    selecting = [
+        rule.name
+        for rule in RULES
+        if not rule.full and "fedora_podman" in close_lanes(rule.lanes)
+    ]
+    assert selecting == ["fedora-probe-inputs"]
+    probe = next(rule for rule in RULES if rule.name == "fedora-probe-inputs")
+    assert probe.lanes == {"fedora_podman"}
 
 
 def test_packaging_is_selected_only_by_the_packaging_rule_or_the_full_graph() -> None:
@@ -263,6 +349,20 @@ def test_packaging_is_selected_only_by_the_packaging_rule_or_the_full_graph() ->
         if not rule.full and "packaging" in close_lanes(rule.lanes)
     ]
     assert selecting == ["packaging"]
+
+
+def test_archive_without_packaging_comes_only_from_the_ruled_rules() -> None:
+    """Decision 9 lets desktop/src run the archive and SBOM jobs without the
+    RPM lifecycle; the SBOM schema is read by the archive-sbom job alone."""
+
+    selecting = [
+        rule.name
+        for rule in RULES
+        if not rule.full
+        and "archive" in close_lanes(rule.lanes)
+        and "packaging" not in close_lanes(rule.lanes)
+    ]
+    assert selecting == ["desktop-source", "sbom-schema"]
 
 
 def test_adding_paths_can_only_add_lanes() -> None:
@@ -732,6 +832,23 @@ def test_expected_results_for_partial_desktop_selection() -> None:
         LANE_PRODUCTION_JOBS["archive"] | LANE_PRODUCTION_JOBS["packaging"]
     )
     assert selected_checks(plan) == {"core-python-3.13"} | LANE_CHECKS["desktop"]
+
+
+def test_a_desktop_source_plan_runs_the_archive_jobs_but_not_the_rpm_lifecycle() -> (
+    None
+):
+    lanes, full, _ = classify_paths(["desktop/src/renderer/app.tsx"])
+    plan = _plan(*lanes)
+    assert not full
+    production = expected_production_results(plan)
+    assert production is not None
+    assert {job for job, allowed in production.items() if allowed == {"skipped"}} == (
+        LANE_PRODUCTION_JOBS["packaging"]
+    )
+    assert expected_ci_results(plan)["fedora-podman"] == {"skipped"}
+    assert selected_checks(plan) == (
+        {"core-python-3.13"} | LANE_CHECKS["desktop"] | LANE_CHECKS["archive"]
+    )
 
 
 def test_core_versions_follow_the_plan_fullness() -> None:

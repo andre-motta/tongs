@@ -1172,8 +1172,9 @@ def test_desktop_without_packaging_still_requires_every_desktop_job(
 def test_a_desktop_source_plan_requires_the_rpm_lifecycle_to_skip(
     evidence: Path,
 ) -> None:
-    """Decision 9: desktop/src runs the archive and SBOM jobs, never the RPM
-    lifecycle, so a run of it or a stray RPM receipt is drift."""
+    """Decisions 9 and 19: renderer, shared and stylesheet source run the
+    archive and SBOM jobs, never the RPM lifecycle, so a run of it or a stray
+    RPM receipt is drift."""
 
     _keep_only(evidence, DESKTOP_SOURCE)
     assert set(_gate(evidence, DESKTOP_SOURCE)) == CI_PLAN.selected_checks(

@@ -108,8 +108,9 @@ python tests/ci/ci_plan.py explain --base origin/main
 
 In outline, documentation selects `docs`, plus the lane of any test that reads
 the document; terminal modules and core-only suites select `lint` and `core`;
-the shared sidecar modules select `lint`, `core` and `desktop`; the Electron
-and renderer source under `desktop/src` adds `archive`; the archive and RPM
+the shared sidecar modules select `lint`, `core` and `desktop`; the renderer,
+shared and shell stylesheet source under `desktop/src` adds `archive`; the
+Electron main and preload source, the shell page and the other archive and RPM
 inputs select `packaging`; and the files the Fedora probe reads (the example
 plugin and its smoke subset) add `fedora_podman`. The CI infrastructure, the
 build configuration and any path no rule matches select the full graph.
@@ -126,11 +127,16 @@ and fails when a rule no longer covers it.
 | `archive` | the archive, archive evidence and archive SBOM jobs of `Desktop production evidence` (implies `desktop`) |
 | `packaging` | the RPM lifecycle job of `Desktop production evidence` (implies `archive`) |
 
-A change under `desktop/src` runs the archive and SBOM jobs but not the RPM
-lifecycle or the Podman probe; the desktop manifests, lock, build script,
-TypeScript configuration and assets are build configuration and run
-everything. Core always runs Python 3.12 and 3.13, and the aggregate requires
-both receipts whenever core is selected.
+A change under `desktop/src/renderer`, `desktop/src/shared` or to a stylesheet
+in `desktop/src/main/shell` runs the archive and SBOM jobs but not the RPM
+lifecycle or the Podman probe. Electron main and preload source and
+`desktop/src/main/shell/index.html` also run the RPM lifecycle, because only
+its launch of the packaged app catches a broken main process, preload bridge,
+CSP meta or script tag. Any other path under `desktop/src` runs the full
+graph. The desktop manifests, lock, build script, TypeScript configuration
+and assets are build configuration and run everything. Core always runs Python
+3.12 and 3.13, and the aggregate requires both receipts whenever core is
+selected.
 
 The plan fails closed. Any doubt selects the full graph and records why: an
 event other than `pull_request`, a checkout that is not the expected two-parent

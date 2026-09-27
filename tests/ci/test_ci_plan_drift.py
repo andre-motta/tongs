@@ -39,7 +39,12 @@ from types import ModuleType
 import pytest
 import yaml
 
-from tests.ci.ci_plan import LANE_PRODUCTION_JOBS, RULES, classify_paths
+from tests.ci.ci_plan import (
+    LANE_PRODUCTION_JOBS,
+    RULES,
+    classify_paths,
+    pattern_matches,
+)
 from tests.ci.test_lane_test_ownership import job_lane, pre_merge_owners
 from tests.ci.test_production_entry_points import ENTRY_POINTS
 
@@ -63,12 +68,23 @@ SYNTHETIC_CHILD = "ci-plan-drift-synthetic-child.txt"
 #: mapped to the reason.  Every entry must be tracked and actually unmatched.
 UNMATCHED_ALLOWLIST: dict[str, str] = {}
 
-#: Archive source inputs that select the archive lane without the packaging
-#: lane (the RPM lifecycle), each with the ruling that allows it.
-ARCHIVE_ONLY_SOURCE_INPUTS: dict[str, str] = {
-    "desktop/src": (
-        "CTO decision 9, 2026-09-27: renderer and main source run the archive "
-        "and SBOM jobs, not the RPM lifecycle or Podman"
+#: Archive source input paths, as rule patterns, that select the archive lane
+#: without the packaging lane (the RPM lifecycle), each with the ruling that
+#: allows it.  Every other archive source input path, including Electron main
+#: and preload source and the shell page, must select packaging.
+ARCHIVE_ONLY_SOURCE_PATTERNS: dict[str, str] = {
+    "desktop/src/renderer/**": (
+        "CTO decision 9, 2026-09-27: renderer source runs the archive and SBOM "
+        "jobs, not the RPM lifecycle or Podman"
+    ),
+    "desktop/src/shared/**": (
+        "CTO decision 9, 2026-09-27: shared bridge contracts run the archive and "
+        "SBOM jobs, not the RPM lifecycle or Podman"
+    ),
+    "desktop/src/main/shell/*.css": (
+        "CTO decision 19 as amended, 2026-09-27: the shell stylesheet runs the "
+        "archive and SBOM jobs; the shell page and all other main and preload "
+        "source run the RPM lifecycle"
     ),
 }
 
@@ -187,17 +203,33 @@ def test_every_archive_source_input_selects_archive() -> None:
     assert _offenders(_source_input_paths(inputs), "archive") == []
 
 
+def _archive_only(path: str) -> bool:
+    return any(
+        pattern_matches(pattern, path) for pattern in ARCHIVE_ONLY_SOURCE_PATTERNS
+    )
+
+
 @pytest.mark.needs_git
 def test_every_archive_source_input_selects_packaging_unless_ruled() -> None:
-    inputs = _source_inputs()
-    for entry, ruling in ARCHIVE_ONLY_SOURCE_INPUTS.items():
-        assert ruling, entry
-        assert entry in inputs, f"{entry} is no longer an archive source input"
-        exempt = _source_input_paths([entry])
-        assert _offenders(exempt, "archive") == []
-        assert _offenders(exempt, "desktop") == []
-    ruled = [entry for entry in inputs if entry not in ARCHIVE_ONLY_SOURCE_INPUTS]
-    assert _offenders(_source_input_paths(ruled), "packaging") == []
+    paths = _source_input_paths(_source_inputs())
+    exempt = {path: source for path, source in paths.items() if _archive_only(path)}
+    ruled = {path: source for path, source in paths.items() if path not in exempt}
+    for pattern, ruling in ARCHIVE_ONLY_SOURCE_PATTERNS.items():
+        assert ruling, pattern
+        assert any(pattern_matches(pattern, path) for path in exempt), (
+            f"{pattern} no longer names an archive source input"
+        )
+    assert _offenders(exempt, "archive") == []
+    assert _offenders(exempt, "desktop") == []
+    # The rulings reach no further than the paths they name: main and preload
+    # source and the shell page keep the RPM lifecycle.
+    for witness in (
+        "desktop/src/main/index.ts",
+        "desktop/src/main/shell/index.html",
+        "desktop/src/preload/index.cts",
+    ):
+        assert witness in ruled, witness
+    assert _offenders(ruled, "packaging") == []
 
 
 # (2) The programs the production jobs run, and what they read.

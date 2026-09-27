@@ -63,6 +63,7 @@ SHARED = frozenset({"lint", "core", "desktop"})
 SIDECAR = frozenset({"lint", "core", "desktop"})
 EXAMPLE = frozenset({"desktop", "fedora_podman"})
 DESKTOP_SOURCE = frozenset({"lint", "core", "desktop", "archive"})
+DESKTOP_MAIN = DESKTOP_SOURCE | {"packaging"}
 SBOM_SCHEMA = DESKTOP_TESTS | {"archive"}
 PACKAGING = SIDECAR | {"archive", "packaging"}
 RELEASE_EVIDENCE = frozenset({"lint", "core"})
@@ -189,9 +190,17 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     # EXAMPLE PLUGIN (desktop TAP job and the Fedora probe's wheel build)
     ("examples/desktop-plugin/pyproject.toml", EXAMPLE),
     ("examples/desktop-plugin/tests/test_dashboard_module.mjs", EXAMPLE),
-    # DESKTOP SOURCE (CTO decision 9)
-    ("desktop/src/main/index.ts", DESKTOP_SOURCE),
+    # DESKTOP SOURCE (CTO decisions 9 and 19)
     ("desktop/src/renderer/app.tsx", DESKTOP_SOURCE),
+    ("desktop/src/renderer/features/review/panel.tsx", DESKTOP_SOURCE),
+    ("desktop/src/shared/bridge.ts", DESKTOP_SOURCE),
+    ("desktop/src/main/shell/styles.css", DESKTOP_SOURCE),
+    # DESKTOP MAIN AND PRELOAD (CTO decision 19): the RPM lifecycle launches
+    # the packaged app
+    ("desktop/src/main/index.ts", DESKTOP_MAIN),
+    ("desktop/src/main/security.ts", DESKTOP_MAIN),
+    ("desktop/src/main/shell/index.html", DESKTOP_MAIN),
+    ("desktop/src/preload/index.cts", DESKTOP_MAIN),
     # PACKAGING
     ("LICENSE", PACKAGING),
     ("scripts/build_desktop_archive.py", PACKAGING),
@@ -230,6 +239,9 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("scripts/new_tool.py", None),
     ("examples/other-plugin/setup.py", None),
     ("desktop/other/x.ts", None),
+    ("desktop/src/new.ts", None),
+    ("desktop/src/main/new/x.ts", None),
+    ("desktop/src/main/shell/app.js", None),
     ("desktop/README.md", None),
     (".github/CODEOWNERS", None),
     ("tests/conftest.py", None),
@@ -292,10 +304,16 @@ def test_matching_rules_add_their_lanes_together() -> None:
     assert not full and lanes == README
     lanes, full, _ = classify_paths(["docs/index.md", "src/tongs/forges/github.py"])
     assert not full and lanes == DOCS | SIDECAR
-    lanes, full, _ = classify_paths(["src/tongs/views/x.py", "desktop/src/a.ts"])
+    lanes, full, _ = classify_paths(
+        ["src/tongs/views/x.py", "desktop/src/renderer/a.ts"]
+    )
     assert not full and lanes == TUI | DESKTOP_SOURCE
-    lanes, full, _ = classify_paths(["desktop/src/a.ts", "LICENSE"])
+    lanes, full, _ = classify_paths(["desktop/src/renderer/a.ts", "LICENSE"])
     assert not full and lanes == DESKTOP_SOURCE | PACKAGING
+    lanes, full, _ = classify_paths(
+        ["desktop/src/renderer/a.ts", "desktop/src/main/ipc.ts"]
+    )
+    assert not full and lanes == DESKTOP_MAIN
     lanes, full, _ = classify_paths(["docs/index.md", "src/tongs/new_module.py"])
     assert full and lanes == ALL_LANES
 
@@ -347,12 +365,13 @@ def test_packaging_is_selected_only_by_the_packaging_rule_or_the_full_graph() ->
         for rule in RULES
         if not rule.full and "packaging" in close_lanes(rule.lanes)
     ]
-    assert selecting == ["packaging"]
+    assert selecting == ["desktop-main", "packaging"]
 
 
 def test_archive_without_packaging_comes_only_from_the_ruled_rules() -> None:
-    """Decision 9 lets desktop/src run the archive and SBOM jobs without the
-    RPM lifecycle; the SBOM schema is read by the archive-sbom job alone."""
+    """Decisions 9 and 19 let renderer, shared and stylesheet source run the
+    archive and SBOM jobs without the RPM lifecycle; the SBOM schema is read by
+    the archive-sbom job alone."""
 
     selecting = [
         rule.name

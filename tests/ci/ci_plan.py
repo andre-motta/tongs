@@ -360,13 +360,31 @@ RULES: tuple[Rule, ...] = (
         ),
         lanes=frozenset({"fedora_podman"}),
     ),
-    # Electron main and renderer source (CTO decision 9): the desktop jobs plus
-    # the archive and SBOM jobs, without the RPM lifecycle or the Podman probe.
-    # Every other archive source input keeps the packaging lane.
+    # Renderer, shared and renderer stylesheet source (CTO decisions 9 and 19):
+    # the desktop jobs plus the archive and SBOM jobs, without the RPM
+    # lifecycle or the Podman probe.  Every other archive source input keeps
+    # the packaging lane, and a desktop/src path no rule names selects the full
+    # graph.
     Rule(
         name="desktop-source",
-        patterns=("desktop/src/**",),
+        patterns=(
+            "desktop/src/renderer/**",
+            "desktop/src/shared/**",
+            "desktop/src/main/shell/*.css",
+        ),
         lanes=frozenset({"lint", "core", "desktop", "archive"}),
+    ),
+    # Electron main and preload source and the shell page (CTO decision 19):
+    # the RPM lifecycle launches the packaged app, so a broken main process,
+    # preload bridge, CSP meta or script tag surfaces only there.
+    Rule(
+        name="desktop-main",
+        patterns=(
+            "desktop/src/main/*",
+            "desktop/src/main/shell/index.html",
+            "desktop/src/preload/**",
+        ),
+        lanes=frozenset({"lint", "core", "desktop", "packaging"}),
     ),
     # The SPDX schema the archive-sbom job validates against.
     Rule(
@@ -415,7 +433,7 @@ RULES: tuple[Rule, ...] = (
     # Build and packaging inputs.  These, with the CI infrastructure above, are
     # the full-graph roots.  The desktop manifests, lock, build script, config
     # and assets are archive source inputs that also feed the RPM lifecycle;
-    # desktop/src has its own rule above.  Hatchling reads .gitignore to choose
+    # desktop/src has its own rules above.  Hatchling reads .gitignore to choose
     # the files a wheel or sdist ships.
     Rule(
         name="build-configuration",

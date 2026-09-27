@@ -189,7 +189,9 @@ companion RPMs) and `desktop-archive.yml` (Reproducible desktop archive) are man
 only (`workflow_dispatch`); the production gate's `rpm-lifecycle` and `archive` jobs
 prove the same source rebuild, companion closure, lifecycle and byte-identical
 rebuild against the receipt-bound fresh archive whenever the `packaging` lane
-is selected; a change under `desktop/src` runs the `archive` lane's jobs alone.
+is selected; a change to renderer, shared or stylesheet source under
+`desktop/src` runs the `archive` lane's jobs alone, while Electron main and
+preload source and the shell page also run the RPM lifecycle.
 
 `docs.yml` builds `site/` with `npm ci --prefix site` and
 `npm run build --prefix site` and deploys `site/dist` to GitHub Pages, but only

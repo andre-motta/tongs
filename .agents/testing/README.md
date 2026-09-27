@@ -119,8 +119,16 @@ renderer tests. Focused Node tests can run against built output with
 Node's test runner, for example:
 
 ```bash
-node --test --test-concurrency=1 tests/desktop/renderer/diff.test.mjs
+node --test --test-concurrency=1 --import ./tests/desktop/renderer/setup.mjs \
+  tests/desktop/renderer/diff.test.mjs
 ```
+
+Load `tests/desktop/renderer/setup.mjs` with `--import` in every renderer run,
+as `npm test` does. It raises Testing Library's async wait timeout and keeps
+query failures short; without it a focused run falls back to a 1000 ms wait
+and prints the whole DOM on failure. Write the path with a leading `./` from
+the checkout root (`../` from `desktop/`): Node resolves `--import` as a module
+specifier, so a bare `tests/...` path fails to load.
 
 Rebuild first whenever TypeScript source changed. Do not use a stale `dist/`
 from another revision as source evidence.
@@ -175,6 +183,7 @@ systemd-run --user --unit="$unit" --wait --collect \
     test "$NODE_OPTIONS" = --max-old-space-size=512
     npm run build --prefix desktop
     exec node --test --test-concurrency=1 \
+      --import ./tests/desktop/renderer/setup.mjs \
       tests/desktop/renderer/diff.test.mjs
   '
 status=$?

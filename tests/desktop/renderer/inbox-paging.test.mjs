@@ -5,7 +5,11 @@ import { QueryCoordinator } from "../../../desktop/dist/src/renderer/core/query.
 import {
   createInboxFeature,
   inboxFeedPresentation,
+  inboxLoadedDepth,
+  inboxPendingSelectionFocus,
   listDiscoveredReviews,
+  MAX_RESTORED_PAGES,
+  mergedReviewItems,
   nextRepositoryToLoad,
   orderedReviewItems,
   orderWatermark,
@@ -56,6 +60,25 @@ test("the watermark is the newest frontier among repositories with more pages", 
 
   const busy = [{ ...feeds[0], loading: true }, feeds[1], feeds[2]];
   assert.equal(nextRepositoryToLoad(busy).repository, "repo-c");
+});
+
+test("a review on two pages or in two feeds is listed once", () => {
+  // A11 was updated between the two page reads, so page 2 repeats it.
+  const twoPages = [feed("repo-a", ["A12", "A11", "A11", "A10"], "cursor-a2")];
+  assert.deepEqual(titles(mergedReviewItems(twoPages)), ["A12", "A11", "A10"]);
+  assert.deepEqual(titles(orderedReviewItems(twoPages)), ["A12", "A11", "A10"]);
+
+  // The same handle reported by two feeds (one review seen through two remotes).
+  const twoFeeds = [
+    feed("repo-a", ["A12", "A11"], null),
+    { ...feed("repo-b", ["B1130"], null), items: [reviewItem("B1130"), reviewItem("A11")] },
+  ];
+  const merged = mergedReviewItems(twoFeeds);
+  assert.equal(merged.length, 3);
+  assert.deepEqual(titles(merged), ["A12", "B1130", "A11"]);
+  assert.equal(merged.filter((item) => item.handle === "review-A11").length, 1);
+  assert.equal(orderedReviewItems(twoFeeds).length, 3);
+  assert.equal(inboxFeedPresentation(twoFeeds, "title").items.length, 3);
 });
 
 test("other sort orders show every loaded row and still offer more", () => {
@@ -334,6 +357,177 @@ test("a failed page is not read again until asked", async () => {
   } finally {
     delete globalThis.IntersectionObserver;
   }
+});
+
+test("a refresh that fails after cancelling a pending load more leaves Load more usable", async () => {
+  const bridge = pagingBridge();
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.pending.size, 1));
+  bridge.respond("repo-a", page(["A12", "A11"], "cursor-a1"));
+  await view.findByText("A12");
+
+  fireEvent.click(view.getByRole("button", { name: "Load more" }));
+  await waitFor(() => assert.equal(bridge.calls.length, 2));
+  assert.equal(bridge.calls[1].cursor, "cursor-a1");
+  assert.equal(
+    (await view.findByText("Loading more from 1 repository")).textContent,
+    "Loading more from 1 repository",
+  );
+
+  fireEvent.click(view.getByRole("button", { name: "Refresh reviews" }));
+  await waitFor(() => assert.equal(bridge.calls.length, 3));
+  assert.equal(bridge.calls[2].cursor, undefined);
+  bridge.fail("repo-a", new Error("controlled refresh failure"));
+  await view.findByText("Refresh failed. Showing the previous review list.");
+
+  assert.deepEqual(cardTitles(view), ["A12", "A11"]);
+  assert.equal(view.queryAllByText(/Loading more from/).length, 0);
+  const loadMore = view.getByRole("button", { name: "Load more" });
+  assert.equal(loadMore.disabled, false);
+  fireEvent.click(loadMore);
+  await waitFor(() => assert.equal(bridge.calls.length, 4));
+  assert.equal(bridge.calls[3].repository, "repo-a");
+  assert.equal(bridge.calls[3].cursor, "cursor-a1");
+  bridge.respond("repo-a", page(["A10"], null));
+  await view.findByText("A10");
+  assert.deepEqual(cardTitles(view), ["A12", "A11", "A10"]);
+});
+
+async function loadTwoPages(bridge) {
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.pending.size, 1));
+  bridge.respond("repo-a", page(["A12", "A11"], "cursor-a1"));
+  await view.findByText("A12");
+  fireEvent.click(view.getByRole("button", { name: "Load more" }));
+  await waitFor(() => assert.equal(bridge.pending.size, 1));
+  bridge.respond("repo-a", page(["A10", "A09"], "cursor-a2"));
+  await view.findByText("A10");
+  assert.equal(inboxLoadedDepth("inbox:all:all_open:open", "repo-a"), 2);
+  return view;
+}
+
+test("returning from a review opened on page 2 reloads that page and focuses the row", async () => {
+  const bridge = pagingBridge();
+  const first = await loadTwoPages(bridge);
+  fireEvent.click(first.getByText("A10").closest("button"));
+  assert.equal(inboxPendingSelectionFocus("all"), "review-A10");
+  cleanup();
+
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.calls.length, 3));
+  assert.equal(bridge.calls[2].cursor, undefined);
+  // The sealed cursor comes from the fresh first page, not the old one.
+  bridge.respond("repo-a", page(["A12", "A11"], "cursor-b1"));
+  await waitFor(() => assert.equal(bridge.calls.length, 4));
+  assert.deepEqual(bridge.calls[3], {
+    scope: "all_open",
+    state: "open",
+    repository: "repo-a",
+    cursor: "cursor-b1",
+  });
+  bridge.respond("repo-a", page(["A10", "A09"], "cursor-b2"));
+  await waitFor(() =>
+    assert.equal(document.activeElement?.dataset.reviewHandle, "review-A10"),
+  );
+  assert.deepEqual(cardTitles(view), ["A12", "A11", "A10", "A09"]);
+  assert.equal(inboxPendingSelectionFocus("all"), null);
+  assert.equal(
+    view.getByText("A10").closest("button").getAttribute("aria-current"),
+    "true",
+  );
+  assert.equal(bridge.calls.length, 4);
+});
+
+test("refresh reads each repository as deep as it had loaded", async () => {
+  const bridge = pagingBridge();
+  const view = await loadTwoPages(bridge);
+  fireEvent.click(view.getByRole("button", { name: "Refresh reviews" }));
+  await waitFor(() => assert.equal(bridge.calls.length, 3));
+  bridge.respond("repo-a", page(["A13", "A12"], "cursor-b1"));
+  await waitFor(() => assert.equal(bridge.calls.length, 4));
+  assert.equal(bridge.calls[3].cursor, "cursor-b1");
+  // The previous rows stay until the refresh completes.
+  assert.deepEqual(cardTitles(view), ["A12", "A11", "A10", "A09"]);
+  bridge.respond("repo-a", page(["A11", "A10"], "cursor-b2"));
+  await view.findByText("A13");
+  assert.deepEqual(cardTitles(view), ["A13", "A12", "A11", "A10"]);
+  assert.equal(view.getAllByRole("button", { name: "Load more" }).length, 1);
+  assert.equal(bridge.calls.length, 4);
+});
+
+test("a focus target missing from the reloaded list is released once it settles", async () => {
+  const bridge = pagingBridge();
+  const first = await loadTwoPages(bridge);
+  fireEvent.click(first.getByText("A09").closest("button"));
+  cleanup();
+
+  const view = render(
+    createInboxFeature().render(
+      featureContext(bridge.bridge, [repository("repo-a")]),
+      { kind: "inbox" },
+    ),
+  );
+  await waitFor(() => assert.equal(bridge.calls.length, 3));
+  bridge.respond("repo-a", page(["A12", "A11"], "cursor-b1"));
+  await waitFor(() => assert.equal(bridge.calls.length, 4));
+  // A09 was closed meanwhile, so the second page no longer holds it.
+  bridge.respond("repo-a", page(["A10", "A08"], "cursor-b2"));
+  await view.findByText("A10");
+  await waitFor(() => assert.equal(inboxPendingSelectionFocus("all"), null));
+  assert.equal(document.activeElement?.dataset.reviewHandle, undefined);
+});
+
+test("a reload never reads deeper than the restore limit", async () => {
+  const bridge = pagingBridge();
+  const depths = new Map([["repo-a", MAX_RESTORED_PAGES + 5]]);
+  const combined = listDiscoveredReviews(
+    bridge.bridge,
+    [{ handle: "repo-a" }],
+    "all_open",
+    "open",
+    undefined,
+    undefined,
+    depths,
+  );
+  for (let index = 0; index < MAX_RESTORED_PAGES; index += 1) {
+    await waitFor(() => assert.equal(bridge.pending.size, 1));
+    bridge.respond("repo-a", page([`A-${index * 10}`], `cursor-${index + 1}`));
+  }
+  const result = await combined.result;
+  assert.equal(bridge.calls.length, MAX_RESTORED_PAGES);
+  assert.equal(result.feeds[0].pages, MAX_RESTORED_PAGES);
+  assert.equal(result.feeds[0].cursor, `cursor-${MAX_RESTORED_PAGES}`);
+  assert.equal(result.items.length, MAX_RESTORED_PAGES);
+});
+
+test("with no repositories the list shows its empty label once the read settles", async () => {
+  const bridge = pagingBridge();
+  const view = render(
+    createInboxFeature().render(featureContext(bridge.bridge, []), { kind: "inbox" }),
+  );
+  await view.findByText("No open reviews match this repository scope.");
+  assert.equal(bridge.calls.length, 0);
+  assert.equal(view.queryAllByText(/Loading reviews from/).length, 0);
+  assert.equal(view.container.querySelectorAll(".review-card").length, 0);
+
+  fireEvent.click(view.getByRole("button", { name: "My Reviews" }));
+  await view.findByText("No open reviews are waiting for you.");
+  assert.equal(bridge.calls.length, 0);
 });
 
 test("the combined read reports each repository's cursor", async () => {

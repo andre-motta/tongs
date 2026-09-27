@@ -102,6 +102,10 @@ export interface LocationParams { readonly location: JsonObject | null; }
 export interface AcceptedResult { readonly accepted: true; }
 
 export interface DesktopEvent { readonly sequence: number; readonly name: string; readonly data: JsonValue; }
+/** Whether the main process currently holds a live connection to the local service. */
+export type ServiceState = "connected" | "stopped";
+/** A service state change; `revision` only grows, so a stale snapshot can be ignored. */
+export interface ServiceStatusDto { readonly state: ServiceState; readonly revision: number; }
 export interface AssetDescriptor { readonly source: "core" | "plugin"; readonly asset_id: string; readonly plugin_id: string | null; readonly kind: string; readonly media_type: string; readonly byte_count: number; readonly sha256: string; readonly url: string; }
 export interface DesktopRead<T> { readonly requestToken: string; readonly result: Promise<T>; }
 
@@ -125,6 +129,8 @@ export interface DesktopBridge extends CIDesktopBridge, ReviewDesktopBridge, Wor
   listAssets(): DesktopRead<readonly AssetDescriptor[]>;
   cancelRead(requestToken: string): Promise<boolean>;
   onEvent(listener: (event: DesktopEvent) => void): () => void;
+  getServiceStatus(): Promise<ServiceStatusDto>;
+  onServiceStatus(listener: (status: ServiceStatusDto) => void): () => void;
   openExternal(url: string): Promise<boolean>;
 }
 
@@ -136,6 +142,7 @@ export const IPC_CHANNELS = Object.freeze({
   openLog: "tongs:logs.open", pageLog: "tongs:logs.page", listPlugins: "tongs:plugins.list",
   invokePlugin: "tongs:plugins.invoke", setLocation: "tongs:host.set-location", listAssets: "tongs:assets.list",
   cancelRead: "tongs:read.cancel", openExternal: "tongs:external.open", event: "tongs:event",
+  serviceStatus: "tongs:service.status", getServiceStatus: "tongs:service.status.get",
 } as const);
 
 /**

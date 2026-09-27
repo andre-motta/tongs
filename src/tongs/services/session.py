@@ -51,6 +51,7 @@ from tongs.services.models import (
 from tongs.services.mr_actions import MRActionService
 from tongs.services.review_mutations import ReviewMutationService
 from tongs.services.review_submission import ReviewSubmissionService
+from tongs.state.drafts.models import RecoveryWarning
 from tongs.state.drafts.store import DraftStore
 
 
@@ -137,6 +138,7 @@ class ApplicationSession:
         self._registry: ForgeRegistryResource | None = None
         self._configured_hosts: frozenset[str] = frozenset()
         self._issued_repositories: set[RepositoryRef] = set()
+        self._recovery_warnings: tuple[RecoveryWarning, ...] = ()
         self._repositories: dict[RepositoryRef, RepositorySnapshot] = {}
         self._local_repositories: tuple[Repo, ...] = ()
         self._discovery_generation = 0
@@ -240,6 +242,16 @@ class ApplicationSession:
         return self._draft_store
 
     @property
+    def recovery_warnings(self) -> tuple[RecoveryWarning, ...]:
+        """Return submission attempts startup recovery skipped as unreadable.
+
+        Each warning holds an attempt identity and a fixed message, never draft
+        text. The drafts themselves are kept.
+        """
+        self._require_started()
+        return self._recovery_warnings
+
+    @property
     def review_submissions(self) -> ReviewSubmissionService:
         """Return the session-scoped durable review submission service."""
         self._require_started()
@@ -294,6 +306,7 @@ class ApplicationSession:
                     self._draft_store_open_attempted = True
                     await self._draft_store.open()
                     await self._draft_store.recover_incomplete_attempts()
+                    self._recovery_warnings = self._draft_store.recovery_warnings
                     self._require_start_open()
                     self._registry = self._provided_registry or ForgeRegistry(
                         extra_gitlab_hosts=self._config.extra_gitlab_hosts,

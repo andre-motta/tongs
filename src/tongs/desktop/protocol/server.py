@@ -108,6 +108,7 @@ from tongs.services import (
     ServiceError,
     ServiceEvent,
 )
+from tongs.state.drafts.models import RecoveryWarning
 
 SUPPORTED_CAPABILITIES = frozenset(
     {
@@ -459,6 +460,9 @@ class DesktopSidecarServer:
         try:
             requested, client_limits = _parse_handshake(frame.params)
             await self._session.start()
+            _report_recovery_warnings(
+                getattr(cast(object, self._session), "recovery_warnings", ())
+            )
             if self._plugin_registry is None:
                 config = cast(object, self._session.config)
                 plugin_config = getattr(config, "plugin_config", {})
@@ -1667,6 +1671,15 @@ def _consume_task(task: asyncio.Task[object]) -> None:
     if not task.cancelled():
         with suppress(BaseException):
             task.exception()
+
+
+def _report_recovery_warnings(warnings: tuple[RecoveryWarning, ...]) -> None:
+    """Write skipped submission attempts to the sidecar diagnostics stream."""
+    for warning in warnings:
+        print(
+            f"tongs desktop draft recovery warning: {warning.describe()}",
+            file=sys.stderr,
+        )
 
 
 def _core_version() -> str:

@@ -229,6 +229,8 @@ class _MockForgeClient:
 
 
 class _FixtureSession:
+    recovery_warnings: tuple[object, ...] = ()
+
     config = Config()
 
     def __init__(self, evidence_root: Path) -> None:

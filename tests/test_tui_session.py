@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -30,8 +31,9 @@ from tongs.plugins.context import PluginContext
 from tongs.plugins.registry import PluginRegistry
 from tongs.scanner.repo import ForgeType, Remote, Repo
 from tongs.services.errors import ServiceErrorCode
-from tongs.services.models import RepositoryRef, ReviewRef
+from tongs.services.models import RepositoryRef, ReviewRef, ReviewRevision
 from tongs.services.session import ApplicationSession
+from tongs.state.drafts import DraftContent, DraftStore, RecoveryWarning
 from tongs.views.inbox import InboxScreen
 from tongs.views.repo_list import RepoListScreen
 from tongs.widgets.mr_table import MRTable
@@ -524,6 +526,36 @@ async def test_startup_failure_is_safe_and_closes_partial_resources(
     assert cache.close_calls == 1
     assert plugins.discover_calls == 0
     assert registry.close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_startup_notifies_skipped_recovery_attempt(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "drafts.db"
+    setup = DraftStore(db_path)
+    await setup.open()
+    draft = await setup.create_draft(
+        ReviewRef(RepositoryRef("github.com", "acme/widgets"), 3),
+        ReviewRevision("head-1", "base-1"),
+        DraftContent(body="private draft text"),
+    )
+    attempt = await setup.lock_submission(draft.id, draft.version)
+    await setup.close()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE submission_attempts SET updated_at = 'bad' WHERE id = ?",
+            (str(attempt.id),),
+        )
+    app, session, _cache = make_app(tmp_path, [], MockForgeRegistry({}))
+
+    async with app.run_test():
+        await settle(app)
+        messages = [notice.message for notice in app._notifications]
+        warnings = session.recovery_warnings
+
+    assert app.startup_error is None
+    assert warnings == (RecoveryWarning(attempt.id),)
+    assert any(str(attempt.id) in message for message in messages)
+    assert all("private draft text" not in message for message in messages)
 
 
 @pytest.mark.asyncio

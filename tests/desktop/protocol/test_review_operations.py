@@ -173,6 +173,8 @@ def _client(**overrides: object) -> SimpleNamespace:
 
 
 class _Session:
+    recovery_warnings: tuple[object, ...] = ()
+
     def __init__(self, store: DraftStore, client: SimpleNamespace) -> None:
         self.config = Config()
         self.drafts = store

@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from importlib.metadata import entry_points, version
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import pytest
 
@@ -34,6 +35,8 @@ from tongs.plugins.desktop import (
 from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.scanner.repo import ForgeType
 from tongs.services import JobRef, RepositoryRef, RepositorySnapshot, ServiceEvent
+from tongs.state.drafts import RecoveryWarning
+from tongs.state.drafts.models import RECOVERY_CORRUPT_ATTEMPT_MESSAGE
 
 _SOURCE_ROOT = Path(__file__).parents[2] / "src"
 
@@ -92,6 +95,8 @@ class _BlockingWriter(_QueueWriter):
 
 
 class _FakeSession:
+    recovery_warnings: tuple[object, ...] = ()
+
     def __init__(self) -> None:
         self.config = Config()
         self.started = False
@@ -176,6 +181,42 @@ async def test_unexpected_operation_logs_method_and_redacted_detail(
     assert "RuntimeError" in stderr
     assert "[REDACTED]" in stderr
     assert token not in stderr
+
+
+@pytest.mark.asyncio
+async def test_handshake_reports_skipped_recovery_attempt_on_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = _FakeSession()
+    attempt_id = UUID("11111111-2222-4333-8444-555555555555")
+    session.recovery_warnings = (RecoveryWarning(attempt_id),)
+    server = DesktopSidecarServer(
+        session=cast(object, session), plugin_registry=_registry()
+    )
+    reader = asyncio.StreamReader()
+    writer = _QueueWriter()
+    task = asyncio.create_task(server.run(reader, writer))
+    reader.feed_data(
+        _frame(
+            "handshake",
+            "handshake",
+            {
+                "protocol_major": 1,
+                "core_version": version("tongs"),
+                "capabilities": [],
+            },
+        )
+    )
+    response = await asyncio.wait_for(writer.frames.get(), 1)
+    reader.feed_eof()
+    await task
+
+    assert response["id"] == "handshake"
+    assert "result" in response
+    stderr = capsys.readouterr().err
+    assert "draft recovery warning" in stderr
+    assert str(attempt_id) in stderr
+    assert RECOVERY_CORRUPT_ATTEMPT_MESSAGE in stderr
 
 
 @pytest.mark.asyncio

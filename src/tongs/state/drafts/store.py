@@ -45,6 +45,7 @@ from tongs.state.drafts.models import (
     PendingSubmissionDispatch,
     ReconciliationRecord,
     ReconciliationResolution,
+    RecoveryWarning,
     ReplyDraftComment,
     StepReceipt,
     SubmissionAttempt,
@@ -388,10 +389,16 @@ class DraftStore:
         self._lifecycle_lock = asyncio.Lock()
         self._operation_lock = asyncio.Lock()
         self._held_attempt_locks: dict[UUID, AttemptLock] = {}
+        self._recovery_warnings: tuple[RecoveryWarning, ...] = ()
 
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    @property
+    def recovery_warnings(self) -> tuple[RecoveryWarning, ...]:
+        """Attempts the latest recovery pass skipped because they were unreadable."""
+        return self._recovery_warnings
 
     async def __aenter__(self) -> Self:
         await self.open()
@@ -1328,7 +1335,14 @@ class DraftStore:
 
     @_serialized
     async def recover_incomplete_attempts(self) -> tuple[SubmissionAttempt, ...]:
-        """Mark only attempts whose process ownership lock is no longer held unknown."""
+        """Mark only attempts whose process ownership lock is no longer held unknown.
+
+        Recovery is per attempt. An attempt that another process resolved or
+        removed after the initial listing is skipped. An unreadable attempt is
+        skipped without changing any stored row and reported through
+        :attr:`recovery_warnings`, so one damaged record cannot stop startup.
+        """
+        self._recovery_warnings = ()
         db = self._connection()
         try:
             rows = await (
@@ -1343,8 +1357,13 @@ class DraftStore:
         except sqlite3.Error as error:
             raise DraftStoreError("submission recovery query failed") from error
         recovered: list[SubmissionAttempt] = []
+        warnings: list[RecoveryWarning] = []
         for row in rows:
-            attempt_id = UUID(row[0])
+            try:
+                attempt_id = UUID(row[0])
+            except (TypeError, ValueError, AttributeError):
+                warnings.append(RecoveryWarning(None))
+                continue
             if attempt_id in self._held_attempt_locks:
                 continue
             ownership = AttemptLock.try_acquire(self._lock_dir, str(attempt_id))
@@ -1353,9 +1372,18 @@ class DraftStore:
             try:
                 try:
                     await db.execute("BEGIN IMMEDIATE")
-                    attempt = await self._attempt_in_transaction(db, attempt_id)
+                    try:
+                        attempt = await self._attempt_in_transaction(db, attempt_id)
+                    except DraftNotFoundError:
+                        # Another process resolved and removed it after listing.
+                        await self._rollback(db)
+                        continue
+                    except DraftCorruptionError:
+                        await self._rollback(db)
+                        warnings.append(RecoveryWarning(attempt_id))
+                        continue
                     if attempt.state not in {DraftState.SUBMITTING, DraftState.PARTIAL}:
-                        await db.execute("COMMIT")
+                        await self._rollback(db)
                         continue
                     now = _now()
                     if attempt.pending_dispatch is not None:
@@ -1404,6 +1432,7 @@ class DraftStore:
                     raise
             finally:
                 ownership.release()
+        self._recovery_warnings = tuple(warnings)
         return tuple(recovered)
 
     @_serialized

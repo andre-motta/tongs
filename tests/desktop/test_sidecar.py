@@ -13,6 +13,7 @@ from typing import cast
 import pytest
 
 from tongs.config import Config
+from tongs.desktop import sidecar
 from tongs.desktop.protocol.messages import JsonObject
 from tongs.desktop.protocol.server import (
     DesktopSidecarServer,
@@ -134,6 +135,47 @@ def _registry() -> DesktopPluginRegistry:
     return DesktopPluginRegistry(
         entry_point_source=lambda _group: (), host_version="1.0"
     )
+
+
+@pytest.mark.asyncio
+async def test_unexpected_operation_logs_method_and_redacted_detail(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    server = DesktopSidecarServer(
+        session=cast(object, _FakeSession()), plugin_registry=_registry()
+    )
+    token = "glpat-" + ("b" * 20)
+
+    async def fail(_params: JsonObject, _context: RequestContext) -> JsonObject:
+        raise RuntimeError(f"backend rejected {token}")
+
+    server.register_operation("test.failure", fail, mutation=False)
+    reader = asyncio.StreamReader()
+    writer = _QueueWriter()
+    task = asyncio.create_task(server.run(reader, writer))
+    reader.feed_data(
+        _frame(
+            "handshake",
+            "handshake",
+            {
+                "protocol_major": 1,
+                "core_version": version("tongs"),
+                "capabilities": [],
+            },
+        )
+    )
+    assert (await asyncio.wait_for(writer.frames.get(), 1))["id"] == "handshake"
+    reader.feed_data(_frame("failure", "test.failure", {}))
+    response = await asyncio.wait_for(writer.frames.get(), 1)
+    reader.feed_eof()
+    await task
+
+    assert response["error"]["code"] == "internal"  # type: ignore[index]
+    stderr = capsys.readouterr().err
+    assert "method=test.failure" in stderr
+    assert "RuntimeError" in stderr
+    assert "[REDACTED]" in stderr
+    assert token not in stderr
 
 
 @pytest.mark.asyncio
@@ -543,3 +585,20 @@ async def test_actual_sidecar_handshake_read_shutdown_and_hostile_frame(
         if process.returncode is None:
             process.kill()
             await process.wait()
+
+
+def test_sidecar_main_logs_redacted_unexpected_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token = "glpat-" + ("a" * 20)
+
+    async def fail() -> None:
+        raise RuntimeError(f"request failed with {token}")
+
+    monkeypatch.setattr(sidecar, "run_stdio", fail)
+
+    assert sidecar.main() == 1
+    stderr = capsys.readouterr().err
+    assert "RuntimeError" in stderr
+    assert "[REDACTED]" in stderr
+    assert token not in stderr

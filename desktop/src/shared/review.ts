@@ -65,7 +65,7 @@ const REVIEW_MUTATION_MESSAGES: Readonly<Record<string, string>> = Object.freeze
 export function reviewMutationMessage(code: string): string {
   return (
     REVIEW_MUTATION_MESSAGES[code] ??
-    "The review action could not be completed. Refresh the review before deciding whether to retry."
+    "The review action failed unexpectedly. Retry the action; if it fails again, check the desktop service diagnostics."
   );
 }
 

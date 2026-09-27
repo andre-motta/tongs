@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import sys
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
@@ -63,6 +64,7 @@ from tongs.desktop.protocol.utility_operations import (
     UtilityOperations,
 )
 from tongs.diff.conversion import convert_forge_changes
+from tongs.errors import redact_credentials
 from tongs.forges.models import MRState, MRSummary, Pipeline, PipelineJob
 from tongs.plugins.desktop import (
     DesktopCallContext,
@@ -571,7 +573,13 @@ class DesktopSidecarServer:
             await self._write_error(frame.request_id, _plugin_protocol_error(error))
         except (BrokenPipeError, ConnectionError):
             self._stopping = True
-        except Exception:  # noqa: BLE001 - operation boundary must stay redacted.
+        except Exception as error:  # noqa: BLE001 - operation boundary must stay redacted.
+            detail = redact_credentials(str(error))[:500]
+            print(
+                f"tongs desktop operation failed: method={frame.method} "
+                f"error={type(error).__name__}: {detail}",
+                file=sys.stderr,
+            )
             if context.response_started:
                 self._stopping = True
                 return

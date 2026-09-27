@@ -30,7 +30,11 @@ This module is the only thing between the signed producer output and
     assembled asset with the exact size and digest.
 
 Nothing here signs anything, and nothing here talks to GitHub except through
-``gh api`` for the two release-state checks.
+read-only ``gh api`` requests for the two release-state checks.  The by-tag
+endpoint answers 404 for a draft, so a draft is found by listing every release
+of the repository and matching ``tag_name`` exactly; the by-tag endpoint only
+confirms the final published release.  Nothing here creates, edits or deletes a
+release or a tag.
 """
 
 from __future__ import annotations
@@ -89,6 +93,10 @@ MAX_SMALL_ASSET_BYTES: Final = 8 * 1024 * 1024
 MAX_RPM_BYTES: Final = 512 * 1024 * 1024
 MAX_ASSET_COUNT: Final = 64
 MAX_NOTES_BYTES: Final = 256 * 1024
+#: Releases requested per listing page, the most the REST API returns.
+RELEASES_PER_PAGE: Final = 100
+#: After this many full pages the listing fails closed instead of guessing.
+MAX_RELEASE_PAGES: Final = 50
 HASH_CHUNK_BYTES: Final = 1024 * 1024
 
 _RELEASE_TAG_RE: Final = re.compile(
@@ -505,11 +513,71 @@ def _release_endpoint(tag: ReleaseTag) -> str:
     return f"repos/{OFFICIAL_REPOSITORY}/releases/tags/{tag.tag}"
 
 
+def _release_list_endpoint(page: int) -> str:
+    return (
+        f"repos/{OFFICIAL_REPOSITORY}/releases?per_page={RELEASES_PER_PAGE}&page={page}"
+    )
+
+
+def _decode_json(document: str, label: str) -> Any:
+    try:
+        return json.loads(document)
+    except json.JSONDecodeError as error:
+        _fail(f"{label} is not JSON: {error}")
+
+
+def _decode_release(document: str) -> dict[str, Any]:
+    value = _decode_json(document, "release metadata")
+    if not isinstance(value, dict):
+        _fail("release metadata is not an object")
+    return value
+
+
+def list_releases_for_tag(
+    tag: ReleaseTag, gh: GhRunner = _run_gh
+) -> list[dict[str, Any]]:
+    """Return every release, draft or published, whose ``tag_name`` is the tag.
+
+    GitHub answers the by-tag endpoint with 404 for a draft, so drafts are
+    only visible in the repository's release listing, which the publish job's
+    ``contents: write`` token can read in full.  Every page is read until a
+    short page ends the listing; any error, malformed page or an unbounded
+    listing fails closed rather than reporting that nothing exists.
+    """
+
+    matches: list[dict[str, Any]] = []
+    for page in range(1, MAX_RELEASE_PAGES + 1):
+        status, stdout, stderr = gh(["api", _release_list_endpoint(page)])
+        if status != 0:
+            _fail(f"release listing for {tag.tag} failed: {(stderr or stdout).strip()}")
+        releases = _decode_json(stdout, "release listing")
+        if not isinstance(releases, list):
+            _fail("release listing is not an array")
+        if len(releases) > RELEASES_PER_PAGE:
+            _fail("release listing page is larger than requested")
+        for release in releases:
+            if not isinstance(release, dict):
+                _fail("release listing entry is not an object")
+            tag_name = release.get("tag_name")
+            if not isinstance(tag_name, str):
+                _fail("release listing entry has no tag name")
+            if tag_name == tag.tag:
+                matches.append(release)
+        if len(releases) < RELEASES_PER_PAGE:
+            return matches
+    _fail(
+        f"release listing exceeds {MAX_RELEASE_PAGES * RELEASES_PER_PAGE} releases; "
+        f"refusing to decide whether a release for {tag.tag} exists"
+    )
+
+
 def require_release_absent(tag: ReleaseTag, gh: GhRunner = _run_gh) -> None:
     """Fail unless GitHub reports no release for the tag at all.
 
     A published release is immutable and must never be replaced, and a draft
     left by an earlier attempt must be inspected by a person, not overwritten.
+    The by-tag endpoint sees only published releases, so the listing is read
+    as well to find a draft.
     """
 
     status, stdout, stderr = gh(["api", _release_endpoint(tag)])
@@ -517,16 +585,22 @@ def require_release_absent(tag: ReleaseTag, gh: GhRunner = _run_gh) -> None:
         _fail(f"a release for {tag.tag} already exists")
     if "HTTP 404" not in stderr:
         _fail(f"release lookup for {tag.tag} failed: {(stderr or stdout).strip()}")
+    existing = list_releases_for_tag(tag, gh)
+    if existing:
+        states = sorted(
+            "draft" if release.get("draft") is not False else "published"
+            for release in existing
+        )
+        _fail(f"a release for {tag.tag} already exists ({', '.join(states)})")
 
 
-def _decode_release(document: str) -> dict[str, Any]:
-    try:
-        value = json.loads(document)
-    except json.JSONDecodeError as error:
-        _fail(f"release metadata is not JSON: {error}")
-    if not isinstance(value, dict):
-        _fail("release metadata is not an object")
-    return value
+def _find_draft_release(tag: ReleaseTag, gh: GhRunner) -> dict[str, Any]:
+    matches = list_releases_for_tag(tag, gh)
+    if not matches:
+        _fail(f"no release for {tag.tag} is listed, draft or published")
+    if len(matches) > 1:
+        _fail(f"{len(matches)} releases are listed for {tag.tag}; expected one draft")
+    return matches[0]
 
 
 def verify_published_release(
@@ -539,16 +613,21 @@ def verify_published_release(
     """Confirm the GitHub release carries the assembled assets exactly.
 
     With ``expect_draft`` the release must still be a draft, which is the
-    state between ``gh release create --draft`` and publication; without it
-    the release must be published, stable and immutable, which is what the
-    installer requires.
+    state between ``gh release create --draft`` and publication, and it is
+    found as the single listed release for the tag because the by-tag endpoint
+    answers 404 for drafts; without it the release must be published, stable
+    and immutable, which is what the installer requires, and it is read from
+    the by-tag endpoint, which only a published release answers.
     """
 
     observed = observe_assets(assets_dir)
-    status, stdout, stderr = gh(["api", _release_endpoint(tag)])
-    if status != 0:
-        _fail(f"release lookup for {tag.tag} failed: {(stderr or stdout).strip()}")
-    release = _decode_release(stdout)
+    if expect_draft:
+        release = _find_draft_release(tag, gh)
+    else:
+        status, stdout, stderr = gh(["api", _release_endpoint(tag)])
+        if status != 0:
+            _fail(f"release lookup for {tag.tag} failed: {(stderr or stdout).strip()}")
+        release = _decode_release(stdout)
     if release.get("tag_name") != tag.tag:
         _fail("published release tag does not equal the requested tag")
     if release.get("draft") is not expect_draft:

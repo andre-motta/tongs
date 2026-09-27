@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -441,16 +442,58 @@ def test_stable_tag_names_its_version() -> None:
     assert (parsed.tag, parsed.version) == ("v12.0.3", "12.0.3")
 
 
-def test_require_absent_distinguishes_absent_present_and_errors() -> None:
+BY_TAG = f"repos/andre-motta/tongs/releases/tags/{TAG}"
+NOT_FOUND = (1, "", "gh: Not Found (HTTP 404)\n")
+
+
+def _listing(page: int) -> str:
+    return f"repos/andre-motta/tongs/releases?per_page=100&page={page}"
+
+
+def _other_releases(count: int, *, start: int = 0) -> list[dict[str, Any]]:
+    return [
+        {"id": 1000 + index, "tag_name": f"v0.{index}.0", "draft": False}
+        for index in range(start, start + count)
+    ]
+
+
+class FakeGh:
+    """Answer ``gh api`` like GitHub: drafts 404 by tag but appear in the list."""
+
+    def __init__(
+        self,
+        pages: list[list[Any]],
+        *,
+        by_tag: tuple[int, str, str] = NOT_FOUND,
+        failures: Mapping[str, tuple[int, str, str]] | None = None,
+    ) -> None:
+        self.pages = pages
+        self.by_tag = by_tag
+        self.failures = dict(failures or {})
+        self.calls: list[list[str]] = []
+
+    def __call__(self, arguments: Any) -> tuple[int, str, str]:
+        arguments = list(arguments)
+        self.calls.append(arguments)
+        assert arguments[0] == "api" and len(arguments) == 2, arguments
+        endpoint = arguments[1]
+        if endpoint in self.failures:
+            return self.failures[endpoint]
+        if endpoint == BY_TAG:
+            return self.by_tag
+        for page, releases in enumerate(self.pages, start=1):
+            if endpoint == _listing(page):
+                return 0, json.dumps(releases), ""
+        if endpoint == _listing(len(self.pages) + 1):
+            return 0, "[]", ""
+        raise AssertionError(f"unexpected gh call: {arguments}")
+
+
+def test_require_absent_passes_only_when_neither_lookup_finds_the_tag() -> None:
     tag = publication.ReleaseTag.parse(TAG)
-    calls: list[list[str]] = []
-
-    def absent(arguments: Any) -> tuple[int, str, str]:
-        calls.append(list(arguments))
-        return 1, "", "gh: Not Found (HTTP 404)\n"
-
-    publication.require_release_absent(tag, gh=absent)
-    assert calls == [["api", "repos/andre-motta/tongs/releases/tags/v1.0.0"]]
+    gh = FakeGh([_other_releases(3)])
+    publication.require_release_absent(tag, gh=gh)
+    assert gh.calls == [["api", BY_TAG], ["api", _listing(1)]]
 
     with pytest.raises(publication.ReleasePublicationError, match="already exists"):
         publication.require_release_absent(tag, gh=lambda _: (0, "{}", ""))
@@ -458,6 +501,85 @@ def test_require_absent_distinguishes_absent_present_and_errors() -> None:
         publication.require_release_absent(
             tag, gh=lambda _: (1, "", "gh: connection reset (HTTP 503)\n")
         )
+
+
+def test_require_absent_fails_on_a_draft_the_by_tag_endpoint_hides() -> None:
+    tag = publication.ReleaseTag.parse(TAG)
+    draft = {"id": 7, "tag_name": TAG, "draft": True}
+    gh = FakeGh([[*_other_releases(2), draft]])
+    with pytest.raises(
+        publication.ReleasePublicationError, match=r"already exists \(draft\)"
+    ):
+        publication.require_release_absent(tag, gh=gh)
+    assert ["api", BY_TAG] in gh.calls
+
+
+def test_require_absent_fails_on_an_existing_published_release() -> None:
+    tag = publication.ReleaseTag.parse(TAG)
+    published = {"id": 8, "tag_name": TAG, "draft": False}
+    # The by-tag endpoint sees a published release directly.
+    gh = FakeGh([[published]], by_tag=(0, json.dumps(published), ""))
+    with pytest.raises(publication.ReleasePublicationError, match="already exists"):
+        publication.require_release_absent(tag, gh=gh)
+    # The listing also catches it if the by-tag answer were ever a 404.
+    gh = FakeGh([[published]])
+    with pytest.raises(
+        publication.ReleasePublicationError, match=r"already exists \(published\)"
+    ):
+        publication.require_release_absent(tag, gh=gh)
+
+
+def test_require_absent_reads_every_listing_page() -> None:
+    tag = publication.ReleaseTag.parse(TAG)
+    draft = {"id": 9, "tag_name": TAG, "draft": True}
+    gh = FakeGh([_other_releases(100), _other_releases(100, start=100), [draft]])
+    with pytest.raises(publication.ReleasePublicationError, match="already exists"):
+        publication.require_release_absent(tag, gh=gh)
+    assert gh.calls[1:] == [["api", _listing(page)] for page in (1, 2, 3)]
+
+    # A listing that ends exactly on a page boundary reads one empty page.
+    gh = FakeGh([_other_releases(100)])
+    publication.require_release_absent(tag, gh=gh)
+    assert gh.calls[1:] == [["api", _listing(1)], ["api", _listing(2)]]
+
+
+def test_require_absent_matches_the_tag_name_exactly() -> None:
+    tag = publication.ReleaseTag.parse(TAG)
+    near = [
+        {"id": 1, "tag_name": f"{TAG}-rc1", "draft": True},
+        {"id": 2, "tag_name": TAG.upper(), "draft": True},
+        {"id": 3, "tag_name": f"desktop-{TAG}", "draft": True},
+    ]
+    publication.require_release_absent(tag, gh=FakeGh([near]))
+
+
+@pytest.mark.parametrize(
+    ("answer", "message"),
+    [
+        ((1, "", "gh: Bad credentials (HTTP 401)\n"), "listing .* failed"),
+        ((0, "not json", ""), "not JSON"),
+        ((0, "{}", ""), "not an array"),
+        ((0, "[1]", ""), "not an object"),
+        ((0, '[{"id": 1}]', ""), "no tag name"),
+        ((0, json.dumps(_other_releases(101)), ""), "larger than requested"),
+    ],
+)
+def test_require_absent_fails_closed_on_a_bad_listing(
+    answer: tuple[int, str, str], message: str
+) -> None:
+    tag = publication.ReleaseTag.parse(TAG)
+    gh = FakeGh([], failures={_listing(1): answer})
+    with pytest.raises(publication.ReleasePublicationError, match=message):
+        publication.require_release_absent(tag, gh=gh)
+
+
+def test_require_absent_refuses_an_unbounded_listing(monkeypatch) -> None:
+    monkeypatch.setattr(publication, "MAX_RELEASE_PAGES", 2)
+    tag = publication.ReleaseTag.parse(TAG)
+    gh = FakeGh([_other_releases(100), _other_releases(100, start=100)])
+    with pytest.raises(publication.ReleasePublicationError, match="refusing"):
+        publication.require_release_absent(tag, gh=gh)
+    assert ["api", _listing(3)] not in gh.calls
 
 
 def _published(assets_dir: Path, **overrides: Any) -> dict[str, Any]:
@@ -496,11 +618,62 @@ def test_verify_published_confirms_an_immutable_release_with_every_asset(
     assert report["immutable"] is True
     assert report["assets"] == sorted(entry.name for entry in assets.iterdir())
 
-    draft = json.dumps(_published(assets, draft=True, immutable=False))
-    report = publication.verify_published_release(
-        tag, assets, expect_draft=True, gh=lambda _: (0, draft, "")
-    )
+
+def test_verify_published_reads_the_final_release_by_tag(tmp_path: Path) -> None:
+    _write_producer_output(tmp_path)
+    assets = _assemble(tmp_path)
+    tag = publication.ReleaseTag.parse(TAG)
+    gh = FakeGh([], by_tag=(0, json.dumps(_published(assets)), ""))
+    publication.verify_published_release(tag, assets, expect_draft=False, gh=gh)
+    assert gh.calls == [["api", BY_TAG]]
+
+
+def test_verify_draft_finds_the_draft_by_listing_when_by_tag_404s(
+    tmp_path: Path,
+) -> None:
+    _write_producer_output(tmp_path)
+    assets = _assemble(tmp_path)
+    tag = publication.ReleaseTag.parse(TAG)
+    draft = _published(assets, draft=True, immutable=False)
+    gh = FakeGh([_other_releases(100), [*_other_releases(5, start=100), draft]])
+
+    report = publication.verify_published_release(tag, assets, expect_draft=True, gh=gh)
     assert report["draft"] is True
+    assert report["release_id"] == 42
+    assert ["api", BY_TAG] not in gh.calls
+    assert gh.calls == [["api", _listing(1)], ["api", _listing(2)]]
+    # The by-tag endpoint cannot see the draft, so a published check fails.
+    with pytest.raises(publication.ReleasePublicationError, match="HTTP 404"):
+        publication.verify_published_release(tag, assets, expect_draft=False, gh=gh)
+
+
+def test_verify_draft_requires_exactly_one_listed_draft(tmp_path: Path) -> None:
+    _write_producer_output(tmp_path)
+    assets = _assemble(tmp_path)
+    tag = publication.ReleaseTag.parse(TAG)
+    draft = _published(assets, draft=True, immutable=False)
+
+    with pytest.raises(publication.ReleasePublicationError, match="no release"):
+        publication.verify_published_release(
+            tag, assets, expect_draft=True, gh=FakeGh([_other_releases(3)])
+        )
+    twice = FakeGh([[draft, {**draft, "id": 43}]])
+    with pytest.raises(publication.ReleasePublicationError, match="2 releases"):
+        publication.verify_published_release(tag, assets, expect_draft=True, gh=twice)
+    published = FakeGh([[_published(assets)]])
+    with pytest.raises(publication.ReleasePublicationError, match="not a draft"):
+        publication.verify_published_release(
+            tag, assets, expect_draft=True, gh=published
+        )
+    partial = _published(assets, draft=True, immutable=False)
+    partial["assets"] = partial["assets"][1:]
+    with pytest.raises(publication.ReleasePublicationError, match="differs from"):
+        publication.verify_published_release(
+            tag, assets, expect_draft=True, gh=FakeGh([[partial]])
+        )
+    failing = FakeGh([], failures={_listing(1): (1, "", "HTTP 502")})
+    with pytest.raises(publication.ReleasePublicationError, match="listing .* failed"):
+        publication.verify_published_release(tag, assets, expect_draft=True, gh=failing)
 
 
 @pytest.mark.parametrize(

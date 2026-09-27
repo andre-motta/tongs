@@ -233,6 +233,32 @@ def test_verification_precedes_every_creating_step(
     assert text.count("gh release edit") == 1
 
 
+def test_the_publication_program_only_reads_release_state() -> None:
+    # The draft check lists releases because the by-tag endpoint 404s for a
+    # draft; every gh call stays a plain GET and nothing deletes or edits.
+    source = (ROOT / PUBLICATION_PROGRAM).read_text()
+    gh_calls = re.findall(r"gh\(\s*\[([^\]]*)\]", source)
+    assert gh_calls == [
+        '"api", _release_list_endpoint(page)',
+        '"api", _release_endpoint(tag)',
+        '"api", _release_endpoint(tag)',
+    ]
+    for forbidden in (
+        "--method",
+        '"-X"',
+        "DELETE",
+        "PATCH",
+        "POST",
+        '"release"',
+        '"delete"',
+    ):
+        assert forbidden not in source
+    assert source.count("subprocess.run(") == 1
+    assert '["gh", *arguments]' in source
+    assert "/releases?per_page=" in source
+    assert "/releases/tags/" in source
+
+
 def test_the_publish_job_checks_out_without_credentials_and_binds_the_tag(
     jobs: dict[str, dict[str, Any]],
 ) -> None:

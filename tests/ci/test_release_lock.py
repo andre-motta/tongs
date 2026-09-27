@@ -6,7 +6,10 @@ index at release time, or an unpinned build backend pulled in by build
 isolation, would therefore run with the token.  These cases read every
 workflow and require each such job to install only from a hash-locked
 requirements file, and then the source tree itself without resolving
-anything.  They also hold ``requirements/release.lock`` to its contract: every
+anything.  The PyPI build job holds no token, but the publish job uploads
+what it builds as is, so it too installs only the lock and builds without
+isolation.  Installs are found with the scanner in ``workflow_installs.py``,
+which ``test_workflow_hygiene.py`` shares.  They also hold ``requirements/release.lock`` to its contract: every
 entry pinned exactly and hashed, covering the core runtime dependencies, the
 signing scripts' imports and the build backend.  Finally, ``GH_TOKEN`` may
 reach only the steps of those jobs that actually call ``gh``.
@@ -26,6 +29,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from tests.ci.verify_desktop_production_gate import ROOT
+from tests.ci.workflow_installs import install_commands as _install_commands
 
 WORKFLOW_DIRECTORY = ROOT / ".github/workflows"
 RELEASE_WORKFLOW = WORKFLOW_DIRECTORY / "release-desktop.yml"
@@ -39,6 +43,11 @@ LOCKED_JOBS = (
     "release-desktop.yml:candidate-attestation",
     "release-desktop.yml:release-publish",
 )
+
+#: Jobs that hold no token but build what a privileged job publishes as is.
+#: They install only the lock, then build without isolation, so the PyPI
+#: wheel and sdist are built by hash-locked code alone.
+LOCKED_BUILD_JOBS = ("publish.yml:build",)
 
 #: pip flags a privileged install may carry.  Anything else, including a bare
 #: requirement, fails the scan.
@@ -94,15 +103,6 @@ def _privileged_jobs(
     return found
 
 
-def _install_commands(job: dict[str, Any]) -> list[tuple[int, list[str]]]:
-    commands = []
-    for index, step in enumerate(job.get("steps", [])):
-        for line in (step.get("run") or "").splitlines():
-            if "pip install" in line:
-                commands.append((index, shlex.split(line)))
-    return commands
-
-
 def _classify_install(tokens: list[str]) -> str:
     """Return ``locked`` or ``source``, or fail for any other install shape."""
 
@@ -139,11 +139,26 @@ def test_every_privileged_install_is_hash_locked_or_resolves_nothing(
             # install there must adopt the lock and join LOCKED_JOBS.
             assert not commands, f"{label} installs under a write token"
             continue
-        kinds = [(index, _classify_install(tokens)) for index, tokens in commands]
-        assert [kind for _, kind in kinds] == ["locked", "source"], label
-        # The source install must follow the locked one, or it would find its
-        # build backend missing and nothing else would supply it.
-        assert kinds[0][0] < kinds[1][0], label
+        # The shared scanner returns installs in step order, so the source
+        # install follows the locked one, which supplies its build backend.
+        kinds = [_classify_install(tokens) for tokens in commands]
+        assert kinds == ["locked", "source"], label
+
+
+def test_the_published_build_installs_only_the_lock(
+    workflows: dict[str, dict[str, Any]],
+) -> None:
+    for label in LOCKED_BUILD_JOBS:
+        name, job_id = label.split(":", 1)
+        job = workflows[name]["jobs"][job_id]
+        kinds = [_classify_install(tokens) for tokens in _install_commands(job)]
+        assert kinds == ["locked"], label
+        builds = [
+            " ".join(step["run"].split())
+            for step in job.get("steps", [])
+            if " -m build" in " ".join((step.get("run") or "").split())
+        ]
+        assert builds == ["python -I -m build --no-isolation"], label
 
 
 def test_the_classifier_refuses_a_fresh_resolution() -> None:
@@ -156,6 +171,23 @@ def test_the_classifier_refuses_a_fresh_resolution() -> None:
     ):
         with pytest.raises(AssertionError):
             _classify_install(shlex.split(command))
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "pip3 install build",
+        "python -m pip  install build",
+        "python3 -m pip install\\\n  build",
+        "cd src && python -m pip install --no-deps -e .",
+        "echo ok; /usr/bin/pip install sigstore",
+    ],
+)
+def test_the_scan_sees_every_spelling_of_pip_install(script: str) -> None:
+    commands = _install_commands({"steps": [{"run": script}]})
+    assert len(commands) == 1
+    with pytest.raises(AssertionError):
+        _classify_install(commands[0])
 
 
 def test_privileged_checkouts_never_persist_credentials(

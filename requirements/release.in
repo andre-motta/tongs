@@ -21,3 +21,7 @@ jsonschema>=4.18,<5
 editables
 hatch-vcs
 hatchling
+
+# The publish workflow builds the PyPI wheel and sdist from this lock with
+# python -m build --no-isolation, so no build requirement resolves fresh.
+build

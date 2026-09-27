@@ -78,6 +78,8 @@ class _FakeClient:
 
 
 class _Session:
+    recovery_warnings: tuple[object, ...] = ()
+
     def __init__(self, client: _FakeClient | None = None) -> None:
         self.client = client or _FakeClient()
         self.job_reads: list[PipelineRef] = []
@@ -611,6 +613,8 @@ class _IsolatedCache:
 
 
 class _IsolatedDraftStore(_IsolatedCache):
+    recovery_warnings: tuple[object, ...] = ()
+
     async def recover_incomplete_attempts(self) -> tuple[object, ...]:
         return ()
 

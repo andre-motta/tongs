@@ -286,6 +286,30 @@ class SubmissionPlanRecord:
             raise ValueError("submission plan step IDs must be unique")
 
 
+RECOVERY_CORRUPT_ATTEMPT_MESSAGE = (
+    "An interrupted review submission could not be read and was skipped; "
+    "its draft was kept."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryWarning:
+    """A submission attempt that startup recovery skipped as unreadable.
+
+    It carries only the attempt identity, when readable, and a fixed message,
+    never draft text.
+    """
+
+    attempt_id: UUID | None
+    message: str = RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+
+    def describe(self) -> str:
+        """Return the message with the attempt identity, for logs and notices."""
+        if self.attempt_id is None:
+            return self.message
+        return f"{self.message} Attempt {self.attempt_id}."
+
+
 @dataclass(frozen=True, slots=True)
 class SubmissionAttempt:
     """A frozen draft submission and all confirmed durable outcomes."""

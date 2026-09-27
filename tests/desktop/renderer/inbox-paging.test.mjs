@@ -515,6 +515,63 @@ test("a reload never reads deeper than the restore limit", async () => {
   assert.equal(result.items.length, MAX_RESTORED_PAGES);
 });
 
+test("a restore reads every first page before the deeper restored pages", async () => {
+  const bridge = pagingBridge();
+  const shallow = Array.from({ length: 10 }, (_, index) => `repo-s${index}`);
+  const handles = ["repo-deep", ...shallow];
+  const arrivals = [];
+  let settled = false;
+  const combined = listDiscoveredReviews(
+    bridge.bridge,
+    handles.map((handle) => ({ handle })),
+    "all_open",
+    "open",
+    undefined,
+    (_index, arrived) => {
+      if (!arrived.loading) arrivals.push(`${arrived.repository}:${arrived.pages}`);
+    },
+    new Map([["repo-deep", 3]]),
+  );
+  void combined.result.finally(() => {
+    settled = true;
+  });
+  // Answer the oldest outstanding read each time, as a service would.
+  let answered = 0;
+  while (!settled && answered < 20) {
+    await new Promise((resolve) => setImmediate(resolve));
+    const call = bridge.calls.find(
+      (candidate, index) =>
+        bridge.pending.has(candidate.repository) &&
+        !bridge.calls.slice(index + 1).some((later) => later.repository === candidate.repository),
+    );
+    if (call === undefined) continue;
+    const deep = call.repository === "repo-deep";
+    const depth = call.cursor === undefined ? 1 : Number(call.cursor.split("-").pop()) + 1;
+    const title = deep ? `D-${depth}` : `S-${100 + shallow.indexOf(call.repository)}`;
+    bridge.respond(call.repository, page([title], deep ? `cursor-${depth}` : null));
+    answered += 1;
+  }
+  const result = await combined.result;
+
+  const order = bridge.calls.map((call) => `${call.repository}:${call.cursor ?? "first"}`);
+  assert.equal(order.length, 13);
+  assert.deepEqual(
+    order.slice(0, 11),
+    handles.map((handle) => `${handle}:first`),
+  );
+  assert.deepEqual(order.slice(11), ["repo-deep:cursor-1", "repo-deep:cursor-2"]);
+  // Each shallow repository is shown before the deep one finishes restoring.
+  assert.equal(arrivals.length, 11);
+  assert.equal(arrivals[10], "repo-deep:3");
+  assert.deepEqual(
+    arrivals.slice(0, 10).sort(),
+    shallow.map((handle) => `${handle}:1`).sort(),
+  );
+  assert.equal(result.feeds[0].pages, 3);
+  assert.equal(result.feeds[0].loading, false);
+  assert.equal(result.items.length, 13);
+});
+
 test("with no repositories the list shows its empty label once the read settles", async () => {
   const bridge = pagingBridge();
   const view = render(

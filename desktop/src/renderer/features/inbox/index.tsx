@@ -622,7 +622,6 @@ export function listDiscoveredReviews(
   const inFlight = new Set<string>();
   const outcomes: ReviewListResult[] = [];
   const feeds: RepositoryFeed[] = handles.map((handle) => pendingFeed(handle));
-  let nextIndex = 0;
   // Set when a read comes back cancelled without our signal firing, for
   // example when the coordinator cancels every read on a cache clear.
   let stopped = false;
@@ -660,33 +659,62 @@ export function listDiscoveredReviews(
       outcome.failures,
     );
   };
-  const readRepository = async (index: number): Promise<void> => {
+  // Reads one page of a repository. When the list had loaded that repository
+  // deeper before it was reloaded, the next page goes to the back of the queue
+  // as its own task, so every repository's first page is read before any
+  // deeper page and a deep repository never holds back a shallow one. The rows
+  // read so far are shown meanwhile, marked as still loading.
+  const readRepository = async (
+    index: number,
+    feed: RepositoryFeed,
+    cursor?: string,
+  ): Promise<void> => {
     const handle = handles[index] as string;
     const depth = Math.min(depths?.get(handle) ?? 1, MAX_RESTORED_PAGES);
-    let feed = await readPage(handle, feeds[index] as RepositoryFeed);
-    // Read again as deep as this list had loaded before it was reloaded. The
-    // rows read so far are shown meanwhile, marked as still loading.
-    while (
-      feed.pages < depth &&
-      feed.cursor !== null &&
-      feed.failures.length === 0 &&
+    const next = await readPage(handle, feed, cursor);
+    feeds[index] = next;
+    const deeper = next.cursor;
+    if (
+      next.pages < depth &&
+      deeper !== null &&
+      next.failures.length === 0 &&
       !aborted() &&
       !stopped
     ) {
-      onRepository?.(index, Object.freeze({ ...feed, loading: true }));
-      feed = await readPage(handle, feed, feed.cursor);
+      onRepository?.(index, Object.freeze({ ...next, loading: true }));
+      queue.push(() => readRepository(index, next, deeper));
+      return;
     }
-    feeds[index] = feed;
-    outcomes[index] = { items: feed.items, failures: feed.failures };
-    // Each repository's first page is shown as soon as it arrives.
-    if (!aborted() && !stopped) onRepository?.(index, feed);
+    outcomes[index] = { items: next.items, failures: next.failures };
+    // Each repository is shown as soon as its last restored page arrives.
+    if (!aborted() && !stopped) onRepository?.(index, next);
   };
-  const worker = async (): Promise<void> => {
-    while (!aborted() && !stopped && nextIndex < handles.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      await readRepository(index);
+  const queue: (() => Promise<void>)[] = handles.map(
+    (_handle, index) => () => readRepository(index, feeds[index] as RepositoryFeed),
+  );
+  let active = 0;
+  let drain: () => void = () => undefined;
+  const drained = new Promise<void>((resolve) => {
+    drain = resolve;
+  });
+  // Starts queued reads up to the pool size; settles once none is left to run.
+  const pump = (): void => {
+    while (
+      active < DISCOVERED_REVIEW_CONCURRENCY &&
+      queue.length > 0 &&
+      !aborted() &&
+      !stopped
+    ) {
+      const task = queue.shift() as () => Promise<void>;
+      active += 1;
+      void task()
+        .catch(() => undefined)
+        .then(() => {
+          active -= 1;
+          pump();
+        });
     }
+    if (active === 0) drain();
   };
 
   const result = new Promise<DiscoveredReviews>((resolve, reject) => {
@@ -706,11 +734,8 @@ export function listDiscoveredReviews(
       reject(cancelled());
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    const workers = Array.from(
-      { length: Math.min(DISCOVERED_REVIEW_CONCURRENCY, handles.length) },
-      () => worker(),
-    );
-    void Promise.all(workers).then(() => {
+    pump();
+    void drained.then(() => {
       signal?.removeEventListener("abort", onAbort);
       if (aborted()) return;
       if (stopped) {

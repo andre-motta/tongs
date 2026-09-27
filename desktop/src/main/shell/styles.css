@@ -504,6 +504,20 @@ button {
   padding: 14px 16px;
   text-align: left;
   cursor: pointer;
+  /* Thousands of loaded rows stay responsive: off-screen cards skip layout
+     and paint until they scroll near the viewport. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 76px;
+}
+.review-list-more {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.review-list-status {
+  color: var(--muted);
+  font-size: 12px;
 }
 .review-card:hover,
 .review-card:focus-visible {

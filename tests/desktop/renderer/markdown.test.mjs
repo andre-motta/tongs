@@ -287,6 +287,46 @@ test("shows the real host beside lookalike link text without a scheme", () => {
   );
 });
 
+test("flags a URL among other words and leaves bare file names unmarked", () => {
+  const view = renderMarkdown(
+    [
+      "[see https://github.com/org/repo](https://evil.example/)",
+      "[github.com/org/repo (docs)](https://evil.example/)",
+      "[setup.py](https://github.com/org/repo/blob/main/setup.py)",
+      "[README.md](https://github.com/org/repo/blob/main/README.md)",
+    ].join("\n\n"),
+  );
+  const links = view.getAllByRole("link");
+  assert.equal(links.length, 4);
+  const described = links.map((link) => {
+    const id = link.getAttribute("aria-describedby") ?? "";
+    const element = view.container.ownerDocument.getElementById(id);
+    return {
+      title: link.getAttribute("title"),
+      description: element?.textContent ?? "",
+      hidden: element?.hasAttribute("hidden") ?? null,
+    };
+  });
+  assert.deepEqual(described, [
+    { title: "https://evil.example/", description: "(opens evil.example)", hidden: false },
+    { title: "https://evil.example/", description: "(opens evil.example)", hidden: false },
+    {
+      title: "https://github.com/org/repo/blob/main/setup.py",
+      description: "Opens github.com",
+      hidden: true,
+    },
+    {
+      title: "https://github.com/org/repo/blob/main/README.md",
+      description: "Opens github.com",
+      hidden: true,
+    },
+  ]);
+  assert.equal(
+    view.container.querySelectorAll(".safe-markdown-link-host-mismatch").length,
+    2,
+  );
+});
+
 test("compares link text to the destination by origin and host", () => {
   assert.equal(externalLinkHost("https://example.com/a"), "example.com");
   assert.equal(externalLinkHost("https://b\u00fccher.example/"), "xn--bcher-kva.example");
@@ -301,9 +341,21 @@ test("compares link text to the destination by origin and host", () => {
     ["  https://evil.example  ", "https://github.com/", true],
     ["click here", "https://evil.example/", false],
     ["v1.0.2", "https://github.com/", false],
-    ["README.md", "https://github.com/", true],
+    ["README.md", "https://github.com/", false],
+    ["setup.py", "https://github.com/org/repo/blob/main/setup.py", false],
+    ["notes.txt", "https://evil.example/", false],
+    ["setup.py/", "https://evil.example/", true],
+    ["docs.github.io", "https://evil.example/", true],
+    ["evil.dev", "https://github.com/", true],
+    ["github.com:8443", "https://github.com/", true],
+    ["see https://github.com/org/repo", "https://evil.example/", true],
+    ["see https://github.com/org/repo", "https://github.com/org/repo", false],
+    ["github.com/org/repo (docs)", "https://evil.example/", true],
+    ["the docs (github.com/org/repo).", "https://evil.example/", true],
+    ["open setup.py and README.md", "https://evil.example/", false],
+    ["e.g. the pipeline", "https://github.com/", false],
     ["", "https://github.com/", false],
-    ["https://a b", "https://github.com/", false],
+    ["https://a b", "https://github.com/", true],
     ["git\u00adhub.com/org", "https://evil.example/x", true],
     ["git\u00adhub.com/org", "https://github.com/org", false],
     ["g\u0456thub.com/org/repo", "https://evil.example/x", true],

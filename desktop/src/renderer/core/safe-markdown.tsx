@@ -24,6 +24,52 @@ const MAX_LINK_TEXT_LENGTH = 2048;
 const HOST_LABEL_SEPARATOR = /[.\u3002\uFF0E\uFF61]/u;
 // A parsed top-level label that reads like a domain: letters, or punycode.
 const HOST_LIKE_TOP_LABEL = /^(?:[a-z]{2,}|xn--[a-z0-9-]+)$/u;
+// Bare two-label text such as "setup.py" or "README.md" reads as a file name.
+// Schemeless text is treated as a host only when it has a path, query,
+// fragment, or port after the host, has three or more labels, or ends in one of
+// these common web top-level labels (or a punycode one). The list leaves out
+// labels that double as common file extensions, such as md, py, sh, and rs.
+const WEB_TOP_LABELS: ReadonlySet<string> = new Set([
+  "com",
+  "org",
+  "net",
+  "edu",
+  "gov",
+  "mil",
+  "int",
+  "io",
+  "dev",
+  "app",
+  "ai",
+  "co",
+  "me",
+  "info",
+  "biz",
+  "cloud",
+  "tech",
+  "xyz",
+  "site",
+  "online",
+  "page",
+  "us",
+  "uk",
+  "de",
+  "fr",
+  "eu",
+  "ca",
+  "au",
+  "jp",
+  "cn",
+  "ru",
+  "br",
+  "nl",
+  "ch",
+  "se",
+  "es",
+  "example",
+]);
+// Punctuation that commonly wraps a URL inside prose, such as "(github.com)".
+const WRAPPING_PUNCTUATION = /^[("'<[{]+|[)"'>\]},;:!?.]+$/gu;
 
 // Theme tokens from the shell stylesheet; the renderer sets them through the
 // CSSOM, which the style-src 'self' policy permits.
@@ -252,11 +298,7 @@ export function linkTextNamesOtherOrigin(
   destination: string,
 ): boolean {
   const trimmed = text.trim();
-  if (
-    trimmed.length === 0 ||
-    trimmed.length > MAX_LINK_TEXT_LENGTH ||
-    /\s/u.test(trimmed)
-  ) {
+  if (trimmed.length === 0 || trimmed.length > MAX_LINK_TEXT_LENGTH) {
     return false;
   }
   let target: URL;
@@ -265,14 +307,24 @@ export function linkTextNamesOtherOrigin(
   } catch {
     return false;
   }
-  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)) {
+  if (!/\s/u.test(trimmed)) return tokenNamesOtherOrigin(trimmed, target);
+  // Text with several words is flagged when any word, stripped of wrapping
+  // punctuation, reads as a URL or host on a different origin.
+  return trimmed
+    .split(/\s+/u)
+    .map((word) => word.replace(WRAPPING_PUNCTUATION, ""))
+    .some((word) => word.length > 0 && tokenNamesOtherOrigin(word, target));
+}
+
+function tokenNamesOtherOrigin(token: string, target: URL): boolean {
+  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(token)) {
     try {
-      return new URL(trimmed).origin !== target.origin;
+      return new URL(token).origin !== target.origin;
     } catch {
       return false;
     }
   }
-  return schemelessTextNamesOtherHost(trimmed, target);
+  return schemelessTextNamesOtherHost(token, target);
 }
 
 // Link text without a scheme is parsed as an https URL so the host parser
@@ -293,7 +345,17 @@ function schemelessTextNamesOtherHost(text: string, target: URL): boolean {
   if (parsed.username !== "" || parsed.password !== "") return true;
   const labels = parsed.hostname.split(".");
   if (labels.length < 2) return false;
-  if (!HOST_LIKE_TOP_LABEL.test(labels[labels.length - 1] ?? "")) return false;
+  const topLabel = labels[labels.length - 1] ?? "";
+  if (!HOST_LIKE_TOP_LABEL.test(topLabel)) return false;
+  const hasSuffix = hostPart.length < text.length || parsed.port !== "";
+  if (
+    !hasSuffix &&
+    labels.length < 3 &&
+    !topLabel.startsWith("xn--") &&
+    !WEB_TOP_LABELS.has(topLabel)
+  ) {
+    return false;
+  }
   return parsed.host !== target.host;
 }
 

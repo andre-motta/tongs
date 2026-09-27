@@ -19,6 +19,8 @@ MAX_PENDING_REQUESTS = 64
 MAX_QUEUED_EVENTS = 256
 MAX_JSON_DEPTH = 24
 MAX_JSON_ITEMS = 20_000
+MIN_JSON_DEPTH = 8
+MIN_JSON_ITEMS = 1_024
 
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _METHOD_RE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
@@ -82,6 +84,21 @@ class ProtocolError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class JsonLimits:
+    """The JSON value-count and nesting budget that every frame must respect."""
+
+    values: int = MAX_JSON_ITEMS
+    depth: int = MAX_JSON_DEPTH
+
+    def negotiate(self, values: int, depth: int) -> JsonLimits:
+        """Return the tighter of these limits and a peer's declared limits."""
+        return JsonLimits(min(self.values, values), min(self.depth, depth))
+
+
+DEFAULT_JSON_LIMITS = JsonLimits()
+
+
+@dataclass(frozen=True, slots=True)
 class RequestFrame:
     request_id: str
     method: str
@@ -133,7 +150,12 @@ def decode_frame(raw: bytes) -> IncomingFrame:
             ProtocolErrorCode.INVALID_FRAME,
             "The request frame is not valid UTF-8 JSON.",
         ) from None
-    _validate_json(document)
+    _validate_json(
+        document,
+        limits=DEFAULT_JSON_LIMITS,
+        code=ProtocolErrorCode.INVALID_FRAME,
+        subject="request",
+    )
     if not isinstance(document, dict):
         raise ProtocolError(
             ProtocolErrorCode.INVALID_FRAME,
@@ -183,23 +205,44 @@ def encode_response(
     *,
     result: object | None = None,
     error: ProtocolError | None = None,
+    limits: JsonLimits = DEFAULT_JSON_LIMITS,
 ) -> bytes:
-    """Encode one response and replace oversized output with a bounded error."""
+    """Encode one response and replace oversized output with a bounded error.
+
+    A response that exceeds the byte size, the JSON value count, or the JSON
+    depth the client accepts becomes a ``RESPONSE_TOO_LARGE`` error for this
+    request only, so the peer never receives a frame it would reject.
+    """
     document: JsonObject = {"v": PROTOCOL_MAJOR, "type": "response", "id": request_id}
     try:
         if error is None:
             document["result"] = to_json_value(result)
         else:
             document["error"] = cast(JsonValue, error.to_wire())
+        _validate_json(
+            document,
+            limits=limits,
+            code=ProtocolErrorCode.RESPONSE_TOO_LARGE,
+            subject="response",
+        )
         encoded = _encode(document)
-    except (ProtocolError, TypeError, ValueError, UnicodeError):
-        encoded = _encode_response_fallback(
+    except ProtocolError as failure:
+        if failure.code is not ProtocolErrorCode.RESPONSE_TOO_LARGE:
+            return _encode_response_fallback(request_id, _unencodable_response())
+        return _encode_response_fallback(
             request_id,
             ProtocolError(
-                ProtocolErrorCode.INTERNAL,
-                "The response could not be encoded safely.",
+                ProtocolErrorCode.RESPONSE_TOO_LARGE,
+                "The response is too large to send; it exceeds the desktop "
+                "JSON value or depth limit.",
+                details={
+                    "value_limit": limits.values,
+                    "depth_limit": limits.depth,
+                },
             ),
         )
+    except (TypeError, ValueError, UnicodeError):
+        return _encode_response_fallback(request_id, _unencodable_response())
     if len(encoded) <= MAX_RESPONSE_FRAME_BYTES:
         return encoded
     fallback = ProtocolError(
@@ -208,6 +251,13 @@ def encode_response(
         retryable=True,
     )
     return _encode_response_fallback(request_id, fallback)
+
+
+def _unencodable_response() -> ProtocolError:
+    return ProtocolError(
+        ProtocolErrorCode.INTERNAL,
+        "The response could not be encoded safely.",
+    )
 
 
 def encode_event(sequence: int, event: str, data: object) -> bytes:
@@ -295,21 +345,31 @@ def _request_id(value: object) -> str:
     return value
 
 
-def _validate_json(value: object) -> None:
-    budget = [MAX_JSON_ITEMS]
+def _validate_json(
+    value: object,
+    *,
+    limits: JsonLimits,
+    code: ProtocolErrorCode,
+    subject: str,
+) -> None:
+    """Check one whole frame document against a value-count and depth budget.
+
+    A budget overflow raises ``code``. Malformed content raises
+    ``INVALID_FRAME`` for a request and ``INTERNAL`` for a response.
+    """
+    budget = [limits.values]
+    malformed = (
+        ProtocolErrorCode.INVALID_FRAME
+        if code is ProtocolErrorCode.INVALID_FRAME
+        else ProtocolErrorCode.INTERNAL
+    )
 
     def visit(item: object, depth: int) -> None:
-        if depth > MAX_JSON_DEPTH:
-            raise ProtocolError(
-                ProtocolErrorCode.INVALID_FRAME,
-                "The request JSON is nested too deeply.",
-            )
+        if depth > limits.depth:
+            raise ProtocolError(code, f"The {subject} JSON is nested too deeply.")
         budget[0] -= 1
         if budget[0] < 0:
-            raise ProtocolError(
-                ProtocolErrorCode.INVALID_FRAME,
-                "The request JSON contains too many values.",
-            )
+            raise ProtocolError(code, f"The {subject} JSON contains too many values.")
         if item is None or isinstance(item, (bool, int)):
             return
         if isinstance(item, str):
@@ -318,8 +378,8 @@ def _validate_json(value: object) -> None:
         if isinstance(item, float):
             if not math.isfinite(item):
                 raise ProtocolError(
-                    ProtocolErrorCode.INVALID_FRAME,
-                    "The request JSON contains an invalid number.",
+                    malformed,
+                    f"The {subject} JSON contains an invalid number.",
                 )
             return
         if isinstance(item, list):
@@ -330,15 +390,15 @@ def _validate_json(value: object) -> None:
             for key, child in item.items():
                 if not isinstance(key, str):
                     raise ProtocolError(
-                        ProtocolErrorCode.INVALID_FRAME,
-                        "The request JSON contains an invalid object key.",
+                        malformed,
+                        f"The {subject} JSON contains an invalid object key.",
                     )
                 _validate_unicode(key)
                 visit(child, depth + 1)
             return
         raise ProtocolError(
-            ProtocolErrorCode.INVALID_FRAME,
-            "The request contains an unsupported JSON value.",
+            malformed,
+            f"The {subject} contains an unsupported JSON value.",
         )
 
     visit(value, 0)
@@ -396,14 +456,20 @@ def _validate_unicode(value: str) -> None:
 
 
 __all__ = [
+    "DEFAULT_JSON_LIMITS",
     "MAX_EVENT_FRAME_BYTES",
+    "MAX_JSON_DEPTH",
+    "MAX_JSON_ITEMS",
     "MAX_PENDING_REQUESTS",
     "MAX_QUEUED_EVENTS",
     "MAX_REQUEST_FRAME_BYTES",
     "MAX_RESPONSE_FRAME_BYTES",
+    "MIN_JSON_DEPTH",
+    "MIN_JSON_ITEMS",
     "PROTOCOL_MAJOR",
     "CancelFrame",
     "IncomingFrame",
+    "JsonLimits",
     "JsonObject",
     "JsonScalar",
     "JsonValue",

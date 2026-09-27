@@ -1,4 +1,8 @@
-import { decodeReadFailure, type ServiceErrorDto } from "../../shared/bridge.js";
+import {
+  decodeReadFailure,
+  RESPONSE_TOO_LARGE,
+  type ServiceErrorDto,
+} from "../../shared/bridge.js";
 
 export class RendererReadError extends Error implements ServiceErrorDto {
   constructor(
@@ -18,10 +22,15 @@ export function serviceErrorOf(error: unknown): ServiceErrorDto | null {
 
 const UNREPORTED_READ = "The local service could not complete this read.";
 
+/** Shown when one read's result exceeds the desktop protocol's safe budget. */
+export const TOO_LARGE_TO_SHOW =
+  "This result is too large to show in the desktop app. The rest of the app keeps working.";
+
 export function safeError(error: unknown): string {
   const failure = serviceErrorOf(error);
   if (failure === null) return UNREPORTED_READ;
   const cause = typeof failure.message === "string" ? failure.message.trim() : "";
+  if (failure.code === RESPONSE_TOO_LARGE) return TOO_LARGE_TO_SHOW;
   if (failure.code === "snapshot_expired")
     return "This diff snapshot expired. Reload the diff to continue.";
   if (failure.code === "revision_changed")

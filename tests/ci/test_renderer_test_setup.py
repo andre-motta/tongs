@@ -11,6 +11,7 @@ the 1000 ms default. This module finds every such command, in the desktop
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from typing import Any
 
@@ -21,6 +22,12 @@ from tests.ci.verify_desktop_production_gate import ROOT
 SETUP = ROOT / "tests/desktop/renderer/setup.mjs"
 RENDERER_GLOB = "tests/desktop/renderer/*.test.mjs"
 SETUP_IMPORT = ("--import", "../tests/desktop/renderer/setup.mjs")
+RENDERER_DIR = "tests/desktop/renderer/"
+DOCUMENTED_SETUP_PATHS = (
+    "./tests/desktop/renderer/setup.mjs",
+    "../tests/desktop/renderer/setup.mjs",
+)
+TESTING_GUIDE = ROOT / ".agents/testing/README.md"
 
 
 def _imports_setup(command: str) -> bool:
@@ -36,6 +43,38 @@ def _imports_setup(command: str) -> bool:
                 if word.endswith(RENDERER_GLOB)
             )
     return False
+
+
+def _documented_renderer_commands(text: str) -> list[list[str]]:
+    """Every ``node --test`` command in a Markdown shell block that runs
+    renderer test files, as its words."""
+
+    commands: list[list[str]] = []
+    for block in re.findall(r"```(?:bash|sh|shell)\n(.*?)```", text, re.DOTALL):
+        for line in block.replace("\\\n", " ").splitlines():
+            if "node --test" not in line:
+                continue
+            words = shlex.split(line)
+            if any(
+                word.startswith(RENDERER_DIR) and word.endswith(".test.mjs")
+                for word in words
+            ):
+                commands.append(words)
+    return commands
+
+
+def _documented_command_imports_setup(words: list[str]) -> bool:
+    """Whether the setup import comes before the first renderer test file."""
+
+    first_file = next(
+        index
+        for index, word in enumerate(words)
+        if word.startswith(RENDERER_DIR) and word.endswith(".test.mjs")
+    )
+    return any(
+        words[index] == "--import" and words[index + 1] in DOCUMENTED_SETUP_PATHS
+        for index in range(words.index("--test"), first_file - 1)
+    )
 
 
 def _workflow_renderer_steps() -> list[tuple[str, dict[str, Any]]]:
@@ -89,3 +128,31 @@ def test_the_ci_fixture_lane_runs_renderer_tests_through_npm_test() -> None:
     ]
     assert any("npm test --prefix desktop" in run for run in runs)
     assert not any("node --test" in run and "desktop" in run for run in runs)
+
+
+def test_documented_renderer_runs_load_the_setup() -> None:
+    """Focused renderer runs in the testing guide import the setup with a
+    relative specifier, since a bare ``tests/...`` path does not resolve."""
+
+    commands = _documented_renderer_commands(TESTING_GUIDE.read_text())
+    assert len(commands) >= 2
+    for words in commands:
+        assert _documented_command_imports_setup(words), " ".join(words)
+
+
+def test_documented_command_check_rejects_a_missing_or_bare_import() -> None:
+    guide = (
+        "```bash\n"
+        "node --test --test-concurrency=1 tests/desktop/renderer/diff.test.mjs\n"
+        "node --test --import tests/desktop/renderer/setup.mjs \\\n"
+        "  tests/desktop/renderer/diff.test.mjs\n"
+        "node --test --import ./tests/desktop/renderer/setup.mjs \\\n"
+        "  tests/desktop/renderer/diff.test.mjs\n"
+        "```\n"
+    )
+    commands = _documented_renderer_commands(guide)
+    assert [_documented_command_imports_setup(words) for words in commands] == [
+        False,
+        False,
+        True,
+    ]

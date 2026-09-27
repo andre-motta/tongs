@@ -636,7 +636,9 @@ class GitHubClient(ForgeClient):
         except ValidationError as exc:
             message = str(exc).lower()
             if "self-approv" in message or "approve your own pull request" in message:
-                raise ValidationError("GitHub does not allow self-approving PRs") from exc
+                raise ValidationError(
+                    "GitHub does not allow self-approving PRs"
+                ) from exc
             raise
 
     async def merge_mr(

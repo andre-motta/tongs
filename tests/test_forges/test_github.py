@@ -349,7 +349,9 @@ class TestReviewMutationRoutes:
     @pytest.mark.asyncio
     async def test_approve_maps_self_approval_422(self):
         client, http = _make_github_client(
-            lambda _: httpx.Response(422, json={"message": "Can not approve your own pull request"})
+            lambda _: httpx.Response(
+                422, json={"message": "Can not approve your own pull request"}
+            )
         )
         async with http:
             with pytest.raises(

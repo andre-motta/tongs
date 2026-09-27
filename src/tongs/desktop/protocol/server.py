@@ -64,6 +64,7 @@ from tongs.desktop.protocol.utility_operations import (
     UtilityOperations,
 )
 from tongs.diff.conversion import convert_forge_changes
+from tongs.errors import redact_credentials
 from tongs.forges.models import MRState, MRSummary, Pipeline, PipelineJob
 from tongs.plugins.desktop import (
     DesktopCallContext,
@@ -101,7 +102,6 @@ from tongs.services import (
     ServiceError,
     ServiceEvent,
 )
-from tongs.services.errors import translate_error
 
 SUPPORTED_CAPABILITIES = frozenset(
     {
@@ -574,10 +574,10 @@ class DesktopSidecarServer:
         except (BrokenPipeError, ConnectionError):
             self._stopping = True
         except Exception as error:  # noqa: BLE001 - operation boundary must stay redacted.
-            safe = translate_error(error, operation=frame.method)
+            detail = redact_credentials(str(error))[:500]
             print(
                 f"tongs desktop operation failed: method={frame.method} "
-                f"code={safe.code.value} message={safe.message}",
+                f"error={type(error).__name__}: {detail}",
                 file=sys.stderr,
             )
             if context.response_started:

@@ -9,7 +9,7 @@ from typing import cast
 
 from tongs.desktop.protocol.messages import MAX_REQUEST_FRAME_BYTES
 from tongs.desktop.protocol.server import DesktopSidecarServer
-from tongs.services.errors import translate_error
+from tongs.errors import redact_credentials
 
 
 class _WritePipeProtocol(asyncio.Protocol):
@@ -101,9 +101,9 @@ def main() -> int:
     except KeyboardInterrupt:
         return 130
     except Exception as error:  # noqa: BLE001 - process boundary stays redacted.
-        safe = translate_error(error, operation="desktop_sidecar")
+        detail = redact_credentials(str(error))[:500]
         print(
-            f"tongs desktop sidecar failed: code={safe.code.value} message={safe.message}",
+            f"tongs desktop sidecar failed: error={type(error).__name__}: {detail}",
             file=sys.stderr,
         )
         return 1

@@ -122,7 +122,9 @@ class TongsApp(App):
             self.exit()
             return
         for warning in self.session.recovery_warnings:
-            self.notify(warning.describe(), severity="warning", timeout=15)
+            self.notify(
+                warning.describe(), severity="warning", timeout=15, markup=False
+            )
         self.config = self.session.config
         self.plugin_registry.discover(self.config.plugin_config)
         await self.plugin_registry.on_app_ready(self)

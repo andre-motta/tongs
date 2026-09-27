@@ -78,6 +78,7 @@ export function harness({
   delayedShutdown = false,
   extraCapabilities = [],
   limitOverrides = {},
+  handshakeExtras = {},
 } = {}) {
   const children = [];
   const respond = (child, frame) => {
@@ -99,6 +100,7 @@ export function harness({
         json_depth: 24,
         ...limitOverrides,
       },
+      ...handshakeExtras,
     };
     child.stdout.write(
       `${JSON.stringify({ v: 1, type: "response", id: frame.id, result })}\n`,

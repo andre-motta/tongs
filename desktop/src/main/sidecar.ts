@@ -111,6 +111,7 @@ export class SidecarTransport extends EventEmitter {
   private failureReported = false;
   private closeRequested = false;
   private state: ServiceState = "stopped";
+  private notices: readonly string[] = NO_NOTICES;
 
   constructor(
     launch: DesktopLaunchConfig,
@@ -138,6 +139,14 @@ export class SidecarTransport extends EventEmitter {
   /** Whether the service completed its handshake and has not stopped since. */
   get serviceState(): ServiceState {
     return this.state;
+  }
+
+  /**
+   * Startup warnings the current session's handshake reported, such as a
+   * review draft whose interrupted submission could not be read.
+   */
+  get serviceNotices(): readonly string[] {
+    return this.notices;
   }
 
   get processId(): number | undefined {
@@ -216,6 +225,7 @@ export class SidecarTransport extends EventEmitter {
     this.buffer = Buffer.alloc(0);
     this.lastEventSequence = 0;
     this.jsonLimits = DEFAULT_JSON_LIMITS;
+    this.notices = NO_NOTICES;
     this.generation += 1;
     const environment = { ...process.env };
     delete environment.PYTHONHOME;
@@ -256,7 +266,9 @@ export class SidecarTransport extends EventEmitter {
       this.startupTimeoutMs,
     );
     try {
-      this.jsonLimits = validateHandshake(await handshake.result, this.launch.coreVersion);
+      const result = await handshake.result;
+      this.jsonLimits = validateHandshake(result, this.launch.coreVersion);
+      this.notices = handshakeNotices(result);
     } catch (error) {
       await this.stop();
       throw error;
@@ -545,7 +557,8 @@ export class ServiceStatusPublisher {
   }
 
   get current(): ServiceStatusDto {
-    return { state: this.#state, revision: this.#revision };
+    const notices = this.#state === "connected" ? [...this.source.serviceNotices] : [];
+    return { state: this.#state, revision: this.#revision, notices };
   }
 
   start(): void {
@@ -599,6 +612,33 @@ function mutationErrorCode(
   return typeof serviceCode === "string" && SERVICE_ERROR_CODES.has(serviceCode)
     ? serviceCode
     : protocolCode;
+}
+
+const NO_NOTICES: readonly string[] = Object.freeze([]);
+const MAX_SERVICE_NOTICES = 20;
+const MAX_SERVICE_NOTICE_LENGTH = 1000;
+
+/**
+ * Reads the optional startup warnings of a handshake. They are plain text for
+ * the user; a malformed list means an incompatible service, like any other
+ * malformed handshake field.
+ */
+function handshakeNotices(value: JsonValue): readonly string[] {
+  if (!isRecord(value) || value.recovery_warnings === undefined) return NO_NOTICES;
+  const warnings = value.recovery_warnings;
+  if (
+    !Array.isArray(warnings) ||
+    warnings.length > MAX_SERVICE_NOTICES ||
+    !warnings.every(
+      (warning) =>
+        typeof warning === "string" &&
+        warning.length > 0 &&
+        warning.length <= MAX_SERVICE_NOTICE_LENGTH,
+    )
+  ) {
+    throw new SidecarError("incompatible_handshake", "The desktop service is incompatible.");
+  }
+  return Object.freeze([...(warnings as string[])]);
 }
 
 function validateHandshake(value: JsonValue, coreVersion: string): JsonLimits {

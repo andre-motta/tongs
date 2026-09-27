@@ -514,9 +514,10 @@ class DesktopSidecarServer:
         try:
             requested, client_limits = _parse_handshake(frame.params)
             await self._session.start()
-            _report_recovery_warnings(
+            recovery_warnings = tuple(
                 getattr(cast(object, self._session), "recovery_warnings", ())
             )
+            _report_recovery_warnings(recovery_warnings)
             if self._plugin_registry is None:
                 config = cast(object, self._session.config)
                 plugin_config = getattr(config, "plugin_config", {})
@@ -537,6 +538,7 @@ class DesktopSidecarServer:
                     "capabilities": sorted(SUPPORTED_CAPABILITIES),
                     "accepted_capabilities": sorted(requested),
                     "methods": [*sorted(self._operations), "shutdown"],
+                    "recovery_warnings": _recovery_notices(recovery_warnings),
                     "limits": {
                         "request_frame_bytes": MAX_REQUEST_FRAME_BYTES,
                         "response_frame_bytes": MAX_RESPONSE_FRAME_BYTES,
@@ -1936,6 +1938,26 @@ def _consume_task(task: asyncio.Task[object]) -> None:
     if not task.cancelled():
         with suppress(BaseException):
             task.exception()
+
+
+#: Bounds of the handshake's ``recovery_warnings``, matched by the desktop shell.
+MAX_RECOVERY_NOTICES = 20
+MAX_RECOVERY_NOTICE_CHARS = 1000
+
+
+def _recovery_notices(warnings: tuple[RecoveryWarning, ...]) -> list[JsonValue]:
+    """Describe startup recovery warnings for the desktop to show the user.
+
+    Each names the review to check on the forge. The list and each text are
+    bounded so a damaged store can never make the handshake too large.
+    """
+    notices: list[JsonValue] = []
+    for warning in warnings[:MAX_RECOVERY_NOTICES]:
+        text = warning.describe()
+        if len(text) > MAX_RECOVERY_NOTICE_CHARS:
+            text = text[: MAX_RECOVERY_NOTICE_CHARS - 1] + "…"
+        notices.append(text)
+    return notices
 
 
 def _report_recovery_warnings(warnings: tuple[RecoveryWarning, ...]) -> None:

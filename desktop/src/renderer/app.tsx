@@ -19,6 +19,7 @@ import {
 } from "./core/navigation.js";
 import { QueryCoordinator } from "./core/query.js";
 import {
+  ServiceNotices,
   ServiceStatusLine,
   ServiceStatusModel,
 } from "./core/service-status.js";
@@ -179,6 +180,7 @@ function App(): ReactNode {
           <ServiceStatusLine model={serviceStatus} bridge={bridge} />
         </div>
       </header>
+      <ServiceNotices model={serviceStatus} />
       <div className="app-layout">
         <RepositoryNavigation
           bridge={bridge}

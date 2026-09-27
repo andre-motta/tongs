@@ -113,7 +113,12 @@ export interface DesktopEvent { readonly sequence: number; readonly name: string
 /** Whether the main process currently holds a live connection to the local service. */
 export type ServiceState = "connected" | "stopped";
 /** A service state change; `revision` only grows, so a stale snapshot can be ignored. */
-export interface ServiceStatusDto { readonly state: ServiceState; readonly revision: number; }
+/** `notices` are the current session's startup warnings, shown until dismissed. */
+export interface ServiceStatusDto {
+  readonly state: ServiceState;
+  readonly revision: number;
+  readonly notices: readonly string[];
+}
 export interface AssetDescriptor { readonly source: "core" | "plugin"; readonly asset_id: string; readonly plugin_id: string | null; readonly kind: string; readonly media_type: string; readonly byte_count: number; readonly sha256: string; readonly url: string; }
 export interface DesktopRead<T> { readonly requestToken: string; readonly result: Promise<T>; }
 

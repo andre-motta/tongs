@@ -17,11 +17,14 @@ from tongs.config import Config
 from tongs.desktop import sidecar
 from tongs.desktop.protocol.messages import JsonLimits, JsonObject
 from tongs.desktop.protocol.server import (
+    MAX_RECOVERY_NOTICE_CHARS,
+    MAX_RECOVERY_NOTICES,
     DesktopSidecarServer,
     RequestContext,
     _encode_event_or_resync,
     _EventBuffer,
     _QueuedEvent,
+    _recovery_notices,
 )
 from tongs.desktop.protocol.state import HandleKind
 from tongs.plugins.desktop import (
@@ -36,7 +39,13 @@ from tongs.plugins.desktop import (
 )
 from tongs.plugins.desktop_registry import DesktopPluginRegistry
 from tongs.scanner.repo import ForgeType
-from tongs.services import JobRef, RepositoryRef, RepositorySnapshot, ServiceEvent
+from tongs.services import (
+    JobRef,
+    RepositoryRef,
+    RepositorySnapshot,
+    ReviewRef,
+    ServiceEvent,
+)
 from tongs.state.drafts import RecoveryWarning
 from tongs.state.drafts.models import RECOVERY_CORRUPT_ATTEMPT_MESSAGE
 
@@ -191,7 +200,8 @@ async def test_handshake_reports_skipped_recovery_attempt_on_stderr(
 ) -> None:
     session = _FakeSession()
     attempt_id = UUID("11111111-2222-4333-8444-555555555555")
-    session.recovery_warnings = (RecoveryWarning(attempt_id),)
+    review = ReviewRef(RepositoryRef("github.com", "acme/widgets"), 12)
+    session.recovery_warnings = (RecoveryWarning(attempt_id, review=review),)
     server = DesktopSidecarServer(
         session=cast(object, session), plugin_registry=_registry()
     )
@@ -214,11 +224,58 @@ async def test_handshake_reports_skipped_recovery_attempt_on_stderr(
     await task
 
     assert response["id"] == "handshake"
-    assert "result" in response
+    # The desktop shows the same text, naming the review to check on the forge.
+    expected = (
+        f"{RECOVERY_CORRUPT_ATTEMPT_MESSAGE} Review: github.com/acme/widgets #12. "
+        f"Attempt {attempt_id}."
+    )
+    assert response["result"]["recovery_warnings"] == [expected]  # type: ignore[index]
     stderr = capsys.readouterr().err
     assert "draft recovery warning" in stderr
-    assert str(attempt_id) in stderr
-    assert RECOVERY_CORRUPT_ATTEMPT_MESSAGE in stderr
+    assert expected in stderr
+
+
+def test_handshake_recovery_notices_are_bounded() -> None:
+    long_review = ReviewRef(RepositoryRef("github.com", "a/" + "b" * 990), 1)
+    warnings = tuple(
+        RecoveryWarning(None, review=long_review if index == 0 else None)
+        for index in range(MAX_RECOVERY_NOTICES + 5)
+    )
+
+    notices = _recovery_notices(warnings)
+
+    assert len(notices) == MAX_RECOVERY_NOTICES
+    assert all(isinstance(text, str) for text in notices)
+    assert len(cast(str, notices[0])) == MAX_RECOVERY_NOTICE_CHARS
+    assert cast(str, notices[0]).endswith("…")
+    assert notices[1] == RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+    assert _recovery_notices(()) == []
+
+
+@pytest.mark.asyncio
+async def test_handshake_without_recovery_warnings_sends_an_empty_list() -> None:
+    server = DesktopSidecarServer(
+        session=cast(object, _FakeSession()), plugin_registry=_registry()
+    )
+    reader = asyncio.StreamReader()
+    writer = _QueueWriter()
+    task = asyncio.create_task(server.run(reader, writer))
+    reader.feed_data(
+        _frame(
+            "handshake",
+            "handshake",
+            {
+                "protocol_major": 1,
+                "core_version": version("tongs"),
+                "capabilities": [],
+            },
+        )
+    )
+    response = await asyncio.wait_for(writer.frames.get(), 1)
+    reader.feed_eof()
+    await task
+
+    assert response["result"]["recovery_warnings"] == []  # type: ignore[index]
 
 
 @pytest.mark.asyncio

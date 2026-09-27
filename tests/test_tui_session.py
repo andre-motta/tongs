@@ -553,8 +553,12 @@ async def test_startup_notifies_skipped_recovery_attempt(tmp_path: Path) -> None
         warnings = session.recovery_warnings
 
     assert app.startup_error is None
-    assert warnings == (RecoveryWarning(attempt.id),)
-    assert any(str(attempt.id) in message for message in messages)
+    assert warnings == (RecoveryWarning(attempt.id, review=draft.review),)
+    # The toast names the review to check on the forge, not only the attempt.
+    assert any(
+        "Review: github.com/acme/widgets #3." in message and str(attempt.id) in message
+        for message in messages
+    )
     assert all("private draft text" not in message for message in messages)
 
 

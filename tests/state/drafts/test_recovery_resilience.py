@@ -153,10 +153,17 @@ async def test_corrupt_attempt_is_reported_and_others_still_recover(
 
     assert {item.id for item in recovered} == {attempts[0].id, attempts[2].id}
     assert all(item.state is DraftState.UNKNOWN for item in recovered)
-    assert store.recovery_warnings == (RecoveryWarning(damaged.id),)
+    assert store.recovery_warnings == (
+        RecoveryWarning(damaged.id, review=damaged.snapshot.review),
+    )
     warning = store.recovery_warnings[0]
     assert warning.message == RECOVERY_CORRUPT_ATTEMPT_MESSAGE
-    assert str(damaged.id) in warning.describe()
+    # The warning names the review to check, read from the released draft row.
+    assert warning.review == _review(2)
+    assert warning.describe() == (
+        f"{RECOVERY_CORRUPT_ATTEMPT_MESSAGE} Review: github.com/acme/widgets #2. "
+        f"Attempt {damaged.id}."
+    )
     assert SECRET_BODY not in warning.describe()
     # The damaged attempt row is kept, never deleted, and the draft is back
     # in the normal editing path with its content intact.
@@ -223,7 +230,10 @@ async def test_recovery_write_failure_skips_one_attempt_and_keeps_starting(
 
     assert tuple(item.id for item in recovered) == (attempts[1].id,)
     assert store.recovery_warnings == (
-        RecoveryWarning(failing.id, RECOVERY_WRITE_FAILED_MESSAGE),
+        RecoveryWarning(failing.id, RECOVERY_WRITE_FAILED_MESSAGE, review=_review(1)),
+    )
+    assert "Review: github.com/acme/widgets #1." in (
+        store.recovery_warnings[0].describe()
     )
     assert SECRET_BODY not in store.recovery_warnings[0].describe()
     # The failed attempt was rolled back unchanged, so the next pass retries it.
@@ -265,3 +275,53 @@ async def test_unparseable_attempt_id_is_reported_without_identity(
             "SELECT state FROM submission_attempts WHERE id = 'not-a-uuid'"
         ).fetchall()
     assert states == [(DraftState.UNKNOWN.value,)]
+
+
+@pytest.mark.asyncio
+async def test_corrupt_attempt_whose_draft_write_fails_still_names_the_review(
+    db_path: Path,
+) -> None:
+    attempts = await _abandoned_attempts(db_path, 1)
+    damaged = attempts[0]
+    _corrupt_attempt(db_path, damaged.id)
+
+    store = DraftStore(db_path)
+    await store.open()
+    real = store._connection()
+
+    class _FailingRelease:
+        async def execute(self, sql: str, parameters: object = ()) -> object:
+            if "UPDATE drafts" in sql and "active_attempt_id = NULL" in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return await real.execute(sql, parameters)  # type: ignore[arg-type]
+
+    store._connection = lambda: _FailingRelease()  # type: ignore[assignment,method-assign]
+    try:
+        assert await store.recover_incomplete_attempts() == ()
+    finally:
+        del store._connection
+
+    assert store.recovery_warnings == (
+        RecoveryWarning(damaged.id, RECOVERY_WRITE_FAILED_MESSAGE, review=_review(1)),
+    )
+    assert (await store.get_draft(damaged.draft_id)).state is DraftState.SUBMITTING
+    await store.close()
+
+
+def test_recovery_warning_describe_names_review_and_attempt() -> None:
+    attempt_id = UUID("11111111-2222-4333-8444-555555555555")
+    review = ReviewRef(RepositoryRef("gitlab.example.com", "group/sub/project"), 42)
+
+    assert RecoveryWarning(None).describe() == RECOVERY_CORRUPT_ATTEMPT_MESSAGE
+    assert RecoveryWarning(None, review=review).describe() == (
+        f"{RECOVERY_CORRUPT_ATTEMPT_MESSAGE} "
+        "Review: gitlab.example.com/group/sub/project #42."
+    )
+    assert (
+        RecoveryWarning(attempt_id, review=review)
+        .describe()
+        .endswith(
+            "Review: gitlab.example.com/group/sub/project #42. "
+            "Attempt 11111111-2222-4333-8444-555555555555."
+        )
+    )

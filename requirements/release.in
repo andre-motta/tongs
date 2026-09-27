@@ -10,7 +10,7 @@ packaging>=24.0
 platformdirs>=4.0
 pyperclip>=1.8
 sigstore==4.5.0
-textual>=1.0
+textual>=2.0
 
 # The SPDX generator in the signing job validates against the pinned schema.
 jsonschema>=4.18,<5

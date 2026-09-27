@@ -481,3 +481,30 @@ def test_provider_audit_queries_the_mcp_extra_capability() -> None:
         'raise RuntimeError(f"missing Fedora providers: {missing}")'
     )
     assert '"direct-package-provides" if usable else "unresolved"' in audit
+
+
+def test_textual_floor_matches_the_content_markup_api() -> None:
+    """Textual 2.0 added ``textual.content.Content.from_markup`` with variables.
+
+    The terminal views escape forge text through it, so every declared floor
+    is 2, and Fedora 44 (python3-textual 4.0.0) still satisfies the RPM one.
+    """
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    release_inputs = (ROOT / "requirements" / "release.in").read_text()
+    core_spec = (PACKAGING / "templates" / "python-tongs.spec.in").read_text()
+    manifest = json.loads((PACKAGING / "manifest.json").read_text())
+    dependencies = json.loads(
+        (
+            ROOT / "packaging" / "rpm" / "python-dependencies" / "manifest.json"
+        ).read_text()
+    )
+
+    assert '"textual>=2.0",' in pyproject
+    assert re.search(r"^textual>=2\.0$", release_inputs, re.MULTILINE)
+    assert "BuildRequires:  python3dist(textual) >= 2\n" in core_spec
+    assert "Requires:       python3dist(textual) >= 2\n" in core_spec
+    assert "python3dist(textual) >= 2" in manifest["core_runtime_requirements"]
+    assert {
+        "requirement": "python3dist(textual) >= 2",
+        "import": "textual",
+    } in dependencies["system_requirements"]

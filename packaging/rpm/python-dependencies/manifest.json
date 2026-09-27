@@ -26,7 +26,7 @@
     {"requirement": "python3dist(pyperclip) >= 1.8", "import": "pyperclip"},
     {"requirement": "python3dist(requests)", "import": "requests"},
     {"requirement": "python3dist(rich) >= 13", "import": "rich"},
-    {"requirement": "python3dist(textual) >= 1", "import": "textual"},
+    {"requirement": "python3dist(textual) >= 2", "import": "textual"},
     {"requirement": "python3dist(typing-extensions) >= 4.14.1", "import": "typing_extensions"},
     {"requirement": "python3dist(urllib3) >= 2", "import": "urllib3"}
   ],

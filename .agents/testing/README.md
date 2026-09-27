@@ -183,7 +183,18 @@ set -e
 exit "$status"
 ```
 
-Change only the deadline and test file list for the intended check. A stricter
+Change only the deadline and test file list for the intended check. The
+documentation site build is the one exception to the task limit: run
+`npm ci --prefix site` and `npm run build --prefix site` with
+`--property=TasksMax=256` and assert `pids.max` is 256. Node starts a worker
+thread per CPU for both `npm` and `astro`, so on a host with many cores the
+build aborts at startup with SIGABRT under 64 tasks. This is a thread-creation
+failure, not an out-of-memory kill. Keep the 1 GiB memory maximum and zero
+swap; the build peaks near 0.9 GiB. The desktop build has a similar limit:
+esbuild starts a thread per CPU, so on such a host add
+`--setenv=GOMAXPROCS=4` to the guard for `npm run build --prefix desktop` and
+`npm test --prefix desktop`, or they abort with `newosproc` before any test
+runs. A stricter
 parent cgroup can make an effective value lower; in that case, adapt the
 fail-closed assertions to prove the effective limit is no greater than the
 stated maximum. If a user systemd manager is unavailable, use an equivalent

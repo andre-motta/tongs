@@ -252,6 +252,41 @@ def test_handshake_recovery_notices_are_bounded() -> None:
     assert _recovery_notices(()) == []
 
 
+def _js_length(text: str) -> int:
+    """Count UTF-16 code units, as the desktop shell's ``String.length`` does."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+@pytest.mark.parametrize("padding", [0, 1, 2, 3])
+def test_recovery_notice_bound_counts_utf16_units_for_astral_text(padding: int) -> None:
+    # Each astral character is one code point but two UTF-16 units. Near the
+    # limit the notice must fit the shell's bound and never split a pair.
+    path = "a/" + "b" * padding + "\U0001f600" * 500
+    review = ReviewRef(RepositoryRef("github.com", path), 1)
+
+    [notice] = _recovery_notices((RecoveryWarning(None, review=review),))
+
+    text = cast(str, notice)
+    assert len(text) < MAX_RECOVERY_NOTICE_CHARS
+    assert _js_length(text) <= MAX_RECOVERY_NOTICE_CHARS
+    assert _js_length(text) >= MAX_RECOVERY_NOTICE_CHARS - 1
+    assert text.endswith("…")
+    text.encode("utf-8")  # no lone surrogate
+
+
+def test_recovery_notice_at_the_utf16_bound_is_kept_whole() -> None:
+    prefix = RecoveryWarning(
+        None, review=ReviewRef(RepositoryRef("github.com", "a/b"), 1)
+    ).describe()
+    spare = MAX_RECOVERY_NOTICE_CHARS - _js_length(prefix)
+    path = "a/b" + "\U0001f600" * (spare // 2) + "c" * (spare % 2)
+    review = ReviewRef(RepositoryRef("github.com", path), 1)
+    text = RecoveryWarning(None, review=review).describe()
+    assert _js_length(text) == MAX_RECOVERY_NOTICE_CHARS
+
+    assert _recovery_notices((RecoveryWarning(None, review=review),)) == [text]
+
+
 @pytest.mark.asyncio
 async def test_handshake_without_recovery_warnings_sends_an_empty_list() -> None:
     server = DesktopSidecarServer(

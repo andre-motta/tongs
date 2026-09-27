@@ -1941,6 +1941,8 @@ def _consume_task(task: asyncio.Task[object]) -> None:
 
 
 #: Bounds of the handshake's ``recovery_warnings``, matched by the desktop shell.
+#: The text bound counts UTF-16 code units, as JavaScript's ``String.length``
+#: does, so both sides measure a notice the same way.
 MAX_RECOVERY_NOTICES = 20
 MAX_RECOVERY_NOTICE_CHARS = 1000
 
@@ -1953,11 +1955,32 @@ def _recovery_notices(warnings: tuple[RecoveryWarning, ...]) -> list[JsonValue]:
     """
     notices: list[JsonValue] = []
     for warning in warnings[:MAX_RECOVERY_NOTICES]:
-        text = warning.describe()
-        if len(text) > MAX_RECOVERY_NOTICE_CHARS:
-            text = text[: MAX_RECOVERY_NOTICE_CHARS - 1] + "…"
-        notices.append(text)
+        notices.append(_truncate_utf16(warning.describe(), MAX_RECOVERY_NOTICE_CHARS))
     return notices
+
+
+def _utf16_length(text: str) -> int:
+    """Return the length of ``text`` in UTF-16 code units, like JavaScript."""
+    return len(text) + sum(1 for char in text if ord(char) > 0xFFFF)
+
+
+def _truncate_utf16(text: str, limit: int) -> str:
+    """Cut ``text`` to at most ``limit`` UTF-16 code units, ending in an ellipsis.
+
+    The cut falls between code points, so it never splits a surrogate pair.
+    """
+    if _utf16_length(text) <= limit:
+        return text
+    budget = limit - 1
+    used = 0
+    end = 0
+    for char in text:
+        width = 2 if ord(char) > 0xFFFF else 1
+        if used + width > budget:
+            break
+        used += width
+        end += 1
+    return text[:end] + "…"
 
 
 def _report_recovery_warnings(warnings: tuple[RecoveryWarning, ...]) -> None:

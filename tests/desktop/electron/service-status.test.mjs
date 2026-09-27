@@ -96,9 +96,7 @@ test("a handshake without recovery warnings has no notices", async () => {
 for (const [label, value] of [
   ["not a list", "check the forge"],
   ["a non-string item", [7]],
-  ["an empty item", [""]],
-  ["an oversized item", ["x".repeat(1001)]],
-  ["too many items", new Array(21).fill("warning")],
+  ["a null item", ["warning", null]],
 ]) {
   test(`a handshake whose recovery warnings are ${label} is incompatible`, async () => {
     const fake = harness({ handshakeExtras: { recovery_warnings: value } });
@@ -106,5 +104,49 @@ for (const [label, value] of [
     await assert.rejects(transport.start(), { code: "incompatible_handshake" });
     assert.equal(transport.serviceState, "stopped");
     assert.deepEqual([...transport.serviceNotices], []);
+  });
+}
+
+async function noticesFor(warnings) {
+  const fake = harness({ handshakeExtras: { recovery_warnings: warnings } });
+  const transport = transportFor(fake);
+  await transport.start();
+  const notices = [...transport.serviceNotices];
+  assert.equal(transport.serviceState, "connected");
+  await transport.stop();
+  return notices;
+}
+
+test("empty recovery warnings are dropped and too many are cut to the bound", async () => {
+  assert.deepEqual(await noticesFor(["", "warning"]), ["warning"]);
+  const many = Array.from({ length: 21 }, (_, index) => `warning ${index}`);
+  assert.deepEqual(await noticesFor(many), many.slice(0, 20));
+});
+
+test("an over-long ASCII recovery warning is cut, not rejected", async () => {
+  const [notice] = await noticesFor(["x".repeat(1001)]);
+  assert.equal(notice.length, 1000);
+  assert.equal(notice, `${"x".repeat(999)}…`);
+});
+
+// U+1F600 is one code point but two UTF-16 units, matching Python's bound.
+const ASTRAL = "\u{1F600}";
+
+test("an astral recovery warning at 1000 UTF-16 units is kept whole", async () => {
+  const exact = ASTRAL.repeat(500);
+  assert.equal(exact.length, 1000);
+  assert.deepEqual(await noticesFor([exact]), [exact]);
+  const odd = `a${ASTRAL.repeat(499)}b`;
+  assert.deepEqual(await noticesFor([odd]), [odd]);
+});
+
+for (const prefix of ["", "a", "ab"]) {
+  test(`an astral recovery warning over the bound is cut on a code point (prefix ${prefix.length})`, async () => {
+    const [notice] = await noticesFor([`${prefix}${ASTRAL.repeat(501)}`]);
+    assert.ok(notice.length <= 1000, `length ${notice.length}`);
+    assert.ok(notice.length >= 999, `length ${notice.length}`);
+    assert.ok(notice.endsWith("…"));
+    assert.ok(notice.isWellFormed(), "no lone surrogate");
+    assert.ok(notice.startsWith(prefix));
   });
 }

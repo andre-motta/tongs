@@ -620,25 +620,34 @@ const MAX_SERVICE_NOTICE_LENGTH = 1000;
 
 /**
  * Reads the optional startup warnings of a handshake. They are plain text for
- * the user; a malformed list means an incompatible service, like any other
- * malformed handshake field.
+ * the user. A value that is not a list of strings means an incompatible
+ * service, like any other malformed handshake field; an over-long list or text
+ * is only cut down, so one long notice cannot stop the service from starting.
  */
 function handshakeNotices(value: JsonValue): readonly string[] {
   if (!isRecord(value) || value.recovery_warnings === undefined) return NO_NOTICES;
   const warnings = value.recovery_warnings;
-  if (
-    !Array.isArray(warnings) ||
-    warnings.length > MAX_SERVICE_NOTICES ||
-    !warnings.every(
-      (warning) =>
-        typeof warning === "string" &&
-        warning.length > 0 &&
-        warning.length <= MAX_SERVICE_NOTICE_LENGTH,
-    )
-  ) {
+  if (!Array.isArray(warnings) || !warnings.every((warning) => typeof warning === "string")) {
     throw new SidecarError("incompatible_handshake", "The desktop service is incompatible.");
   }
-  return Object.freeze([...(warnings as string[])]);
+  const notices = (warnings as string[])
+    .filter((warning) => warning.length > 0)
+    .slice(0, MAX_SERVICE_NOTICES)
+    .map(truncateNotice);
+  return notices.length === 0 ? NO_NOTICES : Object.freeze(notices);
+}
+
+/**
+ * Cuts a notice to `MAX_SERVICE_NOTICE_LENGTH` UTF-16 units, ending in an
+ * ellipsis, without splitting a surrogate pair. Python bounds the text the
+ * same way, so a current service never needs the cut.
+ */
+function truncateNotice(text: string): string {
+  if (text.length <= MAX_SERVICE_NOTICE_LENGTH) return text;
+  let end = MAX_SERVICE_NOTICE_LENGTH - 1;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}…`;
 }
 
 function validateHandshake(value: JsonValue, coreVersion: string): JsonLimits {

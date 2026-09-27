@@ -697,10 +697,11 @@ class DesktopSidecarServer:
     ) -> object:
         """List one page of reviews.
 
-        All Open reads one page per repository, most recently updated first, so
-        a response holds at most ``per_page`` reviews for each repository. A
-        repository-scoped All Open read returns ``next_cursor`` when the forge
-        has another page; passing it back as ``cursor`` reads that page.
+        All Open reads one repository at a time, most recently updated first,
+        so a response holds at most ``per_page`` reviews. It returns
+        ``next_cursor`` when the forge has another page; passing it back as
+        ``cursor`` reads that page. An All Open read without a repository is
+        rejected: it could neither be paged nor stay inside the frame budget.
         """
         _require_params(
             params,
@@ -708,6 +709,11 @@ class DesktopSidecarServer:
             required=frozenset({"scope"}),
         )
         scope, state, repository, per_page = self._review_query_params(params)
+        if scope is ReviewScope.ALL_OPEN and repository is None:
+            raise ProtocolError(
+                ProtocolErrorCode.INVALID_PARAMS,
+                "An All Open review list needs a repository.",
+            )
         repository_handle = (
             cast(str, params["repository"]) if repository is not None else None
         )
@@ -732,7 +738,7 @@ class DesktopSidecarServer:
         )
         return {
             "next_cursor": self._review_cursors.seal(page.next_cursor, binding)
-            if page.next_cursor is not None and repository is not None
+            if page.next_cursor is not None
             else None,
             **self._review_page_wire(page),
         }

@@ -377,15 +377,20 @@ async def test_forged_and_mismatched_cursors_are_invalid_params(
 
 
 @pytest.mark.asyncio
-async def test_all_open_without_repository_reads_first_pages_only(
+async def test_all_open_without_repository_is_invalid_params(
     wired: tuple[_Wire, _Forge, dict[str, str]],
 ) -> None:
     wire, forge, _handles = wired
-    result = _result(await wire.call("reviews.list", {"scope": "all_open"}))
-    assert len(cast(list[object], result["items"])) == 103
-    assert result["next_cursor"] is None
-    assert sorted(project for project, _ in forge.list_requests) == list(_PROJECTS)
-    assert len(forge.ci_requests) == 103
+    for params in (
+        {"scope": "all_open"},
+        {"scope": "all_open", "repository": None},
+        {"scope": "all_open", "state": "closed", "per_page": 10},
+    ):
+        frame = await wire.call("reviews.list", cast(JsonObject, params))
+        error = cast(dict[str, object], frame["error"])
+        assert error["code"] == "invalid_params", params
+    assert forge.list_requests == []
+    assert forge.ci_requests == []
 
 
 def _plugin_context(server: DesktopSidecarServer) -> DesktopPluginContext:

@@ -347,14 +347,23 @@ class TestReviewMutationRoutes:
         assert json.loads(seen[0].content)["commit_id"] == "captured-head"
 
     @pytest.mark.asyncio
-    async def test_approve_maps_422_to_validation_error(self):
+    async def test_approve_maps_self_approval_422(self):
         client, http = _make_github_client(
-            lambda _: httpx.Response(422, json={"message": "cannot approve"})
+            lambda _: httpx.Response(422, json={"message": "Can not approve your own pull request"})
         )
         async with http:
             with pytest.raises(
                 ValidationError, match="GitHub does not allow self-approving PRs"
             ):
+                await client.approve_mr("acme/repo", 10)
+
+    @pytest.mark.asyncio
+    async def test_approve_preserves_other_validation_messages(self):
+        client, http = _make_github_client(
+            lambda _: httpx.Response(422, json={"message": "commit_id is stale"})
+        )
+        async with http:
+            with pytest.raises(ValidationError, match="commit_id is stale"):
                 await client.approve_mr("acme/repo", 10)
 
     @pytest.mark.asyncio

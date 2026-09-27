@@ -634,7 +634,9 @@ class GitHubClient(ForgeClient):
                 repo_path, number, ReviewDecision.APPROVED, "", head_sha=head_sha
             )
         except ValidationError as exc:
-            raise ValidationError("GitHub does not allow self-approving PRs") from exc
+            if "self-approv" in str(exc).lower():
+                raise ValidationError("GitHub does not allow self-approving PRs") from exc
+            raise
 
     async def merge_mr(
         self,

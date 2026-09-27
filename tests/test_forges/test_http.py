@@ -15,6 +15,7 @@ from tongs.errors import (
     NetworkError,
     NotFoundError,
     RateLimitError,
+    ValidationError,
 )
 from tongs.forges.http import (
     RefreshingTokenAuth,
@@ -69,18 +70,13 @@ class TestMapHttpError:
         resp = _FakeResponse(409, '{"message": "Merge conflict"}')
         assert isinstance(map_http_error(resp), ConflictError)
 
-    def test_422_returns_generic_forge_error_not_conflict(self):
-        # GitHub returns 422 for many distinct validation failures across
-        # unrelated endpoints (e.g. self-approving a PR), not only for
-        # definitive rejections of the requested state change. Treating it
-        # as an unknown outcome (rather than guessing it always means
-        # "conflict") keeps existing per-endpoint 422 handling, such as
-        # GitHubClient.approve_mr's "422" substring check, intact.
-        resp = _FakeResponse(422, '{"message": "Validation Failed"}')
+    @pytest.mark.parametrize("status", [400, 422])
+    def test_validation_rejections_are_definite_not_conflicts(self, status):
+        resp = _FakeResponse(status, '{"message": "Validation Failed"}')
         err = map_http_error(resp)
-        assert isinstance(err, ForgeError)
+        assert isinstance(err, ValidationError)
         assert not isinstance(err, ConflictError)
-        assert "422" in str(err)
+        assert "Validation Failed" in str(err)
 
     def test_429_returns_rate_limit(self):
         resp = _FakeResponse(

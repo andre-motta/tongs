@@ -9,6 +9,7 @@ from tongs.errors import (
     NetworkError,
     NotFoundError,
     RateLimitError,
+    ValidationError,
     redact_credentials,
 )
 
@@ -102,6 +103,7 @@ class TestErrorHierarchy:
             ConflictError,
             ForgePermissionError,
             ConfigError,
+            ValidationError,
         ]:
             assert issubclass(cls, ForgeError)
 

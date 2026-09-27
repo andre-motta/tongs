@@ -16,6 +16,7 @@ from tongs.errors import (
     NetworkError,
     NotFoundError,
     RateLimitError,
+    ValidationError,
     redact_credentials,
 )
 
@@ -117,6 +118,8 @@ def map_http_error(response: httpx.Response) -> ForgeError:
         return ConflictError(f"Conflict: {body}")
     if status == 409:
         return ConflictError(f"Conflict: {body}")
+    if status in {400, 422}:
+        return ValidationError(f"Validation failed: {body}")
     if status == 429:
         retry_after = response.headers.get("Retry-After")
         retry_seconds = (

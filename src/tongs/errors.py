@@ -35,6 +35,10 @@ class ForgePermissionError(ForgeError):
     """Insufficient permissions for the requested operation."""
 
 
+class ValidationError(ForgeError):
+    """Forge rejected the request as invalid before applying the mutation."""
+
+
 class ConfigError(ForgeError):
     """Configuration error (malformed config, invalid scan root, etc.)."""
 

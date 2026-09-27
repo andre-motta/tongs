@@ -104,6 +104,7 @@ stop_probe() {
 trap 'stop_probe 130' INT
 trap 'stop_probe 143' TERM
 
+status=0
 podman run --rm \
     --name "$container_name" \
     --init \
@@ -118,4 +119,7 @@ podman run --rm \
     --env "TONGS_SOURCE_SHA=$source_sha" \
     --volume "$repo_root:/checkout:ro,z" \
     --volume "$output_dir:/output:rw,Z" \
-    "$image_id" "${inject_failure[@]}"
+    "$image_id" "${inject_failure[@]}" &
+probe_pid=$!
+wait "$probe_pid" || status=$?
+exit "$status"

@@ -653,6 +653,12 @@ button {
   cursor: wait;
   opacity: 0.7;
 }
+.safe-markdown-link-host-mismatch {
+  margin-left: 5px;
+  color: var(--warning);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .safe-markdown-link-inert,
 .safe-markdown-image-placeholder,
 .safe-markdown-link-error {

@@ -22,10 +22,10 @@ forge:
 
 - github.com and gitlab.com are recognized on their own.
 - Hostnames listed under `[hosts.*]` in the config use the forge you set there.
-- Any other hostname that contains `github` or `gitlab` is treated as that
-  forge.
 
-Repositories with other remotes, or with no remote at all, are skipped.
+Repositories with any other remote, including a self-hosted forge that is not
+listed under `[hosts.*]`, or with no remote at all, are skipped. tongs does not
+guess the forge from a hostname.
 
 To scan a different directory for one run, pass `--scan-root` (or `-d`):
 

@@ -399,6 +399,19 @@ async def test_actual_textual_mr_detail_uses_production_services(
             RetryJobRequested(forge.pipeline.id, forge.job.id)
         )
         await _settle(app)
+        job_reads_after_retry = [
+            call for call in forge.calls if call == ("get_pipeline_jobs", "acme/widgets", 101)
+        ]
+        assert len(job_reads_after_retry) == 2
+
+        screen.action_refresh()
+        await _settle(app)
+        job_reads_after_refresh = [
+            call for call in forge.calls if call == ("get_pipeline_jobs", "acme/widgets", 101)
+        ]
+        assert len(job_reads_after_refresh) == 3
+        assert panel._view_level == 1
+        assert panel._current_pipeline == forge.pipeline
 
         assert ("get_diff", "acme/widgets", 7) in forge.calls
         assert ("get_discussions", "acme/widgets", 7) in forge.calls

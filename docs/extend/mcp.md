@@ -130,13 +130,16 @@ For example: "Use tongs to list open PRs for `github.com/acme/app`", or
   suggested changes or review drafts. Use the terminal app or the desktop app (beta) for
   those.
 - **Checked repository paths.** A `repo_path` must have a hostname and at
-  least an owner and a repository, may contain only letters, digits, `_`, `.`
-  and `-` in each segment, and may not contain `..`. Anything else is
-  rejected before a request is made.
-- **Known hosts.** github.com and gitlab.com work out of the box. For a
-  self-hosted forge, add it under `[hosts.*]` in the
+  least an owner and a repository, may contain only ASCII letters, digits,
+  `_`, `.` and `-` in each segment, and may not contain `..`. A GitHub path
+  must be exactly `hostname/owner/repo`; a GitLab path may include nested
+  groups. Anything else is rejected before a request is made.
+- **Configured hosts only.** github.com and gitlab.com work out of the box.
+  For a self-hosted forge, add it under `[hosts.*]` in the
   [configuration](/reference/configuration/) file, which the server reads at
-  startup.
+  startup. Any other host is rejected before a token is looked up or a
+  request is made, even if its name contains "github" or "gitlab". This is
+  the same host set the terminal and desktop apps use.
 - **No cache.** Each tool call goes to the forge API directly. The server does
   not read or write the tongs response cache.
 

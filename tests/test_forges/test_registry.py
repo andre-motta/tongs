@@ -65,11 +65,43 @@ class TestForgeRegistry:
         host2 = registry.get_host("gitlab.com")
         assert host1 is host2
 
-    def test_gitlab_subdomain_auto_detected(self):
+    @pytest.mark.parametrize(
+        "hostname",
+        [
+            "gitlab.example.org",
+            "evil-gitlab.example",
+            "github.com.evil.io",
+            "mygithub.example",
+            "g\u0456thub.com",
+        ],
+    )
+    def test_unconfigured_host_is_not_mapped_by_substring(self, hostname):
         registry = ForgeRegistry()
-        host = registry.get_host("gitlab.example.org")
-        assert host is not None
-        assert host.forge_type == ForgeType.GITLAB
+        assert registry.get_host(hostname) is None
+
+    @pytest.mark.asyncio
+    async def test_get_client_unconfigured_host_skips_token_lookup(self):
+        registry = ForgeRegistry()
+        with (
+            patch(
+                "tongs.forges.registry.resolve_token",
+                side_effect=AssertionError("token lookup must not run"),
+            ),
+            pytest.raises(AuthError, match="Unknown forge host"),
+        ):
+            await registry.get_client("evil-gitlab.example")
+
+    def test_active_hostnames_are_the_configured_set(self):
+        registry = ForgeRegistry(
+            extra_gitlab_hosts=frozenset({"git.lab.corp"}),
+            extra_github_hosts=frozenset({"git.hub.corp"}),
+        )
+        assert registry.active_hostnames() == [
+            "git.hub.corp",
+            "git.lab.corp",
+            "github.com",
+            "gitlab.com",
+        ]
 
     @pytest.mark.asyncio
     async def test_get_client_unknown_host_raises_auth_error(self):

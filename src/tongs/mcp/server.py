@@ -12,12 +12,14 @@ import re
 from mcp.server.fastmcp import FastMCP
 
 from tongs.config import load_config
+from tongs.forges.base import ForgeClient
 from tongs.forges.registry import ForgeRegistry
+from tongs.scanner.repo import ForgeType
 
 mcp = FastMCP("tongs")
 
 _registry: ForgeRegistry | None = None
-_REPO_PATH_RE = re.compile(r"^(?!.*\.\.)[\w.-]+(?:/[\w.-]+){2,}$")
+_REPO_PATH_RE = re.compile(r"^(?!.*\.\.)[\w.-]+(?:/[\w.-]+){2,}$", re.ASCII)
 
 
 def _get_registry() -> ForgeRegistry:
@@ -33,11 +35,37 @@ def _get_registry() -> ForgeRegistry:
 
 
 def _parse_host_repo(repo_path: str) -> tuple[str, str]:
-    """Split 'hostname/owner/repo' into (hostname, 'owner/repo')."""
+    """Split 'hostname/owner/repo' into (hostname, 'owner/repo').
+
+    Only github.com, gitlab.com and the hosts configured in config.toml are
+    accepted, the same set the terminal and desktop apps use. Any other host
+    is rejected here, before a client is built, a token is looked up or a
+    request is made.
+    """
     if not _REPO_PATH_RE.match(repo_path):
         raise ValueError(f"repo_path must be 'hostname/owner/repo', got: {repo_path}")
-    parts = repo_path.split("/", 1)
-    return parts[0], parts[1]
+    hostname, path = repo_path.split("/", 1)
+    registry = _get_registry()
+    host = (
+        registry.get_host(hostname) if hostname in registry.active_hostnames() else None
+    )
+    if host is None:
+        raise ValueError(
+            f"Host {hostname!r} is not configured; add it under [hosts.*] in "
+            "config.toml to use it with tongs-mcp"
+        )
+    if host.forge_type == ForgeType.GITHUB and path.count("/") != 1:
+        raise ValueError(
+            f"repo_path for a GitHub host must be 'hostname/owner/repo', got: {repo_path}"
+        )
+    return hostname, path
+
+
+async def _client_for(repo_path: str) -> tuple[ForgeClient, str]:
+    """Return the client for an admitted repo_path and its 'owner/repo' part."""
+    hostname, path = _parse_host_repo(repo_path)
+    client = await _get_registry().get_client(hostname)
+    return client, path
 
 
 @mcp.tool()
@@ -48,9 +76,7 @@ async def list_mrs(repo_path: str, state: str = "open") -> list[dict]:
         repo_path: Repository path as 'hostname/owner/repo' (e.g., 'github.com/acme/app')
         state: MR state filter ('open', 'closed', 'merged')
     """
-    hostname, path = _parse_host_repo(repo_path)
-    registry = _get_registry()
-    client = await registry.get_client(hostname)
+    client, path = await _client_for(repo_path)
     mrs = await client.list_mrs(path, state=state)
     return [
         {
@@ -74,9 +100,7 @@ async def get_mr(repo_path: str, number: int) -> dict:
         repo_path: Repository path as 'hostname/owner/repo'
         number: MR/PR number
     """
-    hostname, path = _parse_host_repo(repo_path)
-    registry = _get_registry()
-    client = await registry.get_client(hostname)
+    client, path = await _client_for(repo_path)
     mr = await client.get_mr(path, number)
     return {
         "number": mr.number,
@@ -106,9 +130,7 @@ async def get_mr_diff(repo_path: str, number: int) -> str:
         repo_path: Repository path as 'hostname/owner/repo'
         number: MR/PR number
     """
-    hostname, path = _parse_host_repo(repo_path)
-    registry = _get_registry()
-    client = await registry.get_client(hostname)
+    client, path = await _client_for(repo_path)
     changes = await client.get_mr_diff(path, number)
     parts = []
     for change in changes:
@@ -136,9 +158,7 @@ async def post_comment(repo_path: str, number: int, body: str) -> str:
         number: MR/PR number
         body: Comment text (markdown supported)
     """
-    hostname, path = _parse_host_repo(repo_path)
-    registry = _get_registry()
-    client = await registry.get_client(hostname)
+    client, path = await _client_for(repo_path)
     await client.add_comment(path, number, body)
     return "Comment posted successfully"
 
@@ -151,9 +171,7 @@ async def approve_mr(repo_path: str, number: int) -> str:
         repo_path: Repository path as 'hostname/owner/repo'
         number: MR/PR number
     """
-    hostname, path = _parse_host_repo(repo_path)
-    registry = _get_registry()
-    client = await registry.get_client(hostname)
+    client, path = await _client_for(repo_path)
     await client.approve_mr(path, number)
     return "MR approved successfully"
 
@@ -166,9 +184,7 @@ async def list_pipelines(repo_path: str, number: int) -> list[dict]:
         repo_path: Repository path as 'hostname/owner/repo'
         number: MR/PR number
     """
-    hostname, path = _parse_host_repo(repo_path)
-    registry = _get_registry()
-    client = await registry.get_client(hostname)
+    client, path = await _client_for(repo_path)
     pipelines = await client.list_mr_pipelines(path, number)
     return [
         {

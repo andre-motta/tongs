@@ -111,7 +111,12 @@ class ForgeRegistry:
         return client
 
     def active_hostnames(self) -> list[str]:
-        """Return all known hostnames (configured + discovered)."""
+        """Return the configured hostnames.
+
+        These are github.com, gitlab.com and the extra GitLab and GitHub hosts
+        from config.toml. Hosts seen only through local repository discovery
+        are not included.
+        """
         defaults = {"gitlab.com", "github.com"}
         all_hosts = (
             defaults | set(self._extra_gitlab_hosts) | set(self._extra_github_hosts)
@@ -137,13 +142,15 @@ class ForgeRegistry:
             raise ExceptionGroup("Failed to close forge clients", failures)
 
     def _detect_type(self, hostname: str) -> ForgeType | None:
-        """Detect forge type from hostname."""
+        """Detect forge type for a configured hostname.
+
+        Only exact matches are admitted: github.com, gitlab.com and the extra
+        hosts from config. Any other hostname, including one that merely
+        contains "github" or "gitlab", returns None so no client or token
+        lookup can target it.
+        """
         if hostname in {"github.com"} or hostname in self._extra_github_hosts:
             return ForgeType.GITHUB
         if hostname in {"gitlab.com"} or hostname in self._extra_gitlab_hosts:
             return ForgeType.GITLAB
-        if "gitlab" in hostname:
-            return ForgeType.GITLAB
-        if "github" in hostname:
-            return ForgeType.GITHUB
         return None

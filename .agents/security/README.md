@@ -24,8 +24,13 @@ Do not log raw HTTP headers.
 
 ## Host and URL admission
 
-The forge registry accepts known GitHub/GitLab hosts, explicitly configured
-hosts, and hosts admitted through local repository discovery. Scanner remote
+The forge registry accepts only exact hostnames: `github.com`, `gitlab.com`,
+and the `extra_gitlab_hosts` and `extra_github_hosts` configured in
+`config.toml`. It never infers a forge from a substring such as "gitlab" in the
+name, so an unconfigured host gets no client and no token lookup.
+`ApplicationSession` ignores discovered repositories on other hosts, and
+`tongs-mcp` rejects any other host in `_parse_host_repo` with a plain
+`ValueError` before registry, credential, or network work. Scanner remote
 parsing removes URL userinfo before storing a `Remote`.
 
 `GitHubClient._repo_path_from_api_url()` checks API-provided repository URLs
@@ -135,8 +140,9 @@ or installation.
 `tongs-mcp` runs separately from both UIs and creates its own registry. It
 exposes only the high-level tools declared in `src/tongs/mcp/server.py`; it does
 not expose raw HTTP, token, shell, merge, close, reopen, or CI cancellation
-primitives. `_parse_host_repo()` validates `hostname/owner/repo` input and
-rejects traversal-like forms. Keep auth material out of tool inputs and outputs.
+primitives. `_parse_host_repo()` validates ASCII-only `hostname/owner/repo` input,
+rejects traversal-like forms, admits only the configured hosts above, and
+requires exactly `owner/repo` on GitHub hosts. Keep auth material out of tool inputs and outputs.
 
 ## Plugin trust
 

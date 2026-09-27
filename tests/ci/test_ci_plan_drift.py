@@ -436,12 +436,24 @@ with contextlib.redirect_stdout(output):
 if status != 0:
     sys.stderr.write(output.getvalue())
     raise SystemExit(f"collection failed with {status}")
-files = set()
+files, named = set(), set()
 for name, module in list(sys.modules.items()):
     file = getattr(module, "__file__", None)
-    if file and (relative := checkout_path(name, file)) is not None:
-        files.add(relative)
-print(json.dumps(sorted(files)))
+    if not file or (relative := checkout_path(name, file)) is None:
+        continue
+    files.add(relative)
+    if relative.startswith("src/"):
+        continue
+    # Module-level path constants of the loaded test modules and helpers, such
+    # as a fixture root, name repository files the suites read at run time.
+    for value in vars(module).values():
+        if not isinstance(value, pathlib.PurePath):
+            continue
+        path = pathlib.Path(value)
+        path = (path if path.is_absolute() else root / path).resolve()
+        if path != root and path.is_relative_to(root) and path.exists():
+            named.add(path.relative_to(root).as_posix())
+print(json.dumps({"files": sorted(files), "named": sorted(named)}))
 """
 )
 
@@ -476,8 +488,12 @@ def _pytest_invocations(job: dict) -> list[list[str]]:
     return invocations
 
 
-def _collected_imports(invocations: list[list[str]]) -> list[str]:
+def _collected_reads(invocations: list[list[str]]) -> tuple[list[str], list[str]]:
+    """The repository files the suites import, and the repository paths their
+    non-tongs modules name in module-level path constants."""
+
     imported: set[str] = set()
+    named: set[str] = set()
     for arguments in invocations:
         completed = subprocess.run(
             [
@@ -495,8 +511,27 @@ def _collected_imports(invocations: list[list[str]]) -> list[str]:
             timeout=300,
         )
         assert completed.returncode == 0, completed.stderr
-        imported.update(json.loads(completed.stdout))
-    return sorted(imported)
+        report = json.loads(completed.stdout)
+        imported.update(report["files"])
+        named.update(report["named"])
+    return sorted(imported), sorted(named)
+
+
+def _read_paths(imported: list[str], named: list[str], source: str) -> dict[str, str]:
+    """Every tracked file a suite imports or reaches through a path constant.
+
+    A named directory that holds an imported module is a code root (a
+    ``sys.path`` entry or a source tree a test walks), not a fixture root, so
+    it is skipped; the modules it holds are already checked as imports.
+    """
+
+    paths = dict.fromkeys(imported, f"imported by {source}")
+    for constant in named:
+        if any(module.startswith(constant + "/") for module in imported):
+            continue
+        for path in _expand(constant):
+            paths.setdefault(path, f"named by a path constant in {source}")
+    return paths
 
 
 def test_everything_the_desktop_suites_import_selects_desktop(
@@ -510,9 +545,12 @@ def test_everything_the_desktop_suites_import_selects_desktop(
     targets = {word for arguments in invocations for word in arguments}
     assert "examples/desktop-plugin/tests" in targets
     assert "tests/packaging" in targets
-    imported = _collected_imports(invocations)
+    imported, named = _collected_reads(invocations)
     assert "tests/desktop/native/native_payload_launcher.py" in imported
-    paths = {path: "imported by a desktop suite" for path in imported}
+    # The native payload suite builds its archive from the reference builder's
+    # fixture roots, so the derivation must see them.
+    assert "tests/desktop/artifact_contract/fixtures" in named
+    paths = _read_paths(imported, named, "a desktop suite")
     assert _offenders(paths, "desktop") == []
 
 
@@ -524,9 +562,10 @@ def test_everything_the_core_suites_import_selects_core() -> None:
     invocations = _pytest_invocations(core)
     targets = {word for arguments in invocations for word in arguments}
     assert "tests/integration/desktop/test_draft_process_acceptance.py" in targets
-    imported = _collected_imports(invocations)
+    imported, named = _collected_reads(invocations)
     assert "src/tongs/tui_services.py" in imported
-    paths = {path: "imported by a core suite" for path in imported}
+    assert "tests/desktop/artifact_contract/fixtures" in named
+    paths = _read_paths(imported, named, "a core suite")
     assert _offenders(paths, "core") == []
 
 
@@ -748,17 +787,38 @@ def _load_fedora_probe() -> ModuleType:
     return _load_by_path("ci_plan_drift_fedora_probe", FEDORA_PROBE)
 
 
+@pytest.mark.needs_git
 def test_the_fedora_probe_inputs_rule_is_what_the_probe_reads() -> None:
     """The probe builds the example plugin wheel and runs SMOKE_TESTS from the
-    source copy, so exactly those paths select it outside the full graph."""
+    source copy, so the example plugin, those files and every repository file
+    they load or name through a fixture root select the probe, and every
+    pattern of the rule is still one of those reads."""
 
     probe = _load_fedora_probe()
-    expected = {f"{probe.EXAMPLE_PLUGIN.as_posix()}/**", *probe.SMOKE_TESTS}
+    imported, named = _collected_reads([list(probe.SMOKE_TESTS)])
+    # The installed wheel provides tongs itself; the source rules cover src/.
+    imported = [path for path in imported if not path.startswith("src/")]
+    assert set(probe.SMOKE_TESTS) <= set(imported)
+    assert "tests/plugins/conftest.py" in imported
+    for fixture_root in (
+        "tests/desktop/artifact_contract/fixtures",
+        "tests/fixtures/desktop_plugins",
+    ):
+        assert fixture_root in named, fixture_root
+    paths = _read_paths(imported, named, "the Fedora smoke subset")
+    paths = {
+        path: source for path, source in paths.items() if not path.startswith("src/")
+    }
+    example = probe.EXAMPLE_PLUGIN.as_posix()
+    paths.update(dict.fromkeys(_expand(example), "the example plugin wheel build"))
+    assert _offenders(paths, "fedora_podman") == []
     (rule,) = [rule for rule in RULES if rule.name == "fedora-probe-inputs"]
-    assert set(rule.patterns) == expected
-    assert len(rule.patterns) == len(expected)
-    for path in probe.SMOKE_TESTS:
-        assert _selects(path, "fedora_podman"), path
+    stale = [
+        pattern
+        for pattern in rule.patterns
+        if not any(pattern_matches(pattern, path) for path in paths)
+    ]
+    assert stale == []
 
 
 def _ruff_check_paths() -> list[str]:

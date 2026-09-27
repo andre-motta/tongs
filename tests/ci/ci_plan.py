@@ -288,7 +288,9 @@ RULES: tuple[Rule, ...] = (
         ),
         lanes=frozenset({"lint", "desktop"}),
     ),
-    # Fixtures that both a core suite and a desktop suite read.
+    # Fixtures that both a core suite and a desktop suite read: the native
+    # payload suite builds its archive from the reference builder's fixture
+    # roots.
     Rule(
         name="shared-test-fixtures",
         patterns=(
@@ -297,6 +299,7 @@ RULES: tuple[Rule, ...] = (
             "tests/desktop/fixtures/**",
             "tests/desktop/artifact_contract/__init__.py",
             "tests/desktop/artifact_contract/reference_builder.py",
+            "tests/desktop/artifact_contract/fixtures/**",
         ),
         lanes=frozenset({"lint", "core", "desktop"}),
     ),
@@ -332,27 +335,40 @@ RULES: tuple[Rule, ...] = (
     ),
     # What the Fedora Podman probe reads beyond the full-graph roots: it builds
     # the example plugin wheel and runs the installed-wheel smoke subset named
-    # by SMOKE_TESTS in tests/containers/probe.py.  test_ci_plan_drift.py keeps
-    # this list equal to the probe's own constants.
+    # by SMOKE_TESTS in tests/containers/probe.py, with the packages,
+    # conftest, helpers and fixture roots that subset loads.
+    # test_ci_plan_drift.py derives that set from the probe's own constants
+    # and fails when an entry here is missing or stale.
     Rule(
         name="fedora-probe-inputs",
         patterns=(
             "examples/desktop-plugin/**",
+            "tests/__init__.py",
+            "tests/test_plugins/__init__.py",
             "tests/test_plugins/test_plugin_system.py",
+            "tests/plugins/conftest.py",
             "tests/plugins/test_desktop_discovery.py",
             "tests/plugins/test_desktop_resources.py",
+            "tests/fixtures/desktop_plugins/**",
+            "tests/desktop/artifact_contract/__init__.py",
+            "tests/desktop/artifact_contract/reference_builder.py",
             "tests/desktop/artifact_contract/test_schemas.py",
+            "tests/desktop/artifact_contract/fixtures/**",
             "tests/desktop/test_assets.py",
             "tests/desktop/test_sidecar.py",
+            "tests/test_mcp/__init__.py",
             "tests/test_mcp/test_server.py",
             "tests/test_config.py",
+            "tests/desktop/installer/__init__.py",
             "tests/desktop/installer/test_launcher.py",
             "tests/test_tui_mr_services.py",
             "tests/test_tui_review_mode.py",
             "tests/test_tui_session.py",
+            "tests/test_views/__init__.py",
             "tests/test_views/test_forge_text_literal.py",
             "tests/test_views/test_pipeline_log_search.py",
             "tests/test_views/test_repo_list_search.py",
+            "tests/test_widgets/__init__.py",
             "tests/test_widgets/test_diff_panel.py",
             "tests/test_widgets/test_mr_table.py",
             "tests/test_widgets/test_pipeline_panel.py",

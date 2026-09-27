@@ -145,7 +145,7 @@ packaging/
   rpm/desktop/             # python-tongs and tongs-desktop SRPM sources and harness
   rpm/python-dependencies/ # Companion Python RPM specs and manifest
 scripts/                   # Repository maintenance and evidence helpers
-  release-evidence/native/ # Manual native Electron proofs and their fixtures; CI only lints them
+  release-evidence/native/ # Manual native Electron proofs and their fixtures; CI lints them and imports the Python fixture
 ```
 
 ## Subsystem Guides

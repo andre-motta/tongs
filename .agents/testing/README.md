@@ -223,8 +223,10 @@ The native proofs live in `scripts/release-evidence/native/`: the `ci-`,
 `review-` and `utility-proof` programs, their `*-proof-launcher.mjs` launchers,
 the `*-proof-app/` Electron entry directories, and the `ci_fixture_sidecar.py`
 and `editor_fixture.py` fixtures they start. They are manual release evidence
-tooling. No CI job and no pytest or `npm test` run executes them; CI only lints
-their Python files and classifies changes to them into the lint lane. Run a
+tooling. No CI job runs the proofs themselves. CI lints their Python files, and
+`tests/desktop/test_release_evidence_fixture.py` loads `ci_fixture_sidecar.py`
+against the real sidecar and service internals, so a change to those internals
+or to the fixture runs it in the core lane. Run a
 launcher by hand from the checkout root, for example
 `node scripts/release-evidence/native/ci-proof-launcher.mjs`, after
 `npm run build --prefix desktop`. Each proof writes its report under
@@ -272,7 +274,7 @@ using the rules in `tests/ci/ci_plan.py`:
 | sidecar | `src/tongs/cache/**`, `src/tongs/config.py`, `src/tongs/desktop/**`, `src/tongs/diff/**`, `src/tongs/errors.py`, `src/tongs/forges/**`, `src/tongs/plugins/**`, `src/tongs/scanner/**`, `src/tongs/services/**`, `src/tongs/state/**`, `src/tongs/tui_services.py`, `tests/__init__.py`, `tests/desktop/**`, `tests/fixtures/**`, `tests/integration/**`, `tests/plugins/**`, `tests/services/**`, `tests/state/**`, `examples/desktop-plugin/**` | lint, core, desktop_fixtures, desktop |
 | packaging | `LICENSE`, `scripts/build_desktop_archive.py`, `scripts/build_desktop_sbom.py`, `src/tongs/__init__.py`, `src/tongs/desktop/artifact_contract/**`, `src/tongs/desktop/installer/**`, `tests/integration/desktop/archive_evidence.py`, `tests/integration/desktop/candidate_attestation.py`, `tests/integration/desktop/rpm_payload_contract.py`, `tests/integration/desktop/sbom_evidence.py`, `tests/desktop/installer/fixtures/**`, `tests/packaging/**` | lint, core, desktop_fixtures, desktop, packaging |
 | spikes | `spikes/**` | desktop_fixtures |
-| release-evidence | `scripts/release-evidence/**` | lint |
+| release-evidence | `scripts/release-evidence/**` | lint, core |
 | ci-infrastructure | `.github/workflows/**`, `.github/scripts/**`, `tests/ci/**`, `tests/containers/**` | full graph |
 | build-configuration | `pyproject.toml`, `requirements/**`, `packaging/**`, `desktop/**`, `.gitignore` | full graph |
 | (unmatched) | any other path | full graph |

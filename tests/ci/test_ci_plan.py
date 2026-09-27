@@ -59,7 +59,7 @@ README = frozenset({"docs", "core"})
 SIDECAR = frozenset({"lint", "core", "desktop_fixtures", "desktop"})
 PACKAGING = SIDECAR | {"packaging"}
 SPIKES = frozenset({"desktop_fixtures"})
-RELEASE_EVIDENCE = frozenset({"lint"})
+RELEASE_EVIDENCE = frozenset({"lint", "core"})
 
 
 # Layer 1: every rule pattern, by literal path.

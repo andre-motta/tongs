@@ -69,7 +69,8 @@ _GH_PROGRAM_COMMANDS = ("require-absent", "verify-published")
 
 def _load_workflows() -> dict[str, dict[str, Any]]:
     workflows = {}
-    for path in sorted(WORKFLOW_DIRECTORY.glob("*.yml")):
+    paths = [*WORKFLOW_DIRECTORY.glob("*.yml"), *WORKFLOW_DIRECTORY.glob("*.yaml")]
+    for path in sorted(paths):
         workflows[path.name] = yaml.safe_load(path.read_text())
     return workflows
 

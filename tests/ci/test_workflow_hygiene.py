@@ -76,6 +76,22 @@ def test_every_checkout_drops_its_credentials(
     assert checkouts
 
 
+def test_no_workflow_runs_on_pull_request_target(
+    workflows: dict[str, dict[str, Any]],
+) -> None:
+    # pull_request_target runs fork code with the base repository's secrets.
+    # PyYAML reads the bare `on` key as True.
+    for name, document in workflows.items():
+        triggers = document.get(True) or document.get("on") or {}
+        if isinstance(triggers, str):
+            triggers = {triggers: None}
+        elif isinstance(triggers, list):
+            triggers = dict.fromkeys(triggers)
+        assert "pull_request_target" not in triggers, (
+            f"{name} runs on pull_request_target"
+        )
+
+
 def test_every_file_declares_its_permissions(
     workflows: dict[str, dict[str, Any]],
 ) -> None:

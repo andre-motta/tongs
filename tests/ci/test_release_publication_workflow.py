@@ -107,6 +107,8 @@ def test_only_the_publish_job_can_write_contents(
     }
     assert writers == {"release-publish"}
     assert jobs["release-publish"]["permissions"] == {"contents": "write"}
+    # The unprivileged archive build must not mint or attest anything.
+    assert jobs["candidate-archive"]["permissions"] == {"contents": "read"}
     # The signing job mints the OIDC token; it must not also be able to write.
     assert jobs["candidate-attestation"]["permissions"] == {
         "contents": "read",

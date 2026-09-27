@@ -245,10 +245,11 @@ def encode_response(
         return _encode_response_fallback(request_id, _unencodable_response())
     if len(encoded) <= MAX_RESPONSE_FRAME_BYTES:
         return encoded
+    # Not retryable: repeating the same read returns the same oversized result.
     fallback = ProtocolError(
         ProtocolErrorCode.RESPONSE_TOO_LARGE,
         "The response exceeds the supported size; request a smaller page.",
-        retryable=True,
+        retryable=False,
     )
     return _encode_response_fallback(request_id, fallback)
 

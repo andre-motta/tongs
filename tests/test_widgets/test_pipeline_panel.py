@@ -180,3 +180,16 @@ async def test_enter_loads_the_focused_pipeline_then_the_focused_job_log() -> No
     assert load_jobs.pipeline is pipeline
     assert isinstance(load_log, LoadJobLogRequested)
     assert (load_log.job, load_log.pipeline) == (job, pipeline)
+
+@pytest.mark.asyncio
+async def test_job_log_search_is_case_insensitive() -> None:
+    app = PipelinePanelApp()
+    async with app.run_test():
+        panel = app.query_one(PipelinePanel)
+        panel._view_level = 2
+        panel._log_search_lines = ["build ok", "error: failed"]
+        panel._log_plain_lines = ["build ok", "error: failed"]
+        panel._log_row_offset = 0
+        panel._do_search("ERROR")
+
+        assert panel._search_matches == [1]

@@ -477,3 +477,24 @@ def test_archive_expectations_never_import_the_sbom_chain(
     result = json.loads(completed.stdout)
     assert result["loaded"] == []
     assert "--expected-archive-name" in result["argv"]
+
+
+def test_sbom_consume_arguments_name_the_published_receipt(
+    transfer_root: Path, tmp_path: Path
+) -> None:
+    receipt = tmp_path / "archive-receipt.json"
+    receipt.write_bytes(b"{}\n")
+    argv = sbom_evidence_argv(
+        _namespace(
+            transfer_root,
+            tmp_path,
+            mode="consume",
+            check_id="desktop-archive-sbom",
+            archive_receipt=receipt,
+            evidence_root=tmp_path / "gate",
+            output_root=None,
+        )
+    )
+    parsed = _parsed(sbom_adapter(), argv)
+    assert parsed.command == "consume"
+    assert parsed.receipt == tmp_path / "gate" / "sbom-receipt.json"

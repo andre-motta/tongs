@@ -81,3 +81,16 @@ def test_anchor_requires_a_real_line_on_selected_side() -> None:
             DiffSide.NEW,
             "fingerprint",
         )
+
+
+def test_anchor_rejects_non_integer_line_numbers() -> None:
+    with pytest.raises(ValueError, match="positive integers"):
+        InlineAnchor(
+            ReviewRevision("head", "base"),
+            "old.py",
+            "new.py",
+            1,
+            12.0,  # type: ignore[arg-type]
+            DiffSide.NEW,
+            "fingerprint",
+        )

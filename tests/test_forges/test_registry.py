@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tongs.cache.cached_client import CachedForgeClient
 from tongs.errors import AuthError
 from tongs.forges.http import RefreshingTokenAuth
 from tongs.forges.registry import ForgeRegistry, _github_api_base, _gitlab_api_base
@@ -128,3 +129,37 @@ class TestForgeRegistry:
         cancelled_client.close.assert_awaited_once()
         other_client.close.assert_awaited_once()
         assert registry._clients == {}
+
+
+@pytest.mark.asyncio
+async def test_get_client_reuses_client_and_token_lookup() -> None:
+    registry = ForgeRegistry()
+    with patch("tongs.forges.registry.resolve_token", return_value="tok") as resolve:
+        first = await registry.get_client("github.com")
+        second = await registry.get_client("github.com")
+    assert second is first
+    resolve.assert_called_once()
+    await registry.close_all()
+
+
+@pytest.mark.asyncio
+async def test_close_all_collects_failures_and_closes_every_client() -> None:
+    registry = ForgeRegistry()
+    broken = AsyncMock()
+    broken.close.side_effect = RuntimeError("boom")
+    healthy = AsyncMock()
+    registry._clients = {"github.com": broken, "gitlab.com": healthy}
+    with pytest.raises(ExceptionGroup) as excinfo:
+        await registry.close_all()
+    assert any(isinstance(e, RuntimeError) for e in excinfo.value.exceptions)
+    broken.close.assert_awaited_once()
+    healthy.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cache_wraps_created_client() -> None:
+    registry = ForgeRegistry(cache=object())
+    with patch("tongs.forges.registry.resolve_token", return_value="tok"):
+        client = await registry.get_client("github.com")
+    assert isinstance(client, CachedForgeClient)
+    await registry.close_all()

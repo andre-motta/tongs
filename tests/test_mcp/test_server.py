@@ -1,10 +1,11 @@
 """Tests for MCP server helpers."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from tongs.errors import AuthError, NetworkError
+from tongs.forges.models import CIStatus, Pipeline
 from tongs.forges.registry import ForgeRegistry
 
 mcp_available = True
@@ -193,3 +194,35 @@ class TestToolsRedactForgeErrors:
         message = str(excinfo.value)
         assert "SECRET" not in message
         assert "Forge authentication is unavailable" in message
+
+
+@pytest.mark.asyncio
+async def test_get_mr_diff_synthesizes_only_missing_headers(monkeypatch) -> None:
+    client = AsyncMock()
+    client.get_mr_diff.return_value = [
+        {"old_path": "old.py", "new_path": "new.py", "diff": "@@ -1 +1 @@\n-old\n+new"},
+        {
+            "old_path": "same.py",
+            "new_path": "same.py",
+            "diff": "--- a/same.py\n+++ b/same.py\n@@ -1 +1 @@\n-a\n+b",
+        },
+    ]
+    monkeypatch.setattr(
+        server, "_client_for", AsyncMock(return_value=(client, "org/repo"))
+    )
+    result = await server.get_mr_diff("github.com/org/repo", 1)
+    assert result.startswith("--- a/old.py\n+++ b/new.py\n@@")
+    assert result.count("--- a/same.py") == 1
+
+
+@pytest.mark.asyncio
+async def test_list_pipelines_shortens_sha(monkeypatch) -> None:
+    client = AsyncMock()
+    client.list_mr_pipelines.return_value = [
+        Pipeline(1, CIStatus.SUCCESS, "main", "1234567890abcdef", "https://ci")
+    ]
+    monkeypatch.setattr(
+        server, "_client_for", AsyncMock(return_value=(client, "org/repo"))
+    )
+    result = await server.list_pipelines("github.com/org/repo", 1)
+    assert result[0]["sha"] == "1234567"

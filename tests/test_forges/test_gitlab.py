@@ -760,3 +760,23 @@ class TestGitLabLifecycleActions:
         assert closed.remote_id == "420"
         assert reopened.remote_id == "420"
         assert unapproved.remote_id == "420"
+
+
+def test_parse_note_on_renamed_file_uses_new_path() -> None:
+    client, _ = _make_gitlab_client(lambda r: httpx.Response(200))
+    comment = client._parse_note(
+        {
+            "id": 103,
+            "body": "renamed",
+            "author": {"username": "bob", "name": "Bob"},
+            "created_at": "2026-06-02T10:00:00Z",
+            "resolved": False,
+            "position": {
+                "old_path": "src/old.py",
+                "new_path": "src/new.py",
+                "old_line": 3,
+                "new_line": 4,
+            },
+        }
+    )
+    assert comment.file_path == "src/new.py"

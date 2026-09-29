@@ -446,3 +446,19 @@ def test_archive_rejects_structural_and_metadata_mismatches(
             },
             100,
         )
+
+
+def test_bind_requires_full_source_commit_match() -> None:
+    manifest = json.loads((PACKAGING / "manifest.json").read_text())
+    manifest["accepted_desktop"].pop("reviewed_fixture", None)
+    accepted_commit = manifest["accepted_desktop"]["source_commit"]
+    identity = contract.SourceIdentity(
+        commit=accepted_commit[:12] + ("b" * 28),
+        pep440_version="0.4.2.dev250+g" + ("b" * 12),
+        rpm_version="0.4.2~dev250",
+        rpm_release="0.1.20260908gitbbbbbbb",
+        source_date_epoch=100,
+    )
+
+    with pytest.raises(RuntimeError, match="same source commit"):
+        contract.bind_manifest(manifest, identity, allow_reviewed_fixture=True)

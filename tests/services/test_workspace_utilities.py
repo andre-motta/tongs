@@ -237,3 +237,55 @@ async def test_editor_capacity_is_reserved_before_log_fetch() -> None:
     assert result.status is EditorPlanStatus.CAPACITY_EXCEEDED
     assert calls.reservations == [(JOB.job_id, "1" * 32)]
     assert calls.jobs == []
+
+
+@pytest.mark.asyncio
+async def test_review_url_rejects_snapshot_for_different_review() -> None:
+    calls = Calls()
+
+    async def wrong_review(_review: ReviewRef) -> ReviewSnapshot:
+        snapshot = _snapshot()
+        return ReviewSnapshot(
+            ReviewRef(REPOSITORY, 99),
+            snapshot.detail,
+            snapshot.revision,
+            snapshot.capabilities,
+            snapshot.revision_error,
+        )
+
+    service = _service(calls)
+    service._get_review = wrong_review
+    with pytest.raises(ServiceError) as caught:
+        await service.review_url(REVIEW)
+    assert caught.value.code is ServiceErrorCode.INVALID_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_log_fetch_failure_releases_editor_reservation() -> None:
+    calls = Calls()
+
+    async def fail(_job: JobRef) -> str:
+        raise RuntimeError("fetch failed")
+
+    service = WorkspaceUtilityService(
+        config=Config(editor_command="code --wait"),
+        get_review=calls.get_review,
+        get_job_log=fail,
+        clear_cache=calls.clear_cache,
+        reserve_editor_export=calls.reserve_editor_export,
+        release_editor_export=calls.release_editor_export,
+        environment={},
+        token_factory=lambda: "1" * 32,
+    )
+    with pytest.raises(RuntimeError, match="fetch failed"):
+        await service.prepare_editor_log(JOB)
+    assert calls.releases == [(1, "1" * 32)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["code\n--wait", "code\t--wait", "code\x7f--wait"])
+async def test_editor_command_control_characters_are_not_ready(command: str) -> None:
+    result = await _service(
+        Calls(), config=Config(editor_command=command)
+    ).prepare_editor_log(JOB)
+    assert result.status is not EditorPlanStatus.READY

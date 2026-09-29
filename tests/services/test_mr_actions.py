@@ -505,3 +505,23 @@ async def test_event_failure_marks_known_receipt_for_resync() -> None:
 
     assert result.outcome is MRActionOutcome.KNOWN
     assert result.resync_required is True
+
+
+@pytest.mark.asyncio
+async def test_execute_after_close_is_refused() -> None:
+    client = _client()
+    service, *_ = _service(client)
+    await service.close()
+    with pytest.raises(ServiceError) as raised:
+        await service.execute(CloseReviewCommand("after-close", _target()))
+    assert raised.value.code is ServiceErrorCode.CLOSED
+    client.close_mr.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_non_mutation_result_is_invalid_response() -> None:
+    client = _client(close_mr=AsyncMock(return_value=object()))
+    service, *_ = _service(client)
+    result = await service.execute(CloseReviewCommand("bad-result", _target()))
+    assert result.error is not None
+    assert result.error.code is ServiceErrorCode.INVALID_RESPONSE

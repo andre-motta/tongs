@@ -144,3 +144,23 @@ class TestParseRemoteUrlEdgeCases:
         assert "oauth2" not in remote.url
         assert remote.hostname == "gitlab.com"
         assert remote.repo_path == "org/repo"
+
+    def test_https_trailing_slash_removed_from_repo_path(self):
+        remote = parse_remote_url("origin", "https://gitlab.com/group/repo/")
+        assert remote is not None
+        assert remote.repo_path == "group/repo"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://gitlab.corp:8443/g/r.git",
+            "https://user:token@gitlab.corp:8443/g/r.git",
+        ],
+    )
+    def test_https_port_removed_from_configured_hostname(self, url):
+        remote = parse_remote_url(
+            "origin", url, extra_gitlab_hosts=frozenset({"gitlab.corp"})
+        )
+        assert remote is not None
+        assert remote.hostname == "gitlab.corp"
+        assert remote.repo_path == "g/r"

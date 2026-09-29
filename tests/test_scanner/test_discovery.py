@@ -198,3 +198,43 @@ class TestDiscoverReposEdgeCases:
         )
         repos = discover_repos(tmp_path, max_depth=3)
         assert len(repos) == 0
+
+    def test_hidden_directory_is_not_scanned(self, tmp_path):
+        _init_repo(
+            tmp_path / ".cache" / "hidden",
+            {"origin": "https://github.com/org/hidden.git"},
+        )
+        assert discover_repos(tmp_path) == []
+
+    def test_nested_repository_is_not_reported_separately(self, tmp_path):
+        outer = tmp_path / "outer"
+        _init_repo(outer, {"origin": "https://github.com/org/outer.git"})
+        _init_repo(
+            outer / "vendor" / "inner",
+            {"origin": "https://github.com/org/inner.git"},
+        )
+        repos = discover_repos(tmp_path)
+        assert [repo.display_name for repo in repos] == ["org/outer"]
+
+
+def test_repo_forge_type_follows_primary_remote() -> None:
+    github = Remote(
+        name="upstream",
+        url="https://github.com/org/repo.git",
+        hostname="github.com",
+        repo_path="org/repo",
+        forge_type=ForgeType.GITHUB,
+    )
+    gitlab = Remote(
+        name="origin",
+        url="https://gitlab.com/org/repo.git",
+        hostname="gitlab.com",
+        repo_path="org/repo",
+        forge_type=ForgeType.GITLAB,
+    )
+    repo = Repo(
+        path=Path("/tmp/repo"),
+        remotes=(github, gitlab),
+        primary_remote=gitlab,
+    )
+    assert repo.forge_type is ForgeType.GITLAB

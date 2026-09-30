@@ -288,4 +288,4 @@ async def test_editor_command_control_characters_are_not_ready(command: str) -> 
     result = await _service(
         Calls(), config=Config(editor_command=command)
     ).prepare_editor_log(JOB)
-    assert result.status is not EditorPlanStatus.READY
+    assert result.status is EditorPlanStatus.MALFORMED

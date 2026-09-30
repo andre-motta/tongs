@@ -233,6 +233,31 @@ async def test_unsafe_source_cleanup_fails_before_dispatch(
 
 
 @pytest.mark.asyncio
+async def test_same_source_and_target_branch_cleanup_fails_before_dispatch() -> None:
+    snapshot = _snapshot()
+    same_branch = ReviewSnapshot(
+        snapshot.ref,
+        replace(snapshot.detail, source_branch="main", target_branch="main"),
+        snapshot.revision,
+        snapshot.capabilities,
+    )
+    client = _client()
+    service, *_ = _service(client, snapshot=same_branch)
+
+    with pytest.raises(ServiceError) as raised:
+        await service.execute(
+            MergeReviewCommand(
+                "same-branch-cleanup",
+                _target(),
+                source_cleanup=SourceBranchTarget(REPOSITORY, "main"),
+            )
+        )
+
+    assert raised.value.code is ServiceErrorCode.CONFLICT
+    client.merge_mr.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_exact_repeat_coalesces_and_id_rebind_conflicts() -> None:
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -520,7 +545,11 @@ async def test_execute_after_close_is_refused() -> None:
 
 @pytest.mark.asyncio
 async def test_non_mutation_result_is_invalid_response() -> None:
-    client = _client(close_mr=AsyncMock(return_value=object()))
+    client = _client(
+        close_mr=AsyncMock(
+            return_value=SimpleNamespace(remote_id="1", cache_invalidated=True)
+        )
+    )
     service, *_ = _service(client)
     result = await service.execute(CloseReviewCommand("bad-result", _target()))
     assert result.error is not None

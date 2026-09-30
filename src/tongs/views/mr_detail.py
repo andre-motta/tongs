@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import ClassVar
 from uuid import UUID
 
+import pyperclip
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -1304,13 +1305,13 @@ class MRDetailScreen(Screen):
         self.app.open_url(self.mr_summary.web_url)
 
     def action_yank_url(self) -> None:
-        import pyperclip
-
+        url = self.mr_summary.web_url
+        self.app.copy_to_clipboard(url)
         try:
-            pyperclip.copy(self.mr_summary.web_url)
+            pyperclip.copy(url)
             self.notify("URL copied to clipboard")
         except (pyperclip.PyperclipException, OSError):
-            self.notify(f"URL: {self.mr_summary.web_url}", markup=False)
+            self.notify("URL copied (terminal OSC 52)")
 
     def action_add_comment(self) -> None:
         editor = self.query_one("#comment-editor", CommentEditor)

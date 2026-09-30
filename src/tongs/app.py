@@ -8,13 +8,11 @@ from pathlib import Path
 from typing import ClassVar
 
 from textual import work
-from textual.app import App
+from textual.app import App, get_system_commands_provider
 from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.worker import WorkerCancelled, WorkerFailed
-
-from textual.app import get_system_commands_provider
 
 from tongs.commands import TongsCommandProvider
 from tongs.config import Config, load_config

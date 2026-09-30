@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-
-import pytest
 import sys
 
+import pytest
 from tongs.plugins.desktop import (
     DesktopCallContext,
     DesktopCancellation,

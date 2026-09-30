@@ -181,6 +181,7 @@ async def test_enter_loads_the_focused_pipeline_then_the_focused_job_log() -> No
     assert isinstance(load_log, LoadJobLogRequested)
     assert (load_log.job, load_log.pipeline) == (job, pipeline)
 
+
 @pytest.mark.asyncio
 async def test_job_log_search_is_case_insensitive() -> None:
     app = PipelinePanelApp()

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from tongs.config import Config, HostConfig, load_config
+from tongs.config import Config, HostConfig, config_dir, load_config
 
 
 class TestLoadConfig:
@@ -129,3 +129,10 @@ class TestExtraHosts:
         )
         assert cfg.extra_gitlab_hosts == frozenset()
         assert cfg.extra_github_hosts == frozenset()
+
+
+def test_config_dir_uses_platform_user_config_dir(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "tongs.config.platformdirs.user_config_dir", lambda name: "/tmp/config/tongs"
+    )
+    assert config_dir() == Path("/tmp/config/tongs")

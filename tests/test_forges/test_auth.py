@@ -10,6 +10,7 @@ import pytest
 from tongs.errors import AuthError
 from tongs.forges.auth import (
     _token_from_cli,
+    _token_from_keyring,
     _token_from_netrc,
     refresh_token,
     resolve_token,
@@ -276,3 +277,24 @@ class TestRefreshToken:
             assert refresh_token("github.com", ForgeType.GITHUB) is None
         assert "abcdef123456" not in caplog.text
         assert "ghp_[REDACTED]" in caplog.text
+
+
+def test_resolve_token_falls_back_to_keyring() -> None:
+    with (
+        patch("tongs.forges.auth._token_from_cli", return_value=None),
+        patch("tongs.forges.auth._token_from_netrc", return_value=None),
+        patch("tongs.forges.auth._token_from_keyring", return_value="keyring-token"),
+    ):
+        assert resolve_token("github.com", ForgeType.GITHUB) == "keyring-token"
+
+
+def test_token_from_keyring_reads_tongs_service(monkeypatch) -> None:
+    class FakeKeyring:
+        @staticmethod
+        def get_password(service, hostname):
+            assert service == "tongs"
+            assert hostname == "github.com"
+            return "stored-token"
+
+    monkeypatch.setitem(sys.modules, "keyring", FakeKeyring)
+    assert _token_from_keyring("github.com") == "stored-token"

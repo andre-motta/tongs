@@ -11,7 +11,7 @@ lead: Every key in the terminal app, screen by screen, followed by the desktop r
 | Key | Action |
 |-----|--------|
 | ++ctrl+p++ | Open the command palette |
-| ++question++ | Show a short help hint |
+| ++question++ | Show the keybindings panel |
 
 ### Main screens
 

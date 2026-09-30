@@ -14,6 +14,8 @@ from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.worker import WorkerCancelled, WorkerFailed
 
+from textual.app import get_system_commands_provider
+
 from tongs.commands import TongsCommandProvider
 from tongs.config import Config, load_config
 from tongs.plugins.registry import PluginRegistry
@@ -69,7 +71,7 @@ class TongsApp(App):
     }
     """
 
-    COMMANDS: ClassVar[set] = {TongsCommandProvider}
+    COMMANDS: ClassVar[set] = {TongsCommandProvider, get_system_commands_provider}
 
     BINDINGS: ClassVar[list] = [
         Binding("question_mark", "help", "Help", show=True),
@@ -194,4 +196,4 @@ class TongsApp(App):
             await self.session.close()
 
     def action_help(self) -> None:
-        self.notify("Help: press ? for keybindings, Ctrl+P for command palette")
+        self.action_show_help_panel()

@@ -494,3 +494,17 @@ def test_a_derived_state_never_contradicts_an_explicit_forge_flag() -> None:
         assert file.is_rename_only is False
         assert sum(getattr(file, flag) for flag in flags) == 1
         assert file.is_unavailable is False
+
+
+def test_change_without_new_path_or_filename_falls_back_to_old_path() -> None:
+    file = convert_forge_changes(
+        (
+            {
+                "old_path": "src/legacy.py",
+                "diff": "@@ -1 +1 @@\n-old\n+new\n",
+            },
+        )
+    )[0]
+
+    assert file.old_path == "src/legacy.py"
+    assert file.new_path == "src/legacy.py"

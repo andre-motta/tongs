@@ -310,6 +310,46 @@ class TestSyntheticDiffs:
         files = parse_diff(diff)
         assert files[0].new_path == "a/b/c/d/e/f/g.py"
 
+    def test_empty_new_file_without_hunks_is_preserved(self) -> None:
+        diff = (
+            "diff --git a/empty.txt b/empty.txt\n"
+            "new file mode 100644\n"
+            "index 0000000..e69de29\n"
+        )
+        files = parse_diff(diff)
+        assert len(files) == 1
+        assert files[0].new_path == "empty.txt"
+        assert files[0].status is FileStatus.ADDED
+        assert files[0].hunks == ()
+
+    def test_hunkless_binary_entry_does_not_swallow_following_file(self) -> None:
+        diff = (
+            "diff --git a/image.png b/image.png\n"
+            "new file mode 100644\n"
+            "Binary files /dev/null and b/image.png differ\n"
+            "diff --git a/next.txt b/next.txt\n"
+            "--- a/next.txt\n"
+            "+++ b/next.txt\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        files = parse_diff(diff)
+        assert len(files) == 2
+        assert files[0].is_binary is True
+        assert files[1].new_path == "next.txt"
+        assert len(files[1].hunks) == 1
+
+    def test_bare_blank_context_line_does_not_end_hunk(self) -> None:
+        diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,3 @@\n before\n\n after\n"
+        hunk = parse_diff(diff)[0].hunks[0]
+        assert [line.content for line in hunk.lines] == ["before", "", "after"]
+        assert [(line.old_lineno, line.new_lineno) for line in hunk.lines] == [
+            (1, 1),
+            (2, 2),
+            (3, 3),
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Language detection tests

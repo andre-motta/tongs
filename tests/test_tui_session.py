@@ -579,3 +579,30 @@ async def test_shutdown_cancels_active_inbox_read_before_session_close(
         await asyncio.wait_for(client.personal_started.wait(), timeout=2)
 
     assert registry.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_unmount_finishes_workers_before_session_close(tmp_path: Path) -> None:
+    app, session, _cache = make_app(tmp_path, [], MockForgeRegistry({}))
+    started = asyncio.Event()
+    finished = asyncio.Event()
+    original_close = session.close
+
+    async def blocked_worker() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            finished.set()
+
+    async def close_after_workers() -> None:
+        assert finished.is_set()
+        await original_close()
+
+    session.close = close_after_workers  # type: ignore[method-assign]
+
+    async with app.run_test():
+        app.run_worker(blocked_worker())
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+    assert finished.is_set()

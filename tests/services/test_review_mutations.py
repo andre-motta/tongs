@@ -504,10 +504,10 @@ async def test_close_owns_and_cancels_non_dispatch_validation() -> None:
     )
     await entered.wait()
 
-    await service.close()
+    await asyncio.wait_for(service.close(), timeout=0.1)
 
     with pytest.raises(asyncio.CancelledError):
-        await validation
+        await asyncio.wait_for(validation, timeout=0.1)
     assert service._owner_tasks == set()
     assert service._ledger == {}
     with pytest.raises(ServiceError) as raised:

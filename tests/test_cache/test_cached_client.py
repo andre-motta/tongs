@@ -421,3 +421,14 @@ class TestGetAttrDelegation:
         result = await client.some_uncached_method()
         assert result == "delegated"
         inner.some_uncached_method.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mutation_after_close_does_not_schedule_invalidation(
+    client, inner
+) -> None:
+    await client.close()
+    await client.add_comment("org/repo", 1, "body")
+    assert client._closed is True
+    assert client._invalidation_tasks == {}
+    inner.add_comment.assert_awaited_once()

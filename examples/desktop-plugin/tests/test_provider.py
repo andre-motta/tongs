@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
+import pytest
 from tongs.plugins.desktop import (
     DesktopCallContext,
     DesktopCancellation,
@@ -98,3 +99,21 @@ def test_refresh_is_deterministic_and_publishes_scoped_event() -> None:
     assert host.events[0][0] == "refreshed"
     assert value["generated_at"] == "2026-01-01T00:00:00Z"  # type: ignore[index]
     assert len(value["reviews"]) == 3  # type: ignore[index]
+
+
+def test_provider_rejects_unknown_method() -> None:
+    async def run() -> None:
+        provider = ExampleDashboardProvider()
+        host = RecordingHost()
+        await provider.start(make_context(host))
+        try:
+            with pytest.raises(ValueError):
+                await provider.call(
+                    "unknown",
+                    freeze_json_object({}),
+                    DesktopCallContext("unknown-1", DesktopCancellation()),
+                )
+        finally:
+            await provider.stop()
+
+    asyncio.run(run())

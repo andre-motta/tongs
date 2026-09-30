@@ -198,3 +198,20 @@ async def test_wrong_digest_is_rejected_after_exact_transfer() -> None:
             )
 
     assert raised.value.code is InstallerErrorCode.INTEGRITY_FAILED
+
+
+@pytest.mark.asyncio
+async def test_stream_without_content_length_still_enforces_maximum_bytes() -> None:
+    response = lambda _request: httpx.Response(
+        200, stream=ChunkStream([b"123456", b"78901"])
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        with pytest.raises(InstallerError) as raised:
+            await download_bytes(
+                client,
+                "https://api.github.com/release",
+                limits=InstallerLimits(),
+                maximum_bytes=10,
+            )
+
+    assert raised.value.code is InstallerErrorCode.LIMIT_EXCEEDED

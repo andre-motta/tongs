@@ -16,7 +16,7 @@ from tongs.plugins.desktop import (
     DesktopModule,
     DesktopPluginManifest,
 )
-from tongs.plugins.desktop_resources import validate_asset_resources
+from tongs.plugins.desktop_resources import find_asset, validate_asset_resources
 
 
 def resource_manifest(package: str, root: str = "assets") -> DesktopPluginManifest:
@@ -192,3 +192,12 @@ def test_namespace_package_bundle_root_link_is_rejected(
             validate_asset_resources(resource_manifest("namespace_asset_fixture"))
     finally:
         sys.modules.pop("namespace_asset_fixture", None)
+
+
+def test_find_asset_rejects_unknown_asset(
+    desktop_fixture_root: Path,
+) -> None:
+    assets = validate_asset_resources(resource_manifest("fixture_desktop_assets"))
+
+    with pytest.raises(LookupError, match="Unknown or ambiguous"):
+        find_asset(assets, "resource", "missing")

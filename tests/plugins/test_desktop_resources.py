@@ -194,7 +194,6 @@ def test_namespace_package_bundle_root_link_is_rejected(
         sys.modules.pop("namespace_asset_fixture", None)
 
 
-
 def test_find_asset_rejects_unknown_asset(
     desktop_fixture_root: Path,
 ) -> None:

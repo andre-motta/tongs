@@ -63,7 +63,7 @@ These keys work on the inbox, the repository list and MR detail.
 | ++shift+x++ | Close (press twice to confirm) |
 | ++ctrl+y++ | Copy the MR URL to the clipboard |
 | ++ctrl+g++ | Start review mode, or open the review draft once one exists |
-| ++alt+close-bracket++ | Cycle to the next recovered review draft for this MR |
+| ++ctrl+n++ | Cycle to the next recovered review draft for this MR |
 
 ### Diff viewer
 

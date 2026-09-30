@@ -218,9 +218,7 @@ class MRDetailScreen(Screen):
         Binding("ctrl+y", "yank_url", "Copy URL", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
         Binding("ctrl+g", "review_draft", "Review draft", show=True),
-        Binding(
-            "alt+right_square_bracket", "next_review_draft", "Next draft", show=False
-        ),
+        Binding("ctrl+n", "next_review_draft", "Next draft", show=True),
     ]
 
     def __init__(self, mr_summary: MRSummary):

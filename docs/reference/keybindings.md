@@ -78,7 +78,7 @@ These keys work on the inbox, the repository list and MR detail.
 | ++shift+r++ | Resolve or unresolve the discussion (press twice) |
 | ++c++ | Comment on the current line or selection |
 | ++f3++ | Suggest a change in your external editor |
-| ++n++ / ++shift+n++ | Next / previous file |
+| ++n++ / ++shift-n++ | Next / previous file |
 | ++m++ | Toggle the Markdown preview |
 | ++v++ | Toggle unified and split layout |
 | ++escape++ | Clear the selection |

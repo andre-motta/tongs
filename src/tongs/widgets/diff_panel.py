@@ -1367,7 +1367,7 @@ class DiffPanel(Widget):
 
     BINDINGS: ClassVar[list] = [
         Binding("n", "next_file", "Next file", show=True),
-        Binding("shift+n", "prev_file", "Prev file", show=False),
+        Binding("N", "prev_file", "Prev file", show=False, key_display="N"),
         Binding("m", "preview_markdown", "Preview MD", show=False),
         Binding("v", "toggle_diff_mode", "Unified/Split", show=True),
     ]

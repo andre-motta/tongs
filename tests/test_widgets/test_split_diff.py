@@ -562,7 +562,7 @@ async def test_placeholder_cannot_restore_prior_source_on_layout_or_navigation(
         await pilot.pause()
         assert app.comments == []
 
-        await pilot.press("n", "shift+n")
+        await pilot.press("n", "N")
         await pilot.pause()
         assert_authoritative_placeholder()
 

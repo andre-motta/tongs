@@ -9,7 +9,9 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
+import pyperclip
 import pytest
 from textual.widgets import Static, TextArea
 
@@ -789,3 +791,47 @@ async def test_adapter_keeps_quick_writes_revision_bound_and_immediate(
         assert ("cancel_pipeline", "acme/widgets", 101) in forge.calls
         assert ("retry_job", "acme/widgets", 201) in forge.calls
         assert ("cancel_job", "acme/widgets", 201) in forge.calls
+
+
+@pytest.mark.asyncio
+async def test_question_mark_toggles_help_panel(tmp_path: Path) -> None:
+    app, _forge = _app(tmp_path)
+
+    async with app.run_test(notifications=True) as pilot:
+        await _settle(app)
+        assert len(app.screen.query("HelpPanel")) == 0
+
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert len(app.screen.query("HelpPanel")) == 1
+
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert len(app.screen.query("HelpPanel")) == 0
+
+
+@pytest.mark.asyncio
+async def test_ctrl_y_uses_osc52_and_falls_back_gracefully(
+    tmp_path: Path,
+) -> None:
+    app, forge = _app(tmp_path)
+
+    async with app.run_test(notifications=True) as pilot:
+        await _settle(app)
+        table = app.screen.query_one("#reviews-table")
+        table.focus()
+        await pilot.press("enter")
+        await _settle(app)
+        screen = cast(MRDetailScreen, app.screen)
+        assert isinstance(screen, MRDetailScreen)
+
+        with (
+            patch.object(app, "copy_to_clipboard") as mock_osc52,
+            patch.object(pyperclip, "copy", side_effect=pyperclip.PyperclipException),
+        ):
+            await pilot.press("ctrl+y")
+            await pilot.pause()
+            mock_osc52.assert_called_once_with(forge.summary.web_url)
+            notifications = list(app._notifications)
+            assert any("OSC 52" in n.message for n in notifications)
+            assert any(forge.summary.web_url in n.message for n in notifications)

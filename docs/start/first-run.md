@@ -72,7 +72,7 @@ Press ++escape++ to go back to the inbox. A few keys work almost everywhere:
 
 | Key | Action |
 |-----|--------|
-| ++question++ | Show a short help hint |
+| ++question++ | Show or hide the keybindings panel |
 | ++ctrl+p++ | Command palette |
 | ++ctrl+r++ | Refresh the current view |
 | ++o++ | Open the review in your browser |

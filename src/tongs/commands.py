@@ -61,7 +61,7 @@ class TongsCommandProvider(Provider):
             ("Repos", "Open repository list", lambda: app.push_screen("repo_list")),
             ("Inbox", "Open MR inbox", lambda: app.push_screen("inbox")),
             ("Clear Cache", "Clear all cached API responses", _clear_cache),
-            ("Help", "Show help", lambda: app.action_help()),
+            ("Help", "Show the keybindings panel", lambda: app.action_help()),
         ]
         if hasattr(app, "plugin_registry"):
             commands.extend(app.plugin_registry.get_all_commands())

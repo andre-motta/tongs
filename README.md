@@ -314,7 +314,7 @@ workspace uses labelled controls and does not change these terminal commands.
 | `X` | Close (press twice) |
 | `Ctrl+Y` | Copy MR URL |
 | `Ctrl+G` | Start review mode, or open the review draft screen once a draft exists |
-| `Alt+]` | Cycle to the next recovered review draft for this MR |
+| `Ctrl+N` | Cycle to the next recovered review draft for this MR |
 
 ### Diff viewer
 

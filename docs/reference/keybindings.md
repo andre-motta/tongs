@@ -11,7 +11,7 @@ lead: Every key in the terminal app, screen by screen, followed by the desktop r
 | Key | Action |
 |-----|--------|
 | ++ctrl+p++ | Open the command palette |
-| ++question++ | Show a short help hint |
+| ++question++ | Show or hide the keybindings panel |
 
 ### Main screens
 
@@ -63,7 +63,7 @@ These keys work on the inbox, the repository list and MR detail.
 | ++shift+x++ | Close (press twice to confirm) |
 | ++ctrl+y++ | Copy the MR URL to the clipboard |
 | ++ctrl+g++ | Start review mode, or open the review draft once one exists |
-| ++alt+close-bracket++ | Cycle to the next recovered review draft for this MR |
+| ++ctrl+n++ | Cycle to the next recovered review draft for this MR |
 
 ### Diff viewer
 

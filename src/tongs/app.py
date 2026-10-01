@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from textual import work
-from textual.app import App
+from textual.app import App, get_system_commands_provider
 from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.reactive import reactive
@@ -69,7 +69,7 @@ class TongsApp(App):
     }
     """
 
-    COMMANDS: ClassVar[set] = {TongsCommandProvider}
+    COMMANDS: ClassVar[set] = {TongsCommandProvider, get_system_commands_provider}
 
     BINDINGS: ClassVar[list] = [
         Binding("question_mark", "help", "Help", show=True),
@@ -194,4 +194,7 @@ class TongsApp(App):
             await self.session.close()
 
     def action_help(self) -> None:
-        self.notify("Help: press ? for keybindings, Ctrl+P for command palette")
+        if self.screen.query("HelpPanel"):
+            self.action_hide_help_panel()
+        else:
+            self.action_show_help_panel()

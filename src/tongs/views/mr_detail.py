@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import ClassVar
 from uuid import UUID
 
+import pyperclip
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -218,9 +219,7 @@ class MRDetailScreen(Screen):
         Binding("ctrl+y", "yank_url", "Copy URL", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=True),
         Binding("ctrl+g", "review_draft", "Review draft", show=True),
-        Binding(
-            "alt+right_square_bracket", "next_review_draft", "Next draft", show=False
-        ),
+        Binding("ctrl+n", "next_review_draft", "Next draft", show=True),
     ]
 
     def __init__(self, mr_summary: MRSummary):
@@ -326,6 +325,7 @@ class MRDetailScreen(Screen):
                 self._review_progress_by_draft.get(active.id) if active else None
             )
             self._refresh_draft_ui()
+            self.refresh_bindings()
         except Exception as exc:  # noqa: BLE001 - Keep MR reads usable if draft recovery fails.
             self.notify(
                 f"Could not recover review drafts. ({exc})",
@@ -523,6 +523,7 @@ class MRDetailScreen(Screen):
             draft = await self.app.services.create_draft(target, content)
             self._review_drafts = (draft, *self._review_drafts)
             self._select_review_draft(draft)
+            self.refresh_bindings()
             self.notify("Review mode started. Comments are now saved locally.")
         except asyncio.CancelledError:
             raise
@@ -689,6 +690,7 @@ class MRDetailScreen(Screen):
         if not any(item.id == draft.id for item in self._review_drafts):
             self._review_drafts = (draft, *self._review_drafts)
         self._select_review_draft(draft)
+        self.refresh_bindings()
 
     def _discard_review_draft(self, draft: DraftSnapshot) -> None:
         if self._draft_busy:
@@ -718,6 +720,7 @@ class MRDetailScreen(Screen):
             self._review_progress = None
             self._review_progress_by_draft.pop(draft_id, None)
             self._draft_conflict = None
+            self.refresh_bindings()
             self.notify("Local review draft discarded.")
         except DraftConflictError as exc:
             current_revision = self._current_review_revision or target.revision
@@ -867,6 +870,7 @@ class MRDetailScreen(Screen):
             )
             self._review_progress = None
             self._review_progress_by_draft.pop(draft_id, None)
+            self.refresh_bindings()
             self.notify("Review submitted.")
             self._diff_loaded = False
             self._discussions_loaded = False
@@ -908,6 +912,8 @@ class MRDetailScreen(Screen):
             return False
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "next_review_draft":
+            return len(self._review_drafts) > 1
         if action == "review_draft":
             try:
                 if self.query_one("#comment-editor", CommentEditor).display:
@@ -1306,13 +1312,18 @@ class MRDetailScreen(Screen):
         self.app.open_url(self.mr_summary.web_url)
 
     def action_yank_url(self) -> None:
-        import pyperclip
-
+        url = self.mr_summary.web_url
+        self.app.copy_to_clipboard(url)
         try:
-            pyperclip.copy(self.mr_summary.web_url)
-            self.notify("URL copied to clipboard")
+            pyperclip.copy(url)
         except (pyperclip.PyperclipException, OSError):
-            self.notify(f"URL: {self.mr_summary.web_url}", markup=False)
+            self.notify(
+                f"Sent the URL to the terminal clipboard (OSC 52). "
+                f"If it did not arrive: {url}",
+                markup=False,
+            )
+        else:
+            self.notify("URL copied to the system clipboard")
 
     def action_add_comment(self) -> None:
         editor = self.query_one("#comment-editor", CommentEditor)

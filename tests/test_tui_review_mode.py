@@ -1201,6 +1201,8 @@ async def test_ctrl_n_cycles_between_two_drafts(tmp_path: Path) -> None:
         first = screen._review_draft
         assert first is not None
         assert screen._current_review_revision is not None
+        # With a single draft there is nothing to cycle, so the footer hides it.
+        assert screen.check_action("next_review_draft", ()) is False
         second = await app.services.create_draft(
             app.services.draft_target(
                 screen.mr_summary, screen._current_review_revision
@@ -1208,6 +1210,7 @@ async def test_ctrl_n_cycles_between_two_drafts(tmp_path: Path) -> None:
         )
         screen._review_drafts = (first, second)
         screen.refresh_bindings()
+        assert screen.check_action("next_review_draft", ()) is True
 
         assert screen._review_draft.id == first.id
         await pilot.press("ctrl+n")

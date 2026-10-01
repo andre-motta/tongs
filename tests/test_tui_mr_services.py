@@ -9,7 +9,9 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
+import pyperclip
 import pytest
 from textual.widgets import Static, TextArea
 
@@ -812,10 +814,6 @@ async def test_question_mark_toggles_help_panel(tmp_path: Path) -> None:
 async def test_ctrl_y_uses_osc52_and_falls_back_gracefully(
     tmp_path: Path,
 ) -> None:
-    from unittest.mock import patch
-
-    import pyperclip
-
     app, forge = _app(tmp_path)
 
     async with app.run_test(notifications=True) as pilot:

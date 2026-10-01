@@ -1188,3 +1188,28 @@ async def test_leaving_detail_mid_submission_records_outcome_without_exiting(
         assert not reopened._draft_busy
         bar = reopened.query_one("#review-draft-bar", ReviewDraftBar)
         assert "unknown" in str(bar.render())
+
+
+@pytest.mark.asyncio
+async def test_ctrl_n_cycles_between_two_drafts(tmp_path: Path) -> None:
+    app, _forge = _app(tmp_path)
+
+    async with app.run_test(size=(160, 40), notifications=True) as pilot:
+        screen = await _open_detail(app, pilot)
+        screen.action_review_draft()
+        await _wait_until(app, lambda: screen._review_draft is not None)
+        first = screen._review_draft
+        assert first is not None
+        assert screen._current_review_revision is not None
+        second = await app.services.create_draft(
+            app.services.draft_target(
+                screen.mr_summary, screen._current_review_revision
+            )
+        )
+        screen._review_drafts = (first, second)
+        screen.refresh_bindings()
+
+        assert screen._review_draft.id == first.id
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        assert screen._review_draft.id == second.id

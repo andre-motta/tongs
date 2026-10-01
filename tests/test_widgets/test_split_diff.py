@@ -681,3 +681,41 @@ async def test_unified_placeholder_never_blames_a_too_large_api_response() -> No
         assert str(unified.get_option_at_index(0).prompt) == (
             "Not exposed by the forge. Press o to view in browser."
         )
+
+
+@pytest.mark.asyncio
+async def test_n_and_shift_n_navigate_between_two_files() -> None:
+    first = _file()
+    second = DiffFile(
+        old_path="utils.py",
+        new_path="utils.py",
+        status=FileStatus.MODIFIED,
+        hunks=(
+            DiffHunk(
+                "@@ -1 +1 @@",
+                1,
+                1,
+                1,
+                1,
+                (DiffLine(1, 1, "pass", LineType.CONTEXT),),
+            ),
+        ),
+        additions=0,
+        deletions=0,
+        language="python",
+    )
+    app = _DiffApp()
+
+    async with app.run_test(size=(160, 35)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.set_files([first, second])
+        await pilot.pause()
+
+        assert panel._current_index == 0
+        await pilot.press("n")
+        await pilot.pause()
+        assert panel._current_index == 1
+
+        await pilot.press("N")
+        await pilot.pause()
+        assert panel._current_index == 0

@@ -11,7 +11,7 @@ lead: Every key in the terminal app, screen by screen, followed by the desktop r
 | Key | Action |
 |-----|--------|
 | ++ctrl+p++ | Open the command palette |
-| ++question++ | Show the keybindings panel |
+| ++question++ | Show or hide the keybindings panel |
 
 ### Main screens
 
@@ -78,7 +78,7 @@ These keys work on the inbox, the repository list and MR detail.
 | ++shift+r++ | Resolve or unresolve the discussion (press twice) |
 | ++c++ | Comment on the current line or selection |
 | ++f3++ | Suggest a change in your external editor |
-| ++n++ / ++shift-n++ | Next / previous file |
+| ++n++ / ++shift+n++ | Next / previous file |
 | ++m++ | Toggle the Markdown preview |
 | ++v++ | Toggle unified and split layout |
 | ++escape++ | Clear the selection |

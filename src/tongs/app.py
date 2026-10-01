@@ -194,4 +194,7 @@ class TongsApp(App):
             await self.session.close()
 
     def action_help(self) -> None:
-        self.action_show_help_panel()
+        if self.screen.query("HelpPanel"):
+            self.action_hide_help_panel()
+        else:
+            self.action_show_help_panel()

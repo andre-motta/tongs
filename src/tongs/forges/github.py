@@ -640,10 +640,10 @@ class GitHubClient(ForgeClient):
         return await self._read_ci_status(owner, repo, head_sha)
 
     async def list_my_reviews(self) -> list[MRSummary]:
-        return await self._search_prs("is:pr is:open review-requested:@me")
+        return await self._search_prs("is:pr is:open review-requested:@me archived:false")
 
     async def list_my_mrs(self) -> list[MRSummary]:
-        return await self._search_prs("is:pr is:open author:@me")
+        return await self._search_prs("is:pr is:open author:@me archived:false")
 
     async def _search_prs(self, query: str) -> list[MRSummary]:
         """List the pull requests a search matches.

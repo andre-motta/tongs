@@ -462,6 +462,7 @@ class TestGitLabClientAsync:
             assert req.url.params["scope"] == "all"
             assert req.url.params["reviewer_username"] == "testuser"
             assert req.url.params["state"] == "opened"
+            assert req.url.params["non_archived"] == "true"
             return httpx.Response(200, json=[mr_data])
 
         client, http = _make_gitlab_client(handler)
@@ -469,6 +470,23 @@ class TestGitLabClientAsync:
             reviews = await client.list_my_reviews()
         assert len(reviews) == 1
         assert reviews[0].number == 42
+
+    @pytest.mark.asyncio
+    async def test_list_my_mrs_uses_correct_params(self):
+        mr_data = _mr_api_json()
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            assert req.url.params["scope"] == "created_by_me"
+            assert req.url.params["state"] == "opened"
+            assert req.url.params["non_archived"] == "true"
+            return httpx.Response(200, json=[mr_data])
+
+        client, http = _make_gitlab_client(handler)
+        async with http:
+            mrs = await client.list_my_mrs()
+        assert len(mrs) == 1
+        assert mrs[0].number == 42
+
 
     @pytest.mark.asyncio
     async def test_approve_mr_posts_correctly(self):

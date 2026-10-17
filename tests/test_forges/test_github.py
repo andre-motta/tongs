@@ -1265,6 +1265,48 @@ class TestSearchPaging:
         assert search_pages == ["1"]
 
 
+class TestArchivedFilter:
+    @pytest.mark.asyncio
+    async def test_list_my_reviews_excludes_archived(self) -> None:
+        queries = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/search/issues":
+                queries.append(request.url.params["q"])
+                return httpx.Response(
+                    200,
+                    json={"total_count": 0, "incomplete_results": False, "items": []},
+                )
+            return httpx.Response(200, json=_pr_api_json())
+
+        client, http = _make_github_client(handler)
+        async with http:
+            await client.list_my_reviews()
+
+        assert queries
+        assert "archived:false" in queries[0]
+
+    @pytest.mark.asyncio
+    async def test_list_my_mrs_excludes_archived(self) -> None:
+        queries = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/search/issues":
+                queries.append(request.url.params["q"])
+                return httpx.Response(
+                    200,
+                    json={"total_count": 0, "incomplete_results": False, "items": []},
+                )
+            return httpx.Response(200, json=_pr_api_json())
+
+        client, http = _make_github_client(handler)
+        async with http:
+            await client.list_my_mrs()
+
+        assert queries
+        assert "archived:false" in queries[0]
+
+
 class TestMergedState:
     @pytest.mark.asyncio
     async def test_listed_pull_with_merged_at_reads_as_merged(self) -> None:

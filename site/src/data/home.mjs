@@ -23,5 +23,5 @@ export const draftSteps = [
   { key: 'c', title: 'Comment.', text: 'Each one is saved locally.' },
   { key: 'v', title: 'Pick a verdict.', text: 'Comment or approve, and request changes on GitHub.' },
   { key: 'ctrl+s', title: 'Submit once.', text: 'The forge gets one review.' },
-  { key: 'alt+close-bracket', title: 'Recover.', text: 'Cycle drafts kept from earlier sessions.' },
+  { key: 'ctrl+n', title: 'Recover.', text: 'Cycle drafts kept from earlier sessions.' },
 ];

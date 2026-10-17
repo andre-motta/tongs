@@ -49,8 +49,8 @@ Every save is a transaction in a local SQLite database, so a draft outlives a
 crash, a closed terminal or a reboot. Open the same review again and tongs
 loads the draft for you.
 
-A review can hold more than one draft, for example one per revision. Press
-++alt+close-bracket++ to cycle through them.
+A review can hold more than one draft, for example one per revision. On the MR
+detail screen, press ++ctrl+n++ to cycle through them.
 
 A draft holds up to 200 comments. The summary and each comment can be up to
 65,536 bytes, and tab and newline are the only control characters they can

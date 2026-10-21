@@ -227,11 +227,11 @@ The defects that are known and unfixed in the desktop workspace are listed in
 Every stable release publishes the desktop assets to the GitHub Release of the same `vX.Y.Z` tag that publishes `tongs` to PyPI: the signed per-user archive, its release manifest and Sigstore bundle, the Fedora RPMs, an SBOM and a checksum list. `tongs --install-desktop` selects the release whose version equals the installed core, so the pair to run for one version is:
 
 ```bash
-pip install tongs==1.1.0
+pip install tongs==1.1.1
 tongs --install-desktop
 ```
 
-> The desktop app is a beta. The v1.1.0 GitHub Release attaches the per-user archive and the Fedora RPMs. The commands and package names below describe the contract that every release satisfies.
+> The desktop app is a beta. The v1.1.1 GitHub Release attaches the per-user archive and the Fedora RPMs. The commands and package names below describe the contract that every release satisfies.
 
 The desktop application is optional. Plain `tongs` keeps scanning your repositories and opening the TUI; it never downloads, activates, or starts the desktop shell on its own.
 
@@ -588,7 +588,7 @@ All tools accept a `repo_path` in `hostname/owner/repo` format (e.g. `github.com
 
 The terminal application is the released, supported product. The version you get from PyPI today provides the multi-forge inbox, the diff viewer, inline comments and suggested changes, discussion threads, MR actions, pipeline and CI drill-down, the SQLite cache, the plugin system, and the MCP server.
 
-tongs 1.0.0 added the split diff view and durable review drafts, 1.0.1 fixed the defects found since then, including token refresh after a 401, 1.0.2 fixed two credential security issues and pinned the release builds, 1.0.3 paged the desktop inbox and fixed crashes from damaged drafts, long discussions and bracketed titles, 1.0.4 let a paused review submission return to editing and fixed terminal keys that most terminals never sent, 1.0.5 corrected CI status, merged state and unresolved counts, reported rate limits clearly, kept review lists fresh after Refresh and kept the desktop installer working as releases accumulate, and 1.1.0 pages the All Open tab with CI for every list, expands diff context and generates diffs the forge leaves out, highlights desktop diffs, makes the terminal settings work, validates `config.toml` and runs `tongs-mcp` on the shared services. The desktop workspace is a beta attached to every release since v1.0.0, for Fedora 44 x86_64, together with its per-user installer and Fedora RPMs. Known defects are listed in [known issues](docs/releases/known-issues.md).
+tongs 1.0.0 added the split diff view and durable review drafts, 1.0.1 fixed the defects found since then, including token refresh after a 401, 1.0.2 fixed two credential security issues and pinned the release builds, 1.0.3 paged the desktop inbox and fixed crashes from damaged drafts, long discussions and bracketed titles, 1.0.4 let a paused review submission return to editing and fixed terminal keys that most terminals never sent, 1.0.5 corrected CI status, merged state and unresolved counts, reported rate limits clearly, kept review lists fresh after Refresh and kept the desktop installer working as releases accumulate, 1.1.0 paged the All Open tab with CI for every list, expanded diff context and generated diffs the forge leaves out, highlighted desktop diffs, made the terminal settings work, validated `config.toml` and ran `tongs-mcp` on the shared services, and 1.1.1 keeps the inbox current after you act on a review, stops the command palette from stacking screens or losing typed text, shows review threads on expanded lines and leaves archived projects out of the inbox. The desktop workspace is a beta attached to every release since v1.0.0, for Fedora 44 x86_64, together with its per-user installer and Fedora RPMs. Known defects are listed in [known issues](docs/releases/known-issues.md).
 
 Track what is planned and what is blocked through the [open issues](https://github.com/andre-motta/tongs/issues) and their dependency links rather than through a phase table.
 

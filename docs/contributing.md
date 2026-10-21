@@ -30,8 +30,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev,lint,mcp]"
 pytest
-ruff check src/ tests/
-ruff format --check src/ tests/
+ruff check src/ tests/ packaging/ scripts/ .github/scripts/ examples/
+ruff format --check src/ tests/ packaging/ scripts/ .github/scripts/ examples/
 ```
 
 Tests mock all GitHub and GitLab traffic, so no account or token is needed.

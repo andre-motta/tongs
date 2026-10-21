@@ -119,6 +119,15 @@ npm run build --prefix site
 The pages land in `site/dist`. CI runs the same build on pull requests that
 touch the docs. Like the desktop suite, it is best run under the memory limit in
 the [testing guide](.agents/testing/README.md#bounded-local-node-procedure).
+The site build is the exception there: use a task limit of 256, not 64.
+
+The same docs job then lints Markdown with the pinned linter in
+`.github/linters`. Run it from the root of your clone:
+
+```bash
+npm ci --prefix .github/linters --ignore-scripts --no-audit --no-fund
+.github/linters/node_modules/.bin/markdownlint-cli2 --config .github/linters/.markdownlint-cli2.jsonc "docs/**/*.md" "*.md" ".agents/**/*.md" ".github/*.md" "site/README.md"
+```
 
 ## Code style
 

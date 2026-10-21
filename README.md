@@ -57,10 +57,10 @@ git clone https://github.com/andre-motta/tongs.git
 cd tongs
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev,lint]"
+python -m pip install -e ".[dev,lint,mcp]"
 ```
 
-Use Python 3.12 or newer. If you prefer `uv`, use `uv venv --python 3.12` to create the environment and `uv pip install -e ".[dev,lint]"` after activation.
+Use Python 3.12 or newer. The `mcp` extra is what runs `tests/test_mcp/test_server.py` locally; CI runs that test. The check commands are in [CONTRIBUTING.md](CONTRIBUTING.md). If you prefer `uv`, use `uv venv --python 3.12` to create the environment and `uv pip install -e ".[dev,lint,mcp]"` after activation.
 
 ## Quick start
 

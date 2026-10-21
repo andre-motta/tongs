@@ -4,7 +4,7 @@
 // words cannot drift apart.
 
 export const site = {
-  version: 'v1.1.0',
+  version: 'v1.1.1',
   released: '2026-10-10',
   repo: 'https://github.com/andre-motta/tongs',
   pypi: 'https://pypi.org/project/tongs/',
@@ -86,6 +86,7 @@ export const groups = [
     blurb: 'Releases, known issues and how to contribute.',
     items: [
       { label: 'Releases', slug: 'releases' },
+      { label: 'v1.1.1', slug: 'releases/v1.1.1' },
       { label: 'v1.1.0', slug: 'releases/v1.1.0' },
       { label: 'v1.0.5', slug: 'releases/v1.0.5' },
       { label: 'v1.0.4', slug: 'releases/v1.0.4' },
@@ -173,7 +174,7 @@ export const footerColumns = [
   {
     title: 'releases',
     links: [
-      { label: 'v1.1.0 notes', href: href('releases/v1.1.0') },
+      { label: 'v1.1.1 notes', href: href('releases/v1.1.1') },
       { label: 'Known issues', href: href('releases/known-issues') },
       { label: 'Contributing', href: href('contributing') },
     ],

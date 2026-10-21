@@ -10,6 +10,7 @@ and unsigned Fedora RPMs.
 
 | Version | Date | Notes |
 |---|---|---|
+| 1.1.1 | 2026-10-20 | [Release notes](/releases/v1.1.1/). A patch release: the inbox stays current after you act on a review, the command palette no longer stacks screens or loses typed text, review threads show on expanded lines, and archived projects leave Reviews and My MRs. |
 | 1.1.0 | 2026-10-12 | [Release notes](/releases/v1.1.0/). A feature release: a paged All Open tab with CI for every list, expandable diff context and local diffs, faster and highlighted desktop diffs with Viewed files, working terminal settings, a validated config file, a desktop colour scheme and a safer `tongs-mcp`. |
 | 1.0.5 | 2026-10-10 | [Release notes](/releases/v1.0.5/). A larger patch release: correct CI status, merged state and unresolved counts, clear rate limits, fresh review lists on Refresh, expiring confirmations, a parallel All Open tab and a desktop installer that keeps working as releases accumulate. |
 | 1.0.4 | 2026-10-10 | [Release notes](/releases/v1.0.4/). Paused review submissions can return to editing, GitLab merge requests with over 1,000 changes open again, terminal key fixes and a release gate on tags. |
@@ -26,7 +27,7 @@ release, what you will see, and the milestone each fix is planned for.
 ## What comes next
 
 Planned work is tracked in the
-[milestones](https://github.com/andre-motta/tongs/milestones). v1.1.1 collects
+[milestones](https://github.com/andre-motta/tongs/milestones). v1.1.2 collects
 the next fixes.
 
 ## Upgrade

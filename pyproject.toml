@@ -49,6 +49,10 @@ dev = [
     # must be a declared dependency rather than a transitive one, because a
     # skipped test would itself fail the gate's no-skip rule.
     "pyyaml>=6.0",
+    # The candidate verifier in tests/integration/desktop requires the exact
+    # sigstore of requirements/release.lock, so the test environment pins it
+    # too; the core dependency above stays a range for users.
+    "sigstore==4.5.0",
 ]
 # The linter and formatter CI runs, pinned exactly so every contributor and the
 # lint job use one version and Dependabot can propose the bump.

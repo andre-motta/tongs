@@ -128,8 +128,9 @@ than replaying a renderer request blindly.
    `DiffFile` objects with their revision.
 3. `DiffPanel` renders file trees, syntax highlighting, context folding, comment
    gutters, and inline threads in a unified list or, toggled with `v`, a
-   `SplitDiffView`. `diff/position.py` maps selected lines to forge-specific
-   anchors.
+   `SplitDiffView`. `diff/position.py` records the selected line as a
+   forge-agnostic `DiffPosition`, which the TUI service adapter turns into a
+   `DiffAnchor`.
 4. The desktop protocol performs its own bounded diff projection and paging in
    `src/tongs/desktop/protocol/diff_projection.py`. Paging tokens refer to
    connection-local snapshots and expire; they are not resource identifiers.

@@ -38,7 +38,7 @@ Key attributes are:
 - `services: TUIServiceAdapter`, the supported data/mutation path for views
 - `plugin_registry: PluginRegistry`, the terminal plugin registry
 - `repos: list[Repo]`, the latest trusted local discovery result
-- reactive `current_repo`, `current_mr_number`, `mr_filter`, and `offline`
+- reactive `current_repo`, `current_mr_number`, and `offline`
 
 `cache` and `forge_registry` properties are compatibility aliases to resources
 owned by the started session. New UI code should use `app.services` rather than

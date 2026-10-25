@@ -10,8 +10,8 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID, uuid4
 
+from tongs.identity import ReviewRef, ReviewRevision
 from tongs.scanner.repo import ForgeType
-from tongs.services.models import ReviewRef, ReviewRevision
 from tongs.state.drafts.errors import DraftStoreError
 
 #: The largest review summary or comment body a draft may hold, in UTF-8 bytes.

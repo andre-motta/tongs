@@ -23,8 +23,8 @@ from tongs.config import (
     MAX_SUBMITTED_RETENTION,
     MIN_SUBMITTED_RETENTION,
 )
+from tongs.identity import RepositoryRef, ReviewRef, ReviewRevision
 from tongs.scanner.repo import ForgeType
-from tongs.services.models import RepositoryRef, ReviewRef, ReviewRevision
 from tongs.state.drafts._locks import AttemptLock
 from tongs.state.drafts.errors import (
     DraftAttemptOwnedError,

@@ -190,6 +190,7 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("src/tongs/diff/parser.py", SIDECAR),
     ("src/tongs/errors.py", SIDECAR),
     ("src/tongs/forges/github.py", SIDECAR),
+    ("src/tongs/identity.py", SIDECAR),
     ("src/tongs/plugins/__init__.py", SIDECAR),
     ("src/tongs/plugins/desktop.py", SIDECAR),
     ("src/tongs/plugins/desktop_registry.py", SIDECAR),

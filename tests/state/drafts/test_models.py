@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import replace
 from uuid import uuid4
 
@@ -227,3 +229,27 @@ def test_content_at_the_limits_passes_validation() -> None:
             ),
         )
     )
+
+
+def test_importing_drafts_does_not_load_the_services_package() -> None:
+    # The draft store must depend only on leaf modules, so a fresh
+    # interpreter can import it without pulling in ``tongs.services``.
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import sys\n"
+                "import tongs.state.drafts\n"
+                'assert "tongs.services" not in sys.modules, sorted(\n'
+                '    name for name in sys.modules if name.startswith("tongs")\n'
+                ")\n"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0

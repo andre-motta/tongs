@@ -320,6 +320,7 @@ RULES: tuple[Rule, ...] = (
             "src/tongs/diff/**",
             "src/tongs/errors.py",
             "src/tongs/forges/**",
+            "src/tongs/identity.py",
             "src/tongs/plugins/__init__.py",
             "src/tongs/plugins/desktop.py",
             "src/tongs/plugins/desktop_registry.py",

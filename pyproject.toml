@@ -52,12 +52,12 @@ dev = [
     # The candidate verifier in tests/integration/desktop requires the exact
     # sigstore of requirements/release.lock, so the test environment pins it
     # too; the core dependency above stays a range for users.
-    "sigstore==4.5.0",
+    "sigstore==4.5.1",
 ]
 # The linter and formatter CI runs, pinned exactly so every contributor and the
 # lint job use one version and Dependabot can propose the bump.
 lint = [
-    "ruff==0.17.0",
+    "ruff==0.17.3",
 ]
 
 [project.urls]

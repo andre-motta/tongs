@@ -12,7 +12,7 @@ the SHA-256 of each package file. The closure is 13 Fedora-signed RPMs:
 
 | Package | EPOCH:VERSION-RELEASE | Arch |
 |---|---|---|
-| `expat` | `0:2.8.5-1.fc44` | x86_64 |
+| `expat` | `0:2.9.0-1.fc44` | x86_64 |
 | `libb2` | `0:0.98.1-15.fc44` | x86_64 |
 | `libuv` | `1:1.52.1-2.fc44` | x86_64 |
 | `mpdecimal` | `0:4.0.1-3.fc44` | x86_64 |
@@ -22,8 +22,8 @@ the SHA-256 of each package file. The closure is 13 Fedora-signed RPMs:
 | `nodejs22-npm` | `1:10.9.8-1.22.23.1.2.fc44` | noarch |
 | `nodejs22-npm-bin` | `1:22.23.1-2.fc44` | noarch |
 | `python-pip-wheel` | `0:26.0.1-3.fc44` | noarch |
-| `python3.12` | `0:3.12.15-1.fc44` | x86_64 |
-| `python3.12-libs` | `0:3.12.15-1.fc44` | x86_64 |
+| `python3.12` | `0:3.12.16-2.fc44` | x86_64 |
+| `python3.12-libs` | `0:3.12.16-2.fc44` | x86_64 |
 | `zlib-ng-compat` | `0:2.3.3-3.fc44` | x86_64 |
 
 The base image already ships the pinned `zlib-ng-compat`; it stays in the list

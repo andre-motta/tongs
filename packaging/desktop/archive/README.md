@@ -22,7 +22,7 @@ retains the other runtime files. The app ASAR contains only the paths in
 `app-asar-paths.txt`; source maps, declarations, tests and development packages
 are excluded.
 
-The producer uses `@electron/asar` 4.3.1 from the exact npm lock, Python 3.12.15
+The producer uses `@electron/asar` 4.3.1 from the exact npm lock, Python 3.12.16
 with zlib-ng-compat 2.3.3 (zlib `1.3.1.zlib-ng`), Node 22.23.1, USTAR headers, level-9 raw DEFLATE, and a fixed
 gzip header. The contract checks these tool versions before building. Tar
 ownership is `0:0`, names are `root:root`, member order is lexical, and every

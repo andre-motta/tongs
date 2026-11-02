@@ -57,7 +57,7 @@ dev = [
 # The linter and formatter CI runs, pinned exactly so every contributor and the
 # lint job use one version and Dependabot can propose the bump.
 lint = [
-    "ruff==0.17.0",
+    "ruff==0.17.3",
 ]
 
 [project.urls]

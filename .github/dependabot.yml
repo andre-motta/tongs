@@ -27,6 +27,9 @@ updates:
   # requirements/ are compiled by uv with --exclude-newer and are regenerated
   # by hand with the command at the top of each lock, so their .in inputs are
   # excluded: bumping an input without its lock would only break the lock.
+  # Sigstore is updated by hand: the dev extra pins the exact version of
+  # requirements/release.lock, which has to move with both .in files, the
+  # locks and SIGSTORE_VERSION in release-desktop.yml in the same change.
   - package-ecosystem: pip
     directory: /
     exclude-paths:
@@ -34,6 +37,8 @@ updates:
     schedule:
       interval: monthly
     labels: []
+    ignore:
+      - dependency-name: sigstore
     groups:
       python:
         update-types: [minor, patch]

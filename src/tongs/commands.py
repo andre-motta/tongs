@@ -108,6 +108,16 @@ class TongsCommandProvider(Provider):
                 "Filter by forge type",
                 lambda: screen.action_cycle_forge(),
             ),
+            (
+                "Open Repository...",
+                "Browse a project on a configured host without cloning it",
+                lambda: screen.action_open_repository(),
+            ),
+            (
+                "Remove Repository",
+                "Remove the selected opened repository from the list",
+                lambda: screen.action_remove_repository(),
+            ),
             ("Refresh", "Rescan repos", lambda: screen.action_refresh()),
         ]
 

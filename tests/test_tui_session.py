@@ -282,7 +282,7 @@ async def test_actual_textual_navigation_uses_one_production_session(
         await pilot.press("enter")
         await settle(app)
         assert isinstance(app.screen, InboxScreen)
-        assert app.screen.scoped_repo is repo
+        assert app.screen.scoped_repository == app.services.repository_snapshot(repo)
 
         await pilot.press("3")
         await settle(app)
@@ -932,7 +932,7 @@ async def test_scoped_all_open_stream_reads_only_its_repository(
     steps = [
         step
         async for step in adapter.stream_all_open(
-            repository=session.local_repositories[1]
+            repository=adapter.repository_ref(session.local_repositories[1])
         )
     ]
 

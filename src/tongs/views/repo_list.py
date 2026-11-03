@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar
 
 from rich.text import Text
@@ -14,7 +15,41 @@ from textual.widgets import DataTable, Footer, Input, Static
 from tongs.helpers import forge_label
 from tongs.scanner.repo import ForgeType, Repo
 from tongs.services.errors import ServiceError
+from tongs.services.models import RepositorySnapshot
+from tongs.tui_services import TUIOpenedRepository
+from tongs.views.open_repository import OpenRepositoryScreen
 from tongs.widgets.ascii import tongs_header
+
+REMOTE_MARKER = " (remote)"
+
+
+@dataclass(frozen=True, slots=True)
+class _RepoRow:
+    """One listed repository: a local checkout, or a project opened remotely."""
+
+    key: str
+    display_name: str
+    forge_type: ForgeType | None
+    hostname: str | None
+    local: Repo | None = None
+    opened: RepositorySnapshot | None = None
+
+    @classmethod
+    def for_local(cls, repo: Repo) -> _RepoRow:
+        return cls(
+            str(repo.path), repo.display_name, repo.forge_type, repo.hostname, repo
+        )
+
+    @classmethod
+    def for_opened(cls, snapshot: RepositorySnapshot) -> _RepoRow:
+        ref = snapshot.ref
+        return cls(
+            f"remote:{ref.hostname}/{ref.project_path}",
+            snapshot.display_name,
+            snapshot.forge_type,
+            ref.hostname,
+            opened=snapshot,
+        )
 
 
 class RepoListScreen(Screen):
@@ -32,6 +67,8 @@ class RepoListScreen(Screen):
         Binding("slash", "start_search", "Filter", show=True, key_display="/"),
         Binding("f", "cycle_forge", "Forge", show=True),
         Binding("s", "cycle_sort", "Sort", show=True, key_display="s"),
+        Binding("a", "open_repository", "Open repo", show=True),
+        Binding("x", "remove_repository", "Remove", show=True),
         Binding("ctrl+r", "refresh", "Refresh", show=False),
     ]
 
@@ -52,15 +89,10 @@ class RepoListScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#repo-table", DataTable)
-        table.add_column("F", key="forge", width=4)
-        table.add_column("Repository", key="repo")
-        hostnames = {r.hostname for r in self.app.repos if r.hostname}
-        self._show_host = len(hostnames) > 2
-        if self._show_host:
-            table.add_column("Host", key="host", width=20)
+        self._show_host: bool | None = None
         table.cursor_type = "row"
         table.zebra_stripes = True
-        self._repo_data: dict[str, Repo] = {}
+        self._repo_data: dict[str, _RepoRow] = {}
         self._sort_key: str = "name"
         self._apply_filters()
         # The filter box stays hidden until "/" reveals it, so the table keeps
@@ -104,8 +136,29 @@ class RepoListScreen(Screen):
         table = self.query_one("#repo-table", DataTable)
         table.focus()
 
-    def _apply_filters(self) -> None:
+    def _rows(self) -> list[_RepoRow]:
         repos: list[Repo] = getattr(self.app, "repos", [])
+        rows = [_RepoRow.for_local(repo) for repo in repos]
+        rows.extend(
+            _RepoRow.for_opened(snapshot)
+            for snapshot in self.app.services.opened_repositories
+        )
+        return rows
+
+    def _set_columns(self, table: DataTable, rows: list[_RepoRow]) -> None:
+        """Add the columns, with a host column once more than two hosts show."""
+        show_host = len({row.hostname for row in rows if row.hostname}) > 2
+        if show_host == self._show_host:
+            return
+        self._show_host = show_host
+        table.clear(columns=True)
+        table.add_column("F", key="forge", width=4)
+        table.add_column("Repository", key="repo")
+        if show_host:
+            table.add_column("Host", key="host", width=20)
+
+    def _apply_filters(self) -> None:
+        repos = self._rows()
         filtered = repos
 
         if self.forge_filter is not None:
@@ -132,22 +185,20 @@ class RepoListScreen(Screen):
             filtered = sorted(filtered, key=lambda r: r.display_name.lower())
 
         table = self.query_one("#repo-table", DataTable)
+        self._set_columns(table, repos)
         table.clear()
         self._repo_data.clear()
 
-        show_host = getattr(self, "_show_host", False)
-
         for repo in filtered:
-            key = str(repo.path)
-            self._repo_data[key] = repo
+            self._repo_data[repo.key] = repo
             # Repository names and hosts are shown literally, never as markup.
-            row: list[str | Text] = [
-                forge_label(repo.forge_type),
-                Text(repo.display_name),
-            ]
-            if show_host:
+            name = Text(repo.display_name)
+            if repo.opened is not None:
+                name.append(REMOTE_MARKER, style="dim")
+            row: list[str | Text] = [forge_label(repo.forge_type), name]
+            if self._show_host:
                 row.append(Text(repo.hostname or ""))
-            table.add_row(*row, key=key)
+            table.add_row(*row, key=repo.key)
 
         filter_label = {
             None: "All",
@@ -181,15 +232,55 @@ class RepoListScreen(Screen):
         """Render the latest repository inventory after discovery."""
         self._apply_filters()
 
+    def action_open_repository(self) -> None:
+        self.app.push_screen(OpenRepositoryScreen(), self._on_repository_opened)
+
+    def _on_repository_opened(self, result: TUIOpenedRepository | None) -> None:
+        if result is None:
+            return
+        self._apply_filters()
+        if result.already_local:
+            self.notify(
+                f"{result.snapshot.display_name} is already a local repository, "
+                "so the local one is open.",
+                markup=False,
+            )
+        self._open_inbox(result.snapshot)
+
+    def action_remove_repository(self) -> None:
+        table = self.query_one("#repo-table", DataTable)
+        if table.row_count == 0:
+            return
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        repo = self._repo_data.get(str(row_key.value))
+        if repo is None:
+            return
+        if repo.opened is None:
+            self.notify(
+                "Only opened repositories can be removed; this one is local.",
+                severity="warning",
+            )
+            return
+        self.app.services.remove_repository(repo.opened.ref)
+        self._apply_filters()
+        self.notify(f"Removed {repo.display_name}", markup=False)
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         key = str(event.row_key.value)
         repo = self._repo_data.get(key)
-        if repo:
+        if repo is None:
+            return
+        snapshot = repo.opened
+        if repo.local is not None:
             try:
-                self.app.services.repository_ref(repo)
+                snapshot = self.app.services.repository_snapshot(repo.local)
             except ServiceError as error:
                 self.notify(error.message, severity="warning", markup=False)
                 return
-            from tongs.views.inbox import InboxScreen
+        if snapshot is not None:
+            self._open_inbox(snapshot)
 
-            self.app.push_screen(InboxScreen(repo=repo))
+    def _open_inbox(self, snapshot: RepositorySnapshot) -> None:
+        from tongs.views.inbox import InboxScreen
+
+        self.app.push_screen(InboxScreen(snapshot))

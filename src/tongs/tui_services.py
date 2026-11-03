@@ -36,6 +36,7 @@ from tongs.services.models import (
     JobRef,
     PipelineRef,
     RepositoryRef,
+    RepositorySnapshot,
     ReviewListItem,
     ReviewPage,
     ReviewQuery,
@@ -84,6 +85,20 @@ _SETTLED_OUTCOMES = frozenset({SubmissionOutcome.SUBMITTED, SubmissionOutcome.ED
 _FORGE_NAMES = {ForgeType.GITHUB: "GitHub", ForgeType.GITLAB: "GitLab"}
 
 
+def _find_ref(
+    snapshots: Mapping[RepositoryRef, RepositorySnapshot], ref: RepositoryRef
+) -> RepositorySnapshot | None:
+    """Return the snapshot of the same project, ignoring the path's case."""
+    path = ref.project_path.casefold()
+    for candidate, snapshot in snapshots.items():
+        if (
+            candidate.hostname == ref.hostname
+            and candidate.project_path.casefold() == path
+        ):
+            return snapshot
+    return None
+
+
 def one_checkout_per_project(repositories: tuple[Repo, ...]) -> tuple[Repo, ...]:
     """Keep one checkout of each forge project, in the order given.
 
@@ -116,6 +131,18 @@ class TUIDiscoveryResult:
     generation: int
     repositories: tuple[Repo, ...]
     stale: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class TUIOpenedRepository:
+    """The inbox scope an Open repository request settled on.
+
+    ``already_local`` is set when the project is one of the discovered local
+    repositories, whose own snapshot is returned instead of opening it again.
+    """
+
+    snapshot: RepositorySnapshot
+    already_local: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +197,9 @@ class TUIServiceAdapter:
         self._discovery_generation = 0
         self._repositories: tuple[Repo, ...] = ()
         self._repository_refs: dict[Repo, RepositoryRef] = {}
+        self._local_snapshots: dict[RepositoryRef, RepositorySnapshot] = {}
+        # Projects opened without a local checkout, kept for this run only.
+        self._opened: dict[RepositoryRef, RepositorySnapshot] = {}
         self._review_refs: dict[tuple[str, str, int], ReviewRef] = {}
         self._review_snapshots: dict[ReviewRef, ReviewSnapshot] = {}
         self._review_revisions: dict[ReviewRef, ReviewRevision] = {}
@@ -196,7 +226,7 @@ class TUIServiceAdapter:
 
         # The session keeps every checkout; the terminal lists each project once.
         repositories = one_checkout_per_project(self.session.local_repositories)
-        admitted = {snapshot.ref for snapshot in snapshots}
+        admitted = {snapshot.ref: snapshot for snapshot in snapshots}
         refs: dict[Repo, RepositoryRef] = {}
         for repo in repositories:
             remote = repo.primary_remote
@@ -211,6 +241,11 @@ class TUIServiceAdapter:
 
         self._repositories = repositories
         self._repository_refs = refs
+        self._local_snapshots = {ref: admitted[ref] for ref in refs.values()}
+        # A project cloned since it was opened is listed once, as local.
+        for ref in list(self._opened):
+            if _find_ref(self._local_snapshots, ref) is not None:
+                del self._opened[ref]
         return TUIDiscoveryResult(generation, repositories)
 
     def invalidate_discovery(self) -> None:
@@ -227,6 +262,58 @@ class TUIServiceAdapter:
                 "This local repository does not use a configured forge host.",
             ) from None
 
+    def repository_snapshot(self, repo: Repo) -> RepositorySnapshot:
+        """Return the inbox scope for an actual discovered repository."""
+        return self._local_snapshots[self.repository_ref(repo)]
+
+    def has_repository(self, ref: RepositoryRef) -> bool:
+        """Return whether the repository is still listed, locally or as opened."""
+        return (
+            _find_ref(self._local_snapshots, ref) is not None
+            or _find_ref(self._opened, ref) is not None
+        )
+
+    @property
+    def opened_repositories(self) -> tuple[RepositorySnapshot, ...]:
+        """Return the projects opened without a local checkout, oldest first."""
+        return tuple(self._opened.values())
+
+    async def open_repository(
+        self, hostname: str, project_path: str
+    ) -> TUIOpenedRepository:
+        """Open a configured-host project for this run without cloning it.
+
+        A project already listed, locally or as opened, is returned without a
+        forge read. Forge paths ignore case, so neither is matched by case.
+        Anything else is validated by the session, which reads one review page
+        and raises ``ServiceError`` when the host is not configured or the
+        project cannot be read.
+        """
+        try:
+            ref = RepositoryRef(hostname, project_path)
+        except (TypeError, ValueError):
+            raise ServiceError(
+                ServiceErrorCode.INVALID_INPUT,
+                "The repository identity is invalid.",
+            ) from None
+        local = _find_ref(self._local_snapshots, ref)
+        if local is not None:
+            return TUIOpenedRepository(local, already_local=True)
+        opened = _find_ref(self._opened, ref)
+        if opened is not None:
+            return TUIOpenedRepository(opened)
+        snapshot = await self.session.open_repository(hostname, project_path)
+        self._opened[snapshot.ref] = snapshot
+        return TUIOpenedRepository(snapshot)
+
+    def remove_repository(self, ref: RepositoryRef) -> None:
+        """Forget an opened project; local repositories are not affected.
+
+        The session keeps the identity issued until it closes, which the
+        terminal never reads unscoped, so it needs no revoking here.
+        """
+        self._opened.pop(ref, None)
+
     def review_ref(self, summary: MRSummary) -> ReviewRef:
         """Return the admitted identity paired with a service list result."""
         key = (summary.forge_host.hostname, summary.repo_path, summary.number)
@@ -242,7 +329,7 @@ class TUIServiceAdapter:
         self,
         scope: ReviewScope,
         *,
-        repository: Repo | None = None,
+        repository: RepositoryRef | None = None,
         fresh: bool = False,
     ) -> ReviewPage:
         """Run an inbox read with the terminal's local workspace semantics.
@@ -251,9 +338,7 @@ class TUIServiceAdapter:
         """
         if repository is not None:
             page = await self.session.list_reviews(
-                ReviewQuery(
-                    scope, repository=self.repository_ref(repository), fresh=fresh
-                )
+                ReviewQuery(scope, repository=repository, fresh=fresh)
             )
         elif scope is ReviewScope.ALL_OPEN:
             page = await self._list_all_open(fresh=fresh)
@@ -342,10 +427,9 @@ class TUIServiceAdapter:
 
     def forge_name(self, hostname: str) -> str:
         """Name the forge a host runs, such as GitHub, or the host itself."""
-        for repo in self._repository_refs:
-            remote = repo.primary_remote
-            if remote is not None and remote.hostname == hostname:
-                return _FORGE_NAMES.get(remote.forge_type, hostname)
+        for snapshot in (*self._local_snapshots.values(), *self._opened.values()):
+            if snapshot.ref.hostname == hostname:
+                return _FORGE_NAMES.get(snapshot.forge_type, hostname)
         return hostname
 
     async def list_review_pipelines(self, summary: MRSummary) -> tuple[Pipeline, ...]:
@@ -768,7 +852,7 @@ class TUIServiceAdapter:
         )
 
     async def stream_all_open(
-        self, *, fresh: bool = False, repository: Repo | None = None
+        self, *, fresh: bool = False, repository: RepositoryRef | None = None
     ) -> AsyncIterator[TUIRepositoryProgress]:
         """Read the newest page of every discovered repository, yielding each.
 
@@ -782,7 +866,7 @@ class TUIServiceAdapter:
         flight.
         """
         refs = (
-            (self.repository_ref(repository),)
+            (repository,)
             if repository is not None
             else tuple(dict.fromkeys(self._repository_refs.values()))
         )

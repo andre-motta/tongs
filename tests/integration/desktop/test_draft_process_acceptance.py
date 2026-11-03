@@ -229,7 +229,9 @@ async def _tui_adapter(evidence_root: Path, revision):
         adapter = TUIServiceAdapter(session)
         discovered = await adapter.discover_repositories()
         assert discovered.repositories == (repo,)
-        page = await adapter.list_reviews(ReviewScope.ALL_OPEN, repository=repo)
+        page = await adapter.list_reviews(
+            ReviewScope.ALL_OPEN, repository=adapter.repository_ref(repo)
+        )
         assert not page.failures
         assert len(page.items) == 1
         summary = page.items[0].summary

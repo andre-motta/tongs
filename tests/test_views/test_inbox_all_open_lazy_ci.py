@@ -562,7 +562,9 @@ async def test_a_scoped_inbox_pages_its_repository_too(tmp_path: Path) -> None:
         await settle(app)
         from tongs.views.inbox import InboxScreen
 
-        await app.push_screen(InboxScreen(app.repos[0]))
+        await app.push_screen(
+            InboxScreen(app.services.repository_snapshot(app.repos[0]))
+        )
         await settle(app)
         await pilot.press("3")
         await settle(app)

@@ -45,6 +45,8 @@ These keys work on the inbox, the repository list and MR detail.
 | ++s++ | Cycle the sort order: name, forge, host |
 | ++enter++ (in the filter) | Keep the filter and move to the list |
 | ++enter++ (on the list) | Open the inbox for the selected repository |
+| ++a++ | Open a project you have not cloned, from its host and path or URL |
+| ++x++ | Remove the selected opened project from the list |
 | ++escape++ | Close the filter and restore the full list, or go back |
 | ++ctrl+r++ | Refresh the repository list |
 

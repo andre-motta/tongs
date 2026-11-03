@@ -104,6 +104,23 @@ The scoped inbox has the same three tabs and hides the Repo column. Press ++r++
 or ++escape++ to go back to the repo list, and ++escape++ again to return to
 the full inbox.
 
+## Opening a project you have not cloned
+
+To look at the reviews of a project that is not on your disk, press ++a++ on
+the repo list, or choose **Open Repository...** in the command palette. Enter
+the host and project path, such as `github.com/owner/project` or
+`gitlab.com/group/subgroup/project`, or paste the project's web or clone URL.
+A link to one review works too.
+
+tongs checks that it can read the project, then opens its scoped inbox. Only
+hosts configured in `config.toml` are accepted, with the authentication you
+already set up. If the project is already in your repo list, tongs says so and
+opens that one.
+
+An opened project stays in the repo list, marked `(remote)`, until you press
+++x++ on it or quit tongs. It is not written to `config.toml` and does not
+appear in the full inbox, which lists only the repositories on your disk.
+
 ## Refreshing
 
 Press ++ctrl+r++ to reload the current tab from the forge. All Open normally

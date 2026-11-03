@@ -101,16 +101,18 @@ class TongsApp(App):
         PipelineCard.failed { border: ascii $error; }
         PipelineCard.running { border: ascii $warning; }
         ReviewSubmitScreen > Vertical { border: ascii $accent; }
+        OpenRepositoryScreen > Vertical { border: ascii $accent; }
         CommentEditor { border-top: ascii $accent; }
         DiffPanel DiffFileTree { border-right: ascii $accent; }
         SplitDiffColumn#split-old { border-right: ascii $accent; }
 
         #repo-search, #log-search-input, #comment-input,
-        #review-submit-body, #review-submit-comments {
+        #review-submit-body, #review-submit-comments, #open-repo-input {
             border: ascii $border-blurred;
         }
         #repo-search:focus, #log-search-input:focus, #comment-input:focus,
-        #review-submit-body:focus, #review-submit-comments:focus {
+        #review-submit-body:focus, #review-submit-comments:focus,
+        #open-repo-input:focus {
             border: ascii $border;
         }
 

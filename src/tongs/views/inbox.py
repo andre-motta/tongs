@@ -207,10 +207,12 @@ class InboxScreen(Screen):
             self.scoped_repository is not None
             and not self.app.services.has_repository(self.scoped_repository.ref)
         )
-        if not self.app.repos or scoped_repo_removed:
+        # An opened project needs no local repositories to keep its rows.
+        unscoped_empty = self.scoped_repository is None and not self.app.repos
+        if unscoped_empty or scoped_repo_removed:
             for table in self.query(MRTable):
                 table.clear()
-        if not self.scoped_repository and not self.app.repos:
+        if unscoped_empty:
             self.notify("[dim]No forges discovered yet[/]")
         # Stay on the tab the user is reading; each one reloads when it is
         # next shown, or right away when it is the active one.

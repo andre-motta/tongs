@@ -45,6 +45,8 @@ _INBOX = [
 _REPO_LIST = [
     ("Filter Repos", "screen", call.action_start_search()),
     ("Cycle Forge", "screen", call.action_cycle_forge()),
+    ("Open Repository...", "screen", call.action_open_repository()),
+    ("Remove Repository", "screen", call.action_remove_repository()),
     ("Refresh", "screen", call.action_refresh()),
 ]
 _MR_DETAIL = [

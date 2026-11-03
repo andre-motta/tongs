@@ -2,7 +2,7 @@
 
 import pytest
 
-from tongs.scanner.remote import parse_remote_url
+from tongs.scanner.remote import parse_remote_url, parse_repository_location
 from tongs.scanner.repo import ForgeType
 
 
@@ -164,3 +164,66 @@ class TestParseRemoteUrlEdgeCases:
         assert remote is not None
         assert remote.hostname == "gitlab.corp"
         assert remote.repo_path == "g/r"
+
+
+class TestParseRepositoryLocation:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("github.com/acme/widgets", ("github.com", "acme/widgets")),
+            ("  GitHub.com/acme/widgets/  ", ("github.com", "acme/widgets")),
+            (
+                "https://github.com/acme/widgets/pull/12?tab=files#top",
+                ("github.com", "acme/widgets"),
+            ),
+            (
+                "https://user:token@github.com:443/acme/widgets.git",
+                ("github.com", "acme/widgets"),
+            ),
+            ("git@github.com:acme/widgets.git", ("github.com", "acme/widgets")),
+            (
+                "ssh://git@gitlab.com:22/group/sub/project.git",
+                ("gitlab.com", "group/sub/project"),
+            ),
+            (
+                "https://gitlab.com/group/sub/project/-/merge_requests/3",
+                ("gitlab.com", "group/sub/project"),
+            ),
+            ("gitlab.com/group/sub/project", ("gitlab.com", "group/sub/project")),
+        ],
+    )
+    def test_reads_host_and_project(self, text, expected):
+        assert parse_repository_location(text) == expected
+
+    def test_configured_hosts_are_trimmed_by_their_forge_type(self):
+        assert parse_repository_location(
+            "https://git.example.com/group/project/-/issues",
+            extra_gitlab_hosts=frozenset({"git.example.com"}),
+        ) == ("git.example.com", "group/project")
+        assert parse_repository_location(
+            "https://ghe.example.com/acme/widgets/pull/1",
+            extra_github_hosts=frozenset({"ghe.example.com"}),
+        ) == ("ghe.example.com", "acme/widgets")
+
+    def test_an_unknown_host_keeps_its_whole_path(self):
+        # The path is left alone so the caller can say the host is not set up.
+        assert parse_repository_location("git.example.com/a/b/c") == (
+            "git.example.com",
+            "a/b/c",
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "   ",
+            "github.com",
+            "github.com/acme",
+            "acme/widgets",
+            "github.com//widgets",
+            "https://github.com/",
+            "ftp://github.com/acme/widgets",
+        ],
+    )
+    def test_rejects_input_without_a_host_and_project(self, text):
+        assert parse_repository_location(text) is None

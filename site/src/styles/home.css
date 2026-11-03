@@ -277,10 +277,11 @@ pre.term .s { color: var(--mk-yellow); }
 .prompt-search:hover { border-color: var(--text-2); }
 .prompt-search .ps { color: var(--prompt); }
 .prompt-search .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.routes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--rule); }
+/* Six groups, three to a row. */
+.routes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; border-top: 1px solid var(--rule); }
 .route { padding: 22px 20px 6px; border-right: 1px solid var(--rule); min-width: 0; }
-.route:first-child { padding-left: 0; }
-.route:last-child { border-right: 0; }
+.route:nth-of-type(3n+1) { padding-left: 0; }
+.route:nth-of-type(3n), .route:last-child { border-right: 0; }
 .route .dir { font: 500 var(--fs-label)/1.5 var(--font-mono); color: var(--prompt); }
 .route h3 { margin-top: 6px; font-size: 18px; }
 .route h3 a { color: var(--text); text-decoration: none; }
@@ -341,9 +342,6 @@ pre.term .s { color: var(--mk-yellow); }
 /* ============================================================= responsive */
 @media (max-width: 1100px) {
   .keymap { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .routes { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
-  .route:nth-child(3) { border-right: 0; }
-  .route:nth-child(4) { padding-left: 0; }
 }
 @media (max-width: 900px) {
   .hero-top { grid-template-columns: minmax(0, 1fr); }
@@ -378,7 +376,7 @@ pre.term .s { color: var(--mk-yellow); }
   .keymap { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .keymap li { padding: 14px 12px; }
   .routes { grid-template-columns: minmax(0, 1fr); border-top: 0; }
-  .route, .route:first-child, .route:nth-child(4) { padding: 18px 0 14px; border-right: 0; border-top: 1px solid var(--rule); }
+  .route, .route:nth-of-type(3n+1) { padding: 18px 0 14px; border-right: 0; border-top: 1px solid var(--rule); }
   .steps li { grid-template-columns: 104px minmax(0, 1fr); }
   .works .wrap { justify-content: flex-start; }
   pre.term { font-size: 12.5px; padding: 14px; }

@@ -95,19 +95,28 @@ jobs:
           package-manager-cache: false
       - name: Install the locked site dependencies
         run: npm ci --prefix site
+      # The build first fetches the tongs-agents docs pinned in
+      # site/agents-docs.lock.json from codeload.github.com (sha256-checked)
+      # for the /agents/ section, so this step needs that host.
       - name: Build the site with strict link validation
         run: npm run build --prefix site
-      - name: Check the custom domain and the repository-only records
+      - name: Check the custom domain, the agents section and the repository-only records
         run: |
           set -euo pipefail
           grep -qx 'www.tongs.tools' site/dist/CNAME
-          for record in sdlc site-plan work; do
+          test -f site/dist/agents/index.html
+          test -f site/dist/agents/tutorials/first-workspace/index.html
+          for record in sdlc site-plan work agents/sdlc agents/work; do
             test ! -e "site/dist/$record"
           done
           if grep -qiE '/(sdlc|site-plan|work)/' site/dist/sitemap*.xml 2>/dev/null; then
             echo "A repository-only record reached the sitemap" >&2
             exit 1
           fi
+      # The agents docs sync's own tests: lock shape, hash and archive-member
+      # refusals, link rewriting.  Local fixtures only, no network.
+      - name: Test the agents docs sync
+        run: node --test --test-concurrency=1 tests/site/*.test.mjs
       - name: Install the pinned Markdown linter from its lockfile
         run: npm ci --prefix .github/linters --ignore-scripts --no-audit --no-fund
       - name: Lint Markdown

@@ -80,6 +80,8 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     ("site/package.json", DOCS),
     ("site/src/content/docs", DOCS),
     ("site/public/CNAME", DOCS),
+    ("site/agents-docs.lock.json", DOCS),
+    ("site/scripts/sync-agents-docs.mjs", DOCS),
     (".agents/tui/README.md", DOCS),
     ("CONTRIBUTING.md", DOCS),
     ("AGENTS.md", DOCS),
@@ -91,6 +93,7 @@ LAYER_ONE: list[tuple[str, frozenset[str] | None]] = [
     (".github/FUNDING.yml", DOCS),
     (".github/linters/.markdownlint-cli2.yaml", LINT_READ_DOCS),
     (".github/linters/package-lock.json", LINT_READ_DOCS),
+    ("tests/site/agents-docs-sync.test.mjs", LINT_READ_DOCS),
     # The lane guides no longer embed a generated table, so no test reads them
     (".agents/ci/README.md", DOCS),
     # README

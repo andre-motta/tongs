@@ -312,6 +312,12 @@ kbd {
 .icon-btn svg { width: 18px; height: 18px; }
 .theme-btn svg { display: none; }
 .theme-btn[data-pref="auto"] .i-auto, .theme-btn[data-pref="dark"] .i-dark, .theme-btn[data-pref="light"] .i-light { display: block; }
+/* Six section links: on narrower desktops the search box and the link gaps
+   give up width first, so the header never overflows before 960px. */
+@media (max-width: 1120px) {
+  .nav { gap: 18px; }
+  .search-btn { min-width: 150px; }
+}
 @media (max-width: 960px) {
   .nav { display: none; }
   .tool-link { display: none; }

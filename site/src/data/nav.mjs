@@ -17,6 +17,9 @@ export const site = {
  * one line under it. `nav: true` puts the group in the header. `badge` labels
  * the group in the header, sidebar and routes (the desktop app is labeled
  * beta wherever it appears). `isNew` marks pages the homepage flags as new.
+ * An item is a page (`label`, `slug`) or a section (`label`, `items` of pages),
+ * which the sidebar nests and the homepage route lists as one link to its
+ * first page.
  */
 export const groups = [
   {
@@ -79,6 +82,61 @@ export const groups = [
     ],
   },
   {
+    // tongs-agents, published from the commit pinned in
+    // site/agents-docs.lock.json; the sections follow that repository's
+    // docs/README.md.
+    label: 'Agents',
+    dir: 'agents/',
+    nav: true,
+    blurb: 'Run Claude Code, Codex, Pi and any command side by side in one workspace.',
+    items: [
+      {
+        label: 'Start',
+        items: [
+          { label: 'Overview', slug: 'agents' },
+          { label: 'Your first workspace', slug: 'agents/tutorials/first-workspace' },
+        ],
+      },
+      {
+        label: 'Tutorials',
+        items: [
+          { label: 'Any command as a pane', slug: 'agents/tutorials/any-command' },
+          { label: 'One dotfiles directory', slug: 'agents/tutorials/dotfiles' },
+          { label: 'Driving agents', slug: 'agents/tutorials/driving-agents' },
+          { label: 'Agent chat and web watching', slug: 'agents/tutorials/chat-and-web' },
+          { label: 'Sandboxed agents with OpenShell', slug: 'agents/tutorials/sandbox' },
+          { label: 'tmux instead of Zellij', slug: 'agents/tutorials/tmux' },
+        ],
+      },
+      {
+        label: 'How-to guides',
+        items: [
+          { label: 'Installing', slug: 'agents/install' },
+          { label: 'Agent profiles', slug: 'agents/profiles' },
+          { label: 'Agent workspace', slug: 'agents/workspace' },
+          { label: 'App settings', slug: 'agents/app' },
+          { label: 'Config layer', slug: 'agents/config' },
+          { label: 'Driving agent panes', slug: 'agents/control' },
+          { label: 'MCP agent control', slug: 'agents/mcp-control' },
+          { label: 'Agent chat', slug: 'agents/chat' },
+          { label: 'Web watching', slug: 'agents/web' },
+          { label: 'Sandboxed profiles', slug: 'agents/sandbox' },
+          { label: 'Pi lifecycle integration', slug: 'agents/pi' },
+          { label: 'Upgrading from claude-fleet-monitor', slug: 'agents/migration' },
+        ],
+      },
+      {
+        label: 'Reference',
+        items: [
+          { label: 'Support matrix', slug: 'agents/support-matrix' },
+          { label: 'Session store', slug: 'agents/sessions' },
+          { label: 'Zellij pins', slug: 'agents/zellij-pins' },
+          { label: 'Harness adapter guide', slug: 'agents/harness-adapters' },
+        ],
+      },
+    ],
+  },
+  {
     label: 'Project',
     dir: 'project/',
     nav: false,
@@ -124,25 +182,41 @@ export const redirectHashes = {
 /** URL for a slug, with the trailing slash Starlight uses. */
 export const href = (slug) => `/${slug.replace(/^\/|\/$/g, '')}/`;
 
+/** The pages of a group or section, sections flattened in order. */
+export const pagesOf = (g) => g.items.flatMap((i) => (i.items ? pagesOf(i) : [i]));
+
+/** URL of a group's or section's first page. */
+export const firstHref = (g) => href(pagesOf(g)[0].slug);
+
+const sidebarItem = (i) =>
+  i.items ? { label: i.label, items: i.items.map(sidebarItem) } : { label: i.label, slug: i.slug };
+
 /** Starlight `sidebar` config. */
 export const sidebar = groups.map((g) => ({
   label: g.label,
   collapsed: Boolean(g.collapsed),
   ...(g.badge ? { badge: { text: g.badge, variant: 'caution' } } : {}),
-  items: g.items.map((i) => ({ label: i.label, slug: i.slug })),
+  items: g.items.map(sidebarItem),
 }));
 
-/** The group a docs slug belongs to, or undefined. */
+/**
+ * The group a docs slug belongs to, or undefined. A page missing from the
+ * sidebar falls back to the group whose `dir` its URL starts with, so a new
+ * tongs-agents page still shows under Agents before the sidebar lists it.
+ */
 export function groupOf(slug) {
   const clean = slug.replace(/^\/|\/$/g, '');
-  return groups.find((g) => g.items.some((i) => i.slug === clean));
+  return (
+    groups.find((g) => pagesOf(g).some((i) => i.slug === clean)) ??
+    groups.find((g) => `${clean}/`.startsWith(g.dir))
+  );
 }
 
 /** The sidebar item for a slug, or undefined. */
 export function itemOf(slug) {
   const clean = slug.replace(/^\/|\/$/g, '');
   for (const g of groups) {
-    const item = g.items.find((i) => i.slug === clean);
+    const item = pagesOf(g).find((i) => i.slug === clean);
     if (item) return item;
   }
   return undefined;
@@ -151,7 +225,7 @@ export function itemOf(slug) {
 /** Header links: each group's first page. */
 export const headerLinks = groups
   .filter((g) => g.nav)
-  .map((g) => ({ label: g.label, href: href(g.items[0].slug), group: g.label, badge: g.badge }));
+  .map((g) => ({ label: g.label, href: firstHref(g), group: g.label, badge: g.badge }));
 
 /** Footer columns. */
 export const footerColumns = [

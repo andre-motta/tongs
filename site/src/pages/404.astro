@@ -1,7 +1,7 @@
 ---
 // Custom 404 (Starlight's own is disabled with disable404Route).
 import Plain from '../layouts/Plain.astro';
-import { groups, href } from '../data/nav.mjs';
+import { firstHref, groups } from '../data/nav.mjs';
 
 const nav = groups.filter((g) => g.nav);
 ---
@@ -12,7 +12,7 @@ const nav = groups.filter((g) => g.nav);
       <div class="wrap">
         <p class="eyebrow"><span class="ps" aria-hidden="true">$</span><span>tongs</span><span class="cmt"># 404</span></p>
         <h1 id="lost-title">Nothing here to hold.</h1>
-        <p class="text">This page does not exist, or it moved when the docs were reorganized. Search the docs, or start from one of the five sections.</p>
+        <p class="text">This page does not exist, or it moved when the docs were reorganized. Search the docs, or start from one of the six sections.</p>
         <pre class="out" aria-hidden="true"><span class="ps">$ </span>ls <span id="lost-path">this-page</span>
 <span class="err">ls: cannot access: No such file or directory</span></pre>
         <div class="ctas">
@@ -27,7 +27,7 @@ const nav = groups.filter((g) => g.nav);
         {nav.map((g) => (
           <div class="route">
             <p class="dir">{g.dir}</p>
-            <h3><a href={href(g.items[0].slug)}>{g.label}</a>{g.badge && <span class="beta">{g.badge}</span>}</h3>
+            <h3><a href={firstHref(g)}>{g.label}</a>{g.badge && <span class="beta">{g.badge}</span>}</h3>
             <p>{g.blurb}</p>
           </div>
         ))}

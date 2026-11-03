@@ -8,7 +8,7 @@ import BrandMeta from '../components/BrandMeta.astro';
 import NavLinks from '../components/NavLinks.astro';
 import ThemeButton from '../components/ThemeButton.astro';
 import SiteFooter from '../components/SiteFooter.astro';
-import { groups, href, site } from '../data/nav.mjs';
+import { firstHref, groups, site } from '../data/nav.mjs';
 
 interface Props {
   title: string;
@@ -63,7 +63,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
             </summary>
             <nav class="menu-panel" aria-label="Menu">
-              {groups.filter((g) => g.nav).map((g) => <a href={href(g.items[0].slug)}><span class="lbl">{g.label}{g.badge && <span class="beta">{g.badge}</span>}</span><span class="dir">{g.dir}</span></a>)}
+              {groups.filter((g) => g.nav).map((g) => <a href={firstHref(g)}><span class="lbl">{g.label}{g.badge && <span class="beta">{g.badge}</span>}</span><span class="dir">{g.dir}</span></a>)}
               <hr />
               <a href={site.repo}><span class="lbl">GitHub</span><span class="dir">andre-motta/tongs</span></a>
             </nav>

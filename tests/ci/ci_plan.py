@@ -193,6 +193,13 @@ RULES: tuple[Rule, ...] = (
         ),
         lanes=frozenset({"docs"}),
     ),
+    # The site's own Node tests (the agents docs sync): the docs job runs them
+    # and the lint job runs the ownership check over every test file.
+    Rule(
+        name="site-tests",
+        patterns=("tests/site/**",),
+        lanes=frozenset({"docs", "lint"}),
+    ),
     # The wheel's readme, so the core lane builds it as well as the docs lane.
     Rule(name="readme", patterns=("README.md",), lanes=frozenset({"docs", "core"})),
     # Documentation that tests read, each selecting the lane whose job runs the

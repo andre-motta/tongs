@@ -119,7 +119,8 @@ def test_every_workflow_renderer_run_loads_the_setup() -> None:
 def test_ci_yml_runs_no_second_copy_of_the_renderer_tests() -> None:
     """The desktop production TAP job is the single workflow run of the
     Electron and renderer tests, checked above; ordinary CI runs neither
-    ``npm test`` nor ``node --test`` for the desktop package."""
+    ``npm test`` nor ``node --test`` for the desktop package.  Its one
+    ``node --test`` run is the docs lane's agents docs sync tests."""
 
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     runs = [
@@ -129,7 +130,9 @@ def test_ci_yml_runs_no_second_copy_of_the_renderer_tests() -> None:
     ]
     assert runs
     assert not any("npm test" in run and "desktop" in run for run in runs)
-    assert not any("node --test" in run for run in runs)
+    assert [run for run in runs if "node --test" in run] == [
+        "node --test --test-concurrency=1 tests/site/*.test.mjs"
+    ]
 
 
 def test_documented_renderer_runs_load_the_setup() -> None:

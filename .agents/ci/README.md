@@ -157,7 +157,7 @@ and fails when a rule no longer covers it.
 
 | Lane | Job |
 |---|---|
-| `docs` | `ci.yml` `Docs build`: the Astro + Starlight site build (`npm run build --prefix site`), the CNAME and repository-only record checks, the pinned Markdown linter, and the control-character check |
+| `docs` | `ci.yml` `Docs build`: the Astro + Starlight site build (`npm run build --prefix site`, which fetches the pinned tongs-agents docs from `codeload.github.com`), the CNAME, agents section and repository-only record checks, the agents docs sync tests (`tests/site`), the pinned Markdown linter, and the control-character check |
 | `lint` | `ci.yml` `Lint, format and CI harness tests`: Ruff over `src/`, `tests/`, `packaging/`, `scripts/` and `examples/`, the control-character check, the desktop Prettier check and ESLint, then the `tests/ci` and `tests/containers` suites, whose report must show no skip |
 | `core` | `ci.yml` `Core and MCP`: the core suites listed above, on Python 3.12 and 3.13 on every plan |
 | `fedora_podman` | `ci.yml` `Fedora 44 Podman` probe |

@@ -2,7 +2,7 @@
 // Homepage. Order follows the trailer: heat, clamp, one place, review, drafts,
 // CI, keys, beyond, find your way, resolve.
 import Plain from '../layouts/Plain.astro';
-import { groups, href, site } from '../data/nav.mjs';
+import { firstHref, groups, href, site } from '../data/nav.mjs';
 import { draftSteps, keymap } from '../data/home.mjs';
 import { keysToHtml } from '../plugins/keys.mjs';
 
@@ -271,18 +271,18 @@ const youtube = 'https://www.youtube.com/watch?v=rqaEB2l_1w4';
             <p class="eyebrow"><span class="ps" aria-hidden="true">$</span><span>ls docs/</span></p>
             <div class="beat-head">
               <h2 id="way-title">Find your way.</h2>
-              <div class="text"><p>Five groups, the same words in the header, here and in the docs sidebar.</p></div>
+              <div class="text"><p>Six groups, the same words in the header, here and in the docs sidebar.</p></div>
             </div>
             <button class="prompt-search" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="/ Control+K Meta+K"><span class="ps" aria-hidden="true">/</span><span class="grow">search the docs: drafts, retry, keyring, scan_root</span><kbd aria-hidden="true">/</kbd></button>
             <nav class="routes" aria-label="Documentation groups">
               {nav.map((g) => (
                 <div class="route">
                   <p class="dir">{g.dir}</p>
-                  <h3><a href={href(g.items[0].slug)}>{g.label}</a>{g.badge && <span class="beta">{g.badge}</span>}</h3>
+                  <h3><a href={firstHref(g)}>{g.label}</a>{g.badge && <span class="beta">{g.badge}</span>}</h3>
                   <p>{g.blurb}</p>
                   <ul>
                     {g.items.map((i) => (
-                      <li><a href={href(i.slug)}>{i.label}</a>{i.isNew && <span class="new">new</span>}</li>
+                      <li><a href={i.items ? firstHref(i) : href(i.slug)}>{i.label}</a>{i.isNew && <span class="new">new</span>}</li>
                     ))}
                   </ul>
                 </div>

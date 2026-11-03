@@ -449,6 +449,9 @@ def test_the_lint_job_runs_the_harness_suites_without_skips(
 #: The one site build, run by the ci.yml docs lane on every pull request that
 #: selects it and by docs.yml before each Pages deploy.
 SITE_BUILD_COMMANDS = ["npm ci --prefix site", "npm run build --prefix site"]
+#: The docs lane's tests of the agents docs sync, which the deploy does not
+#: repeat.
+SITE_SYNC_TESTS = "node --test --test-concurrency=1 tests/site/*.test.mjs"
 # Any pinned release of setup-node; the SHA pin itself is checked by the
 # workflow pin contract, so a Dependabot bump does not break this test.
 SETUP_NODE = "actions/setup-node@"
@@ -508,17 +511,18 @@ def test_the_deploy_builds_exactly_what_the_docs_lane_checks(
         "id-token": "write",
     }
     build = docs["jobs"]["build"]
-    # The lane runs the deploy's build, then its own Markdown lint, which
-    # test_docs_lane_contract pins, and the control-character check, which
-    # test_lint_tooling_contract pins.
+    # The lane runs the deploy's build, then the agents docs sync tests, its
+    # own Markdown lint, which test_docs_lane_contract pins, and the
+    # control-character check, which test_lint_tooling_contract pins.
     deploy_commands = _run_commands(build)
     lane_commands = _run_commands(ci["jobs"]["docs"])
     assert lane_commands[: len(deploy_commands)] == deploy_commands
     assert all(
         ".github/linters" in command
-        or command == "python3 scripts/check_control_chars.py"
+        or command in {"python3 scripts/check_control_chars.py", SITE_SYNC_TESTS}
         for command in lane_commands[len(deploy_commands) :]
     )
+    assert SITE_SYNC_TESTS in lane_commands[len(deploy_commands) :]
     assert _setup_node_inputs(build) == _setup_node_inputs(ci["jobs"]["docs"])
     (upload,) = [
         step
@@ -529,6 +533,37 @@ def test_the_deploy_builds_exactly_what_the_docs_lane_checks(
     assert docs["jobs"]["deploy"]["needs"] == "build"
     assert "mkdocs" not in (ROOT / "pyproject.toml").read_text()
     assert not (ROOT / "mkdocs.yml").exists()
+
+
+def test_both_builds_check_the_agents_section_and_the_repository_only_records(
+    ci: dict[str, Any],
+) -> None:
+    """The /agents/ pages come from another repository at build time, so the
+    check after each build proves they were published and that neither
+    repository's work records were."""
+
+    docs = _load(ROOT / ".github/workflows/docs.yml")
+    for job in (ci["jobs"]["docs"], docs["jobs"]["build"]):
+        commands = _run_commands(job)
+        (check,) = [command for command in commands if "site/dist/CNAME" in command]
+        assert commands.index(check) == commands.index(SITE_BUILD_COMMANDS[1]) + 1
+        lines = [line.strip() for line in check.splitlines()]
+        assert lines[0] == "set -euo pipefail"
+        assert "test -f site/dist/agents/index.html" in lines
+        assert "test -f site/dist/agents/tutorials/first-workspace/index.html" in lines
+        assert "for record in sdlc site-plan work agents/sdlc agents/work; do" in lines
+        assert 'test ! -e "site/dist/$record"' in lines
+
+
+def test_the_site_build_syncs_the_pinned_agents_docs_first() -> None:
+    package = json.loads((ROOT / "site/package.json").read_text())
+    sync = "node scripts/sync-agents-docs.mjs"
+    assert package["scripts"]["build"] == f"{sync} && astro build"
+    assert package["scripts"]["dev"] == f"{sync} && astro dev"
+    assert (ROOT / "site/scripts/sync-agents-docs.mjs").is_file()
+    # The fetched pages are build output, never committed.
+    ignored = (ROOT / "site/.gitignore").read_text().splitlines()
+    assert "src/content/agents/" in ignored
 
 
 def test_the_site_toolchain_is_pinned_exactly_and_locked() -> None:

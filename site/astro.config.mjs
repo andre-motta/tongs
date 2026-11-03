@@ -1,5 +1,6 @@
 // www.tongs.tools: homepage (src/pages/index.astro) plus Starlight docs.
-// Markdown lives in ../docs through the src/content/docs symlink.
+// Markdown lives in ../docs through the src/content/docs symlink; the /agents/
+// pages are fetched into src/content/agents by scripts/sync-agents-docs.mjs.
 import { existsSync } from 'node:fs';
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -81,6 +82,10 @@ export default defineConfig({
       description:
         'Unified code review for the terminal. A keyboard-driven review inbox for GitHub pull requests and GitLab merge requests.',
       disable404Route: true,
+      // The tongs-agents pages (/agents/) live outside src/content/docs, so
+      // Starlight's Markdown processing (asides, heading anchors) is enabled
+      // for them by name.
+      markdown: { processedDirs: ['./src/content/agents/'] },
       customCss: ['./src/styles/tokens.css', './src/styles/docs.css'],
       // No social icons: forges appear as text only, never as logos (the
       // header and footer carry a text GitHub link).

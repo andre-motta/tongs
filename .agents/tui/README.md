@@ -17,7 +17,7 @@ trusted terminal/Python memory; the adapter maps them to service-issued
 ## Textual patterns
 
 - Use `Screen` for top-level navigation and constructor arguments for the
-  selected `Repo` or `MRSummary`.
+  selected `RepositorySnapshot` or `MRSummary`.
 - Use named `@work` groups for asynchronous reads and mutations. Set
   `exclusive=True` when a newer refresh should cancel an older worker.
 - Use messages for child-widget actions and let the owning screen call services.
@@ -65,15 +65,29 @@ confirmation checks regardless of how they were invoked.
 ## Inbox and repository list
 
 `InboxScreen` has My Reviews, My MRs, and All Open tabs. In global mode it uses
-the service scopes across admitted hosts; in scoped mode it passes the selected
-local repository to `TUIServiceAdapter.list_reviews()`. Per-host failures are
+the service scopes across admitted hosts; in scoped mode it is constructed with
+a `RepositorySnapshot` and passes its `RepositoryRef` to
+`TUIServiceAdapter.list_reviews()` and `stream_all_open()`. The snapshot comes
+from `repository_snapshot()` for a local `Repo` or from `open_repository()` for a
+project opened without cloning it, so both use the same screen. Per-host failures are
 shown without discarding successful hosts. Each `MRSummary` displayed by the
 adapter is remembered with its service-issued `ReviewRef` for later reads.
 
 Tabs load lazily and use the repository generation to invalidate results after
 discovery. `MRTable` owns row-to-summary mapping and sort cycling. `RepoListScreen`
-filters and sorts the trusted discovered `Repo` objects, but asks the adapter to
-confirm a repository reference before navigation.
+filters and sorts the trusted discovered `Repo` objects together with the
+adapter's `opened_repositories`, but asks the adapter to confirm a repository
+reference before navigation.
+
+`OpenRepositoryScreen` parses one input with
+`scanner.remote.parse_repository_location()` and calls
+`TUIServiceAdapter.open_repository()`, which returns a listed local or opened
+project without a forge read (matching paths without case) and otherwise
+validates it through `ApplicationSession.open_repository()`. Opened projects
+live only in the adapter: discovery replaces `_repository_refs`, and a project
+that discovery now finds locally is dropped from the opened set. They never
+widen the unscoped tabs, and `remove_repository()` only forgets them, since the
+terminal never reads the session's full issued set.
 
 All Open reads the newest page (100) of each repository without CI through
 `stream_all_open()` and keeps each repository's next-page cursor. `m`, or a
@@ -105,8 +119,9 @@ Common bindings:
 - Inbox: `1` to `3` select scope, `r` opens repositories or returns from scoped
   mode, `o` opens the selected review's URL in the browser, `m` loads more All
   Open reviews, `Ctrl+R` refreshes.
-- Repository list: `/` filters, `f` cycles forge, `s` cycles sort, and
-  `Ctrl+R` refreshes discovery.
+- Repository list: `/` filters, `f` cycles forge, `s` cycles sort, `a` opens a
+  project without cloning it, `x` removes an opened project, and `Ctrl+R`
+  refreshes discovery.
 
 ## MR detail
 

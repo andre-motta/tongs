@@ -114,6 +114,7 @@ export const groups = [
           { label: 'Installing', slug: 'agents/install' },
           { label: 'Agent profiles', slug: 'agents/profiles' },
           { label: 'Agent workspace', slug: 'agents/workspace' },
+          { label: 'Resume open sessions', slug: 'agents/resume' },
           { label: 'App settings', slug: 'agents/app' },
           { label: 'Config layer', slug: 'agents/config' },
           { label: 'Driving agent panes', slug: 'agents/control' },

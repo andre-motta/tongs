@@ -23,11 +23,11 @@ from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane
 
 from tongs.config import app_config
 from tongs.forges.models import CIStatus, MRSummary
-from tongs.scanner.repo import Repo
 from tongs.services.errors import ServiceError, ServiceErrorCode
 from tongs.services.models import (
     HostFailure,
     RepositoryRef,
+    RepositorySnapshot,
     ReviewListItem,
     ReviewScope,
 )
@@ -106,7 +106,8 @@ class _CILookups:
 class InboxScreen(Screen):
     """MR inbox dashboard with tabs for My Reviews / My MRs / All Open.
 
-    When `repo` is provided, the inbox is scoped to that single repo.
+    When `repository` is provided, the inbox is scoped to that one repository,
+    which may be a local checkout or a project opened without cloning it.
     """
 
     DEFAULT_CSS = """
@@ -133,9 +134,9 @@ class InboxScreen(Screen):
     loading_my_mrs: reactive[bool] = reactive(False)
     loading_all_open: reactive[bool] = reactive(False)
 
-    def __init__(self, repo: Repo | None = None):
+    def __init__(self, repository: RepositorySnapshot | None = None):
         super().__init__()
-        self.scoped_repo = repo
+        self.scoped_repository = repository
         self._loaded_tabs: set[str] = set()
         self._repository_generation = 0
         # Each All Open load takes the next number; a load whose number is no
@@ -176,13 +177,13 @@ class InboxScreen(Screen):
 
     def on_mount(self) -> None:
         self._repository_generation = self.app.repository_generation
-        show_repo = self.scoped_repo is None
+        show_repo = self.scoped_repository is None
         for table in self.query(MRTable):
             table.setup_columns(show_repo=show_repo)
             table.cursor_type = "row"
             table.zebra_stripes = True
-        if self.scoped_repo:
-            self.sub_title = self.scoped_repo.display_name
+        if self.scoped_repository:
+            self.sub_title = self.scoped_repository.display_name
 
     def on_screen_resume(self) -> None:
         generation = self.app.repository_generation
@@ -202,16 +203,14 @@ class InboxScreen(Screen):
         self._all_open_added = 0
         with suppress(NoMatches):
             self._set_all_open_status("")
-        scoped_repo_removed = False
-        if self.scoped_repo is not None:
-            try:
-                self.app.services.repository_ref(self.scoped_repo)
-            except ServiceError:
-                scoped_repo_removed = True
+        scoped_repo_removed = (
+            self.scoped_repository is not None
+            and not self.app.services.has_repository(self.scoped_repository.ref)
+        )
         if not self.app.repos or scoped_repo_removed:
             for table in self.query(MRTable):
                 table.clear()
-        if not self.scoped_repo and not self.app.repos:
+        if not self.scoped_repository and not self.app.repos:
             self.notify("[dim]No forges discovered yet[/]")
         # Stay on the tab the user is reading; each one reloads when it is
         # next shown, or right away when it is the active one.
@@ -270,17 +269,17 @@ class InboxScreen(Screen):
         self._load_tab(tab_id, fresh=True)
 
     def action_go_back(self) -> None:
-        if self.scoped_repo:
+        if self.scoped_repository:
             self.app.pop_screen()
 
     def action_quit_or_back(self) -> None:
-        if self.scoped_repo:
+        if self.scoped_repository:
             self.app.pop_screen()
         else:
             self.app.exit()
 
     def action_repos_or_back(self) -> None:
-        if self.scoped_repo:
+        if self.scoped_repository:
             self.app.pop_screen()
         else:
             self.app.open_screen("repo_list")
@@ -425,7 +424,7 @@ class InboxScreen(Screen):
         table = self.query_one("#reviews-table", MRTable)
         table.loading = True
         try:
-            if not self.scoped_repo and not self.app.repos:
+            if not self.scoped_repository and not self.app.repos:
                 table.clear()
                 return
             await self._load_page(
@@ -443,7 +442,7 @@ class InboxScreen(Screen):
         table = self.query_one("#my-mrs-table", MRTable)
         table.loading = True
         try:
-            if not self.scoped_repo and not self.app.repos:
+            if not self.scoped_repository and not self.app.repos:
                 table.clear()
                 return
             await self._load_page(
@@ -472,7 +471,7 @@ class InboxScreen(Screen):
         self._ci["all-open"].rate_limited.clear()
         self._all_open_cursors.clear()
         try:
-            if not self.scoped_repo and not self.app.repos:
+            if not self.scoped_repository and not self.app.repos:
                 table.clear()
                 return
             await self._stream_all_open(table, load, fresh=fresh)
@@ -570,8 +569,10 @@ class InboxScreen(Screen):
         failures: list[HostFailure] = []
         total = 0
         stream = (
-            self.app.services.stream_all_open(fresh=fresh, repository=self.scoped_repo)
-            if self.scoped_repo is not None
+            self.app.services.stream_all_open(
+                fresh=fresh, repository=self.scoped_repository.ref
+            )
+            if self.scoped_repository is not None
             else self.app.services.stream_all_open(fresh=fresh)
         )
         try:
@@ -679,7 +680,7 @@ class InboxScreen(Screen):
         loaded = " loaded" if self._all_open_cursors else ""
         text = (
             f"{_open_count(count)}{loaded}"
-            if self.scoped_repo is not None
+            if self.scoped_repository is not None
             else f"{_open_count(count)}{loaded} across {total} {_repositories(total)}"
         )
         if self._all_open_added:
@@ -986,7 +987,13 @@ class InboxScreen(Screen):
         """
         try:
             page = await self.app.services.list_reviews(
-                scope, repository=self.scoped_repo, fresh=fresh
+                scope,
+                repository=(
+                    self.scoped_repository.ref
+                    if self.scoped_repository is not None
+                    else None
+                ),
+                fresh=fresh,
             )
         except ServiceError as error:
             if error.code is ServiceErrorCode.RATE_LIMITED:

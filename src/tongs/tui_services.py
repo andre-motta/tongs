@@ -36,6 +36,7 @@ from tongs.services.models import (
     JobRef,
     PipelineRef,
     RepositoryRef,
+    RepositorySnapshot,
     ReviewListItem,
     ReviewPage,
     ReviewQuery,
@@ -170,6 +171,7 @@ class TUIServiceAdapter:
         self._discovery_generation = 0
         self._repositories: tuple[Repo, ...] = ()
         self._repository_refs: dict[Repo, RepositoryRef] = {}
+        self._local_snapshots: dict[RepositoryRef, RepositorySnapshot] = {}
         self._review_refs: dict[tuple[str, str, int], ReviewRef] = {}
         self._review_snapshots: dict[ReviewRef, ReviewSnapshot] = {}
         self._review_revisions: dict[ReviewRef, ReviewRevision] = {}
@@ -196,7 +198,7 @@ class TUIServiceAdapter:
 
         # The session keeps every checkout; the terminal lists each project once.
         repositories = one_checkout_per_project(self.session.local_repositories)
-        admitted = {snapshot.ref for snapshot in snapshots}
+        admitted = {snapshot.ref: snapshot for snapshot in snapshots}
         refs: dict[Repo, RepositoryRef] = {}
         for repo in repositories:
             remote = repo.primary_remote
@@ -211,6 +213,7 @@ class TUIServiceAdapter:
 
         self._repositories = repositories
         self._repository_refs = refs
+        self._local_snapshots = {ref: admitted[ref] for ref in refs.values()}
         return TUIDiscoveryResult(generation, repositories)
 
     def invalidate_discovery(self) -> None:
@@ -227,6 +230,14 @@ class TUIServiceAdapter:
                 "This local repository does not use a configured forge host.",
             ) from None
 
+    def repository_snapshot(self, repo: Repo) -> RepositorySnapshot:
+        """Return the inbox scope for an actual discovered repository."""
+        return self._local_snapshots[self.repository_ref(repo)]
+
+    def has_repository(self, ref: RepositoryRef) -> bool:
+        """Return whether the repository is still listed after discovery."""
+        return ref in self._local_snapshots
+
     def review_ref(self, summary: MRSummary) -> ReviewRef:
         """Return the admitted identity paired with a service list result."""
         key = (summary.forge_host.hostname, summary.repo_path, summary.number)
@@ -242,7 +253,7 @@ class TUIServiceAdapter:
         self,
         scope: ReviewScope,
         *,
-        repository: Repo | None = None,
+        repository: RepositoryRef | None = None,
         fresh: bool = False,
     ) -> ReviewPage:
         """Run an inbox read with the terminal's local workspace semantics.
@@ -251,9 +262,7 @@ class TUIServiceAdapter:
         """
         if repository is not None:
             page = await self.session.list_reviews(
-                ReviewQuery(
-                    scope, repository=self.repository_ref(repository), fresh=fresh
-                )
+                ReviewQuery(scope, repository=repository, fresh=fresh)
             )
         elif scope is ReviewScope.ALL_OPEN:
             page = await self._list_all_open(fresh=fresh)
@@ -768,7 +777,7 @@ class TUIServiceAdapter:
         )
 
     async def stream_all_open(
-        self, *, fresh: bool = False, repository: Repo | None = None
+        self, *, fresh: bool = False, repository: RepositoryRef | None = None
     ) -> AsyncIterator[TUIRepositoryProgress]:
         """Read the newest page of every discovered repository, yielding each.
 
@@ -782,7 +791,7 @@ class TUIServiceAdapter:
         flight.
         """
         refs = (
-            (self.repository_ref(repository),)
+            (repository,)
             if repository is not None
             else tuple(dict.fromkeys(self._repository_refs.values()))
         )

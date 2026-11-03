@@ -186,10 +186,10 @@ class RepoListScreen(Screen):
         repo = self._repo_data.get(key)
         if repo:
             try:
-                self.app.services.repository_ref(repo)
+                snapshot = self.app.services.repository_snapshot(repo)
             except ServiceError as error:
                 self.notify(error.message, severity="warning", markup=False)
                 return
             from tongs.views.inbox import InboxScreen
 
-            self.app.push_screen(InboxScreen(repo=repo))
+            self.app.push_screen(InboxScreen(snapshot))

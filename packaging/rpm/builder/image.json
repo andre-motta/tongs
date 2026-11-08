@@ -1,9 +1,9 @@
 {
   "image": "ghcr.io/andre-motta/tongs-rpm-builder",
-  "digest": "sha256:3f664f651bebc66825705a5acd9a01ee12ab1810688818b62525a80c2f2a0376",
-  "tag": "fedora44-20261101-c9d95aa77744",
-  "base_digest": "sha256:b414c09be79dd1f32529b55b096b6bb30435d82ee16fbdbbabf8985eb5f86db0",
-  "source_commit": "c9d95aa77744dfd001e578622285280ba4a7391d",
-  "run_id": 41274064578,
-  "run_url": "https://github.com/andre-motta/tongs/actions/runs/41274064578"
+  "digest": "sha256:31f1f859d3c5f389ed6da379c83a97ee56357f83c3e09f105ce742ea2b047663",
+  "tag": "fedora44-20261108-db4e742d7df6",
+  "base_digest": "sha256:50ab7dd5a71732975b6a1f19108df021b61254f3a507e68ac8abb5fb0bceb308",
+  "source_commit": "db4e742d7df6dfa737fffaa2f1cfdbffeb18ccb2",
+  "run_id": 42447842772,
+  "run_url": "https://github.com/andre-motta/tongs/actions/runs/42447842772"
 }
